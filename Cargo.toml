@@ -16,3 +16,7 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+# Uncomment for local development with a modified pdbtbx:
+# [patch.crates-io]
+# pdbtbx = { path = "../pdbtbx" }

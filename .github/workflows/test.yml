@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run Rust tests
+        run: cargo test --workspace
+
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install maturin and build connector
+        run: |
+          pip install maturin numpy pytest
+          cd ferritin-connector
+          maturin develop --release
+      - name: Install ferritin package
+        run: pip install -e packages/ferritin/
+      - name: Run Python tests
+        run: pytest tests/ -v --tb=short -k "not oracle"

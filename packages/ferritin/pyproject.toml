@@ -5,12 +5,32 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ferritin"
 version = "0.1.0"
-description = "Structural bioinformatics toolkit powered by Rust"
+description = "Structural bioinformatics toolkit powered by Rust — load, align, analyze protein structures"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["bioinformatics", "protein", "pdb", "structural-biology", "tmalign", "sasa", "dssp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
     "numpy>=1.24",
     "ferritin-connector>=0.1.0",
 ]
+
+[project.optional-dependencies]
+pandas = ["pandas>=1.5"]
+polars = ["polars>=0.19"]
+
+[project.urls]
+Repository = "https://github.com/theGreatHerrLebert/ferritin"
 
 [tool.setuptools.packages.find]
 where = ["src"]
