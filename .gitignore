@@ -21,3 +21,8 @@ USAlign/USalign
 
 # Test outputs
 dump/
+
+# Validation PDB downloads (large, not tracked)
+validation/pdbs/
+validation/results.json
+validation/report.html
