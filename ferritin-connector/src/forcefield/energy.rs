@@ -206,12 +206,84 @@ pub fn compute_energy_and_forces(
         }
     }
 
-    // Note: torsion and nonbonded gradients are more complex.
-    // For the MVP (hydrogen optimization), bond + angle gradients
-    // are the dominant terms. Torsion energy is computed for reporting
-    // but its gradient is omitted in this version.
+    // --- Nonbonded: LJ 12-6 + Coulomb with gradients ---
+    let cutoff_sq = 15.0 * 15.0;
+    let coulomb_factor = 332.0;
 
-    // Torsion energy (no gradient)
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let pair = (i, j);
+            if topo.excluded_pairs.contains(&pair) {
+                continue;
+            }
+
+            let dx = coords[i][0] - coords[j][0];
+            let dy = coords[i][1] - coords[j][1];
+            let dz = coords[i][2] - coords[j][2];
+            let r2 = dx * dx + dy * dy + dz * dz;
+
+            if r2 > cutoff_sq || r2 < 0.01 {
+                continue;
+            }
+
+            let is_14 = topo.pairs_14.contains(&pair);
+            let scale_vdw = if is_14 { 1.0 / params.scnb } else { 1.0 };
+            let scale_es = if is_14 { 1.0 / params.scee } else { 1.0 };
+
+            let r = r2.sqrt();
+            let inv_r = 1.0 / r;
+
+            // LJ 12-6: E = eps * [(rmin/r)^12 - 2*(rmin/r)^6]
+            // dE/dr = eps * [-12*rmin^12/r^13 + 12*rmin^6/r^7]
+            let ti = &topo.atoms[i].amber_type;
+            let tj = &topo.atoms[j].amber_type;
+            if let (Some(lj_i), Some(lj_j)) = (params.get_lj(ti), params.get_lj(tj)) {
+                let eps = (lj_i.epsilon * lj_j.epsilon).sqrt();
+                let rmin = lj_i.r + lj_j.r;
+                if eps > 1e-10 && rmin > 1e-10 {
+                    let sr = rmin * inv_r;
+                    let sr6 = sr.powi(6);
+                    let sr12 = sr6 * sr6;
+                    result.vdw += scale_vdw * eps * (sr12 - 2.0 * sr6);
+
+                    // Force: F = -dE/dr * (r_vec / r)
+                    let de_dr = scale_vdw * eps * (-12.0 * sr12 + 12.0 * sr6) * inv_r;
+                    let fx = de_dr * dx * inv_r;
+                    let fy = de_dr * dy * inv_r;
+                    let fz = de_dr * dz * inv_r;
+
+                    forces[i][0] -= fx;
+                    forces[i][1] -= fy;
+                    forces[i][2] -= fz;
+                    forces[j][0] += fx;
+                    forces[j][1] += fy;
+                    forces[j][2] += fz;
+                }
+            }
+
+            // Coulomb: E = k*q1*q2/r, dE/dr = -k*q1*q2/r²
+            let qi = topo.atoms[i].charge;
+            let qj = topo.atoms[j].charge;
+            if qi.abs() > 1e-10 && qj.abs() > 1e-10 {
+                let e_es = scale_es * coulomb_factor * qi * qj * inv_r;
+                result.electrostatic += e_es;
+
+                let de_dr = -e_es * inv_r; // -k*q1*q2/r²
+                let fx = de_dr * dx * inv_r;
+                let fy = de_dr * dy * inv_r;
+                let fz = de_dr * dz * inv_r;
+
+                forces[i][0] -= fx;
+                forces[i][1] -= fy;
+                forces[i][2] -= fz;
+                forces[j][0] += fx;
+                forces[j][1] += fy;
+                forces[j][2] += fz;
+            }
+        }
+    }
+
+    // --- Torsion energy (energy only, gradient is complex) ---
     for torsion in &topo.torsions {
         let ti = &topo.atoms[torsion.i].amber_type;
         let tj = &topo.atoms[torsion.j].amber_type;
@@ -230,7 +302,8 @@ pub fn compute_energy_and_forces(
         }
     }
 
-    result.total = result.bond_stretch + result.angle_bend + result.torsion;
+    result.total =
+        result.bond_stretch + result.angle_bend + result.torsion + result.vdw + result.electrostatic;
     (result, forces)
 }
 

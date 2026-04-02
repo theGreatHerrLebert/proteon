@@ -52,7 +52,9 @@ from .analysis import (
 )
 from .core import RustWrapperObject
 from .forcefield import (
+    batch_minimize_hydrogens,
     compute_energy,
+    load_and_minimize_hydrogens,
     minimize_hydrogens,
     minimize_structure,
 )

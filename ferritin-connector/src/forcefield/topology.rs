@@ -3,6 +3,8 @@
 //! Infers bonds from interatomic distances, then builds the lists
 //! of bond/angle/torsion interactions needed for energy computation.
 
+use std::collections::HashSet;
+
 use super::params::{AmberParams, AtomTypeEntry};
 
 /// Per-atom data for force field computation.
@@ -50,9 +52,9 @@ pub struct Topology {
     pub angles: Vec<Angle>,
     pub torsions: Vec<Torsion>,
     /// Pairs that are 1-2 or 1-3 connected (excluded from nonbonded)
-    pub excluded_pairs: Vec<(usize, usize)>,
+    pub excluded_pairs: HashSet<(usize, usize)>,
     /// 1-4 pairs (scaled nonbonded)
-    pub pairs_14: Vec<(usize, usize)>,
+    pub pairs_14: HashSet<(usize, usize)>,
 }
 
 /// Maximum bond distance for element pairs (Å).
@@ -159,15 +161,15 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &AmberParams) -> Topology {
 
     // Step 4: Build torsions from angles
     let mut torsions = Vec::new();
-    let mut excluded_pairs = Vec::new();
-    let mut pairs_14 = Vec::new();
+    let mut excluded_pairs = HashSet::new();
+    let mut pairs_14 = HashSet::new();
 
     // Record 1-2 and 1-3 exclusions
     for bond in &bonds {
-        excluded_pairs.push((bond.i.min(bond.j), bond.i.max(bond.j)));
+        excluded_pairs.insert((bond.i.min(bond.j), bond.i.max(bond.j)));
     }
     for angle in &angles {
-        excluded_pairs.push((angle.i.min(angle.k), angle.i.max(angle.k)));
+        excluded_pairs.insert((angle.i.min(angle.k), angle.i.max(angle.k)));
     }
 
     // Build torsions: for each bond j-k, find i bonded to j and l bonded to k
@@ -184,8 +186,8 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &AmberParams) -> Topology {
                 }
                 torsions.push(Torsion { i, j, k, l });
                 let pair = (i.min(l), i.max(l));
-                if !excluded_pairs.contains(&pair) && !pairs_14.contains(&pair) {
-                    pairs_14.push(pair);
+                if !excluded_pairs.contains(&pair) {
+                    pairs_14.insert(pair);
                 }
             }
         }

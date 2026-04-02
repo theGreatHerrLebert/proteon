@@ -82,3 +82,52 @@ def minimize_structure(
         steps, converged, energy_components.
     """
     return _ff.minimize_structure(_get_ptr(structure), max_steps, gradient_tolerance)
+
+
+def batch_minimize_hydrogens(
+    structures,
+    max_steps: int = 500,
+    gradient_tolerance: float = 0.1,
+    *,
+    n_threads=None,
+):
+    """Minimize hydrogen positions for many structures in parallel (Rust + rayon).
+
+    Args:
+        structures: List of ferritin Structure objects.
+        max_steps: Maximum optimization steps per structure.
+        gradient_tolerance: Convergence criterion in kcal/mol/A.
+        n_threads: Thread count. None/-1 = all cores.
+
+    Returns:
+        List of result dicts (same format as minimize_hydrogens).
+
+    Examples:
+        >>> results = ferritin.batch_minimize_hydrogens(structures, n_threads=-1)
+        >>> for r in results:
+        ...     print(f"E: {r['initial_energy']:.0f} -> {r['final_energy']:.0f}")
+    """
+    ptrs = [_get_ptr(s) for s in structures]
+    return _ff.batch_minimize_hydrogens(ptrs, max_steps, gradient_tolerance, n_threads)
+
+
+def load_and_minimize_hydrogens(
+    paths,
+    max_steps: int = 500,
+    gradient_tolerance: float = 0.1,
+    *,
+    n_threads=None,
+):
+    """Load files and minimize hydrogens in one parallel call (zero GIL).
+
+    Args:
+        paths: List of file paths.
+        max_steps: Maximum optimization steps per structure.
+        gradient_tolerance: Convergence criterion in kcal/mol/A.
+        n_threads: Thread count. None/-1 = all cores.
+
+    Returns:
+        List of (index, result_dict) tuples.
+    """
+    str_paths = [str(p) for p in paths]
+    return _ff.load_and_minimize_hydrogens(str_paths, max_steps, gradient_tolerance, n_threads)
