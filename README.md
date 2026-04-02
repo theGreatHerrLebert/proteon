@@ -107,6 +107,17 @@ ss = ferritin.assign_secondary_structure(ca)          # quick SS (CA-distance)
 rmsd, R, t = ferritin.kabsch_superpose(x, y)          # optimal superposition
 ```
 
+### Atom Selection Language
+```python
+mask = ferritin.select(s, "CA and chain A")          # → boolean mask
+mask = ferritin.select(s, "backbone and resid 1-50") # backbone of region
+mask = ferritin.select(s, "protein and heavy")       # heavy atoms only
+mask = ferritin.select(s, "(chain A or chain B) and not water")
+
+coords = s.coords[mask]                              # index any per-atom array
+bfactors = s.b_factors[mask]
+```
+
 ### DataFrame Export
 ```python
 df = ferritin.to_dataframe(s)                  # pandas
@@ -172,6 +183,44 @@ See [`examples/`](examples/) for runnable scripts:
 - `03_contact_map.py` — distance matrices, contacts
 - `04_ramachandran.py` — backbone dihedrals, SS correlation
 - `05_sasa_analysis.py` — SASA, RSA, burial classification
+
+## Agent-Aware Documentation
+
+Ferritin includes structured **Agent Notes** in every public function's docstring — guidance specifically for AI agents and LLM-powered tools that call ferritin programmatically.
+
+```python
+def atom_sasa(structure, probe=1.4, n_points=960):
+    """Compute per-atom SASA using Shrake-Rupley algorithm.
+
+    Args / Returns / Examples...
+
+    Agent Notes:
+        DEFAULTS: probe=1.4 is the standard water probe radius. Don't change
+        unless you have a specific reason.
+
+        PRECISION: n_points=960 gives ~0.2% accuracy. Use 100 for screening,
+        960 for publication quality.
+
+        PREFER: For many structures, use batch_total_sasa() with n_threads=-1.
+
+        COST: Crambin (327 atoms): ~12ms. Large complex (58k atoms): ~230ms.
+    """
+```
+
+The convention uses keyword prefixes to categorize guidance:
+
+| Prefix | Meaning |
+|--------|---------|
+| `PREREQUISITE` | What must be true before calling |
+| `INTERPRET` | How to read the output correctly |
+| `WATCH` | Common gotchas that are NOT bugs |
+| `PREFER` | Better alternatives for common use cases |
+| `AVOID` | Anti-patterns that produce bad results |
+| `CAUTION` | Destructive or misleading behaviors |
+| `COST` | Computational complexity and timing |
+| `VERIFY` | What to check in the result |
+
+This ensures AI agents that read function signatures before calling them always see the most critical usage guidance — preventing the most common mistakes in automated structural biology workflows.
 
 ## References
 

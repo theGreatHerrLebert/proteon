@@ -86,6 +86,7 @@ from .sasa import (
     residue_sasa,
     total_sasa,
 )
+from .select import select
 from .io import (
     batch_load,
     batch_load_tolerant,
