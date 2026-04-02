@@ -51,6 +51,12 @@ from .analysis import (
     to_dataframe,
 )
 from .core import RustWrapperObject
+from .hbond import (
+    backbone_hbonds,
+    batch_backbone_hbonds,
+    geometric_hbonds,
+    hbond_count,
+)
 from .dssp import (
     batch_dssp,
     dssp,
