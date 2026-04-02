@@ -40,7 +40,7 @@ Ferritin fills that gap:
 - **Rust core** — 24.6x faster than Biopython for SASA, 34x for dihedrals
 - **Rayon parallelism** — batch operations scale to all cores automatically
 - **Zero-GIL pipelines** — `load_and_analyze()` runs entirely in Rust, 6x faster than a Python loop
-- **Oracle-validated on 1000 structures** — 0.20% SASA agreement with Biopython, 97.3% load rate
+- **Oracle-validated on 1000 structures** — SASA within 0.20% of Biopython (median), 97.3% PDB load rate
 - **342 tests** — comprehensive test suite including cross-tool oracle validation
 
 ## Features
@@ -68,7 +68,7 @@ results = ferritin.tm_align_many_to_many(queries, targets, n_threads=-1)
 ```
 
 ### SASA (Solvent Accessible Surface Area)
-Shrake-Rupley algorithm, 0.18% agreement with Biopython:
+Shrake-Rupley algorithm, within 0.2% of Biopython:
 ```python
 sasa = ferritin.atom_sasa(s)             # per-atom (Å²)
 res_sasa = ferritin.residue_sasa(s)      # per-residue
@@ -145,7 +145,7 @@ Validated on 1000 diverse PDB structures (10 to 50,000 residues):
 
 | Metric | Value |
 |--------|-------|
-| **SASA accuracy** | 0.20% median diff vs Biopython (100% within 5%) |
+| **SASA accuracy** | Within 0.20% of Biopython (median), 100% within 5% |
 | **SASA speed** | **24.6x faster** than Biopython (median across 1000 structures) |
 | **Dihedrals speed** | **34x faster** than Python |
 | **Load + analyze** | 101 structures/second (zero-GIL pipeline) |
