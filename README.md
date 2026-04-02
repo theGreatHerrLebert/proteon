@@ -180,6 +180,8 @@ See [`examples/`](examples/) for runnable scripts:
 - Kabsch & Sander. "DSSP." *Biopolymers* 22, 2577-2637 (1983)
 - Shrake & Rupley. "Environment and exposure to solvent." *J Mol Biol* 79(2), 351-71 (1973)
 - Tien et al. "Maximum allowed solvent accessibilities." *PLoS ONE* 8(11), e80635 (2013)
+- Hildebrandt et al. "BALL — Biochemical Algorithms Library 1.3." *BMC Bioinformatics* 11, 531 (2010)
+- Schulte, D. "pdbtbx: A Rust library for reading, editing, and saving crystallographic PDB/mmCIF files." *JOSS* 7(77), 4377 (2022)
 
 ## License
 
