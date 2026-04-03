@@ -35,6 +35,8 @@ pub fn atom_schema() -> Schema {
         Field::new("chain_id", DataType::Utf8, false),
         Field::new("residue_name", DataType::Utf8, false),
         Field::new("residue_serial", DataType::Int64, false),
+        Field::new("insertion_code", DataType::Utf8, true),
+        Field::new("conformer_id", DataType::Utf8, true),
         Field::new("atom_name", DataType::Utf8, false),
         Field::new("atom_serial", DataType::Int64, false),
         Field::new("element", DataType::Utf8, true),
@@ -58,6 +60,8 @@ pub struct AtomBatchBuilder {
     chain_id: StringBuilder,
     residue_name: StringBuilder,
     residue_serial: Int64Builder,
+    insertion_code: StringBuilder,
+    conformer_id: StringBuilder,
     atom_name: StringBuilder,
     atom_serial: Int64Builder,
     element: StringBuilder,
@@ -79,6 +83,8 @@ impl AtomBatchBuilder {
             chain_id: StringBuilder::with_capacity(capacity, capacity),
             residue_name: StringBuilder::with_capacity(capacity, capacity * 3),
             residue_serial: Int64Builder::with_capacity(capacity),
+            insertion_code: StringBuilder::with_capacity(capacity, capacity),
+            conformer_id: StringBuilder::with_capacity(capacity, capacity),
             atom_name: StringBuilder::with_capacity(capacity, capacity * 4),
             atom_serial: Int64Builder::with_capacity(capacity),
             element: StringBuilder::with_capacity(capacity, capacity * 2),
@@ -101,6 +107,8 @@ impl AtomBatchBuilder {
         chain_id: &str,
         residue_name: &str,
         residue_serial: i64,
+        insertion_code: Option<&str>,
+        conformer_id: Option<&str>,
         atom_name: &str,
         atom_serial: i64,
         element: Option<&str>,
@@ -117,6 +125,14 @@ impl AtomBatchBuilder {
         self.chain_id.append_value(chain_id);
         self.residue_name.append_value(residue_name);
         self.residue_serial.append_value(residue_serial);
+        match insertion_code {
+            Some(ic) => self.insertion_code.append_value(ic),
+            None => self.insertion_code.append_null(),
+        }
+        match conformer_id {
+            Some(cf) => self.conformer_id.append_value(cf),
+            None => self.conformer_id.append_null(),
+        }
         self.atom_name.append_value(atom_name);
         self.atom_serial.append_value(atom_serial);
         match element {
@@ -152,6 +168,8 @@ impl AtomBatchBuilder {
                 Arc::new(self.chain_id.finish()),
                 Arc::new(self.residue_name.finish()),
                 Arc::new(self.residue_serial.finish()),
+                Arc::new(self.insertion_code.finish()),
+                Arc::new(self.conformer_id.finish()),
                 Arc::new(self.atom_name.finish()),
                 Arc::new(self.atom_serial.finish()),
                 Arc::new(self.element.finish()),
@@ -175,26 +193,28 @@ mod tests {
     #[test]
     fn test_schema_fields() {
         let schema = atom_schema();
-        assert_eq!(schema.fields().len(), 15);
+        assert_eq!(schema.fields().len(), 17);
         assert_eq!(schema.field(0).name(), "structure_id");
-        assert_eq!(schema.field(8).name(), "x");
+        assert_eq!(schema.field(5).name(), "insertion_code");
+        assert_eq!(schema.field(6).name(), "conformer_id");
+        assert_eq!(schema.field(10).name(), "x");
     }
 
     #[test]
     fn test_build_batch() {
         let mut builder = AtomBatchBuilder::new(2);
         builder.append(
-            "1crn", 0, "A", "THR", 1, "CA", 1, Some("C"),
+            "1crn", 0, "A", "THR", 1, None, None, "CA", 1, Some("C"),
             17.047, 14.099, 3.625, 13.79, 1.0, false, true,
         );
         builder.append(
-            "1crn", 0, "A", "THR", 1, "CB", 2, Some("C"),
+            "1crn", 0, "A", "THR", 1, None, None, "CB", 2, Some("C"),
             16.967, 12.784, 4.338, 13.25, 1.0, false, false,
         );
 
         let batch = builder.finish().unwrap();
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 15);
+        assert_eq!(batch.num_columns(), 17);
     }
 
     #[test]

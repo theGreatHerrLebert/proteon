@@ -13,6 +13,12 @@ Fast structure loading, alignment, and analysis with a clean Python API.
 
 __version__ = "0.1.0"
 
+from .arrow import (
+    from_arrow,
+    to_arrow,
+    to_parquet,
+    to_structure_arrow,
+)
 from .align import (
     AlignResult,
     ChainPairResult,

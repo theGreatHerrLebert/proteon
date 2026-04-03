@@ -43,7 +43,7 @@ mod tests {
     fn test_write_parquet() {
         let mut builder = AtomBatchBuilder::new(1);
         builder.append(
-            "1crn", 0, "A", "THR", 1, "CA", 1, Some("C"),
+            "1crn", 0, "A", "THR", 1, None, None, "CA", 1, Some("C"),
             17.047, 14.099, 3.625, 13.79, 1.0, false, true,
         );
         let batch = builder.finish().unwrap();

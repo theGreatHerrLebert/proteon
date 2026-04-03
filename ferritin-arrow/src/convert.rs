@@ -6,9 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use arrow::array::{
-    Array, AsArray, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt32Array,
-};
+use arrow::array::{Array, AsArray, BooleanArray, Float64Array, Int64Array, RecordBatch, UInt32Array};
 
 use crate::atom::AtomBatchBuilder;
 use crate::structure::StructureBatchBuilder;
@@ -32,7 +30,10 @@ pub fn pdb_to_atom_batch(pdb: &pdbtbx::PDB, structure_id: &str) -> anyhow::Resul
                     .unwrap_or("UNK");
                 let res_serial = residue.serial_number() as i64;
 
+                let insertion_code = residue.insertion_code();
+
                 for conformer in residue.conformers() {
+                    let conf_id = conformer.alternative_location();
                     for atom in conformer.atoms() {
                         let atom_name = atom.name();
                         let element = atom.element().map(|e| e.symbol());
@@ -45,6 +46,8 @@ pub fn pdb_to_atom_batch(pdb: &pdbtbx::PDB, structure_id: &str) -> anyhow::Resul
                             chain_id,
                             res_name,
                             res_serial,
+                            insertion_code,
+                            conf_id,
                             atom_name,
                             atom.serial_number() as i64,
                             element,
@@ -109,8 +112,10 @@ pub fn pdbs_to_atom_batch(
                 for residue in chain.residues() {
                     let res_name = residue.name().unwrap_or("UNK");
                     let res_serial = residue.serial_number() as i64;
+                    let insertion_code = residue.insertion_code();
 
                     for conformer in residue.conformers() {
+                        let conf_id = conformer.alternative_location();
                         for atom in conformer.atoms() {
                             let atom_name = atom.name();
                             let element = atom.element().map(|e| e.symbol());
@@ -123,6 +128,8 @@ pub fn pdbs_to_atom_batch(
                                 chain_id,
                                 res_name,
                                 res_serial,
+                                insertion_code,
+                                conf_id,
                                 atom_name,
                                 atom.serial_number() as i64,
                                 element,
@@ -148,49 +155,71 @@ pub fn pdbs_to_atom_batch(
 // Arrow → PDB (from_arrow)
 // ============================================================================
 
-/// Helper to downcast a RecordBatch column by index.
-fn col_str(batch: &RecordBatch, idx: usize) -> &StringArray {
-    batch.column(idx).as_any().downcast_ref::<StringArray>().unwrap()
-}
-fn col_f64(batch: &RecordBatch, idx: usize) -> &Float64Array {
-    batch.column(idx).as_any().downcast_ref::<Float64Array>().unwrap()
-}
-fn col_i64(batch: &RecordBatch, idx: usize) -> &Int64Array {
-    batch.column(idx).as_any().downcast_ref::<Int64Array>().unwrap()
-}
-fn col_u32(batch: &RecordBatch, idx: usize) -> &UInt32Array {
-    batch.column(idx).as_any().downcast_ref::<UInt32Array>().unwrap()
-}
-fn col_bool(batch: &RecordBatch, idx: usize) -> &BooleanArray {
-    batch.column(idx).as_any().downcast_ref::<BooleanArray>().unwrap()
-}
-
 /// Convert an atom-schema Arrow RecordBatch back into pdbtbx PDB structures.
 ///
-/// Groups rows by `structure_id`, then by model/chain/residue to rebuild
-/// the hierarchy. Returns a Vec of (structure_id, PDB) pairs.
+/// Groups rows by `structure_id`, then by model/chain/residue/conformer
+/// to rebuild the full hierarchy including insertion codes and alt conformers.
 ///
-/// This enables round-tripping: PDB → Arrow → filter/transform → PDB.
+/// Returns an error if the batch does not have the expected atom schema.
 pub fn atom_batch_to_pdbs(batch: &RecordBatch) -> anyhow::Result<Vec<(String, pdbtbx::PDB)>> {
     let n = batch.num_rows();
     if n == 0 {
         return Ok(vec![]);
     }
 
-    let structure_ids = col_str(batch, 0);
-    let models = col_u32(batch, 1);
-    let chain_ids = col_str(batch, 2);
-    let residue_names = col_str(batch, 3);
-    let residue_serials = col_i64(batch, 4);
-    let atom_names = col_str(batch, 5);
-    let atom_serials = col_i64(batch, 6);
-    let elements = batch.column(7).as_string::<i32>();
-    let xs = col_f64(batch, 8);
-    let ys = col_f64(batch, 9);
-    let zs = col_f64(batch, 10);
-    let b_factors = col_f64(batch, 11);
-    let occupancies = col_f64(batch, 12);
-    let is_hetero = col_bool(batch, 13);
+    // Schema validation: check required columns exist by name
+    let schema = batch.schema();
+    let get_col = |name: &str| -> anyhow::Result<usize> {
+        schema.index_of(name).map_err(|_| {
+            anyhow::anyhow!(
+                "Missing column '{}' — expected atom schema (got columns: {:?})",
+                name,
+                schema.fields().iter().map(|f| f.name().as_str()).collect::<Vec<_>>()
+            )
+        })
+    };
+
+    let idx_sid = get_col("structure_id")?;
+    let idx_model = get_col("model")?;
+    let idx_chain = get_col("chain_id")?;
+    let idx_resname = get_col("residue_name")?;
+    let idx_resser = get_col("residue_serial")?;
+    let idx_icode = schema.index_of("insertion_code").ok();
+    let idx_confid = schema.index_of("conformer_id").ok();
+    let idx_atomname = get_col("atom_name")?;
+    let idx_atomser = get_col("atom_serial")?;
+    let idx_elem = get_col("element")?;
+    let idx_x = get_col("x")?;
+    let idx_y = get_col("y")?;
+    let idx_z = get_col("z")?;
+    let idx_bfac = get_col("b_factor")?;
+    let idx_occ = get_col("occupancy")?;
+    let idx_het = get_col("is_hetero")?;
+
+    let structure_ids = batch.column(idx_sid).as_string::<i32>();
+    let models = batch.column(idx_model).as_any().downcast_ref::<UInt32Array>().unwrap();
+    let chain_ids = batch.column(idx_chain).as_string::<i32>();
+    let residue_names = batch.column(idx_resname).as_string::<i32>();
+    let residue_serials = batch.column(idx_resser).as_any().downcast_ref::<Int64Array>().unwrap();
+    let insertion_codes = idx_icode.map(|i| batch.column(i).as_string::<i32>());
+    let conformer_ids = idx_confid.map(|i| batch.column(i).as_string::<i32>());
+    let atom_names = batch.column(idx_atomname).as_string::<i32>();
+    let atom_serials = batch.column(idx_atomser).as_any().downcast_ref::<Int64Array>().unwrap();
+    let elements = batch.column(idx_elem).as_string::<i32>();
+    let xs = batch.column(idx_x).as_any().downcast_ref::<Float64Array>().unwrap();
+    let ys = batch.column(idx_y).as_any().downcast_ref::<Float64Array>().unwrap();
+    let zs = batch.column(idx_z).as_any().downcast_ref::<Float64Array>().unwrap();
+    let b_factors = batch.column(idx_bfac).as_any().downcast_ref::<Float64Array>().unwrap();
+    let occupancies = batch.column(idx_occ).as_any().downcast_ref::<Float64Array>().unwrap();
+    let is_hetero = batch.column(idx_het).as_any().downcast_ref::<BooleanArray>().unwrap();
+
+    // Helpers to read optional nullable string columns
+    let get_icode = |row: usize| -> Option<&str> {
+        insertion_codes.and_then(|ic| if ic.is_null(row) { None } else { Some(ic.value(row)) })
+    };
+    let get_confid = |row: usize| -> Option<&str> {
+        conformer_ids.and_then(|cf| if cf.is_null(row) { None } else { Some(cf.value(row)) })
+    };
 
     // Group rows by structure_id, preserving order
     let mut structure_order: Vec<String> = Vec::new();
@@ -215,8 +244,8 @@ pub fn atom_batch_to_pdbs(batch: &RecordBatch) -> anyhow::Result<Vec<(String, pd
             model_rows.entry(models.value(row)).or_default().push(row);
         }
 
-        for (_model_idx, m_rows) in &model_rows {
-            let mut model = pdbtbx::Model::new(0);
+        for (model_serial, m_rows) in &model_rows {
+            let mut model = pdbtbx::Model::new(*model_serial as usize);
 
             // Group by chain
             let mut chain_rows: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -233,52 +262,80 @@ pub fn atom_batch_to_pdbs(batch: &RecordBatch) -> anyhow::Result<Vec<(String, pd
                 let c_rows = &chain_rows[cid];
                 let mut chain = pdbtbx::Chain::new(cid).unwrap();
 
-                // Group by residue (serial number)
-                let mut res_rows: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-                let mut res_order: Vec<i64> = Vec::new();
+                // Group by residue: (serial, insertion_code) is the unique key
+                type ResKey = (i64, Option<String>);
+                let mut res_rows: BTreeMap<ResKey, Vec<usize>> = BTreeMap::new();
+                let mut res_order: Vec<ResKey> = Vec::new();
                 for &row in c_rows {
-                    let rs = residue_serials.value(row);
-                    res_rows.entry(rs).or_insert_with(|| {
-                        res_order.push(rs);
+                    let key: ResKey = (
+                        residue_serials.value(row),
+                        get_icode(row).map(|s| s.to_string()),
+                    );
+                    res_rows.entry(key.clone()).or_insert_with(|| {
+                        res_order.push(key.clone());
                         Vec::new()
                     }).push(row);
                 }
 
-                for rs in &res_order {
-                    let r_rows = &res_rows[rs];
-                    let first = r_rows[0];
-                    let res_name = residue_names.value(first);
+                for rkey in &res_order {
+                    let r_rows = &res_rows[rkey];
+                    let (rs, ref icode) = *rkey;
 
-                    let mut residue = pdbtbx::Residue::new(*rs as isize, None, None)
-                        .unwrap();
-                    let mut conformer = pdbtbx::Conformer::new(res_name, None, None)
-                        .unwrap();
+                    let mut residue = pdbtbx::Residue::new(
+                        rs as isize,
+                        icode.as_deref(),
+                        None,
+                    ).unwrap();
 
+                    // Group by conformer (alt-loc ID)
+                    let mut conf_rows: BTreeMap<Option<String>, Vec<usize>> = BTreeMap::new();
+                    let mut conf_order: Vec<Option<String>> = Vec::new();
                     for &row in r_rows {
-                        let element_str = if elements.is_null(row) {
-                            "C"
-                        } else {
-                            elements.value(row)
-                        };
-
-                        let atom = pdbtbx::Atom::new(
-                            is_hetero.value(row),
-                            atom_serials.value(row) as usize,
-                            "",  // conformer/alt-loc ID
-                            atom_names.value(row),
-                            xs.value(row),
-                            ys.value(row),
-                            zs.value(row),
-                            occupancies.value(row),
-                            b_factors.value(row),
-                            element_str,
-                            0,  // charge
-                        ).unwrap();
-
-                        conformer.add_atom(atom);
+                        let cfid = get_confid(row).map(|s| s.to_string());
+                        conf_rows.entry(cfid.clone()).or_insert_with(|| {
+                            conf_order.push(cfid.clone());
+                            Vec::new()
+                        }).push(row);
                     }
 
-                    residue.add_conformer(conformer);
+                    for cfid in &conf_order {
+                        let cf_rows = &conf_rows[cfid];
+                        let first = cf_rows[0];
+                        let res_name = residue_names.value(first);
+
+                        let mut conformer = pdbtbx::Conformer::new(
+                            res_name,
+                            cfid.as_deref(),
+                            None,
+                        ).unwrap();
+
+                        for &row in cf_rows {
+                            let element_str = if elements.is_null(row) {
+                                "C"
+                            } else {
+                                elements.value(row)
+                            };
+
+                            let atom = pdbtbx::Atom::new(
+                                is_hetero.value(row),
+                                atom_serials.value(row) as usize,
+                                "",
+                                atom_names.value(row),
+                                xs.value(row),
+                                ys.value(row),
+                                zs.value(row),
+                                occupancies.value(row),
+                                b_factors.value(row),
+                                element_str,
+                                0,
+                            ).unwrap();
+
+                            conformer.add_atom(atom);
+                        }
+
+                        residue.add_conformer(conformer);
+                    }
+
                     chain.add_residue(residue);
                 }
 
@@ -319,13 +376,9 @@ mod tests {
 
         let batch = pdb_to_atom_batch(&pdb, "1crn").unwrap();
         assert!(batch.num_rows() > 300, "crambin should have >300 atoms");
-        assert_eq!(batch.num_columns(), 15);
+        assert_eq!(batch.num_columns(), 17);
 
-        let ids = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let ids = batch.column(0).as_string::<i32>();
         assert_eq!(ids.value(0), "1crn");
     }
 
@@ -378,5 +431,20 @@ mod tests {
         assert!((ox - rx).abs() < 1e-10, "x mismatch: {ox} vs {rx}");
         assert!((oy - ry).abs() < 1e-10, "y mismatch: {oy} vs {ry}");
         assert!((oz - rz).abs() < 1e-10, "z mismatch: {oz} vs {rz}");
+    }
+
+    #[test]
+    fn test_rejects_wrong_schema() {
+        let pdb = match load_test_pdb() {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Structure schema batch should be rejected by atom_batch_to_pdbs
+        let structure_batch = pdb_to_structure_batch(&pdb, "1crn").unwrap();
+        let result = atom_batch_to_pdbs(&structure_batch);
+        assert!(result.is_err(), "should reject structure schema");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Missing column"), "error should mention missing column: {err_msg}");
     }
 }
