@@ -46,7 +46,7 @@ struct Args {
     #[arg(short = 'j', long, default_value = "0")]
     threads: usize,
 
-    /// Flush to Parquet every N structures (single-file mode).
+    /// Flush to Parquet every N structures (single-file mode, minimum 1).
     /// Keeps memory bounded for large corpora.
     #[arg(long, default_value = "500")]
     chunk_size: usize,
@@ -125,6 +125,8 @@ fn load_pdb_permissive(path: &Path) -> Result<pdbtbx::PDB> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    anyhow::ensure!(args.chunk_size >= 1, "--chunk-size must be at least 1");
+
     if args.threads > 0 {
         rayon::ThreadPoolBuilder::new()
             .num_threads(args.threads)
@@ -158,14 +160,27 @@ fn main() -> Result<()> {
         std::fs::create_dir_all(&args.out)
             .with_context(|| format!("creating output directory {}", args.out.display()))?;
 
+        // Detect basename collisions and disambiguate with parent dir
+        let mut name_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for path in &files {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+            *name_counts.entry(stem.to_string()).or_default() += 1;
+        }
+
         files.par_iter().for_each(|path| {
             let sid = structure_id_from_path(path);
-            // Use full path hash for output filename to avoid collisions
-            let out_name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown");
-            match load_and_write_single(path, &sid, &args.out, out_name) {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+            // If basename is unique, use it directly; otherwise include parent dir
+            let out_name = if name_counts.get(stem).copied().unwrap_or(0) > 1 {
+                let parent = path.parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("unk");
+                format!("{parent}_{stem}")
+            } else {
+                stem.to_string()
+            };
+            match load_and_write_single(path, &sid, &args.out, &out_name) {
                 Ok(_) => {
                     let done = n_done.fetch_add(1, Ordering::Relaxed) + 1;
                     if done % 100 == 0 {
