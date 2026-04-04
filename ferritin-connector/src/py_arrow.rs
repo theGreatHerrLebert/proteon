@@ -126,11 +126,31 @@ fn to_parquet(
     Ok(())
 }
 
+/// Read structures from a Parquet file (per-atom schema).
+///
+/// Returns a list of (structure_id, PyPDB) tuples.
+#[pyfunction]
+fn from_parquet(py: Python<'_>, path: &str) -> PyResult<Vec<(String, PyPDB)>> {
+    let batch = py
+        .allow_threads(|| ferritin_arrow::reader::read_parquet(std::path::Path::new(path)))
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    let pdbs = py
+        .allow_threads(|| atom_batch_to_pdbs(&batch))
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    Ok(pdbs
+        .into_iter()
+        .map(|(sid, pdb)| (sid, PyPDB::from_inner(pdb)))
+        .collect())
+}
+
 #[pymodule]
 pub fn py_arrow(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(to_arrow_ipc, m)?)?;
     m.add_function(wrap_pyfunction!(to_structure_arrow_ipc, m)?)?;
     m.add_function(wrap_pyfunction!(from_arrow_ipc, m)?)?;
     m.add_function(wrap_pyfunction!(to_parquet, m)?)?;
+    m.add_function(wrap_pyfunction!(from_parquet, m)?)?;
     Ok(())
 }

@@ -15,6 +15,7 @@ __version__ = "0.1.0"
 
 from .arrow import (
     from_arrow,
+    from_parquet,
     to_arrow,
     to_parquet,
     to_structure_arrow,

@@ -97,6 +97,29 @@ ghb = ferritin.geometric_hbonds(s)        # distance-based, all polar atoms
 counts = ferritin.hbond_count(s)          # per-residue participation
 ```
 
+### Force Field & Energy Minimization
+AMBER96 force field with steepest descent minimization — fix hydrogen clashes after loading or editing:
+```python
+# Energy breakdown
+e = ferritin.compute_energy(s)
+print(f"Total: {e['total']:.1f} kcal/mol")
+print(f"  bonds={e['bond_stretch']:.1f}  angles={e['angle_bend']:.1f}")
+print(f"  torsions={e['torsion']:.1f}  vdw={e['vdw']:.1f}  elec={e['electrostatic']:.1f}")
+
+# Minimize hydrogens only (heavy atoms frozen)
+result = ferritin.minimize_hydrogens(s)
+print(f"{result['initial_energy']:.1f} → {result['final_energy']:.1f} in {result['steps']} steps")
+
+# Full structure minimization
+result = ferritin.minimize_structure(s, max_steps=1000, gradient_tolerance=0.1)
+
+# Batch parallel (rayon, GIL-released)
+results = ferritin.batch_minimize_hydrogens(structures, n_threads=-1)
+
+# Zero-GIL: load from disk + minimize in one Rust call
+results = ferritin.load_and_minimize_hydrogens(pdb_files, n_threads=-1)
+```
+
 ### Geometry & Analysis
 ```python
 phi, psi, omega = ferritin.backbone_dihedrals(s)     # Ramachandran
@@ -167,7 +190,7 @@ Pure Rust (no Python dependency)
 └── ferritin-bin      — CLI binaries (tmalign, usalign)
 
 PyO3 connector (cdylib, rayon, GIL-released)
-└── ferritin-connector — analysis, SASA, DSSP, H-bonds, alignment
+└── ferritin-connector — analysis, SASA, DSSP, H-bonds, force field, alignment
 
 Python package
 └── ferritin           — clean Pythonic API
@@ -221,6 +244,11 @@ structures = ferritin.from_arrow(ipc)
 
 # Direct to Parquet (Zstd compressed, from Rust)
 ferritin.to_parquet(s, "output.parquet", "1crn")
+
+# Parquet → back to structures
+results = ferritin.from_parquet("output.parquet")
+for structure_id, structure in results:
+    print(f"{structure_id}: {structure.atom_count} atoms")
 ```
 
 ## CLI Tools
@@ -329,6 +357,9 @@ This ensures AI agents that read function signatures before calling them always 
 
 **Structural search (in development):**
 - van Kempen et al. "Fast and accurate protein structure search with Foldseek." [*Nature Biotechnology* 41, 243-246 (2023)](https://doi.org/10.1038/s41587-023-01773-0)
+
+**Force field:**
+- Cornell et al. "A Second Generation Force Field for the Simulation of Proteins, Nucleic Acids, and Organic Molecules." [*J. Am. Chem. Soc.* 117(19), 5179-5197 (1995)](https://doi.org/10.1021/ja00124a002)
 
 **Infrastructure:**
 - Hildebrandt et al. "BALL — Biochemical Algorithms Library 1.3." [*BMC Bioinformatics* 11, 531 (2010)](https://doi.org/10.1186/1471-2105-11-531)

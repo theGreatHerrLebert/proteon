@@ -248,3 +248,106 @@ class TestPublicAPI:
             assert os.path.getsize(path) > 0
         finally:
             os.unlink(path)
+
+    def test_import_from_parquet(self):
+        import ferritin
+        assert hasattr(ferritin, "from_parquet")
+        assert callable(ferritin.from_parquet)
+
+
+# ---------------------------------------------------------------------------
+# Parquet round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestParquetRoundtrip:
+    """Tests for Parquet write → read round-trip."""
+
+    def test_connector_roundtrip_atom_count(self):
+        pdb = py_io.load(CRAMBIN)
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+            path = f.name
+        try:
+            py_arrow.to_parquet(pdb, path, "1crn")
+            results = py_arrow.from_parquet(path)
+            assert len(results) == 1
+            sid, rebuilt = results[0]
+            assert sid == "1crn"
+            assert rebuilt.atom_count == pdb.atom_count
+        finally:
+            os.unlink(path)
+
+    def test_connector_roundtrip_coordinates(self):
+        pdb = py_io.load(CRAMBIN)
+        orig_coords = pdb.coords
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+            path = f.name
+        try:
+            py_arrow.to_parquet(pdb, path, "1crn")
+            _, rebuilt = py_arrow.from_parquet(path)[0]
+            np.testing.assert_allclose(
+                orig_coords, rebuilt.coords, atol=1e-6,
+                err_msg="coordinates must survive Parquet round-trip"
+            )
+        finally:
+            os.unlink(path)
+
+    def test_connector_roundtrip_b_factors(self):
+        pdb = py_io.load(CRAMBIN)
+        orig_bf = pdb.b_factors
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+            path = f.name
+        try:
+            py_arrow.to_parquet(pdb, path, "1crn")
+            _, rebuilt = py_arrow.from_parquet(path)[0]
+            np.testing.assert_allclose(
+                orig_bf, rebuilt.b_factors, atol=1e-6,
+                err_msg="B-factors must survive Parquet round-trip"
+            )
+        finally:
+            os.unlink(path)
+
+    def test_connector_roundtrip_atom_names(self):
+        pdb = py_io.load(CRAMBIN)
+        orig_names = pdb.atom_names
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+            path = f.name
+        try:
+            py_arrow.to_parquet(pdb, path, "1crn")
+            _, rebuilt = py_arrow.from_parquet(path)[0]
+            assert orig_names == rebuilt.atom_names
+        finally:
+            os.unlink(path)
+
+    def test_public_parquet_roundtrip(self):
+        import ferritin
+
+        s = ferritin.load(CRAMBIN)
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+            path = f.name
+        try:
+            ferritin.to_parquet(s, path, "1crn")
+            results = ferritin.from_parquet(path)
+            assert len(results) == 1
+            assert results[0][0] == "1crn"
+            assert results[0][1].atom_count == s.atom_count
+        finally:
+            os.unlink(path)
+
+    def test_missing_file_raises(self):
+        with pytest.raises(RuntimeError):
+            py_arrow.from_parquet("/nonexistent/fake.parquet")
+
+    def test_multi_model_parquet_roundtrip(self):
+        if not os.path.exists(MULTI_MODEL):
+            pytest.skip("models.pdb not available")
+        pdb = py_io.load(MULTI_MODEL)
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+            path = f.name
+        try:
+            py_arrow.to_parquet(pdb, path, "models")
+            results = py_arrow.from_parquet(path)
+            _, rebuilt = results[0]
+            assert rebuilt.model_count == pdb.model_count
+        finally:
+            os.unlink(path)

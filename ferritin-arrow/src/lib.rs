@@ -24,4 +24,7 @@ pub mod convert;
 pub mod structure;
 
 #[cfg(feature = "parquet")]
+pub mod reader;
+
+#[cfg(feature = "parquet")]
 pub mod writer;

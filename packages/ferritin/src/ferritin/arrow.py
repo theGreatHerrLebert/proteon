@@ -128,3 +128,39 @@ def to_parquet(
     """
     _check_available()
     _arrow.to_parquet(_get_ptr(structure), path, structure_id)
+
+
+def from_parquet(path: str) -> List[Tuple[str, Structure]]:
+    """Import structures from a Parquet file (per-atom schema).
+
+    Round-trips with ``to_parquet()``: PDB → Parquet → PDB.
+
+    Args:
+        path: Path to a Parquet file written by ``to_parquet()`` or
+            ``ferritin-ingest``.
+
+    Returns:
+        List of (structure_id, Structure) tuples.
+
+    Raises:
+        RuntimeError: If the file cannot be read or lacks the expected schema.
+
+    Agent Notes:
+        PREREQUISITE: The Parquet file must use the ferritin per-atom schema
+        (17 columns). Files from ``to_parquet()`` and ``ferritin-ingest``
+        produce this automatically.
+
+        INTERPRET: Returns one (structure_id, Structure) pair per unique
+        structure_id in the file. Multi-structure Parquet files (from ingest)
+        return multiple pairs.
+
+        PREFER: For large Parquet files with many structures, consider
+        filtering with DuckDB/Polars first, then loading the subset via
+        ``from_arrow()`` on the filtered Arrow data.
+
+        COST: Reads the entire file into memory. For very large files
+        (>1M atoms), memory may be a concern.
+    """
+    _check_available()
+    pairs = _arrow.from_parquet(str(path))
+    return [(sid, Structure.from_py_ptr(pdb)) for sid, pdb in pairs]
