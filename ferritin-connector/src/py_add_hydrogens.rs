@@ -8,6 +8,24 @@ use rayon::prelude::*;
 use crate::add_hydrogens;
 use crate::py_pdb::PyPDB;
 
+/// Apply minimized coordinates back to a PDB structure.
+///
+/// Iterates chains → residues → atoms in the same order as topology building,
+/// and sets each atom's position from the flat coordinate array.
+fn apply_coords_to_pdb(pdb: &mut pdbtbx::PDB, coords: &[[f64; 3]]) {
+    let mut idx = 0;
+    for chain in pdb.chains_mut() {
+        for residue in chain.residues_mut() {
+            for atom in residue.atoms_mut() {
+                if idx < coords.len() {
+                    atom.set_pos((coords[idx][0], coords[idx][1], coords[idx][2]));
+                    idx += 1;
+                }
+            }
+        }
+    }
+}
+
 fn resolve_threads(n: Option<i32>) -> usize {
     match n {
         None | Some(-1) => 0,
@@ -232,14 +250,19 @@ pub fn batch_prepare(
                             (r.added, r.skipped)
                         }
                         "none" => (0, 0),
-                        _ => {
+                        "all" => {
                             let r = add_hydrogens::place_all_hydrogens(pdb);
                             (r.added, r.skipped)
                         }
+                        _ => (0, 0), // unknown mode: skip (matches serial path)
                     };
 
-                    // Minimize H positions
-                    let (init_e, final_e, steps, converged) = if minimize && h_added > 0 {
+                    // Minimize H positions and apply coords back to PDB
+                    // Minimize whenever requested — the structure may already have H from a prior step
+                    let has_any_h = pdb.atoms().any(|a| {
+                        a.element().map_or(false, |e| e.symbol() == "H" || e.symbol() == "D")
+                    });
+                    let (init_e, final_e, steps, converged) = if minimize && (h_added > 0 || has_any_h) {
                         let topo = crate::forcefield::topology::build_topology(pdb, &amber);
                         let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
                         let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
@@ -251,6 +274,8 @@ pub fn batch_prepare(
                             _ => crate::forcefield::minimize::steepest_descent(
                                 &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
                         };
+                        // Apply minimized coordinates back to PDB
+                        apply_coords_to_pdb(pdb, &result.coords);
                         (result.initial_energy, result.energy.total, result.steps, result.converged)
                     } else {
                         (0.0, 0.0, 0, false)

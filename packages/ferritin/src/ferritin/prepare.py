@@ -132,12 +132,19 @@ def prepare(
         report.warnings.append(f"Unknown hydrogens option '{hydrogens}', skipping")
 
     # Step 3: Minimize hydrogen positions
+    # Use batch_prepare for a single structure so coords are applied back in Rust.
     if minimize and report.hydrogens_added > 0:
-        result = _ff.minimize_hydrogens(ptr, minimize_steps, gradient_tolerance, minimize_method)
-        report.initial_energy = result["initial_energy"]
-        report.final_energy = result["final_energy"]
-        report.minimizer_steps = result["steps"]
-        report.converged = result["converged"]
+        # Run minimization via the Rust batch path (applies coords in-place)
+        results = _add_h.batch_prepare(
+            [ptr], False, "none", False,
+            True, minimize_method, minimize_steps, gradient_tolerance, None,
+        )
+        if results:
+            r = results[0]
+            report.initial_energy = r["initial_energy"]
+            report.final_energy = r["final_energy"]
+            report.minimizer_steps = r["minimizer_steps"]
+            report.converged = r["converged"]
 
     # Step 4: Check force field coverage
     energy_result = _ff.compute_energy(ptr, "amber96")

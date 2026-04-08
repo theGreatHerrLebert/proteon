@@ -39,12 +39,17 @@ pub fn compute_energy(py: Python<'_>, pdb: &PyPDB, ff: &str) -> PyResult<PyObjec
             let result = py.allow_threads(|| energy::compute_energy(&coords, &topo, &charmm));
             (topo, result)
         }
-        _ => {
+        "amber" | "amber96" => {
             let amber = params::amber96();
             let topo = topology::build_topology(&pdb.inner, &amber);
             let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
             let result = py.allow_threads(|| energy::compute_energy(&coords, &topo, &amber));
             (topo, result)
+        }
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("Unknown force field '{}'. Use 'amber96' or 'charmm19_eef1'.", ff)
+            ));
         }
     };
 
