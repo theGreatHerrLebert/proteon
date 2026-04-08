@@ -74,7 +74,16 @@ from .hbond import (
 )
 from .hydrogens import (
     batch_place_peptide_hydrogens,
+    place_all_hydrogens,
+    place_general_hydrogens,
     place_peptide_hydrogens,
+    reconstruct_fragments,
+)
+from .prepare import (
+    PrepReport,
+    batch_prepare,
+    load_and_prepare,
+    prepare,
 )
 from .dssp import (
     batch_dssp,

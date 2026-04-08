@@ -176,6 +176,120 @@ pub fn batch_place_peptide_hydrogens(
     Ok(results)
 }
 
+/// Batch prepare structures in parallel (reconstruct + place H + minimize H).
+///
+/// Runs the full preparation pipeline on each structure using rayon parallelism.
+/// Returns list of dicts with preparation statistics.
+#[pyfunction]
+#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=0.1, n_threads=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn batch_prepare(
+    py: Python<'_>,
+    structures: &Bound<'_, PyList>,
+    reconstruct: bool,
+    hydrogens: &str,
+    include_water: bool,
+    minimize: bool,
+    minimize_method: &str,
+    minimize_steps: usize,
+    gradient_tolerance: f64,
+    n_threads: Option<i32>,
+) -> PyResult<Vec<PyObject>> {
+    let mut all_pdbs: Vec<pdbtbx::PDB> = structures
+        .iter()
+        .map(|item| {
+            let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+            Ok(pdb.inner.clone())
+        })
+        .collect::<PyResult<_>>()?;
+
+    let n = resolve_threads(n_threads);
+    let h_mode = hydrogens.to_string();
+    let method = minimize_method.to_string();
+    let amber = crate::forcefield::params::amber96();
+
+    let results: Vec<(usize, usize, usize, f64, f64, usize, bool, usize)> = py.allow_threads(|| {
+        let pool = build_pool(n);
+        pool.install(|| {
+            all_pdbs
+                .par_iter_mut()
+                .map(|pdb| {
+                    // Reconstruct
+                    let reconstructed = if reconstruct {
+                        crate::reconstruct::reconstruct_fragments(pdb).added
+                    } else {
+                        0
+                    };
+
+                    // Place hydrogens
+                    let (h_added, h_skipped) = match h_mode.as_str() {
+                        "backbone" => {
+                            let r = add_hydrogens::place_peptide_hydrogens(pdb);
+                            (r.added, r.skipped)
+                        }
+                        "general" => {
+                            let r = add_hydrogens::place_general_hydrogens(pdb, include_water);
+                            (r.added, r.skipped)
+                        }
+                        "none" => (0, 0),
+                        _ => {
+                            let r = add_hydrogens::place_all_hydrogens(pdb);
+                            (r.added, r.skipped)
+                        }
+                    };
+
+                    // Minimize H positions
+                    let (init_e, final_e, steps, converged) = if minimize && h_added > 0 {
+                        let topo = crate::forcefield::topology::build_topology(pdb, &amber);
+                        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+                        let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
+                        let result = match method.as_str() {
+                            "cg" => crate::forcefield::minimize::conjugate_gradient(
+                                &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+                            "lbfgs" => crate::forcefield::minimize::lbfgs(
+                                &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+                            _ => crate::forcefield::minimize::steepest_descent(
+                                &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+                        };
+                        (result.initial_energy, result.energy.total, result.steps, result.converged)
+                    } else {
+                        (0.0, 0.0, 0, false)
+                    };
+
+                    // Count unassigned atoms
+                    let topo = crate::forcefield::topology::build_topology(pdb, &amber);
+                    let n_unassigned = topo.unassigned_atoms.len();
+
+                    (reconstructed, h_added, h_skipped, init_e, final_e, steps, converged, n_unassigned)
+                })
+                .collect()
+        })
+    });
+
+    // Write back modified structures
+    for (item, modified) in structures.iter().zip(all_pdbs) {
+        let mut pdb = item.extract::<PyRefMut<'_, PyPDB>>()?;
+        pdb.inner = modified;
+    }
+
+    // Convert to Python dicts
+    Ok(results
+        .into_iter()
+        .map(|(recon, h_add, h_skip, init_e, final_e, steps, conv, unassigned)| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("atoms_reconstructed", recon).unwrap();
+            dict.set_item("hydrogens_added", h_add).unwrap();
+            dict.set_item("hydrogens_skipped", h_skip).unwrap();
+            dict.set_item("initial_energy", init_e).unwrap();
+            dict.set_item("final_energy", final_e).unwrap();
+            dict.set_item("minimizer_steps", steps).unwrap();
+            dict.set_item("converged", conv).unwrap();
+            dict.set_item("n_unassigned_atoms", unassigned).unwrap();
+            dict.into_any().unbind()
+        })
+        .collect())
+}
+
 // ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
@@ -189,5 +303,6 @@ pub fn py_add_hydrogens(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(place_general_hydrogens, m)?)?;
     m.add_function(wrap_pyfunction!(reconstruct_fragments, m)?)?;
     m.add_function(wrap_pyfunction!(batch_place_peptide_hydrogens, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_prepare, m)?)?;
     Ok(())
 }

@@ -1,12 +1,11 @@
-"""Peptide backbone hydrogen placement.
-
-Places amide H atoms on backbone nitrogen of non-N-terminal, non-proline
-amino acid residues. Required for accurate Kabsch-Sander H-bond detection
-and DSSP secondary structure assignment.
+"""Hydrogen placement and fragment reconstruction.
 
 Functions:
-    place_peptide_hydrogens     — add backbone N-H to a single structure
-    batch_place_peptide_hydrogens — parallel placement on many structures
+    place_peptide_hydrogens      — backbone N-H only
+    place_all_hydrogens          — backbone + sidechain (standard AA)
+    place_general_hydrogens      — all atoms including ligands
+    reconstruct_fragments        — add missing heavy atoms from templates
+    batch_place_peptide_hydrogens — parallel backbone H placement
 """
 
 from __future__ import annotations
@@ -88,3 +87,52 @@ def batch_place_peptide_hydrogens(
     """
     ptrs = [_get_ptr(s) for s in structures]
     return _add_h.batch_place_peptide_hydrogens(ptrs, n_threads)
+
+
+def place_all_hydrogens(structure) -> Tuple[int, int]:
+    """Place backbone + sidechain hydrogens on standard amino acids.
+
+    Runs Phase 1 (backbone amide N-H) then Phase 2 (sidechain templates
+    for all 20 standard amino acids). Modifies structure in place.
+    Idempotent.
+
+    Args:
+        structure: A ferritin Structure (modified in place).
+
+    Returns:
+        (n_added, n_skipped) tuple.
+    """
+    return _add_h.place_all_hydrogens(_get_ptr(structure))
+
+
+def place_general_hydrogens(structure, include_water: bool = False) -> Tuple[int, int]:
+    """Place all hydrogens including ligands and non-standard residues.
+
+    Runs Phase 1 (backbone) + Phase 2 (sidechain templates) + Phase 3
+    (general algorithm using bond orders, ring detection, MMFF94 bond
+    lengths). Handles ligands, cofactors, and non-standard residues.
+
+    Args:
+        structure: A ferritin Structure (modified in place).
+        include_water: If True, also place H on water molecules.
+
+    Returns:
+        (n_added, n_skipped) tuple.
+    """
+    return _add_h.place_general_hydrogens(_get_ptr(structure), include_water)
+
+
+def reconstruct_fragments(structure) -> int:
+    """Reconstruct missing heavy atoms from fragment templates.
+
+    Uses BALL FragmentDB templates for the 20 standard amino acids.
+    Adds missing backbone and sidechain heavy atoms using 3-point
+    rigid body superposition and BFS coordinate propagation.
+
+    Args:
+        structure: A ferritin Structure (modified in place).
+
+    Returns:
+        Number of atoms added.
+    """
+    return _add_h.reconstruct_fragments(_get_ptr(structure))
