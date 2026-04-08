@@ -32,16 +32,6 @@ def kabsch_superpose(
     Returns:
         (rmsd, rotation_3x3, translation_3) after optimal superposition.
 
-    Agent Notes:
-        PREREQUISITE: x and y must have the SAME number of points and be
-        in corresponding order (x[i] matches y[i]). For unaligned structures,
-        use tm_align() first to get the alignment, then superpose.
-
-        OUTPUT: To apply the superposition: y_fitted = apply_transform(x, R, t).
-        The rotation R is 3x3 orthogonal, translation t is length-3.
-
-        RMSD: The returned RMSD is AFTER optimal superposition. For RMSD
-        without superposition, use rmsd_no_super().
     """
     return _geo.kabsch_superpose(np.ascontiguousarray(x, dtype=np.float64),
                                   np.ascontiguousarray(y, dtype=np.float64))

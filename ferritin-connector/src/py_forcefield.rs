@@ -63,20 +63,42 @@ pub fn compute_energy(py: Python<'_>, pdb: &PyPDB) -> PyResult<PyObject> {
 ///     energy_components: dict of bond/angle/torsion/vdw/es
 ///     steps: number of steps taken
 ///     converged: whether optimization converged
+fn run_minimize(
+    coords: &[[f64; 3]],
+    topo: &topology::Topology,
+    amber: &params::AmberParams,
+    max_steps: usize,
+    gradient_tolerance: f64,
+    constrained: &[bool],
+    method: &str,
+) -> minimize::MinimizeResult {
+    match method {
+        "cg" | "conjugate_gradient" => {
+            minimize::conjugate_gradient(coords, topo, amber, max_steps, gradient_tolerance, constrained)
+        }
+        _ => {
+            minimize::steepest_descent(coords, topo, amber, max_steps, gradient_tolerance, constrained)
+        }
+    }
+}
+
 #[pyfunction]
-#[pyo3(signature = (pdb, max_steps=500, gradient_tolerance=0.1))]
+#[pyo3(signature = (pdb, max_steps=500, gradient_tolerance=0.1, method="sd"))]
 pub fn minimize_hydrogens<'py>(
     py: Python<'py>,
     pdb: &PyPDB,
     max_steps: usize,
     gradient_tolerance: f64,
+    method: &str,
 ) -> PyResult<PyObject> {
     let amber = params::amber96();
     let topo = topology::build_topology(&pdb.inner, &amber);
     let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+    let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
+    let method = method.to_string();
 
     let result = py.allow_threads(|| {
-        minimize::minimize_hydrogens(&coords, &topo, &amber, max_steps, gradient_tolerance)
+        run_minimize(&coords, &topo, &amber, max_steps, gradient_tolerance, &constrained, &method)
     });
 
     let n = result.coords.len();
@@ -116,28 +138,22 @@ pub fn minimize_hydrogens<'py>(
 ///
 /// Returns dict with same format as minimize_hydrogens.
 #[pyfunction]
-#[pyo3(signature = (pdb, max_steps=1000, gradient_tolerance=0.1))]
+#[pyo3(signature = (pdb, max_steps=1000, gradient_tolerance=0.1, method="sd"))]
 pub fn minimize_structure<'py>(
     py: Python<'py>,
     pdb: &PyPDB,
     max_steps: usize,
     gradient_tolerance: f64,
+    method: &str,
 ) -> PyResult<PyObject> {
     let amber = params::amber96();
     let topo = topology::build_topology(&pdb.inner, &amber);
     let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-
-    let constrained = vec![false; coords.len()]; // nothing constrained
+    let constrained = vec![false; coords.len()];
+    let method = method.to_string();
 
     let result = py.allow_threads(|| {
-        minimize::steepest_descent(
-            &coords,
-            &topo,
-            &amber,
-            max_steps,
-            gradient_tolerance,
-            &constrained,
-        )
+        run_minimize(&coords, &topo, &amber, max_steps, gradient_tolerance, &constrained, &method)
     });
 
     let n = result.coords.len();
@@ -177,24 +193,27 @@ fn minimize_h_single(
     pdb: &pdbtbx::PDB,
     max_steps: usize,
     gradient_tolerance: f64,
+    method: &str,
 ) -> minimize::MinimizeResult {
     let amber = params::amber96();
     let topo = topology::build_topology(pdb, &amber);
     let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-    minimize::minimize_hydrogens(&coords, &topo, &amber, max_steps, gradient_tolerance)
+    let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
+    run_minimize(&coords, &topo, &amber, max_steps, gradient_tolerance, &constrained, method)
 }
 
 /// Batch minimize hydrogen positions for many structures in parallel.
 ///
 /// Returns list of dicts (same format as minimize_hydrogens).
 #[pyfunction]
-#[pyo3(signature = (structures, max_steps=500, gradient_tolerance=0.1, n_threads=None))]
+#[pyo3(signature = (structures, max_steps=500, gradient_tolerance=0.1, n_threads=None, method="sd"))]
 pub fn batch_minimize_hydrogens<'py>(
     py: Python<'py>,
     structures: &Bound<'py, PyList>,
     max_steps: usize,
     gradient_tolerance: f64,
     n_threads: Option<i32>,
+    method: &str,
 ) -> PyResult<Vec<PyObject>> {
     // Clone PDB data on main thread
     let pdbs: Vec<pdbtbx::PDB> = structures
@@ -207,12 +226,14 @@ pub fn batch_minimize_hydrogens<'py>(
 
     let n = resolve_threads(n_threads);
 
+    let method = method.to_string();
+
     // Run minimization in parallel
     let results: Vec<minimize::MinimizeResult> = py.allow_threads(|| {
         let pool = build_pool(n);
         pool.install(|| {
             pdbs.par_iter()
-                .map(|pdb| minimize_h_single(pdb, max_steps, gradient_tolerance))
+                .map(|pdb| minimize_h_single(pdb, max_steps, gradient_tolerance, &method))
                 .collect()
         })
     });
@@ -253,13 +274,14 @@ pub fn batch_minimize_hydrogens<'py>(
 
 /// Load files and minimize hydrogens in one parallel call (zero GIL).
 #[pyfunction]
-#[pyo3(signature = (paths, max_steps=500, gradient_tolerance=0.1, n_threads=None))]
+#[pyo3(signature = (paths, max_steps=500, gradient_tolerance=0.1, n_threads=None, method="sd"))]
 pub fn load_and_minimize_hydrogens<'py>(
     py: Python<'py>,
     paths: &Bound<'py, PyList>,
     max_steps: usize,
     gradient_tolerance: f64,
     n_threads: Option<i32>,
+    method: &str,
 ) -> PyResult<Vec<(usize, PyObject)>> {
     let path_strs: Vec<String> = paths
         .iter()
@@ -267,6 +289,7 @@ pub fn load_and_minimize_hydrogens<'py>(
         .collect::<PyResult<_>>()?;
 
     let n = resolve_threads(n_threads);
+    let method = method.to_string();
 
     // Load + minimize entirely in Rust
     let results: Vec<(usize, minimize::MinimizeResult)> = py.allow_threads(|| {
@@ -284,7 +307,7 @@ pub fn load_and_minimize_hydrogens<'py>(
                 .enumerate()
                 .filter_map(|(i, path)| {
                     opts.read(path).ok().map(|(pdb, _)| {
-                        let result = minimize_h_single(&pdb, max_steps, gradient_tolerance);
+                        let result = minimize_h_single(&pdb, max_steps, gradient_tolerance, &method);
                         (i, result)
                     })
                 })

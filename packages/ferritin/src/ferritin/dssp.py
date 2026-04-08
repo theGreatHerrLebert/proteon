@@ -61,25 +61,9 @@ def dssp(structure) -> str:
         >>> n_helix = ss.count('H')
 
     Agent Notes:
-        OUTPUT: String of length = number of amino acid residues (not total
-        residues — water/ligands are excluded). Length may differ from
-        structure.residue_count if non-AA residues are present.
-
-        INTERPRET: H=alpha helix, E=beta strand are the main secondary
-        structure types. G=3-10 helix and I=pi helix are rare but valid.
-        B=isolated beta bridge (not part of a sheet). T=turn, S=bend, C=coil.
-
-        REQUIRES: Backbone atoms N, CA, C, O must be present per residue.
-        Residues missing any of these are skipped. Structures with only CA
-        atoms (e.g., coarse-grained models) will return empty strings —
-        use assign_secondary_structure() instead for CA-only approximation.
-
-        COMPARE: Results may differ slightly from the DSSP binary (mkdssp)
-        due to implementation differences in bridge detection and edge cases.
-        Core helix/strand regions match well; disagreements are typically
-        at boundaries (1-2 residues).
-
-        PREFER: For many structures, use batch_dssp(structures, n_threads=-1).
+        PREFER: batch_dssp() for multiple structures. Do not loop in Python.
+        WATCH: CA-only structures return empty string — use
+            assign_secondary_structure() instead for CA-only approximation.
     """
     return _dssp.dssp(_get_ptr(structure))
 

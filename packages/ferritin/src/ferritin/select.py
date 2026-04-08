@@ -253,28 +253,6 @@ def select(structure, query: str) -> NDArray[np.bool_]:
         >>> mask = ferritin.select(structure, "protein and heavy")
         >>> heavy_coords = structure.coords[mask]
 
-    Agent Notes:
-        OUTPUT: Boolean numpy mask of length structure.atom_count.
-        Use it to index ANY per-atom array: coords, b_factors,
-        occupancies, atom_names, elements, etc.
-
-        SYNTAX: Atom names are CASE SENSITIVE ("CA" != "ca").
-        Keywords (and, or, not, backbone, etc.) are case insensitive.
-
-        SHORTHAND: Bare atom names work without "name" prefix:
-        "CA" is equivalent to "name CA".
-
-        COMMON PATTERNS:
-            "CA"                     — alpha carbons only
-            "backbone"               — N, CA, C, O atoms
-            "protein and heavy"      — amino acid heavy atoms (for ML features)
-            "chain A and resid 1-100" — region selection
-            "not water and not hydrogen" — clean structure
-
-        COMBINE: Use the mask with numpy indexing:
-            structure.coords[mask]      — filtered coordinates
-            structure.b_factors[mask]   — filtered B-factors
-            np.array(structure.atom_names)[mask]  — filtered names
     """
     atom_data = {
         "n": structure.atom_count,

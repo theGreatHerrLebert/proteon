@@ -71,6 +71,10 @@ from .hbond import (
     geometric_hbonds,
     hbond_count,
 )
+from .hydrogens import (
+    batch_place_peptide_hydrogens,
+    place_peptide_hydrogens,
+)
 from .dssp import (
     batch_dssp,
     dssp,

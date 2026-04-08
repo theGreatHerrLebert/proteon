@@ -350,6 +350,60 @@ def test_energy(path: str) -> dict:
     return result
 
 
+def test_hydrogens(path: str) -> dict:
+    """Test peptide hydrogen placement and DSSP equivalence."""
+    result = {"test": "hydrogens", "status": "pass", "details": {}}
+
+    try:
+        fe_s = ferritin.load(path)
+
+        # DSSP before placing H (virtual H path)
+        ss_before = ferritin.dssp(fe_s)
+
+        # Place hydrogens
+        t0 = time.time()
+        n_added, n_skipped = ferritin.place_peptide_hydrogens(fe_s)
+        h_time = time.time() - t0
+
+        result["details"]["n_added"] = n_added
+        result["details"]["n_skipped"] = n_skipped
+        result["details"]["time_ms"] = round(h_time * 1000, 2)
+
+        # DSSP after placing H (real H path)
+        ss_after = ferritin.dssp(fe_s)
+
+        result["details"]["dssp_length"] = len(ss_before)
+        result["details"]["dssp_match"] = ss_before == ss_after
+
+        if ss_before != ss_after:
+            # Find positions that differ
+            diffs = [i for i, (a, b) in enumerate(zip(ss_before, ss_after)) if a != b]
+            result["status"] = "fail"
+            result["details"]["error"] = (
+                f"DSSP mismatch at {len(diffs)} positions: {diffs[:10]}"
+            )
+            result["details"]["dssp_before"] = ss_before
+            result["details"]["dssp_after"] = ss_after
+
+        # Idempotency: second call should add 0
+        n_added2, _ = ferritin.place_peptide_hydrogens(fe_s)
+        if n_added2 != 0:
+            result["status"] = "fail"
+            result["details"]["error"] = f"not idempotent: second pass added {n_added2}"
+
+        # Sanity: for proteins > 10 AA residues, should place some H
+        n_aa = len(ss_before) if ss_before else 0
+        if n_aa > 10 and n_added == 0:
+            result["status"] = "warn"
+            result["details"]["warning"] = f"zero H placed for {n_aa}-residue protein"
+
+    except Exception as e:
+        result["status"] = "fail"
+        result["details"]["error"] = str(e)[:200]
+
+    return result
+
+
 def test_select(path: str) -> dict:
     """Test selection language on structure."""
     result = {"test": "select", "status": "pass", "details": {}}
@@ -397,6 +451,7 @@ ALL_TESTS = [
     test_dihedrals,
     test_dssp,
     test_hbonds,
+    test_hydrogens,
     test_contact_map,
     test_energy,
     test_select,

@@ -35,22 +35,9 @@ def compute_energy(structure) -> dict:
         >>> print(f"Total: {e['total']:.1f} kcal/mol")
 
     Agent Notes:
-        INTERPRET: Absolute energy values are NOT meaningful across structures
-        of different sizes. Only compare energies of the SAME structure before/after
-        modification (e.g., before/after minimization).
-
-        WATCH: vdw > 1e6 usually means steric clashes (atoms overlapping).
-        This is common in raw X-ray structures before minimization — it is NOT a bug.
-
-        WATCH: electrostatic energy is large without solvent. In vacuo energies
-        are always higher than solvated. Don't interpret large electrostatic
-        values as errors.
-
-        EXPECT: For a well-refined crystal structure like crambin (46 residues):
-        bond_stretch ~80, angle_bend ~70, torsion ~140, vdw ~2400,
-        electrostatic ~20000 kcal/mol.
-
-        COST: O(N^2) for nonbonded terms. Structures > 5000 atoms take seconds.
+        WATCH: Absolute values not comparable across different structures.
+            vdw > 1e6 = steric clashes (normal for raw X-ray, not a bug).
+        COST: O(N^2) for nonbonded terms. Slow above 5000 atoms.
     """
     return _ff.compute_energy(_get_ptr(structure))
 
@@ -59,6 +46,7 @@ def minimize_hydrogens(
     structure,
     max_steps: int = 500,
     gradient_tolerance: float = 0.1,
+    method: str = "sd",
 ) -> dict:
     """Minimize hydrogen positions using AMBER96 force field.
 
@@ -69,6 +57,8 @@ def minimize_hydrogens(
         structure: A ferritin Structure.
         max_steps: Maximum optimization steps (default 500).
         gradient_tolerance: Convergence criterion in kcal/mol/A (default 0.1).
+        method: "sd" (steepest descent, default) or "cg" (conjugate gradient).
+            CG converges faster but SD is more robust for severe clashes.
 
     Returns:
         dict with: coords (Nx3), initial_energy, final_energy,
@@ -76,34 +66,21 @@ def minimize_hydrogens(
 
     Examples:
         >>> result = ferritin.minimize_hydrogens(structure)
-        >>> print(f"Energy: {result['initial_energy']:.0f} -> {result['final_energy']:.0f}")
+        >>> result = ferritin.minimize_hydrogens(structure, method="cg")
 
     Agent Notes:
-        PREREQUISITE: Structure must already contain hydrogen atoms. Most PDB
-        files from X-ray crystallography do NOT have hydrogens. If atom_count
-        seems low or there are no H atoms, hydrogens need to be added first.
-
-        VERIFY: Always check result['converged']. If False, the minimization
-        hit max_steps without converging — increase max_steps or check for
-        severe clashes.
-
-        EXPECT: For refined crystal structures, this often converges in 1 step
-        (hydrogens are already well-placed). Large energy changes indicate the
-        input had bad hydrogen positions.
-
-        PREFER: Use batch_minimize_hydrogens() when processing multiple structures.
-        It uses rayon parallelism across structures.
-
-        COST: O(N^2) per step for nonbonded interactions. Fast for small proteins
-        (<1000 atoms), slower for large complexes.
+        WATCH: Check result['converged']. If False, increase max_steps.
+        PREFER: batch_minimize_hydrogens() for multiple structures.
+        COST: O(N^2) per step. Slow above 5000 atoms.
     """
-    return _ff.minimize_hydrogens(_get_ptr(structure), max_steps, gradient_tolerance)
+    return _ff.minimize_hydrogens(_get_ptr(structure), max_steps, gradient_tolerance, method)
 
 
 def minimize_structure(
     structure,
     max_steps: int = 1000,
     gradient_tolerance: float = 0.1,
+    method: str = "sd",
 ) -> dict:
     """Full energy minimization using AMBER96 force field.
 
@@ -119,23 +96,12 @@ def minimize_structure(
         steps, converged, energy_components.
 
     Agent Notes:
-        CAUTION: Full minimization moves ALL atoms. This can distort the
-        structure if run for too many steps. For most use cases,
-        minimize_hydrogens() is safer and sufficient.
-
-        CAUTION: Steepest descent is robust but slow to converge. It will
-        resolve major clashes but won't find the true energy minimum.
-        This is appropriate for structure preparation, NOT for finding
-        native conformations.
-
-        WATCH: If the structure deforms (RMSD > 2A from input), reduce
-        max_steps. Typical use: 100-500 steps to relieve clashes.
-
-        AVOID: Don't use this to "refine" a docked pose or homology model
-        beyond removing clashes. The in-vacuo force field will collapse
-        exposed sidechains without solvent.
+        WATCH: Moves ALL atoms — can distort the structure. For most use
+            cases, minimize_hydrogens() is safer and sufficient.
+        WATCH: In-vacuo force field will collapse exposed sidechains.
+            Use only for clash relief (100-500 steps), not refinement.
     """
-    return _ff.minimize_structure(_get_ptr(structure), max_steps, gradient_tolerance)
+    return _ff.minimize_structure(_get_ptr(structure), max_steps, gradient_tolerance, method)
 
 
 def batch_minimize_hydrogens(
@@ -161,12 +127,6 @@ def batch_minimize_hydrogens(
         >>> for r in results:
         ...     print(f"E: {r['initial_energy']:.0f} -> {r['final_energy']:.0f}")
 
-    Agent Notes:
-        PREFER: This over a Python loop — uses rayon for true multi-core
-        parallelism with GIL released.
-
-        SCALE: Speedup scales with number of structures and cores.
-        Best for datasets of 10+ structures on multi-core machines.
     """
     ptrs = [_get_ptr(s) for s in structures]
     return _ff.batch_minimize_hydrogens(ptrs, max_steps, gradient_tolerance, n_threads)
@@ -192,12 +152,6 @@ def load_and_minimize_hydrogens(
     Returns:
         List of (index, result_dict) tuples. Files that fail to load are skipped.
 
-    Agent Notes:
-        PREFER: This is the fastest way to minimize many structures. Zero Python
-        overhead — everything happens in Rust with rayon parallelism.
-
-        TOLERANT: Files that fail to load are silently skipped. Check the
-        returned indices to see which files succeeded.
     """
     str_paths = [str(p) for p in paths]
     return _ff.load_and_minimize_hydrogens(str_paths, max_steps, gradient_tolerance, n_threads)

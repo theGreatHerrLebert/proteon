@@ -16,11 +16,27 @@ pub const PROBE_RADIUS: f64 = 1.4;
 pub const DEFAULT_N_POINTS: usize = 960;
 
 // ---------------------------------------------------------------------------
-// Van der Waals radii (Bondi, 1964 + extensions)
-// Used by FreeSASA, Biopython, biotite
+// Atomic radii sets
 // ---------------------------------------------------------------------------
 
-/// Get van der Waals radius for an element symbol.
+/// Which atomic radii table to use for SASA computation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RadiiSet {
+    /// Bondi (1964) van der Waals radii, element-based.
+    /// One radius per element regardless of chemical context.
+    #[default]
+    Bondi,
+    /// ProtOr (Tsai et al. 1999) radii, atom-type-based.
+    /// Different radii for the same element depending on residue context.
+    /// Compatible with FreeSASA and NACCESS.
+    ProtOr,
+}
+
+// ---------------------------------------------------------------------------
+// Bondi radii (element-based)
+// ---------------------------------------------------------------------------
+
+/// Get Bondi van der Waals radius for an element symbol.
 /// Returns None for unknown elements.
 pub fn vdw_radius(element: &str) -> Option<f64> {
     match element.trim() {
@@ -44,6 +60,63 @@ pub fn vdw_radius(element: &str) -> Option<f64> {
         "Co" => Some(1.52),
         "Ni" => Some(1.63),
         _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ProtOr radii (atom-type-based, residue-context-aware)
+// From: Tsai et al. (1999) J Mol Biol 290:253-266
+// Same values used by FreeSASA (--radii=protor) and NACCESS
+// ---------------------------------------------------------------------------
+
+/// Residues with aromatic rings where CG is sp2 (ring junction → 1.61).
+const AROMATIC_RESIDUES: &[&str] = &["PHE", "TYR", "TRP", "HIS"];
+
+/// Aromatic ring carbon names (sp2 → 1.76).
+/// CG in aromatics is the ring junction (sp2 → 1.61).
+fn is_aromatic_ring_carbon(atom_name: &str, residue_name: &str) -> bool {
+    if !AROMATIC_RESIDUES.contains(&residue_name) {
+        return false;
+    }
+    matches!(atom_name,
+        "CD1" | "CD2" | "CE1" | "CE2" | "CE3" | "CZ" | "CZ2" | "CZ3" | "CH2"
+    )
+}
+
+/// Get ProtOr radius for an atom given its name and residue name.
+/// Values from Tsai et al. (1999), matching FreeSASA --radii=protor.
+pub fn protor_radius(atom_name: &str, residue_name: &str, element: &str) -> f64 {
+    let name = atom_name.trim();
+    let res = residue_name.trim();
+    let elem = element.trim();
+
+    match elem {
+        "C" => {
+            if name == "C" {
+                // Backbone carbonyl carbon (sp2)
+                1.61
+            } else if name == "CG" && AROMATIC_RESIDUES.contains(&res) {
+                // Aromatic ring junction (sp2)
+                1.61
+            } else if is_aromatic_ring_carbon(name, res) {
+                // Aromatic ring carbons (sp2)
+                1.76
+            } else {
+                // All other carbons: CA, CB, CG (non-aromatic), CD, CE, etc. (sp3)
+                1.88
+            }
+        }
+        "N" => 1.64,
+        "O" => {
+            match name {
+                "OG" | "OG1" | "OH" => 1.46,  // Hydroxyl
+                _ => 1.42,                       // Carbonyl, carboxyl
+            }
+        }
+        "S" => 1.77,
+        "H" | "D" => 1.00,
+        "Se" => 1.90,
+        _ => vdw_radius(elem).unwrap_or(DEFAULT_RADIUS),
     }
 }
 
@@ -274,19 +347,35 @@ pub fn sasa_from_pdb(
     pdb: &pdbtbx::PDB,
     probe: f64,
     n_points: usize,
+    radii_set: RadiiSet,
 ) -> Vec<f64> {
     let mut coords = Vec::new();
     let mut radii = Vec::new();
 
-    for atom in pdb.atoms() {
-        let (x, y, z) = atom.pos();
-        coords.push([x, y, z]);
+    // We need residue context for ProtOr radii
+    for chain in pdb.chains() {
+        for residue in chain.residues() {
+            let res_name = residue.name().unwrap_or("");
+            for atom in residue.atoms() {
+                let (x, y, z) = atom.pos();
+                coords.push([x, y, z]);
 
-        let r = atom
-            .element()
-            .and_then(|e| vdw_radius(e.symbol()))
-            .unwrap_or(DEFAULT_RADIUS);
-        radii.push(r);
+                let elem_str = atom
+                    .element()
+                    .map(|e| e.symbol())
+                    .unwrap_or("");
+
+                let r = match radii_set {
+                    RadiiSet::Bondi => {
+                        vdw_radius(elem_str).unwrap_or(DEFAULT_RADIUS)
+                    }
+                    RadiiSet::ProtOr => {
+                        protor_radius(atom.name(), res_name, elem_str)
+                    }
+                };
+                radii.push(r);
+            }
+        }
     }
 
     // Use rayon-parallel version for large structures

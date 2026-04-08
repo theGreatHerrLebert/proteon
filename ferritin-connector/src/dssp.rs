@@ -32,6 +32,8 @@ pub struct DsspResidue {
     pub h: [f64; 3],
     pub has_h: bool,
     pub chain_idx: usize,
+    /// True if this residue needs virtual H placement (no real H found).
+    pub needs_virtual_h: bool,
 }
 
 fn normalize(v: [f64; 3]) -> [f64; 3] {
@@ -62,6 +64,7 @@ pub fn extract_dssp_residues(pdb: &pdbtbx::PDB) -> Vec<DsspResidue> {
             let mut ca = None;
             let mut c = None;
             let mut o = None;
+            let mut h_real = None;
             let is_proline = residue.name() == Some("PRO");
 
             for atom in residue.atoms() {
@@ -72,26 +75,35 @@ pub fn extract_dssp_residues(pdb: &pdbtbx::PDB) -> Vec<DsspResidue> {
                     "CA" => ca = Some([x, y, z]),
                     "C" => c = Some([x, y, z]),
                     "O" => o = Some([x, y, z]),
+                    "H" | "HN" => h_real = Some([x, y, z]),
                     _ => {}
                 }
             }
 
             if let (Some(n), Some(ca), Some(c), Some(o)) = (n, ca, c, o) {
+                let (h, has_h) = match h_real {
+                    // Use real H atom if present (placed or experimental)
+                    Some(pos) if !is_proline => (pos, true),
+                    _ => ([0.0; 3], !is_proline),
+                };
+                let needs_virtual_h = h_real.is_none() && !is_proline;
                 chain_residues.push(DsspResidue {
                     n, ca, c, o,
-                    h: [0.0; 3],
-                    has_h: !is_proline,
+                    h,
+                    has_h,
                     chain_idx,
+                    needs_virtual_h,
                 });
             }
         }
 
-        // Virtual H placement: H = N + 1.01 * normalize(normalize(C_prev→N) + normalize(CA→N))
-        if !chain_residues.is_empty() {
+        // Virtual H placement for residues without real H atoms.
+        // H = N + 1.01 * normalize(normalize(C_prev→N) + normalize(CA→N))
+        if !chain_residues.is_empty() && chain_residues[0].needs_virtual_h {
             chain_residues[0].has_h = false;
         }
         for i in 1..chain_residues.len() {
-            if !chain_residues[i].has_h {
+            if !chain_residues[i].needs_virtual_h {
                 continue;
             }
             let c_prev = chain_residues[i - 1].c;
@@ -435,5 +447,63 @@ mod tests {
         let v = normalize([3.0, 4.0, 0.0]);
         let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
         assert!((len - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_dssp_identical_with_placed_vs_virtual_h() {
+        // DSSP assignments must be identical whether using virtual H
+        // (no H atoms in structure) or placed H atoms.
+        use crate::add_hydrogens;
+
+        let (pdb_no_h, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read("../test-pdbs/1crn.pdb")
+            .expect("failed to read 1crn.pdb");
+
+        // DSSP with virtual H (original path)
+        let ss_virtual = dssp_from_pdb(&pdb_no_h);
+
+        // Now place real H atoms and run DSSP again
+        let mut pdb_with_h = pdb_no_h;
+        let result = add_hydrogens::place_peptide_hydrogens(&mut pdb_with_h);
+        assert!(result.added > 0);
+
+        let ss_placed = dssp_from_pdb(&pdb_with_h);
+
+        assert_eq!(
+            ss_virtual, ss_placed,
+            "DSSP must be identical with virtual vs placed H.\n  virtual: {}\n  placed:  {}",
+            ss_virtual, ss_placed,
+        );
+    }
+
+    #[test]
+    fn test_dssp_uses_real_h_when_present() {
+        // Verify that extract_dssp_residues picks up real H atoms
+        use crate::add_hydrogens;
+
+        let (mut pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read("../test-pdbs/1crn.pdb")
+            .expect("failed to read 1crn.pdb");
+
+        add_hydrogens::place_peptide_hydrogens(&mut pdb);
+
+        let residues = extract_dssp_residues(&pdb);
+        let n_with_real_h = residues.iter().filter(|r| r.has_h && !r.needs_virtual_h).count();
+
+        assert!(
+            n_with_real_h > 0,
+            "Should detect placed H atoms as real (not virtual)"
+        );
+
+        // Only N-terminal residues (first in each chain) should still need virtual H
+        // (they have no previous C to place H from, and we don't place H on them)
+        let n_needing_virtual = residues.iter().filter(|r| r.needs_virtual_h).count();
+        let n_chains = pdb.chains().count();
+        assert_eq!(
+            n_needing_virtual, n_chains,
+            "After placing H, only N-terminal residues (one per chain) should need virtual H"
+        );
     }
 }

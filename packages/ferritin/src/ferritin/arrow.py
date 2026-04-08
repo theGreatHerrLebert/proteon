@@ -146,20 +146,8 @@ def from_parquet(path: str) -> List[Tuple[str, Structure]]:
         RuntimeError: If the file cannot be read or lacks the expected schema.
 
     Agent Notes:
-        PREREQUISITE: The Parquet file must use the ferritin per-atom schema
-        (17 columns). Files from ``to_parquet()`` and ``ferritin-ingest``
-        produce this automatically.
-
-        INTERPRET: Returns one (structure_id, Structure) pair per unique
-        structure_id in the file. Multi-structure Parquet files (from ingest)
-        return multiple pairs.
-
-        PREFER: For large Parquet files with many structures, consider
-        filtering with DuckDB/Polars first, then loading the subset via
-        ``from_arrow()`` on the filtered Arrow data.
-
-        COST: Reads the entire file into memory. For very large files
-        (>1M atoms), memory may be a concern.
+        COST: Reads entire file into memory. For large files, filter with
+            DuckDB/Polars first, then load the subset via from_arrow().
     """
     _check_available()
     pairs = _arrow.from_parquet(str(path))

@@ -52,16 +52,6 @@ def extract_ca_coords(structure) -> NDArray[np.float64]:
         >>> ca = ferritin.extract_ca_coords(structure)
         >>> print(f"{len(ca)} residues")
 
-    Agent Notes:
-        OUTPUT: One row per CA atom found. Length may be less than
-        structure.residue_count because water/ligand residues have no CA.
-        For amino acid count, use len(extract_ca_coords(s)).
-
-        USE FOR: This is the standard input for distance_matrix(),
-        contact_map(), and assign_secondary_structure(). Most structural
-        analyses operate on CA coordinates, not all-atom.
-
-        SPEED: Rust implementation, faster than filtering in Python.
     """
     if _analysis is not None and hasattr(structure, 'get_py_ptr'):
         return np.asarray(_analysis.extract_ca_coords(structure.get_py_ptr()))
@@ -86,18 +76,8 @@ def backbone_dihedrals(
         >>> print(f"Mean phi: {phi[valid].mean():.1f}")
 
     Agent Notes:
-        OUTPUT: Three arrays of length = number of amino acid residues.
-        NaN at chain termini (phi[0], psi[-1], omega[0] per chain).
-        Always filter with ~np.isnan() before computing statistics.
-
-        INTERPRET: Alpha helix: phi ~ -60, psi ~ -45.
-        Beta sheet: phi ~ -120, psi ~ 130.
-        Omega ~ +/-180 for trans peptide bonds (>99% of cases).
-        Omega ~ 0 indicates a cis peptide bond (rare, usually before Pro).
-
-        UNITS: Degrees, range [-180, 180].
-
-        SPEED: 34x faster than pure Python (Rust implementation).
+        WATCH: NaN at chain termini. Always filter with ~np.isnan()
+            before computing statistics.
     """
     if _analysis is not None and hasattr(structure, 'get_py_ptr'):
         phi, psi, omega = _analysis.backbone_dihedrals(structure.get_py_ptr())
@@ -149,15 +129,8 @@ def distance_matrix(
         Distance matrix in Angstroms.
 
     Agent Notes:
-        MEMORY: Output is N*N (or N*M) float64. For 1000 residues = 8MB.
-        For 10000 residues = 800MB. Check size before computing on large structures.
-
-        PREFER: For CA-CA distances, extract CA coords first with extract_ca_coords().
-        All-atom distance matrices are rarely needed and very large.
-
-        USE FOR: Contact maps (with cutoff), nearest-neighbor searches,
-        distance-based features for ML. For contact maps specifically,
-        use contact_map() which returns a boolean array (8x less memory).
+        COST: N*N float64. 1000 residues = 8MB, 10000 = 800MB.
+        PREFER: contact_map() for boolean contacts (8x less memory).
     """
     a = np.asarray(coords, dtype=np.float64)
     b = a if coords2 is None else np.asarray(coords2, dtype=np.float64)
@@ -183,16 +156,6 @@ def contact_map(
     Returns:
         Boolean matrix where True means distance <= cutoff.
 
-    Agent Notes:
-        DEFAULTS: cutoff=8.0 A is standard for CA-CA residue contacts in
-        structural biology. Use 4.5-5.0 A for all-atom contacts.
-        Use 10-12 A for coarse-grained or long-range contacts.
-
-        INPUT: Usually called on CA coordinates (extract_ca_coords()),
-        not all-atom coordinates. CA contacts represent residue-residue contacts.
-
-        MEMORY: Boolean array uses 1 byte per element (8x less than float64
-        distance matrix). Prefer this over distance_matrix for large structures.
     """
     dm = distance_matrix(coords, coords2)
     return dm <= cutoff
@@ -253,20 +216,8 @@ def to_dataframe(structure, engine: str = "pandas"):
         residue_number, chain_id, x, y, z, b_factor, occupancy.
 
     Agent Notes:
-        USE FOR: Interactive exploration in notebooks, filtering atoms by
-        properties, computing per-residue statistics, exporting to CSV.
-
-        FILTER PATTERNS:
-            CA atoms: df[df.atom_name.str.strip() == "CA"]
-            Chain A:  df[df.chain_id == "A"]
-            Backbone: df[df.atom_name.str.strip().isin(["N","CA","C","O"])]
-            High B:   df[df.b_factor > 50]
-
-        NOTE: atom_name may have leading/trailing spaces (PDB format).
-        Always use .str.strip() when filtering by atom name.
-
-        ENGINES: "pandas" is the default. "polars" is available for
-        large-scale analysis (faster groupby, lazy evaluation).
+        WATCH: atom_name has leading/trailing spaces (PDB format).
+            Always use df.atom_name.str.strip() when filtering.
     """
     coords = structure.coords
     data = {
@@ -421,27 +372,6 @@ def load_and_analyze(
         >>> for r in results:
         ...     print(f"{r['path']}: {r['n_ca']} CA, Rg={r['rg']:.1f}")
 
-    Agent Notes:
-        FASTEST: This is the fastest way to process many PDB files. The entire
-        pipeline (file I/O, parsing, CA extraction, distance matrix, contact
-        map, dihedrals, Rg) runs in Rust with rayon parallelism. Zero GIL.
-        6x faster than an equivalent Python loop.
-
-        TOLERANT: Files that fail to load are silently skipped. Check the
-        'index' field in each result to match back to the input paths list.
-
-        OUTPUT: Each result dict contains:
-            index (int) — position in input paths list
-            path (str) — file path
-            n_atoms, n_chains, n_residues, n_ca (int) — counts
-            ca_coords (Mx3 float64) — CA coordinates
-            distance_matrix (MxM float64) — CA-CA distances
-            contact_map (MxM bool) — contacts at cutoff
-            phi, psi, omega (M float64) — backbone dihedrals
-            rg (float) — radius of gyration
-
-        PREFER: This over loading structures individually then analyzing them.
-        The single-call pipeline avoids Python ↔ Rust round-trips.
     """
     str_paths = [str(p) for p in paths]
     return _analysis.load_and_analyze(str_paths, cutoff, n_threads)

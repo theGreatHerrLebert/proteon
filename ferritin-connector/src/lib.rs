@@ -1,9 +1,11 @@
 use pyo3::prelude::*;
 use pyo3::wrap_pymodule;
 
+mod add_hydrogens;
 mod dssp;
 mod forcefield;
 mod hbond;
+mod py_add_hydrogens;
 mod py_align;
 mod py_align_funcs;
 mod py_analysis;
@@ -22,6 +24,7 @@ mod sasa;
 /// ferritin_connector — PyO3 bindings for the ferritin structural bioinformatics toolkit.
 #[pymodule]
 fn ferritin_connector(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_wrapped(wrap_pymodule!(py_add_hydrogens::py_add_hydrogens))?;
     m.add_wrapped(wrap_pymodule!(py_align::py_align))?;
     m.add_wrapped(wrap_pymodule!(py_align_funcs::py_align_funcs))?;
     m.add_wrapped(wrap_pymodule!(py_arrow::py_arrow))?;

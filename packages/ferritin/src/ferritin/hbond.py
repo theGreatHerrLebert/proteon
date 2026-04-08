@@ -52,22 +52,9 @@ def backbone_hbonds(
         >>> strong = hbonds[hbonds[:, 2] < -2.0]  # filter strong bonds
 
     Agent Notes:
-        OUTPUT: Nx4 array. Column 0,1 = residue indices (amino acids only,
-        0-indexed). Column 2 = energy (kcal/mol, more negative = stronger).
-        Column 3 = O...N distance (Angstroms).
-
-        INTERPRET: Energy < -0.5 = H-bond exists (default cutoff).
-        Energy < -2.0 = strong H-bond (typical in alpha helices).
-        Energy < -3.0 = very strong.
-
-        PATTERN: In alpha helices, look for i→i+4 H-bonds (col1 - col0 = 4).
-        In beta sheets, look for long-range H-bonds (|col1 - col0| > 4).
-
-        REQUIRES: Backbone N, CA, C, O atoms. Virtual H atoms are computed
-        internally (no explicit H atoms needed in the PDB).
-
-        SCOPE: This only detects BACKBONE H-bonds (CO...HN). For sidechain
-        H-bonds (e.g., Ser-OH, Asp-COOH), use geometric_hbonds() instead.
+        PREFER: batch_backbone_hbonds() for multiple structures.
+        WATCH: Backbone only (CO...HN). For sidechain H-bonds, use
+            geometric_hbonds() instead.
     """
     return np.asarray(_hbond.backbone_hbonds(_get_ptr(structure), energy_cutoff))
 
@@ -89,17 +76,9 @@ def geometric_hbonds(
         Nx3 numpy array: [donor_atom_idx, acceptor_atom_idx, distance]
 
     Agent Notes:
-        SCOPE: Detects ALL polar contacts (N...O, O...O, N...S, O...S).
-        This is broader than true H-bonds — it includes contacts that may
-        not have favorable geometry. Use as a screening step.
-
-        CAUTION: This uses distance only, no angle criterion. True H-bonds
-        require D-H...A angle > 120 degrees. The distance criterion alone
-        produces false positives. For backbone H-bonds with proper energy
-        criterion, use backbone_hbonds() instead.
-
-        OUTPUT: Atom indices are 0-based into the full atom list (including
-        HETATM, water). Use structure.atom_names to identify atoms.
+        WATCH: Distance only, no angle criterion — produces false positives.
+            For backbone H-bonds with proper energy criterion, use
+            backbone_hbonds() instead.
     """
     return np.asarray(_hbond.geometric_hbonds(_get_ptr(structure), dist_cutoff))
 

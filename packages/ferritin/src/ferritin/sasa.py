@@ -37,6 +37,7 @@ def atom_sasa(
     structure,
     probe: float = 1.4,
     n_points: int = 960,
+    radii: str = "bondi",
 ) -> NDArray[np.float64]:
     """Compute per-atom SASA using Shrake-Rupley algorithm.
 
@@ -44,38 +45,28 @@ def atom_sasa(
         structure: A ferritin Structure.
         probe: Probe radius in Angstroms (default 1.4 for water).
         n_points: Test points per sphere (default 960; higher = more precise).
+        radii: Atomic radii table. "bondi" (default, element-based) or
+            "protor" (atom-type-based, matches FreeSASA/NACCESS).
 
     Returns:
         1D numpy array of per-atom SASA in Angstroms².
 
     Examples:
         >>> sasa = ferritin.atom_sasa(structure)
-        >>> print(f"Total SASA: {sasa.sum():.0f} A²")
-        >>> exposed = sasa > 0
-        >>> print(f"{exposed.sum()} exposed atoms out of {len(sasa)}")
+        >>> sasa_protor = ferritin.atom_sasa(structure, radii="protor")
 
     Agent Notes:
-        DEFAULTS: probe=1.4 is the standard water probe radius. Don't change
-        unless you have a specific reason (e.g., probe=0 for van der Waals surface).
-
-        PRECISION: n_points=960 gives ~0.2% accuracy. Use 100 for fast screening,
-        960 for publication quality. Doubling points halves the error but doubles time.
-
-        OUTPUT: Array length = structure.atom_count (all atoms including HETATM/water).
-        To get per-residue or per-chain SASA, use residue_sasa() instead.
-
-        PREFER: For many structures, use batch_total_sasa() with n_threads=-1.
-
-        COST: O(N * P * k) where N=atoms, P=points, k=avg neighbors.
-        Crambin (327 atoms): ~12ms. Large complex (58k atoms): ~230ms.
+        PREFER: batch_total_sasa() for multiple structures. Do not loop in Python.
+        COST: ~12ms for 327 atoms, ~230ms for 58K atoms.
     """
-    return np.asarray(_sasa.atom_sasa(_get_ptr(structure), probe, n_points))
+    return np.asarray(_sasa.atom_sasa(_get_ptr(structure), probe, n_points, radii))
 
 
 def residue_sasa(
     structure,
     probe: float = 1.4,
     n_points: int = 960,
+    radii: str = "bondi",
 ) -> NDArray[np.float64]:
     """Compute per-residue SASA (sum of atom contributions per residue).
 
@@ -83,17 +74,19 @@ def residue_sasa(
         structure: A ferritin Structure.
         probe: Probe radius in Angstroms (default 1.4).
         n_points: Test points per sphere (default 960).
+        radii: Atomic radii table ("bondi" or "protor").
 
     Returns:
         1D numpy array of per-residue SASA in Angstroms².
     """
-    return np.asarray(_sasa.residue_sasa(_get_ptr(structure), probe, n_points))
+    return np.asarray(_sasa.residue_sasa(_get_ptr(structure), probe, n_points, radii))
 
 
 def relative_sasa(
     structure,
     probe: float = 1.4,
     n_points: int = 960,
+    radii: str = "bondi",
 ) -> NDArray[np.float64]:
     """Compute relative solvent accessibility (RSA) per residue.
 
@@ -109,27 +102,17 @@ def relative_sasa(
         1D numpy array of RSA values (0.0–1.0+). NaN for non-standard residues.
 
     Agent Notes:
-        INTERPRET: RSA < 0.25 = buried (core), RSA >= 0.25 = exposed (surface).
-        This threshold is the standard in literature (Tien et al. 2013).
-
-        WATCH: RSA can exceed 1.0 for residues in extended conformations or
-        at chain termini. This is normal, not an error.
-
-        WATCH: NaN values indicate non-standard residues (ligands, modified
-        amino acids, water) for which no reference max SASA exists.
-        Filter with ~np.isnan(rsa) before analysis.
-
-        USE FOR: Burial classification, identifying surface residues for
-        mutation studies, interface residue detection (compare RSA in
-        complex vs monomer).
+        WATCH: RSA can exceed 1.0 at chain termini — not an error.
+            NaN = non-standard residue (no reference max SASA). Filter first.
     """
-    return np.asarray(_sasa.relative_sasa(_get_ptr(structure), probe, n_points))
+    return np.asarray(_sasa.relative_sasa(_get_ptr(structure), probe, n_points, radii))
 
 
 def total_sasa(
     structure,
     probe: float = 1.4,
     n_points: int = 960,
+    radii: str = "bondi",
 ) -> float:
     """Total SASA of a structure in Angstroms².
 
@@ -137,14 +120,17 @@ def total_sasa(
         structure: A ferritin Structure.
         probe: Probe radius in Angstroms (default 1.4).
         n_points: Test points per sphere (default 960).
+        radii: Atomic radii table ("bondi" or "protor").
 
     Returns:
         Total SASA in Angstroms².
 
     Examples:
         >>> print(f"Total SASA: {ferritin.total_sasa(structure):.0f} A²")
+        >>> # Match FreeSASA exactly:
+        >>> print(f"ProtOr SASA: {ferritin.total_sasa(structure, radii='protor'):.0f} A²")
     """
-    return _sasa.total_sasa(_get_ptr(structure), probe, n_points)
+    return _sasa.total_sasa(_get_ptr(structure), probe, n_points, radii)
 
 
 def batch_total_sasa(
@@ -153,6 +139,7 @@ def batch_total_sasa(
     n_points: int = 960,
     *,
     n_threads: Optional[int] = None,
+    radii: str = "bondi",
 ) -> NDArray[np.float64]:
     """Compute total SASA for many structures in parallel (Rust + rayon).
 
@@ -161,12 +148,13 @@ def batch_total_sasa(
         probe: Probe radius in Angstroms (default 1.4).
         n_points: Test points per sphere (default 960).
         n_threads: Thread count. None/-1 = all cores.
+        radii: Atomic radii table ("bondi" or "protor").
 
     Returns:
         1D numpy array of total SASA values.
     """
     ptrs = [_get_ptr(s) for s in structures]
-    return np.asarray(_sasa.batch_total_sasa(ptrs, probe, n_points, n_threads))
+    return np.asarray(_sasa.batch_total_sasa(ptrs, probe, n_points, n_threads, radii))
 
 
 def load_and_sasa(
@@ -175,6 +163,7 @@ def load_and_sasa(
     n_points: int = 960,
     *,
     n_threads: Optional[int] = None,
+    radii: str = "bondi",
 ) -> List[Tuple[int, float]]:
     """Load files and compute total SASA in one parallel call (zero GIL).
 
@@ -193,4 +182,4 @@ def load_and_sasa(
         ...     print(f"{pdb_files[idx]}: {sasa:.0f} A²")
     """
     str_paths = [str(p) for p in paths]
-    return _sasa.load_and_sasa(str_paths, probe, n_points, n_threads)
+    return _sasa.load_and_sasa(str_paths, probe, n_points, n_threads, radii)
