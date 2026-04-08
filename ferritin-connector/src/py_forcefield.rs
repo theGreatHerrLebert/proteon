@@ -93,6 +93,9 @@ fn run_minimize(
     method: &str,
 ) -> minimize::MinimizeResult {
     match method {
+        "sd" | "steepest_descent" => {
+            minimize::steepest_descent(coords, topo, amber, max_steps, gradient_tolerance, constrained)
+        }
         "cg" | "conjugate_gradient" => {
             minimize::conjugate_gradient(coords, topo, amber, max_steps, gradient_tolerance, constrained)
         }
@@ -100,6 +103,8 @@ fn run_minimize(
             minimize::lbfgs(coords, topo, amber, max_steps, gradient_tolerance, constrained)
         }
         _ => {
+            // Default to SD for backward compat, but this should ideally error.
+            // The Python layer validates method names before calling.
             minimize::steepest_descent(coords, topo, amber, max_steps, gradient_tolerance, constrained)
         }
     }

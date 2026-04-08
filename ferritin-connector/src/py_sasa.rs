@@ -10,11 +10,23 @@ use rayon::prelude::*;
 use crate::py_pdb::PyPDB;
 use crate::sasa;
 
-fn parse_radii(radii: &str) -> sasa::RadiiSet {
+fn parse_radii(radii: &str) -> PyResult<sasa::RadiiSet> {
     match radii.to_lowercase().as_str() {
-        "protor" | "naccess" | "freesasa" => sasa::RadiiSet::ProtOr,
-        _ => sasa::RadiiSet::Bondi,
+        "protor" | "naccess" | "freesasa" => Ok(sasa::RadiiSet::ProtOr),
+        "bondi" => Ok(sasa::RadiiSet::Bondi),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            format!("Unknown radii set '{}'. Use 'bondi' or 'protor'.", radii)
+        )),
     }
+}
+
+fn validate_n_points(n_points: usize) -> PyResult<()> {
+    if n_points == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "n_points must be > 0"
+        ));
+    }
+    Ok(())
 }
 
 fn extract_radii(pdb: &pdbtbx::PDB, radii_set: sasa::RadiiSet) -> (Vec<[f64; 3]>, Vec<f64>) {
@@ -78,10 +90,11 @@ pub fn atom_sasa<'py>(
     probe: f64,
     n_points: usize,
     radii: &str,
-) -> Bound<'py, PyArray1<f64>> {
-    let rs = parse_radii(radii);
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    validate_n_points(n_points)?;
+    let rs = parse_radii(radii)?;
     let result = py.allow_threads(|| sasa::sasa_from_pdb(&pdb.inner, probe, n_points, rs));
-    result.into_pyarray(py)
+    Ok(result.into_pyarray(py))
 }
 
 /// Compute per-residue SASA for a structure.
@@ -96,12 +109,13 @@ pub fn residue_sasa<'py>(
     probe: f64,
     n_points: usize,
     radii: &str,
-) -> Bound<'py, PyArray1<f64>> {
-    let rs = parse_radii(radii);
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    validate_n_points(n_points)?;
+    let rs = parse_radii(radii)?;
     let atom_areas =
         py.allow_threads(|| sasa::sasa_from_pdb(&pdb.inner, probe, n_points, rs));
     let res_areas = sasa::residue_sasa(&pdb.inner, &atom_areas);
-    res_areas.into_pyarray(py)
+    Ok(res_areas.into_pyarray(py))
 }
 
 /// Compute relative solvent accessibility (RSA) per residue.
@@ -119,8 +133,9 @@ pub fn relative_sasa<'py>(
     probe: f64,
     n_points: usize,
     radii: &str,
-) -> Bound<'py, PyArray1<f64>> {
-    let rs = parse_radii(radii);
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    validate_n_points(n_points)?;
+    let rs = parse_radii(radii)?;
     let atom_areas =
         py.allow_threads(|| sasa::sasa_from_pdb(&pdb.inner, probe, n_points, rs));
     let res_areas = sasa::residue_sasa(&pdb.inner, &atom_areas);
@@ -141,7 +156,7 @@ pub fn relative_sasa<'py>(
         }
     }
 
-    rsa.into_pyarray(py)
+    Ok(rsa.into_pyarray(py))
 }
 
 /// Total SASA of a structure.
@@ -153,10 +168,11 @@ pub fn total_sasa(
     probe: f64,
     n_points: usize,
     radii: &str,
-) -> f64 {
-    let rs = parse_radii(radii);
+) -> PyResult<f64> {
+    validate_n_points(n_points)?;
+    let rs = parse_radii(radii)?;
     let areas = py.allow_threads(|| sasa::sasa_from_pdb(&pdb.inner, probe, n_points, rs));
-    areas.iter().sum()
+    Ok(areas.iter().sum())
 }
 
 // ===========================================================================
@@ -176,7 +192,8 @@ pub fn batch_atom_sasa<'py>(
     n_threads: Option<i32>,
     radii: &str,
 ) -> PyResult<Vec<Bound<'py, PyArray1<f64>>>> {
-    let rs = parse_radii(radii);
+    validate_n_points(n_points)?;
+    let rs = parse_radii(radii)?;
     let data: Vec<(Vec<[f64; 3]>, Vec<f64>)> = structures
         .iter()
         .map(|item| {
@@ -216,7 +233,8 @@ pub fn batch_total_sasa<'py>(
     n_threads: Option<i32>,
     radii: &str,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    let rs = parse_radii(radii);
+    validate_n_points(n_points)?;
+    let rs = parse_radii(radii)?;
     let data: Vec<(Vec<[f64; 3]>, Vec<f64>)> = structures
         .iter()
         .map(|item| {
@@ -278,7 +296,8 @@ pub fn load_and_sasa<'py>(
     n_threads: Option<i32>,
     radii: &str,
 ) -> PyResult<Vec<(usize, f64)>> {
-    let rs = parse_radii(radii);
+    validate_n_points(n_points)?;
+    let rs = parse_radii(radii)?;
     let path_strs: Vec<String> = paths
         .iter()
         .map(|p| p.extract::<String>())

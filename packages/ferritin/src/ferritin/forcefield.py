@@ -40,6 +40,16 @@ def compute_energy(structure, ff: str = "amber96") -> dict:
     return _ff.compute_energy(_get_ptr(structure), ff)
 
 
+_VALID_METHODS = {"sd", "steepest_descent", "cg", "conjugate_gradient", "lbfgs", "l-bfgs"}
+
+
+def _validate_method(method: str) -> None:
+    if method not in _VALID_METHODS:
+        raise ValueError(
+            f"Unknown minimizer method '{method}'. Use 'sd', 'cg', or 'lbfgs'."
+        )
+
+
 def minimize_hydrogens(
     structure,
     max_steps: int = 500,
@@ -49,14 +59,12 @@ def minimize_hydrogens(
     """Minimize hydrogen positions using AMBER96 force field.
 
     Freezes all heavy atoms and optimizes only H positions.
-    Uses steepest descent with adaptive step size.
 
     Args:
         structure: A ferritin Structure.
         max_steps: Maximum optimization steps (default 500).
         gradient_tolerance: Convergence criterion in kcal/mol/A (default 0.1).
-        method: "sd" (steepest descent, default) or "cg" (conjugate gradient).
-            CG converges faster but SD is more robust for severe clashes.
+        method: "sd" (steepest descent), "cg" (conjugate gradient), or "lbfgs".
 
     Returns:
         dict with: coords (Nx3), initial_energy, final_energy,
@@ -71,6 +79,7 @@ def minimize_hydrogens(
         PREFER: batch_minimize_hydrogens() for multiple structures.
         COST: O(N^2) per step. Slow above 5000 atoms.
     """
+    _validate_method(method)
     return _ff.minimize_hydrogens(_get_ptr(structure), max_steps, gradient_tolerance, method)
 
 
@@ -99,6 +108,7 @@ def minimize_structure(
         WATCH: In-vacuo force field will collapse exposed sidechains.
             Use only for clash relief (100-500 steps), not refinement.
     """
+    _validate_method(method)
     return _ff.minimize_structure(_get_ptr(structure), max_steps, gradient_tolerance, method)
 
 
@@ -190,4 +200,8 @@ def run_md(
             energy: final energy components dict.
             n_steps, dt, temperature_target, thermostat_tau: simulation parameters.
     """
+    if dt <= 0:
+        raise ValueError(f"dt must be positive, got {dt}")
+    if temperature < 0:
+        raise ValueError(f"temperature must be non-negative, got {temperature}")
     return _ff.run_md(_get_ptr(structure), n_steps, dt, temperature, thermostat_tau, snapshot_freq, shake)
