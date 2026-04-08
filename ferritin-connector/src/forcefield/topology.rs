@@ -75,14 +75,61 @@ fn max_bond_distance(elem_a: &str, elem_b: &str) -> f64 {
 
 /// Build topology from a PDB structure.
 pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
-    // Step 1: Extract atoms with type assignment
+    // Step 0: Pre-scan to detect terminal residues and disulfide CYS.
+    // Each chain's first amino acid residue gets "-N" suffix,
+    // last gets "-C" suffix. CYS with SG near another SG gets "-S" suffix.
+    let mut residue_variants: HashMap<usize, String> = HashMap::new();
+    let mut res_idx = 0usize;
+
+    // Collect SG positions for disulfide detection
+    let mut sg_positions: Vec<(usize, [f64; 3])> = Vec::new(); // (res_idx, pos)
+
+    for chain in pdb.chains() {
+        let mut chain_residues: Vec<(usize, String)> = Vec::new(); // (res_idx, name)
+        for residue in chain.residues() {
+            let name = residue.name().unwrap_or("UNK").to_string();
+            let is_aa = residue.conformers().next()
+                .map_or(false, |c| c.is_amino_acid());
+            if is_aa {
+                chain_residues.push((res_idx, name.clone()));
+            }
+            // Find SG atoms for disulfide detection
+            if name == "CYS" {
+                for atom in residue.atoms() {
+                    if atom.name().trim() == "SG" {
+                        let (x, y, z) = atom.pos();
+                        sg_positions.push((res_idx, [x, y, z]));
+                    }
+                }
+            }
+            res_idx += 1;
+        }
+        // Mark first and last amino acid in chain
+        if let Some((first_idx, first_name)) = chain_residues.first() {
+            residue_variants.insert(*first_idx, format!("{}-N", first_name));
+        }
+        if let Some((last_idx, last_name)) = chain_residues.last() {
+            residue_variants.insert(*last_idx, format!("{}-C", last_name));
+        }
+    }
+
+    // Note: CYS-S (disulfide) variant is NOT applied automatically.
+    // BALL only applies CYS-S when explicitly flagged during preprocessing,
+    // not from raw PDB geometry. Applying it here would change charges and
+    // diverge from BALL's behavior.
+
+    // Step 1: Extract atoms with type assignment using variant names
     let mut atoms = Vec::new();
     let mut unassigned_atoms = Vec::new();
-    let mut res_idx = 0;
+    res_idx = 0;
 
     for chain in pdb.chains() {
         for residue in chain.residues() {
-            let res_name = residue.name().unwrap_or("UNK").to_string();
+            let base_name = residue.name().unwrap_or("UNK").to_string();
+            let lookup_name = residue_variants.get(&res_idx)
+                .cloned()
+                .unwrap_or_else(|| base_name.clone());
+
             for atom in residue.atoms() {
                 let (x, y, z) = atom.pos();
                 let atom_name = atom.name().trim().to_string();
@@ -92,11 +139,12 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                     .unwrap_or_else(|| "C".to_string());
                 let is_hydrogen = element == "H" || element == "D";
 
-                // Look up AMBER type and charge
-                let (amber_type, charge) = match params.get_atom_type(&res_name, &atom_name) {
-                    Some(e) => (e.amber_type.clone(), e.charge),
-                    None => {
-                        unassigned_atoms.push(format!("{}:{}", res_name, atom_name));
+                // Look up AMBER type and charge: try variant name first, then base name
+                let (amber_type, charge) = params.get_atom_type(&lookup_name, &atom_name)
+                    .or_else(|| params.get_atom_type(&base_name, &atom_name))
+                    .map(|e| (e.amber_type.clone(), e.charge))
+                    .unwrap_or_else(|| {
+                        unassigned_atoms.push(format!("{}:{}", base_name, atom_name));
                         let t = match element.as_str() {
                             "C" => "CT",
                             "N" => "N",
@@ -107,14 +155,13 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                             _ => "CT",
                         };
                         (t.to_string(), 0.0)
-                    }
-                };
+                    });
 
                 atoms.push(FFAtom {
                     pos: [x, y, z],
                     amber_type,
                     charge,
-                    residue_name: res_name.clone(),
+                    residue_name: base_name.clone(),
                     atom_name,
                     element,
                     residue_idx: res_idx,
