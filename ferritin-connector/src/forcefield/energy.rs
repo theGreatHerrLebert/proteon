@@ -68,12 +68,33 @@ impl CubicSwitch {
 /// If `distance_dependent_dielectric` is true, the Coulomb term uses ε = r
 /// (divides electrostatic energy by an additional factor of r), providing a
 /// simple implicit solvation surrogate.
+/// Default atom count above which neighbor list is used automatically.
+pub const NBL_AUTO_THRESHOLD: usize = 2000;
+
 pub fn compute_energy(
     coords: &[[f64; 3]],
     topo: &Topology,
     params: &impl ForceField,
 ) -> EnergyResult {
-    compute_energy_impl(coords, topo, params, false)
+    compute_energy_auto(coords, topo, params, NBL_AUTO_THRESHOLD)
+}
+
+/// Compute energy with configurable neighbor list threshold.
+///
+/// `nbl_threshold`: use neighbor list when n_atoms > threshold.
+/// Set to 0 to always use neighbor list, usize::MAX to never use it.
+pub fn compute_energy_auto(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &impl ForceField,
+    nbl_threshold: usize,
+) -> EnergyResult {
+    if coords.len() > nbl_threshold {
+        let nbl = NeighborList::build(coords, 15.0, &topo.excluded_pairs, &topo.pairs_14);
+        compute_energy_nbl(coords, topo, params, &nbl)
+    } else {
+        compute_energy_impl(coords, topo, params, false)
+    }
 }
 
 /// Compute energy with optional distance-dependent dielectric.
@@ -231,7 +252,22 @@ pub fn compute_energy_and_forces(
     topo: &Topology,
     params: &impl ForceField,
 ) -> (EnergyResult, Vec<[f64; 3]>) {
-    compute_energy_and_forces_impl(coords, topo, params, false)
+    compute_energy_and_forces_auto(coords, topo, params, NBL_AUTO_THRESHOLD)
+}
+
+/// Compute energy and forces with configurable neighbor list threshold.
+pub fn compute_energy_and_forces_auto(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &impl ForceField,
+    nbl_threshold: usize,
+) -> (EnergyResult, Vec<[f64; 3]>) {
+    if coords.len() > nbl_threshold {
+        let nbl = NeighborList::build(coords, 15.0, &topo.excluded_pairs, &topo.pairs_14);
+        compute_energy_and_forces_nbl(coords, topo, params, &nbl)
+    } else {
+        compute_energy_and_forces_impl(coords, topo, params, false)
+    }
 }
 
 /// Compute energy and forces with optional distance-dependent dielectric.
@@ -457,6 +493,18 @@ fn compute_energy_and_forces_impl(
 // ---------------------------------------------------------------------------
 // Neighbor-list accelerated energy + forces
 // ---------------------------------------------------------------------------
+
+/// Compute energy (no forces) using a prebuilt neighbor list.
+fn compute_energy_nbl(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &impl ForceField,
+    nbl: &NeighborList,
+) -> EnergyResult {
+    // Use the forces version and discard forces — the energy is the same
+    let (result, _) = compute_energy_and_forces_nbl(coords, topo, params, nbl);
+    result
+}
 
 /// Compute energy and forces using a prebuilt neighbor list for O(N) nonbonded.
 ///
