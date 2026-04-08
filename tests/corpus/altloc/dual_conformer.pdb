@@ -1,0 +1,17 @@
+REMARK   0 Minimal structure with alternate conformations (altloc A/B).
+REMARK   0 Atom 3 (CA of VAL 2) has two positions with 50/50 occupancy.
+REMARK   0 Tests that analysis functions handle altloc without double-counting.
+ATOM      1  N   ALA A   1       1.000   1.000   1.000  1.00  0.00           N
+ATOM      2  CA  ALA A   1       2.000   1.000   1.000  1.00  0.00           C
+ATOM      3  C   ALA A   1       3.000   1.000   1.000  1.00  0.00           C
+ATOM      4  O   ALA A   1       3.000   2.000   1.000  1.00  0.00           O
+ATOM      5  N   VAL A   2       4.000   1.000   1.000  1.00  0.00           N
+ATOM      6  CA AVAL A   2       5.000   1.000   1.000  0.50  0.00           C
+ATOM      7  CA BVAL A   2       5.100   1.100   1.000  0.50  0.00           C
+ATOM      8  C   VAL A   2       6.000   1.000   1.000  1.00  0.00           C
+ATOM      9  O   VAL A   2       6.000   2.000   1.000  1.00  0.00           O
+ATOM     10  N   GLY A   3       7.000   1.000   1.000  1.00  0.00           N
+ATOM     11  CA  GLY A   3       8.000   1.000   1.000  1.00  0.00           C
+ATOM     12  C   GLY A   3       9.000   1.000   1.000  1.00  0.00           C
+ATOM     13  O   GLY A   3       9.000   2.000   1.000  1.00  0.00           O
+END

@@ -1,0 +1,16 @@
+REMARK   0 Alanine with missing CB atom.
+REMARK   0 Tests that reconstruct_fragments can add the missing sidechain atom,
+REMARK   0 and that analysis functions handle incomplete residues gracefully.
+ATOM      1  N   ALA A   1       1.000   1.000   1.000  1.00  0.00           N
+ATOM      2  CA  ALA A   1       2.000   1.000   1.000  1.00  0.00           C
+ATOM      3  C   ALA A   1       3.000   1.000   1.000  1.00  0.00           C
+ATOM      4  O   ALA A   1       3.000   2.000   1.000  1.00  0.00           O
+ATOM      5  N   GLY A   2       4.000   1.000   1.000  1.00  0.00           N
+ATOM      6  CA  GLY A   2       5.000   1.000   1.000  1.00  0.00           C
+ATOM      7  C   GLY A   2       6.000   1.000   1.000  1.00  0.00           C
+ATOM      8  O   GLY A   2       6.000   2.000   1.000  1.00  0.00           O
+ATOM      9  N   ALA A   3       7.000   1.000   1.000  1.00  0.00           N
+ATOM     10  CA  ALA A   3       8.000   1.000   1.000  1.00  0.00           C
+ATOM     11  C   ALA A   3       9.000   1.000   1.000  1.00  0.00           C
+ATOM     12  O   ALA A   3       9.000   2.000   1.000  1.00  0.00           O
+END
