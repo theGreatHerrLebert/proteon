@@ -35,34 +35,156 @@ def timed(name, fn, *args, **kwargs):
     return result, elapsed
 
 
-def run_benchmark(pdb_dir, n_structures, n_threads, output_file):
+def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000):
     import ferritin
 
     # Collect input files
     files = sorted(Path(pdb_dir).glob("*.pdb")) + sorted(Path(pdb_dir).glob("*.cif"))
     files = [str(f) for f in files[:n_structures]]
     n = len(files)
-    print(f"Benchmark: {n} structures, {n_threads or 'all'} threads")
+    print(f"Benchmark: {n} structures, {n_threads or 'all'} threads, chunk={chunk_size}")
     print(f"=" * 60)
 
     results = {
         "n_structures": n,
         "n_threads": n_threads,
+        "chunk_size": chunk_size,
         "benchmarks": {},
     }
 
-    # 1. Batch loading
-    print("\n[1/9] Batch loading...")
-    t0 = time.perf_counter()
-    structures = ferritin.batch_load_tolerant(files, n_threads=n_threads)
-    load_time = time.perf_counter() - t0
-    n_loaded = len(structures)
-    load_rate = n_loaded / load_time if load_time > 0 else 0
-    print(f"  Loaded {n_loaded}/{n} in {load_time:.1f}s ({load_rate:.0f} structs/s)")
-    results["benchmarks"]["load"] = {
-        "n_loaded": n_loaded, "n_failed": n - n_loaded,
-        "elapsed_s": round(load_time, 2), "rate": round(load_rate, 1),
+    # Process in chunks to avoid OOM
+    # Each chunk: load → run all analyses → discard → next chunk
+    all_timings = {
+        "load": {"elapsed": 0, "n_loaded": 0, "n_failed": 0},
+        "sasa": {"elapsed": 0},
+        "dssp": {"elapsed": 0},
+        "dihedrals": {"elapsed": 0},
+        "hbonds": {"elapsed": 0},
+        "hydrogens": {"elapsed": 0, "total_h": 0},
+        "energy": {"elapsed": 0, "n_computed": 0},
+        "prepare": {"elapsed": 0, "n_prepared": 0, "n_converged": 0},
     }
+    sasa_values = []
+    energies = []
+
+    n_chunks = (n + chunk_size - 1) // chunk_size
+    for ci in range(n_chunks):
+        chunk_files = files[ci * chunk_size : (ci + 1) * chunk_size]
+        cn = len(chunk_files)
+        print(f"\n--- Chunk {ci+1}/{n_chunks} ({cn} files) ---")
+
+        # Load
+        t0 = time.perf_counter()
+        structures = ferritin.batch_load_tolerant(chunk_files, n_threads=n_threads)
+        dt = time.perf_counter() - t0
+        all_timings["load"]["elapsed"] += dt
+        all_timings["load"]["n_loaded"] += len(structures)
+        all_timings["load"]["n_failed"] += cn - len(structures)
+        print(f"  Load: {len(structures)}/{cn} in {dt:.1f}s")
+
+        if not structures:
+            continue
+
+        # SASA
+        t0 = time.perf_counter()
+        sv = ferritin.batch_total_sasa(structures, n_threads=n_threads, radii="protor")
+        dt = time.perf_counter() - t0
+        all_timings["sasa"]["elapsed"] += dt
+        sasa_values.extend(sv.tolist())
+
+        # DSSP
+        t0 = time.perf_counter()
+        ferritin.batch_dssp(structures, n_threads=n_threads)
+        dt = time.perf_counter() - t0
+        all_timings["dssp"]["elapsed"] += dt
+
+        # Dihedrals
+        t0 = time.perf_counter()
+        ferritin.batch_dihedrals(structures, n_threads=n_threads)
+        dt = time.perf_counter() - t0
+        all_timings["dihedrals"]["elapsed"] += dt
+
+        # H-bonds
+        t0 = time.perf_counter()
+        ferritin.batch_backbone_hbonds(structures, n_threads=n_threads)
+        dt = time.perf_counter() - t0
+        all_timings["hbonds"]["elapsed"] += dt
+
+        # H placement
+        t0 = time.perf_counter()
+        h_res = ferritin.batch_place_peptide_hydrogens(structures, n_threads=n_threads)
+        dt = time.perf_counter() - t0
+        all_timings["hydrogens"]["elapsed"] += dt
+        all_timings["hydrogens"]["total_h"] += sum(r[0] for r in h_res)
+
+        # Energy (first chunk only — O(N²) is slow)
+        if ci == 0:
+            n_energy = min(500, len(structures))
+            t0 = time.perf_counter()
+            for s in structures[:n_energy]:
+                try:
+                    e = ferritin.compute_energy(s, units="kJ/mol")
+                    energies.append(e["total"])
+                    all_timings["energy"]["n_computed"] += 1
+                except Exception:
+                    pass
+            dt = time.perf_counter() - t0
+            all_timings["energy"]["elapsed"] += dt
+
+        # Prepare (first chunk only)
+        if ci == 0:
+            n_prep = min(200, len(structures))
+            t0 = time.perf_counter()
+            try:
+                reports = ferritin.batch_prepare(
+                    structures[:n_prep], reconstruct=False, hydrogens="backbone",
+                    minimize=True, minimize_steps=50, minimize_method="lbfgs",
+                    n_threads=n_threads,
+                )
+                all_timings["prepare"]["n_prepared"] = n_prep
+                all_timings["prepare"]["n_converged"] = sum(1 for r in reports if r.converged)
+            except Exception as e:
+                print(f"  Prepare failed: {e}")
+            dt = time.perf_counter() - t0
+            all_timings["prepare"]["elapsed"] += dt
+
+        # Free memory
+        del structures
+        print(f"  Done. SASA/DSSP/dihed/hbond/H complete.")
+
+    # Compile results
+    n_loaded = all_timings["load"]["n_loaded"]
+    print(f"\n{'=' * 60}")
+    print(f"SUMMARY ({n_loaded}/{n} structures loaded)")
+    print(f"{'=' * 60}")
+    print(f"  {'Operation':<25s} {'Time(s)':>8s} {'Rate(s/s)':>10s}")
+    print(f"  {'-'*45}")
+
+    for name, tm in all_timings.items():
+        elapsed = tm["elapsed"]
+        count = tm.get("n_loaded", tm.get("n_computed", tm.get("n_prepared", n_loaded)))
+        rate = count / elapsed if elapsed > 0 else 0
+        print(f"  {name:<25s} {elapsed:8.1f} {rate:10.0f}")
+        results["benchmarks"][name] = {
+            "elapsed_s": round(elapsed, 2),
+            "rate": round(rate, 1),
+            **{k: v for k, v in tm.items() if k != "elapsed"},
+        }
+
+    if sasa_values:
+        results["benchmarks"]["sasa"]["median"] = round(float(np.median(sasa_values)), 1)
+        print(f"\n  Median SASA: {np.median(sasa_values):.0f} A²")
+    if energies:
+        results["benchmarks"]["energy"]["median_kj"] = round(float(np.median(energies)), 1)
+        print(f"  Median energy: {np.median(energies):.0f} kJ/mol")
+
+    total = sum(tm["elapsed"] for tm in all_timings.values())
+    print(f"\n  TOTAL TIME: {total:.1f}s ({total/60:.1f} min)")
+
+    with open(output_file, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\nResults saved to {output_file}")
+    return results
 
     if n_loaded == 0:
         print("No structures loaded, aborting.")
@@ -204,6 +326,7 @@ if __name__ == "__main__":
     parser.add_argument("--n", type=int, default=50000, help="Max structures")
     parser.add_argument("--threads", type=int, default=0, help="Threads (0=all)")
     parser.add_argument("--output", default="benchmark_results.json", help="Output JSON")
+    parser.add_argument("--chunk", type=int, default=5000, help="Chunk size for processing")
     args = parser.parse_args()
 
-    run_benchmark(args.pdb_dir, args.n, args.threads or None, args.output)
+    run_benchmark(args.pdb_dir, args.n, args.threads or None, args.output, args.chunk)
