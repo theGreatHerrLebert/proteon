@@ -576,11 +576,27 @@ fn collect_atom_positions(residue: &pdbtbx::Residue) -> (HashMap<String, [f64; 3
     (positions, existing_h)
 }
 
+/// Check if a CYS SG atom is in a disulfide bond (another SG within 2.5 Å).
+fn is_disulfide(sg_pos: [f64; 3], all_sg_positions: &[[f64; 3]]) -> bool {
+    for other in all_sg_positions {
+        let dx = sg_pos[0] - other[0];
+        let dy = sg_pos[1] - other[1];
+        let dz = sg_pos[2] - other[2];
+        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+        // Another SG within 2.5 Å but not self (> 0.1)
+        if dist > 0.1 && dist < 2.5 {
+            return true;
+        }
+    }
+    false
+}
+
 /// Compute sidechain H positions for a residue based on templates.
 fn compute_sidechain_h(
     resname: &str,
     positions: &HashMap<String, [f64; 3]>,
     existing_h: &HashSet<String>,
+    all_sg_positions: &[[f64; 3]],
 ) -> Vec<(String, [f64; 3])> {
     let templates = sidechain_templates(resname);
     let mut result = Vec::new();
@@ -624,10 +640,9 @@ fn compute_sidechain_h(
                 if existing_h.contains(*name) { continue; }
                 let p = match positions.get(*parent) { Some(v) => *v, None => continue };
                 let n = match positions.get(*neighbor) { Some(v) => *v, None => continue };
-                // For CYS SG, check for disulfide (nearby SG within 2.5 Å)
-                if *parent == "SG" {
-                    // Skip if this is likely a disulfide
-                    // (detected later if needed — for now always place HG)
+                // For CYS SG, skip if disulfide bonded
+                if *parent == "SG" && is_disulfide(p, all_sg_positions) {
+                    continue;
                 }
                 result.push((name.to_string(), place_oh1h(p, n, *bl)));
             }
@@ -663,6 +678,21 @@ pub fn place_sidechain_hydrogens(pdb: &mut pdbtbx::PDB) -> AddHydrogensResult {
         None => return AddHydrogensResult { added: 0, skipped: 0 },
     };
 
+    // Collect all SG positions for disulfide detection
+    let mut all_sg_positions: Vec<[f64; 3]> = Vec::new();
+    for chain in first_model.chains() {
+        for residue in chain.residues() {
+            if residue.name() == Some("CYS") {
+                for atom in residue.atoms() {
+                    if atom.name().trim() == "SG" {
+                        let (x, y, z) = atom.pos();
+                        all_sg_positions.push([x, y, z]);
+                    }
+                }
+            }
+        }
+    }
+
     for (chain_idx, chain) in first_model.chains().enumerate() {
         for (residue_idx, residue) in chain.residues().enumerate() {
             let is_aa = residue
@@ -679,7 +709,7 @@ pub fn place_sidechain_hydrogens(pdb: &mut pdbtbx::PDB) -> AddHydrogensResult {
             };
 
             let (positions, existing_h) = collect_atom_positions(residue);
-            let new_hs = compute_sidechain_h(&resname, &positions, &existing_h);
+            let new_hs = compute_sidechain_h(&resname, &positions, &existing_h, &all_sg_positions);
 
             if new_hs.is_empty() {
                 skipped += 1;
