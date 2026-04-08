@@ -62,10 +62,33 @@ impl CubicSwitch {
 }
 
 /// Compute total energy of the system.
+///
+/// If `distance_dependent_dielectric` is true, the Coulomb term uses ε = r
+/// (divides electrostatic energy by an additional factor of r), providing a
+/// simple implicit solvation surrogate.
 pub fn compute_energy(
     coords: &[[f64; 3]],
     topo: &Topology,
     params: &AmberParams,
+) -> EnergyResult {
+    compute_energy_impl(coords, topo, params, false)
+}
+
+/// Compute energy with optional distance-dependent dielectric.
+pub fn compute_energy_dd(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &AmberParams,
+    distance_dependent_dielectric: bool,
+) -> EnergyResult {
+    compute_energy_impl(coords, topo, params, distance_dependent_dielectric)
+}
+
+fn compute_energy_impl(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &AmberParams,
+    distance_dependent_dielectric: bool,
 ) -> EnergyResult {
     let mut result = EnergyResult::default();
 
@@ -173,11 +196,12 @@ pub fn compute_energy(
                 }
             }
 
-            // Coulomb
+            // Coulomb (with optional distance-dependent dielectric ε = r)
             let qi = topo.atoms[i].charge;
             let qj = topo.atoms[j].charge;
             if qi.abs() > 1e-10 && qj.abs() > 1e-10 {
-                result.electrostatic += switch_val * scale_es * coulomb_factor * qi * qj / r;
+                let denom = if distance_dependent_dielectric { r * r } else { r };
+                result.electrostatic += switch_val * scale_es * coulomb_factor * qi * qj / denom;
             }
         }
     }
@@ -198,6 +222,25 @@ pub fn compute_energy_and_forces(
     coords: &[[f64; 3]],
     topo: &Topology,
     params: &AmberParams,
+) -> (EnergyResult, Vec<[f64; 3]>) {
+    compute_energy_and_forces_impl(coords, topo, params, false)
+}
+
+/// Compute energy and forces with optional distance-dependent dielectric.
+pub fn compute_energy_and_forces_dd(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &AmberParams,
+    distance_dependent_dielectric: bool,
+) -> (EnergyResult, Vec<[f64; 3]>) {
+    compute_energy_and_forces_impl(coords, topo, params, distance_dependent_dielectric)
+}
+
+fn compute_energy_and_forces_impl(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &AmberParams,
+    distance_dependent_dielectric: bool,
 ) -> (EnergyResult, Vec<[f64; 3]>) {
     let n = coords.len();
     let mut forces = vec![[0.0f64; 3]; n];
@@ -359,14 +402,20 @@ pub fn compute_energy_and_forces(
                 }
             }
 
-            // Coulomb: E = k*q1*q2/r
+            // Coulomb: E = k*q1*q2/r (or k*q1*q2/r² with distance-dependent dielectric)
             let qi = topo.atoms[i].charge;
             let qj = topo.atoms[j].charge;
             if qi.abs() > 1e-10 && qj.abs() > 1e-10 {
-                let e_es = scale_es * coulomb_factor * qi * qj * inv_r;
+                let (e_es, de_dr) = if distance_dependent_dielectric {
+                    // ε = r: E = k*q1*q2/r², dE/dr = -2*k*q1*q2/r³
+                    let e = scale_es * coulomb_factor * qi * qj * inv_r * inv_r;
+                    (e, -2.0 * e * inv_r)
+                } else {
+                    let e = scale_es * coulomb_factor * qi * qj * inv_r;
+                    (e, -e * inv_r)
+                };
                 result.electrostatic += switch_val * e_es;
 
-                let de_dr = -e_es * inv_r;
                 let total_de_dr = switch_val * de_dr + e_es * dsw_dr2 * 2.0 * r;
                 let fx = total_de_dr * dx * inv_r;
                 let fy = total_de_dr * dy * inv_r;

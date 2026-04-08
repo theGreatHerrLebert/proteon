@@ -152,6 +152,41 @@ def load_and_minimize_hydrogens(
     Returns:
         List of (index, result_dict) tuples. Files that fail to load are skipped.
 
+    Agent Notes:
+        WATCH: Failed inputs are skipped. Use the returned indices to map results
+            back to the original path list.
+        PREFER: Use this for many files instead of a Python loop over load() and
+            minimize_hydrogens().
     """
     str_paths = [str(p) for p in paths]
     return _ff.load_and_minimize_hydrogens(str_paths, max_steps, gradient_tolerance, n_threads)
+
+
+def run_md(
+    structure,
+    n_steps: int = 1000,
+    dt: float = 0.001,
+    temperature: float = 300.0,
+    thermostat_tau: float = 0.2,
+    snapshot_freq: int = 10,
+) -> dict:
+    """Run molecular dynamics simulation using Velocity Verlet integration.
+
+    Args:
+        structure: Ferritin Structure object.
+        n_steps: Number of MD steps (default 1000).
+        dt: Time step in picoseconds (default 0.001 = 1 fs).
+        temperature: Initial/target temperature in Kelvin (default 300).
+        thermostat_tau: Berendsen coupling time in ps. 0 = NVE (default 0.2 = NVT).
+        snapshot_freq: Record trajectory frame every N steps (default 10).
+
+    Returns:
+        Dict with keys:
+            coords: final coordinates (N, 3) numpy array.
+            velocities: final velocities (N, 3) numpy array.
+            trajectory: list of frame dicts (step, time_ps, kinetic_energy,
+                potential_energy, total_energy, temperature).
+            energy: final energy components dict.
+            n_steps, dt, temperature_target, thermostat_tau: simulation parameters.
+    """
+    return _ff.run_md(_get_ptr(structure), n_steps, dt, temperature, thermostat_tau, snapshot_freq)

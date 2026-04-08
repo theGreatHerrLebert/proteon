@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use rayon::prelude::*;
 
-use crate::forcefield::{energy, minimize, params, topology};
+use crate::forcefield::{energy, md, minimize, params, topology};
 use crate::py_pdb::PyPDB;
 
 fn resolve_threads(n: Option<i32>) -> usize {
@@ -346,6 +346,98 @@ pub fn load_and_minimize_hydrogens<'py>(
 }
 
 // ---------------------------------------------------------------------------
+// Molecular dynamics
+// ---------------------------------------------------------------------------
+
+/// Run molecular dynamics simulation using Velocity Verlet integration.
+///
+/// Args:
+///     pdb: Structure to simulate.
+///     n_steps: Number of MD steps (default 1000).
+///     dt: Time step in picoseconds (default 0.001 = 1 fs).
+///     temperature: Initial/target temperature in Kelvin (default 300).
+///     thermostat_tau: Berendsen coupling time in ps. 0 = NVE (default 0.2 = NVT).
+///     snapshot_freq: Record trajectory frame every N steps (default 10).
+///
+/// Returns dict with:
+///     coords: final coordinates (N, 3).
+///     velocities: final velocities (N, 3).
+///     trajectory: list of dicts with step, time_ps, kinetic_energy,
+///                 potential_energy, total_energy, temperature.
+///     trajectory_coords: list of (N, 3) coordinate arrays at each snapshot.
+///     energy: final energy components dict.
+#[pyfunction]
+#[pyo3(signature = (pdb, n_steps=1000, dt=0.001, temperature=300.0, thermostat_tau=0.2, snapshot_freq=10))]
+pub fn run_md(
+    py: Python<'_>,
+    pdb: &PyPDB,
+    n_steps: usize,
+    dt: f64,
+    temperature: f64,
+    thermostat_tau: f64,
+    snapshot_freq: usize,
+) -> PyResult<PyObject> {
+    let amber = params::amber96();
+    let topo = topology::build_topology(&pdb.inner, &amber);
+    let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+    let n = coords.len();
+
+    // Collect trajectory coords at each snapshot
+    let snap_freq = snapshot_freq.max(1);
+    let topo_clone = topo.clone();
+    let amber_clone = amber.clone();
+
+    // Run MD (release GIL)
+    let result = py.allow_threads(move || {
+        md::velocity_verlet(&coords, &topo_clone, &amber_clone, n_steps, dt, temperature, thermostat_tau, snap_freq)
+    });
+
+    // Build result dict
+    let dict = pyo3::types::PyDict::new(py);
+
+    // Final coords
+    let flat: Vec<f64> = result.coords.iter().flat_map(|c| c.iter().copied()).collect();
+    let coords_arr = PyArray1::from_vec(py, flat).reshape([n, 3]).expect("reshape");
+    dict.set_item("coords", coords_arr)?;
+
+    // Final velocities
+    let flat_v: Vec<f64> = result.velocities.iter().flat_map(|v| v.iter().copied()).collect();
+    let vel_arr = PyArray1::from_vec(py, flat_v).reshape([n, 3]).expect("reshape");
+    dict.set_item("velocities", vel_arr)?;
+
+    // Trajectory frames
+    let frames = pyo3::types::PyList::empty(py);
+    for frame in &result.frames {
+        let fd = pyo3::types::PyDict::new(py);
+        fd.set_item("step", frame.step)?;
+        fd.set_item("time_ps", frame.time_ps)?;
+        fd.set_item("kinetic_energy", frame.kinetic_energy)?;
+        fd.set_item("potential_energy", frame.potential_energy)?;
+        fd.set_item("total_energy", frame.total_energy)?;
+        fd.set_item("temperature", frame.temperature)?;
+        frames.append(fd)?;
+    }
+    dict.set_item("trajectory", frames)?;
+
+    // Final energy components
+    let components = pyo3::types::PyDict::new(py);
+    components.set_item("bond_stretch", result.energy.bond_stretch)?;
+    components.set_item("angle_bend", result.energy.angle_bend)?;
+    components.set_item("torsion", result.energy.torsion)?;
+    components.set_item("improper_torsion", result.energy.improper_torsion)?;
+    components.set_item("vdw", result.energy.vdw)?;
+    components.set_item("electrostatic", result.energy.electrostatic)?;
+    dict.set_item("energy", components)?;
+
+    dict.set_item("n_steps", n_steps)?;
+    dict.set_item("dt", dt)?;
+    dict.set_item("temperature_target", temperature)?;
+    dict.set_item("thermostat_tau", thermostat_tau)?;
+
+    Ok(dict.into_any().unbind())
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -356,5 +448,6 @@ pub fn py_forcefield(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(minimize_structure, m)?)?;
     m.add_function(wrap_pyfunction!(batch_minimize_hydrogens, m)?)?;
     m.add_function(wrap_pyfunction!(load_and_minimize_hydrogens, m)?)?;
+    m.add_function(wrap_pyfunction!(run_md, m)?)?;
     Ok(())
 }

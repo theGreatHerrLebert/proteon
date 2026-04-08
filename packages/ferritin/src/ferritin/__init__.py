@@ -64,6 +64,7 @@ from .forcefield import (
     load_and_minimize_hydrogens,
     minimize_hydrogens,
     minimize_structure,
+    run_md,
 )
 from .hbond import (
     backbone_hbonds,
