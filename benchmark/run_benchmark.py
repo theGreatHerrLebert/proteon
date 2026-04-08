@@ -85,9 +85,9 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
         loaded = ferritin.batch_load_tolerant(chunk_files, n_threads=n_threads)
         dt = time.perf_counter() - t0
         structures = [s for _, s in loaded]
-        # Skip structures > 50K atoms (huge complexes would OOM on SASA)
+        # Skip structures > 20K atoms (huge complexes OOM on batch SASA)
         n_before = len(structures)
-        structures = [s for s in structures if s.atom_count < 50000]
+        structures = [s for s in structures if s.atom_count < 20000]
         n_skipped_large = n_before - len(structures)
         all_timings["load"]["elapsed"] += dt
         all_timings["load"]["n_loaded"] += len(structures)
