@@ -1,4 +1,8 @@
-"""Tests for AMBER96 force field energy computation and minimization."""
+"""Tests for AMBER96 force field energy computation and minimization.
+
+Note: tests use units="kcal/mol" to match historical reference values.
+The default API output is kJ/mol.
+"""
 
 import os
 
@@ -8,6 +12,7 @@ import pytest
 import ferritin
 
 TEST_PDBS_DIR = os.path.join(os.path.dirname(__file__), "..", "test-pdbs")
+UNITS = "kcal/mol"  # legacy unit for stable test assertions
 
 
 def load_crambin():
@@ -25,12 +30,12 @@ def load_ubiquitin():
 
 class TestComputeEnergy:
     def test_returns_all_components(self):
-        e = ferritin.compute_energy(load_crambin())
+        e = ferritin.compute_energy(load_crambin(), units=UNITS)
         for key in ("bond_stretch", "angle_bend", "torsion", "vdw", "electrostatic", "total"):
             assert key in e, f"Missing key: {key}"
 
     def test_total_is_sum(self):
-        e = ferritin.compute_energy(load_crambin())
+        e = ferritin.compute_energy(load_crambin(), units=UNITS)
         expected = (
             e["bond_stretch"]
             + e["angle_bend"]
@@ -44,23 +49,23 @@ class TestComputeEnergy:
         )
 
     def test_components_are_finite(self):
-        e = ferritin.compute_energy(load_crambin())
+        e = ferritin.compute_energy(load_crambin(), units=UNITS)
         for key, val in e.items():
             assert np.isfinite(val), f"{key} is not finite: {val}"
 
     def test_bond_stretch_positive(self):
         """Bond stretching energy is always >= 0 (harmonic)."""
-        e = ferritin.compute_energy(load_crambin())
+        e = ferritin.compute_energy(load_crambin(), units=UNITS)
         assert e["bond_stretch"] >= 0
 
     def test_angle_bend_positive(self):
         """Angle bending energy is always >= 0 (harmonic)."""
-        e = ferritin.compute_energy(load_crambin())
+        e = ferritin.compute_energy(load_crambin(), units=UNITS)
         assert e["angle_bend"] >= 0
 
     def test_both_structures_compute(self):
         """Energy computation works on structures with and without hydrogens."""
-        e_crn = ferritin.compute_energy(load_crambin())
+        e_crn = ferritin.compute_energy(load_crambin(), units=UNITS)
         e_ubq = ferritin.compute_energy(load_ubiquitin())
         assert np.isfinite(e_crn["total"])
         assert np.isfinite(e_ubq["total"])
