@@ -431,9 +431,15 @@ pub fn velocity_verlet_constrained(
         if use_constraints {
             shake(&mut pos, &old_pos, &inv_mass, constraints, 1e-6, 1000);
 
-            // Update velocities to reflect position correction:
-            // v(t+dt/2) = (r(t+dt) - r(t)) / dt
-            // Then add half-step acceleration from forces
+            // Reconstruct midpoint velocity from constrained displacement.
+            //
+            // Without SHAKE:  (r(t+dt) - r(t)) / dt = v(t) + 0.5*a(t)*dt = v(t+dt/2)
+            // With SHAKE:     (r(t+dt) - r(t)) / dt = v(t+dt/2) + λ_constraint/dt
+            //
+            // This is the STANDARD SHAKE velocity formula (Andersen 1983, Allen &
+            // Tildesley Ch.3). The constraint force contribution λ/dt is implicitly
+            // encoded in the position displacement. The second half-step kick (below)
+            // then adds 0.5*a(t+dt)*dt, and RATTLE removes the parallel component.
             for i in 0..n {
                 vel[i][0] = (pos[i][0] - old_pos[i][0]) / dt;
                 vel[i][1] = (pos[i][1] - old_pos[i][1]) / dt;
@@ -602,5 +608,92 @@ mod tests {
         let last_temp = result.frames.last().unwrap().temperature;
         assert!(last_temp > 0.0 && last_temp.is_finite(),
             "Temperature should be positive and finite, got {}", last_temp);
+    }
+
+    #[test]
+    fn test_shake_maintains_bond_lengths() {
+        // Verify SHAKE constrains X-H bond lengths during MD.
+        // After each step, all constrained bonds should be within tolerance
+        // of their equilibrium length.
+        let (mut pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read("../test-pdbs/1crn.pdb")
+            .expect("failed to read 1crn.pdb");
+
+        // Place hydrogens first so we have X-H bonds to constrain
+        crate::add_hydrogens::place_peptide_hydrogens(&mut pdb);
+
+        let amber = params::amber96();
+        let topo = topology::build_topology(&pdb, &amber);
+        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+        let constraints = build_h_constraints(&topo, &amber);
+
+        assert!(!constraints.is_empty(), "Should have X-H constraints");
+
+        // Run 5 steps with SHAKE, very small timestep to avoid blowup
+        let result = velocity_verlet_constrained(
+            &coords, &topo, &amber,
+            5,      // steps
+            0.0002, // dt = 0.2 fs (very small to keep stable)
+            300.0,  // temperature
+            0.0,    // NVE (no thermostat)
+            5,      // snapshot every 5
+            &constraints,
+        );
+
+        // Check all constrained bond lengths in final structure
+        let tol = 1e-3; // 0.001 Å tolerance
+        for c in &constraints {
+            let dx = result.coords[c.i][0] - result.coords[c.j][0];
+            let dy = result.coords[c.i][1] - result.coords[c.j][1];
+            let dz = result.coords[c.i][2] - result.coords[c.j][2];
+            let r_sq = dx * dx + dy * dy + dz * dz;
+            let r = r_sq.sqrt();
+            let target = c.d_sq.sqrt();
+            let err = (r - target).abs();
+            assert!(
+                err < tol,
+                "Constrained bond {}-{}: r={:.4} target={:.4} err={:.6}",
+                c.i, c.j, r, target, err,
+            );
+        }
+
+        // Verify result is finite (no blowup)
+        assert!(
+            result.frames.last().unwrap().total_energy.is_finite(),
+            "Total energy should be finite with SHAKE",
+        );
+    }
+
+    #[test]
+    fn test_shake_vs_unconstrained_same_initial() {
+        // Both should start from the same initial state
+        let (mut pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read("../test-pdbs/1crn.pdb")
+            .expect("failed to read 1crn.pdb");
+
+        crate::add_hydrogens::place_peptide_hydrogens(&mut pdb);
+
+        let amber = params::amber96();
+        let topo = topology::build_topology(&pdb, &amber);
+        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+        let constraints = build_h_constraints(&topo, &amber);
+
+        let r_no_shake = velocity_verlet(
+            &coords, &topo, &amber, 1, 0.0002, 300.0, 0.0, 1,
+        );
+        let r_shake = velocity_verlet_constrained(
+            &coords, &topo, &amber, 1, 0.0002, 300.0, 0.0, 1, &constraints,
+        );
+
+        // Initial frames should have the same potential energy
+        let pe_no = r_no_shake.frames[0].potential_energy;
+        let pe_sh = r_shake.frames[0].potential_energy;
+        assert!(
+            (pe_no - pe_sh).abs() < 0.01,
+            "Initial PE should match: no_shake={} shake={}",
+            pe_no, pe_sh,
+        );
     }
 }
