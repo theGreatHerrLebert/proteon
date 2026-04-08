@@ -460,12 +460,21 @@ def _backbone_dihedrals_python(structure):
         psi = np.full(n_res, np.nan)
         omega = np.full(n_res, np.nan)
 
+        # Detect backbone breaks via CA-CA distance > 4.5 Å
+        # (catches insertion-code interleaving, missing residues, etc.)
         if n_res > 1:
-            phi[1:] = dihedral_angle(c_arr[:-1], n_arr[1:], ca_arr[1:], c_arr[1:])
-        if n_res > 1:
-            psi[:-1] = dihedral_angle(n_arr[:-1], ca_arr[:-1], c_arr[:-1], n_arr[1:])
-        if n_res > 1:
-            omega[1:] = dihedral_angle(ca_arr[:-1], c_arr[:-1], n_arr[1:], ca_arr[1:])
+            ca_diff = ca_arr[1:] - ca_arr[:-1]
+            ca_dist = np.sqrt(np.sum(ca_diff**2, axis=1))
+            connected = ca_dist <= 4.5
+
+            phi_vals = dihedral_angle(c_arr[:-1], n_arr[1:], ca_arr[1:], c_arr[1:])
+            phi[1:] = np.where(connected, phi_vals, np.nan)
+
+            psi_vals = dihedral_angle(n_arr[:-1], ca_arr[:-1], c_arr[:-1], n_arr[1:])
+            psi[:-1] = np.where(connected, psi_vals, np.nan)
+
+            omega_vals = dihedral_angle(ca_arr[:-1], c_arr[:-1], n_arr[1:], ca_arr[1:])
+            omega[1:] = np.where(connected, omega_vals, np.nan)
 
         all_phi.append(phi)
         all_psi.append(psi)

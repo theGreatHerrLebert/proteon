@@ -148,7 +148,7 @@ def phase_ferritin_batch(structures, n_threads):
     # SASA
     print("  Batch SASA...", end=" ", flush=True)
     t0 = time.time()
-    results["sasa"] = np.asarray(ferritin.batch_total_sasa(structures, n_threads=n_threads))
+    results["sasa"] = np.asarray(ferritin.batch_total_sasa(structures, n_threads=n_threads, radii="protor"))
     print(f"{time.time() - t0:.1f}s")
 
     # H-bonds
@@ -472,8 +472,7 @@ def run_validation(pdb_dir, n_structures, output_file, n_threads, n_workers):
         print(f"    Max relative diff:    {np.max(diffs):.4f} ({np.max(diffs)*100:.2f}%)")
         print(f"    Within 1%: {np.sum(diffs < 0.01)}/{len(diffs)}")
         print(f"    Within 5%: {np.sum(diffs < 0.05)}/{len(diffs)}")
-        print(f"    Note: diff is from different atomic radii tables "
-              f"(Bondi vs ProtOr), not algorithm error.")
+        print(f"    Note: both ferritin and FreeSASA use ProtOr radii.")
 
     # Hydrogen summary
     h_added = [batch_results["hydrogens"][i][0] for i in range(n_loaded)]

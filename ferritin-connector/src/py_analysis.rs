@@ -41,13 +41,14 @@ fn extract_ca(pdb: &pdbtbx::PDB) -> Vec<[f64; 3]> {
 }
 
 /// Extract backbone (N, CA, C) coordinates grouped by residue from a pdbtbx PDB.
-/// Returns (triples, chain_starts) where chain_starts[i] marks the first residue
-/// index of each chain (for NaN insertion at chain boundaries).
+/// Returns (triples, breaks) where breaks[i] marks residue indices at which the
+/// backbone is discontinuous (chain boundaries and CA-CA gaps > 4.5 Å, e.g. from
+/// insertion-code interleaving or missing residues).
 fn extract_backbone(
     pdb: &pdbtbx::PDB,
 ) -> (Vec<([f64; 3], [f64; 3], [f64; 3])>, Vec<usize>) {
-    let mut result = Vec::new();
-    let mut chain_starts = Vec::new();
+    let mut result: Vec<([f64; 3], [f64; 3], [f64; 3])> = Vec::new();
+    let mut breaks = Vec::new();
 
     for chain in pdb.chains() {
         let start = result.len();
@@ -76,15 +77,26 @@ fn extract_backbone(
             }
 
             if let (Some(n), Some(ca), Some(c)) = (n_pos, ca_pos, c_pos) {
+                // Detect backbone discontinuity via CA-CA distance
+                if let Some(prev) = result.last() {
+                    let prev_ca: &[f64; 3] = &prev.1;
+                    let dx = ca[0] - prev_ca[0];
+                    let dy = ca[1] - prev_ca[1];
+                    let dz = ca[2] - prev_ca[2];
+                    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                    if dist > 4.5 {
+                        breaks.push(result.len());
+                    }
+                }
                 result.push((n, ca, c));
             }
         }
         if result.len() > start {
-            chain_starts.push(start);
+            breaks.push(start);
         }
     }
 
-    (result, chain_starts)
+    (result, breaks)
 }
 
 /// Compute dihedral angle in degrees from four points.
