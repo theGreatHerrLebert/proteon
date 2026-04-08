@@ -951,7 +951,30 @@ fn general_handle_atom(
 /// First runs Phase 1+2 (backbone + sidechain templates), then applies
 /// the general algorithm to any remaining unsaturated heavy atoms
 /// (ligands, modified residues, cofactors).
-pub fn place_general_hydrogens(pdb: &mut pdbtbx::PDB) -> AddHydrogensResult {
+/// Water residue names.
+const WATER_NAMES: &[&str] = &["HOH", "WAT", "H2O", "TIP", "TIP3", "SPC", "DOD"];
+
+/// Place 2 H on a water molecule's oxygen atom.
+fn place_water_h(o_pos: [f64; 3]) -> [[f64; 3]; 2] {
+    // Water H-O-H angle: 104.5 degrees
+    // Place with arbitrary orientation (no neighbors to reference)
+    let half_angle = (104.5_f64 / 2.0).to_radians();
+    let bl = OH_BOND_LENGTH;
+
+    // Pick an arbitrary direction
+    let dir1 = [0.0, half_angle.sin(), half_angle.cos()];
+    let dir2 = [0.0, -half_angle.sin(), half_angle.cos()];
+
+    [
+        [o_pos[0] + bl * dir1[0], o_pos[1] + bl * dir1[1], o_pos[2] + bl * dir1[2]],
+        [o_pos[0] + bl * dir2[0], o_pos[1] + bl * dir2[1], o_pos[2] + bl * dir2[2]],
+    ]
+}
+
+/// Place hydrogens on non-standard residues using the general BALL algorithm.
+///
+/// If `include_water` is true, also places 2 H on each water molecule.
+pub fn place_general_hydrogens(pdb: &mut pdbtbx::PDB, include_water: bool) -> AddHydrogensResult {
     // First: place standard AA hydrogens
     let standard = place_all_hydrogens(pdb);
 
@@ -973,6 +996,38 @@ pub fn place_general_hydrogens(pdb: &mut pdbtbx::PDB) -> AddHydrogensResult {
 
             // Skip standard amino acids (already handled by Phase 1+2)
             if is_standard_aa {
+                continue;
+            }
+
+            let resname = residue.name().unwrap_or("");
+
+            // Water handling
+            if WATER_NAMES.contains(&resname) {
+                if !include_water {
+                    continue;
+                }
+                // Find O atom, check no existing H
+                let mut o_pos = None;
+                let mut has_h = false;
+                for atom in residue.atoms() {
+                    let elem = atom.element().map(|e| e.symbol()).unwrap_or("");
+                    if elem == "O" {
+                        let (x, y, z) = atom.pos();
+                        o_pos = Some([x, y, z]);
+                    }
+                    if elem == "H" || elem == "D" {
+                        has_h = true;
+                    }
+                }
+                if let Some(o) = o_pos {
+                    if !has_h {
+                        let hs = place_water_h(o);
+                        max_serial += 1;
+                        placements.push((chain_idx, residue_idx, "H1".to_string(), hs[0], max_serial));
+                        max_serial += 1;
+                        placements.push((chain_idx, residue_idx, "H2".to_string(), hs[1], max_serial));
+                    }
+                }
                 continue;
             }
 

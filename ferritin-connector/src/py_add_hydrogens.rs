@@ -110,10 +110,16 @@ pub fn place_all_hydrogens(py: Python<'_>, pdb: &mut PyPDB) -> (usize, usize) {
 ///
 /// Runs Phase 1 (backbone) + Phase 2 (sidechain templates) + Phase 3
 /// (general BALL algorithm for ligands/non-standard residues).
+///
+/// Args:
+///     pdb: Structure to modify.
+///     include_water: If True, also place 2 H on each water molecule (default False).
+///
 /// Returns (n_added, n_skipped).
 #[pyfunction]
-pub fn place_general_hydrogens(py: Python<'_>, pdb: &mut PyPDB) -> (usize, usize) {
-    let result = py.allow_threads(|| add_hydrogens::place_general_hydrogens(&mut pdb.inner));
+#[pyo3(signature = (pdb, include_water=false))]
+pub fn place_general_hydrogens(py: Python<'_>, pdb: &mut PyPDB, include_water: bool) -> (usize, usize) {
+    let result = py.allow_threads(|| add_hydrogens::place_general_hydrogens(&mut pdb.inner, include_water));
     (result.added, result.skipped)
 }
 
