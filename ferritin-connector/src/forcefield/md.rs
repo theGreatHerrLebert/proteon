@@ -347,6 +347,7 @@ fn rattle(
 /// * `temperature` — Initial/target temperature in Kelvin
 /// * `thermostat_tau` — Berendsen coupling time in ps (0.0 = NVE, no thermostat)
 /// * `snapshot_freq` — Record frame every N steps
+#[allow(dead_code)]
 pub fn velocity_verlet(
     coords: &[[f64; 3]],
     topo: &Topology,
@@ -571,7 +572,7 @@ mod tests {
         // In NVE, total energy should be approximately conserved
         let e0 = result.frames[0].total_energy;
         let e_last = result.frames.last().unwrap().total_energy;
-        let drift = (e_last - e0).abs();
+        let _drift = (e_last - e0).abs();
 
         // With 0.5 fs timestep and 10 steps, drift should be small
         // (but can be large for un-minimized structures with clashes)

@@ -106,6 +106,10 @@ def from_arrow(data: bytes) -> List[Tuple[str, Structure]]:
 
     Raises:
         RuntimeError: If the Arrow data does not have the expected atom schema.
+
+    Agent Notes:
+        WATCH: Expects ferritin's per-atom schema, not an arbitrary Arrow table.
+        INVARIANT: Round-trip preserves atom order so per-atom arrays still align.
     """
     _check_available()
     pairs = _arrow.from_arrow_ipc(data)
@@ -146,6 +150,7 @@ def from_parquet(path: str) -> List[Tuple[str, Structure]]:
         RuntimeError: If the file cannot be read or lacks the expected schema.
 
     Agent Notes:
+        WATCH: Expects a ferritin atom-schema Parquet file, not a generic Parquet table.
         COST: Reads entire file into memory. For large files, filter with
             DuckDB/Polars first, then load the subset via from_arrow().
     """

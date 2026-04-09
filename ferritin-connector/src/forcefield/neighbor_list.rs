@@ -20,10 +20,13 @@ pub struct NBPair {
 pub struct NeighborList {
     pub pairs: Vec<NBPair>,
     /// Cutoff used to build this list (Å).
+    #[allow(dead_code)]
     pub cutoff: f64,
     /// Buffer distance — rebuild when any atom moves more than buffer/2.
+    #[allow(dead_code)]
     pub buffer: f64,
     /// Coordinates at build time (for displacement check).
+    #[allow(dead_code)]
     ref_coords: Vec<[f64; 3]>,
 }
 
@@ -168,6 +171,7 @@ impl NeighborList {
     }
 
     /// Check if the list needs rebuilding (any atom moved > buffer/2).
+    #[allow(dead_code)]
     pub fn needs_rebuild(&self, coords: &[[f64; 3]]) -> bool {
         let threshold_sq = (self.buffer / 2.0) * (self.buffer / 2.0);
         for (i, c) in coords.iter().enumerate() {

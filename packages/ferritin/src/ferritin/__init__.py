@@ -108,6 +108,19 @@ from .sasa import (
     total_sasa,
 )
 from .select import select
+from .search import (
+    SearchDB,
+    SearchEntry,
+    SearchHit,
+    batch_encode_alphabet,
+    build_search_db,
+    compile_search_db,
+    encode_alphabet,
+    load_search_db,
+    save_search_db,
+    search,
+    warm_search_db,
+)
 from .io import (
     batch_load,
     batch_load_tolerant,

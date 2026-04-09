@@ -148,7 +148,7 @@ fn match_points(
             rotation_180(rotation_axis)
         };
 
-        tw2 = mat_vec(rotation, tw2);
+        let _tw2 = mat_vec(rotation, tw2);
         tw3 = mat_vec(rotation, tw3);
         final_rotation = mat_mul(rotation, final_rotation);
         final_translation = mat_vec(rotation, final_translation);

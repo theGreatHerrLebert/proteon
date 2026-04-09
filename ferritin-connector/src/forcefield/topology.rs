@@ -84,7 +84,17 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
     // Collect SG positions for disulfide detection
     let mut sg_positions: Vec<(usize, [f64; 3])> = Vec::new(); // (res_idx, pos)
 
-    for chain in pdb.chains() {
+    // Use first model only (consistent with atom_count(), SASA, DSSP, etc.)
+    let first_model = match pdb.models().next() {
+        Some(m) => m,
+        None => return Topology {
+            atoms: Vec::new(), bonds: Vec::new(), angles: Vec::new(),
+            torsions: Vec::new(), improper_torsions: Vec::new(),
+            excluded_pairs: HashSet::new(), pairs_14: HashSet::new(),
+            unassigned_atoms: Vec::new(),
+        },
+    };
+    for chain in first_model.chains() {
         let mut chain_residues: Vec<(usize, String)> = Vec::new(); // (res_idx, name)
         for residue in chain.residues() {
             let name = residue.name().unwrap_or("UNK").to_string();
@@ -123,7 +133,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
     let mut unassigned_atoms = Vec::new();
     res_idx = 0;
 
-    for chain in pdb.chains() {
+    for chain in first_model.chains() {
         for residue in chain.residues() {
             let base_name = residue.name().unwrap_or("UNK").to_string();
             let lookup_name = residue_variants.get(&res_idx)
@@ -431,7 +441,7 @@ mod tests {
                 let (aj, _, _) = sg[j];
                 let pair = (ai.min(aj), ai.max(aj));
                 let is_bonded = topo.excluded_pairs.contains(&pair) ||
-                    topo.bonds.iter().any(|b| (b.i == pair.0 && b.j == pair.1));
+                    topo.bonds.iter().any(|b| b.i == pair.0 && b.j == pair.1);
                 let dx = topo.atoms[ai].pos[0] - topo.atoms[aj].pos[0];
                 let dy = topo.atoms[ai].pos[1] - topo.atoms[aj].pos[1];
                 let dz = topo.atoms[ai].pos[2] - topo.atoms[aj].pos[2];
@@ -471,6 +481,18 @@ mod tests {
         // (but deduplication reduces this)
         assert!(topo.bonds.len() > 300, "Should have > 300 bonds, got {}", topo.bonds.len());
         assert!(topo.bonds.len() < 400, "Should have < 400 bonds, got {}", topo.bonds.len());
+
+        // Debug: print all improper torsion centers
+        println!("Improper torsions ({}):", topo.improper_torsions.len());
+        for imp in &topo.improper_torsions {
+            let a = &topo.atoms[imp.k]; // center atom (position 3)
+            let ti = &topo.atoms[imp.i].amber_type;
+            let tj = &topo.atoms[imp.j].amber_type;
+            let tk = &a.amber_type;
+            let tl = &topo.atoms[imp.l].amber_type;
+            println!("  center={}:{} types={}-{}-{}-{}",
+                a.residue_name, a.atom_name, ti, tj, tk, tl);
+        }
     }
 
     #[test]

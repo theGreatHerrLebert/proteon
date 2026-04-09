@@ -50,7 +50,12 @@ fn extract_backbone(
     let mut result: Vec<([f64; 3], [f64; 3], [f64; 3])> = Vec::new();
     let mut breaks = Vec::new();
 
-    for chain in pdb.chains() {
+    // Use first model only (consistent with atom_count(), SASA, DSSP, etc.)
+    let first_model = match pdb.models().next() {
+        Some(m) => m,
+        None => return (result, breaks),
+    };
+    for chain in first_model.chains() {
         let start = result.len();
         for residue in chain.residues() {
             let is_aa = residue

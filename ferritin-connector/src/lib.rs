@@ -8,6 +8,7 @@ mod fragment_templates;
 mod reconstruct;
 mod forcefield;
 mod hbond;
+mod parallel;
 mod py_add_hydrogens;
 mod py_align;
 mod py_align_funcs;
@@ -20,6 +21,7 @@ mod py_hbond;
 mod py_io;
 mod py_pdb;
 mod py_sasa;
+mod py_search;
 mod py_structure;
 mod py_transform;
 mod sasa;
@@ -39,6 +41,7 @@ fn ferritin_connector(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pymodule!(py_io::py_io))?;
     m.add_wrapped(wrap_pymodule!(py_pdb::py_pdb))?;
     m.add_wrapped(wrap_pymodule!(py_sasa::py_sasa))?;
+    m.add_wrapped(wrap_pymodule!(py_search::py_search))?;
     m.add_wrapped(wrap_pymodule!(py_structure::py_structure))?;
     m.add_wrapped(wrap_pymodule!(py_transform::py_transform))?;
     Ok(())

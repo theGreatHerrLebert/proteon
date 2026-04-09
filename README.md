@@ -308,7 +308,7 @@ See [`examples/`](examples/) for runnable scripts:
 
 ## Agent-Aware Documentation
 
-Ferritin includes structured **Agent Notes** in every public function's docstring — guidance specifically for AI agents and LLM-powered tools that call ferritin programmatically.
+Ferritin includes structured **Agent Notes** in selected public boundary functions — guidance specifically for AI agents and LLM-powered tools that call ferritin programmatically.
 
 ```python
 def atom_sasa(structure, probe=1.4, n_points=960):
@@ -317,11 +317,8 @@ def atom_sasa(structure, probe=1.4, n_points=960):
     Args / Returns / Examples...
 
     Agent Notes:
-        DEFAULTS: probe=1.4 is the standard water probe radius. Don't change
-        unless you have a specific reason.
-
-        PRECISION: n_points=960 gives ~0.2% accuracy. Use 100 for screening,
-        960 for publication quality.
+        WATCH: probe=1.4 is the standard water probe radius. Changing it
+        changes the physical interpretation of the result.
 
         PREFER: For many structures, use batch_total_sasa() with n_threads=-1.
 
@@ -329,15 +326,21 @@ def atom_sasa(structure, probe=1.4, n_points=960):
     """
 ```
 
-The convention uses keyword prefixes to categorize guidance:
+The convention uses a small set of keyword prefixes so the notes stay short and scannable:
 
 | Prefix | Meaning |
 |--------|---------|
-| `PREREQUISITE` | What must be true before calling |
-| `INTERPRET` | How to read the output correctly |
 | `WATCH` | Common gotchas that are NOT bugs |
 | `PREFER` | Better alternatives for common use cases |
-| `AVOID` | Anti-patterns that produce bad results |
+| `COST` | Performance or memory implications |
+| `INVARIANT` | Important guarantees callers can rely on |
+
+Policy:
+
+- Use Agent Notes only on public APIs where misuse is likely or where a caller must make a decision.
+- Prefer `WATCH`, `PREFER`, `COST`, and optionally `INVARIANT`.
+- Do not restate obvious behavior already covered by the signature or docstring.
+- If a note describes an important behavioral guarantee or trap, it should be backed by tests or a clear invariant in the implementation.
 | `CAUTION` | Destructive or misleading behaviors |
 | `COST` | Computational complexity and timing |
 | `VERIFY` | What to check in the result |

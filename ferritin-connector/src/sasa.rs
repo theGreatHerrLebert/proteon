@@ -190,8 +190,10 @@ impl CellList {
 
         // Cap grid to avoid OOM on structures with huge bounding boxes
         // (e.g., multi-model NMR, symmetry mates, or bogus coordinates).
-        // 500³ cells = 125M entries, ~3GB — reasonable upper bound.
-        let max_cells: usize = 500;
+        // 150³ cells = 3.375M entries, ~80 MB — fits 120 threads in <10 GB.
+        // A normal protein has bbox ~100 Å with cell_size ~6 Å, so nx ~17;
+        // 150³ covers structures up to ~900 Å in each dimension, more than enough.
+        let max_cells: usize = 150;
         let nx = nx.min(max_cells);
         let ny = ny.min(max_cells);
         let nz = nz.min(max_cells);
@@ -360,8 +362,12 @@ pub fn sasa_from_pdb(
     let mut coords = Vec::new();
     let mut radii = Vec::new();
 
-    // We need residue context for ProtOr radii
-    for chain in pdb.chains() {
+    // Use first model only (consistent with atom_count(), DSSP, etc.)
+    let first_model = match pdb.models().next() {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+    for chain in first_model.chains() {
         for residue in chain.residues() {
             let res_name = residue.name().unwrap_or("");
             for atom in residue.atoms() {
@@ -401,7 +407,12 @@ pub fn residue_sasa(pdb: &pdbtbx::PDB, atom_sasa: &[f64]) -> Vec<f64> {
     let mut result = Vec::new();
     let mut atom_idx = 0;
 
-    for chain in pdb.chains() {
+    // Use first model only (consistent with sasa_from_pdb and atom_count)
+    let first_model = match pdb.models().next() {
+        Some(m) => m,
+        None => return result,
+    };
+    for chain in first_model.chains() {
         for residue in chain.residues() {
             let n_atoms = residue.atom_count();
             let sum: f64 = atom_sasa[atom_idx..atom_idx + n_atoms].iter().sum();

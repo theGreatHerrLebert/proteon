@@ -120,6 +120,11 @@ def batch_load_tolerant(
     Examples:
         >>> results = ferritin.batch_load_tolerant(all_files, n_threads=-1)
         >>> print(f"{len(results)}/{len(all_files)} loaded")
+
+    Agent Notes:
+        WATCH: Failures are skipped silently at the return-value level. Always use
+            the returned indices to map loaded structures back to the original list.
+        PREFER: Use this for archive-scale ingestion where partial success is acceptable.
     """
     str_paths = [str(p) for p in paths]
     pairs = _io.batch_load_tolerant(str_paths, n_threads)

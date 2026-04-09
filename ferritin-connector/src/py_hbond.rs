@@ -114,12 +114,12 @@ pub fn batch_backbone_hbonds<'py>(
     energy_cutoff: f64,
     n_threads: Option<i32>,
 ) -> PyResult<Vec<Bound<'py, PyArray2<f64>>>> {
-    // Extract DSSP residue data on main thread
-    let all_pdbs: Vec<pdbtbx::PDB> = structures
+    // Extract only DSSP residue data on main thread (no PDB clone)
+    let all_residues: Vec<Vec<crate::dssp::DsspResidue>> = structures
         .iter()
         .map(|item| {
             let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-            Ok(pdb.inner.clone())
+            Ok(crate::dssp::extract_dssp_residues(&pdb.inner))
         })
         .collect::<PyResult<_>>()?;
 
@@ -128,9 +128,9 @@ pub fn batch_backbone_hbonds<'py>(
     let results: Vec<Vec<hbond::BackboneHBond>> = py.allow_threads(|| {
         let pool = build_pool(n);
         pool.install(|| {
-            all_pdbs
+            all_residues
                 .par_iter()
-                .map(|pdb| hbond::backbone_hbonds(pdb, energy_cutoff))
+                .map(|residues| hbond::backbone_hbonds_from_residues(residues, energy_cutoff))
                 .collect()
         })
     });

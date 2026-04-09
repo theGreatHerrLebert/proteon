@@ -247,28 +247,38 @@ pub fn batch_minimize_hydrogens<'py>(
     n_threads: Option<i32>,
     method: &str,
 ) -> PyResult<Vec<PyObject>> {
-    // Clone PDB data on main thread
-    let pdbs: Vec<pdbtbx::PDB> = structures
-        .iter()
-        .map(|item| {
-            let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-            Ok(pdb.inner.clone())
-        })
-        .collect::<PyResult<_>>()?;
-
     let n = resolve_threads(n_threads);
-
     let method = method.to_string();
+    let total = structures.len();
+    let chunk_size = 500;
+    let mut all_results: Vec<minimize::MinimizeResult> = Vec::with_capacity(total);
 
-    // Run minimization in parallel
-    let results: Vec<minimize::MinimizeResult> = py.allow_threads(|| {
-        let pool = build_pool(n);
-        pool.install(|| {
-            pdbs.par_iter()
-                .map(|pdb| minimize_h_single(pdb, max_steps, gradient_tolerance, &method))
-                .collect()
-        })
-    });
+    // Process in chunks to avoid cloning all structures at once
+    for start in (0..total).step_by(chunk_size) {
+        let end = (start + chunk_size).min(total);
+
+        let chunk_pdbs: Vec<pdbtbx::PDB> = (start..end)
+            .map(|i| {
+                let item = structures.get_item(i)?;
+                let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+                Ok(pdb.inner.clone())
+            })
+            .collect::<PyResult<_>>()?;
+
+        let results: Vec<minimize::MinimizeResult> = py.allow_threads(|| {
+            let pool = build_pool(n);
+            pool.install(|| {
+                chunk_pdbs
+                    .par_iter()
+                    .map(|pdb| minimize_h_single(pdb, max_steps, gradient_tolerance, &method))
+                    .collect()
+            })
+        });
+
+        all_results.extend(results);
+    }
+
+    let results = all_results;
 
     // Convert to Python dicts
     Ok(results

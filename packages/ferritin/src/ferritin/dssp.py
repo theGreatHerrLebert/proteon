@@ -112,6 +112,11 @@ def load_and_dssp(
 
     Returns:
         List of (index, ss_string) tuples.
+
+    Agent Notes:
+        WATCH: Failed inputs are skipped. Use the returned indices to map DSSP
+            strings back to the original path list.
+        PREFER: Use this for many files instead of load() + dssp() in Python.
     """
     str_paths = [str(p) for p in paths]
     return _dssp.load_and_dssp(str_paths, n_threads)

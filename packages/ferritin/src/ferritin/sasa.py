@@ -180,6 +180,11 @@ def load_and_sasa(
         >>> results = ferritin.load_and_sasa(pdb_files, n_threads=-1)
         >>> for idx, sasa in results:
         ...     print(f"{pdb_files[idx]}: {sasa:.0f} A²")
+
+    Agent Notes:
+        WATCH: Failed inputs are skipped. Use the returned indices to map SASA
+            values back to the original path list.
+        PREFER: Use this for large file batches to avoid Python-side load loops.
     """
     str_paths = [str(p) for p in paths]
     return _sasa.load_and_sasa(str_paths, probe, n_points, n_threads, radii)

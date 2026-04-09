@@ -7,8 +7,14 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use rayon::prelude::*;
 
+use crate::parallel::{auto_threads, build_pool};
 use crate::py_pdb::PyPDB;
 use crate::sasa;
+
+/// Estimated peak per-task memory for SASA: the CellList (~80 MB capped)
+/// plus expanded radii vectors (~200 KB for 25K atoms) plus per-thread
+/// neighbor buffers. Round to 100 MB to leave headroom.
+const SASA_PER_TASK_BYTES: usize = 100 * 1024 * 1024;
 
 fn parse_radii(radii: &str) -> PyResult<sasa::RadiiSet> {
     match radii.to_lowercase().as_str() {
@@ -32,7 +38,13 @@ fn validate_n_points(n_points: usize) -> PyResult<()> {
 fn extract_radii(pdb: &pdbtbx::PDB, radii_set: sasa::RadiiSet) -> (Vec<[f64; 3]>, Vec<f64>) {
     let mut coords = Vec::new();
     let mut radii = Vec::new();
-    for chain in pdb.chains() {
+    // Use first model only (consistent with atom_count(), DSSP, hbonds, etc.)
+    // pdb.chains() iterates ALL models, which inflates NMR ensembles by n_models×
+    let first_model = match pdb.models().next() {
+        Some(m) => m,
+        None => return (coords, radii),
+    };
+    for chain in first_model.chains() {
         for residue in chain.residues() {
             let res_name = residue.name().unwrap_or("");
             for atom in residue.atoms() {
@@ -52,21 +64,6 @@ fn extract_radii(pdb: &pdbtbx::PDB, radii_set: sasa::RadiiSet) -> (Vec<[f64; 3]>
         }
     }
     (coords, radii)
-}
-
-fn resolve_threads(n: Option<i32>) -> usize {
-    match n {
-        None | Some(-1) => 0,
-        Some(n) => n.max(1) as usize,
-    }
-}
-
-fn build_pool(n_threads: usize) -> rayon::ThreadPool {
-    let mut builder = rayon::ThreadPoolBuilder::new();
-    if n_threads > 0 {
-        builder = builder.num_threads(n_threads);
-    }
-    builder.build().expect("failed to build rayon thread pool")
 }
 
 // ===========================================================================
@@ -202,7 +199,7 @@ pub fn batch_atom_sasa<'py>(
         })
         .collect::<PyResult<_>>()?;
 
-    let n = resolve_threads(n_threads);
+    let n = auto_threads(n_threads, SASA_PER_TASK_BYTES);
 
     // Parallelize the SASA computation
     let results: Vec<Vec<f64>> = py.allow_threads(|| {
@@ -243,7 +240,7 @@ pub fn batch_total_sasa<'py>(
         })
         .collect::<PyResult<_>>()?;
 
-    let n = resolve_threads(n_threads);
+    let n = auto_threads(n_threads, SASA_PER_TASK_BYTES);
 
     let results: Vec<f64> = py.allow_threads(|| {
         let pool = build_pool(n);
@@ -303,7 +300,7 @@ pub fn load_and_sasa<'py>(
         .map(|p| p.extract::<String>())
         .collect::<PyResult<_>>()?;
 
-    let n = resolve_threads(n_threads);
+    let n = auto_threads(n_threads, SASA_PER_TASK_BYTES);
 
     let results: Vec<(usize, f64)> = py.allow_threads(|| {
         let pool = build_pool(n);

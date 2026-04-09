@@ -98,6 +98,7 @@ pub fn compute_energy_auto(
 }
 
 /// Compute energy with optional distance-dependent dielectric.
+#[allow(dead_code)]
 pub fn compute_energy_dd(
     coords: &[[f64; 3]],
     topo: &Topology,
@@ -271,6 +272,7 @@ pub fn compute_energy_and_forces_auto(
 }
 
 /// Compute energy and forces with optional distance-dependent dielectric.
+#[allow(dead_code)]
 pub fn compute_energy_and_forces_dd(
     coords: &[[f64; 3]],
     topo: &Topology,

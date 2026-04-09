@@ -39,6 +39,7 @@ pub struct OrderedBond {
 pub struct AtomInfo {
     pub pos: [f64; 3],
     pub element: String,
+    #[allow(dead_code)]
     pub name: String,
     pub neighbors: Vec<usize>,
     pub bonds: Vec<usize>, // indices into bond list

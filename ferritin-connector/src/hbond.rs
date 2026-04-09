@@ -35,7 +35,7 @@ pub fn backbone_hbonds(
     backbone_hbonds_from_residues(&residues, energy_cutoff)
 }
 
-fn backbone_hbonds_from_residues(
+pub fn backbone_hbonds_from_residues(
     residues: &[dssp::DsspResidue],
     energy_cutoff: f64,
 ) -> Vec<BackboneHBond> {
@@ -120,7 +120,12 @@ pub fn geometric_hbonds(
     let mut atom_idx = 0;
     let mut res_idx = 0;
 
-    for chain in pdb.chains() {
+    // Use first model only (consistent with atom_count(), SASA, DSSP, etc.)
+    let first_model = match pdb.models().next() {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+    for chain in first_model.chains() {
         for residue in chain.residues() {
             for atom in residue.atoms() {
                 let (x, y, z) = atom.pos();

@@ -48,7 +48,12 @@ pub fn extract_dssp_residues(pdb: &pdbtbx::PDB) -> Vec<DsspResidue> {
     let mut residues = Vec::new();
     let mut chain_idx = 0;
 
-    for chain in pdb.chains() {
+    // Use first model only (consistent with atom_count(), SASA, etc.)
+    let first_model = match pdb.models().next() {
+        Some(m) => m,
+        None => return residues,
+    };
+    for chain in first_model.chains() {
         let mut chain_residues: Vec<DsspResidue> = Vec::new();
 
         for residue in chain.residues() {

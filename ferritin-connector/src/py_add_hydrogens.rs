@@ -15,7 +15,12 @@ use crate::py_pdb::PyPDB;
 /// Panics if the coordinate array doesn't match the atom count.
 fn apply_coords_to_pdb(pdb: &mut pdbtbx::PDB, coords: &[[f64; 3]]) {
     let mut idx = 0;
-    for chain in pdb.chains_mut() {
+    // Use first model only (consistent with build_topology, etc.)
+    let first_model = match pdb.models_mut().next() {
+        Some(m) => m,
+        None => return,
+    };
+    for chain in first_model.chains_mut() {
         for residue in chain.residues_mut() {
             for atom in residue.atoms_mut() {
                 assert!(
@@ -172,36 +177,47 @@ pub fn batch_place_peptide_hydrogens(
     structures: &Bound<'_, PyList>,
     n_threads: Option<i32>,
 ) -> PyResult<Vec<(usize, usize)>> {
-    let mut all_pdbs: Vec<pdbtbx::PDB> = structures
-        .iter()
-        .map(|item| {
-            let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-            Ok(pdb.inner.clone())
-        })
-        .collect::<PyResult<_>>()?;
-
     let n = resolve_threads(n_threads);
+    let total = structures.len();
+    let chunk_size = 500;
+    let mut all_results = Vec::with_capacity(total);
 
-    let results: Vec<(usize, usize)> = py.allow_threads(|| {
-        let pool = build_pool(n);
-        pool.install(|| {
-            all_pdbs
-                .par_iter_mut()
-                .map(|pdb| {
-                    let r = add_hydrogens::place_peptide_hydrogens(pdb);
-                    (r.added, r.skipped)
-                })
-                .collect()
-        })
-    });
+    // Process in chunks to avoid cloning all structures at once
+    for start in (0..total).step_by(chunk_size) {
+        let end = (start + chunk_size).min(total);
 
-    // Write back modified structures
-    for (item, modified) in structures.iter().zip(all_pdbs) {
-        let mut pdb = item.extract::<PyRefMut<'_, PyPDB>>()?;
-        pdb.inner = modified;
+        let mut chunk_pdbs: Vec<pdbtbx::PDB> = (start..end)
+            .map(|i| {
+                let item = structures.get_item(i)?;
+                let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+                Ok(pdb.inner.clone())
+            })
+            .collect::<PyResult<_>>()?;
+
+        let results: Vec<(usize, usize)> = py.allow_threads(|| {
+            let pool = build_pool(n);
+            pool.install(|| {
+                chunk_pdbs
+                    .par_iter_mut()
+                    .map(|pdb| {
+                        let r = add_hydrogens::place_peptide_hydrogens(pdb);
+                        (r.added, r.skipped)
+                    })
+                    .collect()
+            })
+        });
+
+        // Write back modified structures for this chunk
+        for (i, modified) in (start..end).zip(chunk_pdbs) {
+            let item = structures.get_item(i)?;
+            let mut pdb = item.extract::<PyRefMut<'_, PyPDB>>()?;
+            pdb.inner = modified;
+        }
+
+        all_results.extend(results);
     }
 
-    Ok(results)
+    Ok(all_results)
 }
 
 /// Batch prepare structures in parallel (reconstruct + place H + minimize H).
@@ -223,92 +239,102 @@ pub fn batch_prepare(
     gradient_tolerance: f64,
     n_threads: Option<i32>,
 ) -> PyResult<Vec<PyObject>> {
-    let mut all_pdbs: Vec<pdbtbx::PDB> = structures
-        .iter()
-        .map(|item| {
-            let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-            Ok(pdb.inner.clone())
-        })
-        .collect::<PyResult<_>>()?;
-
     let n = resolve_threads(n_threads);
     let h_mode = hydrogens.to_string();
     let method = minimize_method.to_string();
     let amber = crate::forcefield::params::amber96();
+    let total = structures.len();
+    let chunk_size = 200; // prepare is heavier per-structure, smaller chunks
+    let mut all_results = Vec::with_capacity(total);
 
-    let results: Vec<(usize, usize, usize, f64, f64, usize, bool, usize)> = py.allow_threads(|| {
-        let pool = build_pool(n);
-        pool.install(|| {
-            all_pdbs
-                .par_iter_mut()
-                .map(|pdb| {
-                    // Reconstruct
-                    let reconstructed = if reconstruct {
-                        crate::reconstruct::reconstruct_fragments(pdb).added
-                    } else {
-                        0
-                    };
+    // Process in chunks to avoid cloning all structures at once
+    for start in (0..total).step_by(chunk_size) {
+        let end = (start + chunk_size).min(total);
 
-                    // Place hydrogens
-                    let (h_added, h_skipped) = match h_mode.as_str() {
-                        "backbone" => {
-                            let r = add_hydrogens::place_peptide_hydrogens(pdb);
-                            (r.added, r.skipped)
-                        }
-                        "general" => {
-                            let r = add_hydrogens::place_general_hydrogens(pdb, include_water);
-                            (r.added, r.skipped)
-                        }
-                        "none" => (0, 0),
-                        "all" => {
-                            let r = add_hydrogens::place_all_hydrogens(pdb);
-                            (r.added, r.skipped)
-                        }
-                        _ => (0, 0), // unknown mode: skip (matches serial path)
-                    };
+        let mut chunk_pdbs: Vec<pdbtbx::PDB> = (start..end)
+            .map(|i| {
+                let item = structures.get_item(i)?;
+                let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+                Ok(pdb.inner.clone())
+            })
+            .collect::<PyResult<_>>()?;
 
-                    // Minimize H positions and apply coords back to PDB
-                    // Minimize whenever requested — the structure may already have H from a prior step
-                    let has_any_h = pdb.atoms().any(|a| {
-                        a.element().map_or(false, |e| e.symbol() == "H" || e.symbol() == "D")
-                    });
-                    let (init_e, final_e, steps, converged) = if minimize && (h_added > 0 || has_any_h) {
-                        let topo = crate::forcefield::topology::build_topology(pdb, &amber);
-                        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-                        let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
-                        let result = match method.as_str() {
-                            "cg" => crate::forcefield::minimize::conjugate_gradient(
-                                &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
-                            "lbfgs" => crate::forcefield::minimize::lbfgs(
-                                &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
-                            _ => crate::forcefield::minimize::steepest_descent(
-                                &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+        let h_mode = h_mode.clone();
+        let method = method.clone();
+        let results: Vec<(usize, usize, usize, f64, f64, usize, bool, usize)> = py.allow_threads(|| {
+            let pool = build_pool(n);
+            pool.install(|| {
+                chunk_pdbs
+                    .par_iter_mut()
+                    .map(|pdb| {
+                        // Reconstruct
+                        let reconstructed = if reconstruct {
+                            crate::reconstruct::reconstruct_fragments(pdb).added
+                        } else {
+                            0
                         };
-                        // Apply minimized coordinates back to PDB
-                        apply_coords_to_pdb(pdb, &result.coords);
-                        (result.initial_energy, result.energy.total, result.steps, result.converged)
-                    } else {
-                        (0.0, 0.0, 0, false)
-                    };
 
-                    // Count unassigned atoms
-                    let topo = crate::forcefield::topology::build_topology(pdb, &amber);
-                    let n_unassigned = topo.unassigned_atoms.len();
+                        // Place hydrogens
+                        let (h_added, h_skipped) = match h_mode.as_str() {
+                            "backbone" => {
+                                let r = add_hydrogens::place_peptide_hydrogens(pdb);
+                                (r.added, r.skipped)
+                            }
+                            "general" => {
+                                let r = add_hydrogens::place_general_hydrogens(pdb, include_water);
+                                (r.added, r.skipped)
+                            }
+                            "none" => (0, 0),
+                            "all" => {
+                                let r = add_hydrogens::place_all_hydrogens(pdb);
+                                (r.added, r.skipped)
+                            }
+                            _ => (0, 0),
+                        };
 
-                    (reconstructed, h_added, h_skipped, init_e, final_e, steps, converged, n_unassigned)
-                })
-                .collect()
-        })
-    });
+                        // Minimize H positions and apply coords back to PDB
+                        let has_any_h = pdb.atoms().any(|a| {
+                            a.element().map_or(false, |e| e.symbol() == "H" || e.symbol() == "D")
+                        });
+                        let (init_e, final_e, steps, converged) = if minimize && (h_added > 0 || has_any_h) {
+                            let topo = crate::forcefield::topology::build_topology(pdb, &amber);
+                            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+                            let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
+                            let result = match method.as_str() {
+                                "cg" => crate::forcefield::minimize::conjugate_gradient(
+                                    &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+                                "lbfgs" => crate::forcefield::minimize::lbfgs(
+                                    &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+                                _ => crate::forcefield::minimize::steepest_descent(
+                                    &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+                            };
+                            apply_coords_to_pdb(pdb, &result.coords);
+                            (result.initial_energy, result.energy.total, result.steps, result.converged)
+                        } else {
+                            (0.0, 0.0, 0, false)
+                        };
 
-    // Write back modified structures
-    for (item, modified) in structures.iter().zip(all_pdbs) {
-        let mut pdb = item.extract::<PyRefMut<'_, PyPDB>>()?;
-        pdb.inner = modified;
+                        let topo = crate::forcefield::topology::build_topology(pdb, &amber);
+                        let n_unassigned = topo.unassigned_atoms.len();
+
+                        (reconstructed, h_added, h_skipped, init_e, final_e, steps, converged, n_unassigned)
+                    })
+                    .collect()
+            })
+        });
+
+        // Write back modified structures for this chunk
+        for (i, modified) in (start..end).zip(chunk_pdbs) {
+            let item = structures.get_item(i)?;
+            let mut pdb = item.extract::<PyRefMut<'_, PyPDB>>()?;
+            pdb.inner = modified;
+        }
+
+        all_results.extend(results);
     }
 
     // Convert to Python dicts
-    Ok(results
+    Ok(all_results
         .into_iter()
         .map(|(recon, h_add, h_skip, init_e, final_e, steps, conv, unassigned)| {
             let dict = pyo3::types::PyDict::new(py);

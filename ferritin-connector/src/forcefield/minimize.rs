@@ -567,6 +567,7 @@ fn dot3n_raw(a: &[[f64; 3]], b: &[[f64; 3]], constrained: &[bool]) -> f64 {
 // ---------------------------------------------------------------------------
 
 /// Minimize only hydrogen positions (freeze all heavy atoms).
+#[allow(dead_code)]
 pub fn minimize_hydrogens(
     coords: &[[f64; 3]],
     topo: &Topology,
@@ -584,6 +585,7 @@ pub fn minimize_hydrogens(
 }
 
 /// Minimize hydrogen positions using conjugate gradient.
+#[allow(dead_code)]
 pub fn minimize_hydrogens_cg(
     coords: &[[f64; 3]],
     topo: &Topology,
@@ -601,6 +603,7 @@ pub fn minimize_hydrogens_cg(
 }
 
 /// Minimize hydrogen positions using L-BFGS.
+#[allow(dead_code)]
 pub fn minimize_hydrogens_lbfgs(
     coords: &[[f64; 3]],
     topo: &Topology,
