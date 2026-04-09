@@ -242,7 +242,12 @@ pub fn batch_prepare(
     let n = resolve_threads(n_threads);
     let h_mode = hydrogens.to_string();
     let method = minimize_method.to_string();
-    let amber = crate::forcefield::params::amber96();
+    // CHARMM19-EEF1 (implicit solvent) is a better default for prepare() than
+    // AMBER96-vacuum: it gives physically meaningful energies on isolated
+    // proteins without needing explicit water, and the EEF1 solvation term
+    // dampens the unscreened electrostatic blow-up that makes raw AMBER96
+    // numbers useless for bare structures.
+    let ff = crate::forcefield::params::charmm19_eef1();
     let total = structures.len();
     let chunk_size = 200; // prepare is heavier per-structure, smaller chunks
     let mut all_results = Vec::with_capacity(total);
@@ -297,16 +302,16 @@ pub fn batch_prepare(
                             a.element().map_or(false, |e| e.symbol() == "H" || e.symbol() == "D")
                         });
                         let (init_e, final_e, steps, converged) = if minimize && (h_added > 0 || has_any_h) {
-                            let topo = crate::forcefield::topology::build_topology(pdb, &amber);
+                            let topo = crate::forcefield::topology::build_topology(pdb, &ff);
                             let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
                             let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
                             let result = match method.as_str() {
                                 "cg" => crate::forcefield::minimize::conjugate_gradient(
-                                    &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+                                    &coords, &topo, &ff, minimize_steps, gradient_tolerance, &constrained),
                                 "lbfgs" => crate::forcefield::minimize::lbfgs(
-                                    &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+                                    &coords, &topo, &ff, minimize_steps, gradient_tolerance, &constrained),
                                 _ => crate::forcefield::minimize::steepest_descent(
-                                    &coords, &topo, &amber, minimize_steps, gradient_tolerance, &constrained),
+                                    &coords, &topo, &ff, minimize_steps, gradient_tolerance, &constrained),
                             };
                             apply_coords_to_pdb(pdb, &result.coords);
                             (result.initial_energy, result.energy.total, result.steps, result.converged)
@@ -314,7 +319,7 @@ pub fn batch_prepare(
                             (0.0, 0.0, 0, false)
                         };
 
-                        let topo = crate::forcefield::topology::build_topology(pdb, &amber);
+                        let topo = crate::forcefield::topology::build_topology(pdb, &ff);
                         let n_unassigned = topo.unassigned_atoms.len();
 
                         (reconstructed, h_added, h_skipped, init_e, final_e, steps, converged, n_unassigned)
