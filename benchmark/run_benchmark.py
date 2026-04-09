@@ -99,40 +99,51 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
             continue
 
         # SASA
+        log(f"  SASA starting...")
         t0 = time.perf_counter()
         sv = ferritin.batch_total_sasa(structures, n_threads=n_threads, radii="protor")
         dt = time.perf_counter() - t0
+        log(f"  SASA: {dt:.1f}s")
         all_timings["sasa"]["elapsed"] += dt
         sasa_values.extend(sv.tolist())
 
         # DSSP
+        log(f"  DSSP starting...")
         t0 = time.perf_counter()
         ferritin.batch_dssp(structures, n_threads=n_threads)
         dt = time.perf_counter() - t0
+        log(f"  DSSP: {dt:.1f}s")
         all_timings["dssp"]["elapsed"] += dt
 
         # Dihedrals
+        log(f"  Dihedrals starting...")
         t0 = time.perf_counter()
         ferritin.batch_dihedrals(structures, n_threads=n_threads)
         dt = time.perf_counter() - t0
+        log(f"  Dihedrals: {dt:.1f}s")
         all_timings["dihedrals"]["elapsed"] += dt
 
         # H-bonds
+        log(f"  H-bonds starting...")
         t0 = time.perf_counter()
         ferritin.batch_backbone_hbonds(structures, n_threads=n_threads)
         dt = time.perf_counter() - t0
+        log(f"  H-bonds: {dt:.1f}s")
         all_timings["hbonds"]["elapsed"] += dt
 
         # H placement
+        log(f"  Hydrogens starting...")
         t0 = time.perf_counter()
         h_res = ferritin.batch_place_peptide_hydrogens(structures, n_threads=n_threads)
         dt = time.perf_counter() - t0
+        log(f"  Hydrogens: {dt:.1f}s")
         all_timings["hydrogens"]["elapsed"] += dt
         all_timings["hydrogens"]["total_h"] += sum(r[0] for r in h_res)
 
         # Energy (first chunk only — O(N²) is slow)
         if ci == 0:
             n_energy = min(500, len(structures))
+            log(f"  Energy starting ({n_energy} structures)...")
             t0 = time.perf_counter()
             for s in structures[:n_energy]:
                 try:
@@ -142,11 +153,13 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
                 except Exception:
                     pass
             dt = time.perf_counter() - t0
+            log(f"  Energy: {dt:.1f}s")
             all_timings["energy"]["elapsed"] += dt
 
         # Prepare (first chunk only)
         if ci == 0:
             n_prep = min(200, len(structures))
+            log(f"  Prepare starting ({n_prep} structures)...")
             t0 = time.perf_counter()
             try:
                 reports = ferritin.batch_prepare(
@@ -159,6 +172,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
             except Exception as e:
                 log(f"  Prepare failed: {e}")
             dt = time.perf_counter() - t0
+            log(f"  Prepare: {dt:.1f}s")
             all_timings["prepare"]["elapsed"] += dt
 
         # Free memory

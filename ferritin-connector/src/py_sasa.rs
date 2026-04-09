@@ -11,10 +11,17 @@ use crate::parallel::{auto_threads, build_pool};
 use crate::py_pdb::PyPDB;
 use crate::sasa;
 
-/// Estimated peak per-task memory for SASA: the CellList (~80 MB capped)
-/// plus expanded radii vectors (~200 KB for 25K atoms) plus per-thread
-/// neighbor buffers. Round to 100 MB to leave headroom.
-const SASA_PER_TASK_BYTES: usize = 100 * 1024 * 1024;
+/// Estimated peak per-task memory for SASA.
+///
+/// The theoretical minimum is just the CellList (~80 MB capped) plus
+/// per-task temporaries. But empirically on monster3 (120 cores, 250 GB),
+/// 120 threads OOM while 32 threads work fine. The effective per-thread
+/// footprint from glibc arena fragmentation and transient allocations is
+/// much larger than the logical working set.
+///
+/// Budget 3 GB/thread so auto_threads clamps 250 GB / (3 GB / 0.75 headroom)
+/// ≈ 62 threads on monster3 — safely in the known-good zone.
+const SASA_PER_TASK_BYTES: usize = 3 * 1024 * 1024 * 1024;
 
 fn parse_radii(radii: &str) -> PyResult<sasa::RadiiSet> {
     match radii.to_lowercase().as_str() {

@@ -73,6 +73,16 @@ impl NeighborList {
             ncells[d] = ncells[d].max(1);
         }
 
+        // Cap grid to avoid OOM on structures with huge bounding boxes
+        // (bogus coordinates, symmetry mates, etc.).
+        // 150³ cells = 3.375M entries, ~80 MB — matches CellList in sasa.rs.
+        // With cell_size ~17 Å, 150 cells covers ~2550 Å, more than enough
+        // for any normal protein.
+        const MAX_CELLS: usize = 150;
+        for d in 0..3 {
+            ncells[d] = ncells[d].min(MAX_CELLS);
+        }
+
         let total_cells = ncells[0] * ncells[1] * ncells[2];
 
         // Assign atoms to cells
