@@ -109,6 +109,31 @@ def build_candidate_truth_for_query(
     return build_truth_for_query(query_structure, loaded_paths, structures)
 
 
+def filter_truth_candidate_paths(
+    paths: list[Path],
+    *,
+    max_file_size_mb: float | None,
+) -> tuple[list[Path], list[dict]]:
+    kept = []
+    skipped = []
+    max_bytes = None if max_file_size_mb is None else int(max_file_size_mb * 1024 * 1024)
+    for path in paths:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            skipped.append({"source_path": str(path), "reason": "stat_failed"})
+            continue
+        if max_bytes is not None and size > max_bytes:
+            skipped.append({
+                "source_path": str(path),
+                "reason": "file_too_large",
+                "file_size_mb": round(size / (1024 * 1024), 3),
+            })
+            continue
+        kept.append(path)
+    return kept, skipped
+
+
 def truth_cache_key(
     *,
     pdb_dir: Path,
@@ -117,6 +142,7 @@ def truth_cache_key(
     seed: int,
     truth_mode: str,
     truth_candidate_top_k: int,
+    truth_max_file_size_mb: float | None,
     foldseek_args: list[str],
     sensitivity: float,
     max_seqs: int,
@@ -129,6 +155,7 @@ def truth_cache_key(
         "aligner": "ferritin.tm_align_one_to_many.fast",
         "truth_mode": truth_mode,
         "truth_candidate_top_k": truth_candidate_top_k,
+        "truth_max_file_size_mb": truth_max_file_size_mb,
         "foldseek_args": foldseek_args,
         "foldseek_sensitivity": sensitivity,
         "foldseek_max_seqs": max_seqs,
@@ -274,7 +301,8 @@ def main() -> None:
     parser.add_argument("--sensitivity", type=float, default=9.5)
     parser.add_argument("--max-seqs", type=int, default=1000)
     parser.add_argument("--truth-mode", choices=["candidates", "exhaustive"], default="candidates")
-    parser.add_argument("--truth-candidate-top-k", type=int, default=500)
+    parser.add_argument("--truth-candidate-top-k", type=int, default=100)
+    parser.add_argument("--truth-max-file-size-mb", type=float, default=20.0)
     parser.add_argument("--truth-cache", default=None)
     parser.add_argument("--reuse-truth", action="store_true")
     parser.add_argument("--thresholds", nargs="*", type=float, default=[0.5, 0.7, 0.9])
@@ -372,6 +400,7 @@ def main() -> None:
         seed=args.seed,
         truth_mode=args.truth_mode,
         truth_candidate_top_k=args.truth_candidate_top_k,
+        truth_max_file_size_mb=args.truth_max_file_size_mb,
         foldseek_args=args.foldseek_args,
         sensitivity=args.sensitivity,
         max_seqs=args.max_seqs,
@@ -383,6 +412,7 @@ def main() -> None:
         truth_cache = {}
 
     brute_force_s = 0.0
+    skipped_truth_candidates_by_query: dict[str, list[dict]] = {}
     for query_idx, query_path in enumerate(query_paths, start=1):
         query_key = str(query_path)
         if query_key in truth_cache:
@@ -411,8 +441,14 @@ def main() -> None:
                     continue
                 seen_candidates.add(key)
                 candidate_paths.append(path)
+            candidate_paths, skipped_candidates = filter_truth_candidate_paths(
+                candidate_paths,
+                max_file_size_mb=args.truth_max_file_size_mb,
+            )
+            skipped_truth_candidates_by_query[query_key] = skipped_candidates
             print(
-                f"Truth {query_idx}/{len(query_paths)} candidates {query_path.name} vs {len(candidate_paths)} structures...",
+                f"Truth {query_idx}/{len(query_paths)} candidates {query_path.name} "
+                f"vs {len(candidate_paths)} structures ({len(skipped_candidates)} skipped)...",
                 flush=True,
             )
             t0 = time.time()
@@ -485,6 +521,7 @@ def main() -> None:
             "truth_cache_hit": truth_cache_hit,
             "truth_mode": args.truth_mode,
             "truth_candidate_top_k": args.truth_candidate_top_k,
+            "truth_max_file_size_mb": args.truth_max_file_size_mb,
         },
         "foldseek": {
             "executable": str(foldseek),
@@ -506,6 +543,7 @@ def main() -> None:
             },
         },
         "per_query": per_query,
+        "skipped_truth_candidates": skipped_truth_candidates_by_query,
     }
 
     output_path = Path(args.output)
