@@ -88,12 +88,38 @@ def build_truth_for_query(
     return rows
 
 
+def load_structures_for_paths(paths: list[Path]) -> tuple[list[Path], list]:
+    loaded = ferritin.batch_load_tolerant(paths, n_threads=-1)
+    loaded_paths = [paths[idx] for idx, _structure in loaded]
+    structures = [structure for _idx, structure in loaded]
+    return loaded_paths, structures
+
+
+def build_candidate_truth_for_query(
+    query_path: Path,
+    candidate_paths: list[Path],
+) -> list[dict]:
+    try:
+        query_structure = ferritin.load(query_path)
+    except Exception:
+        return []
+    loaded_paths, structures = load_structures_for_paths(candidate_paths)
+    if not structures:
+        return []
+    return build_truth_for_query(query_structure, loaded_paths, structures)
+
+
 def truth_cache_key(
     *,
     pdb_dir: Path,
     target_paths: list[Path],
     query_paths: list[Path],
     seed: int,
+    truth_mode: str,
+    truth_candidate_top_k: int,
+    foldseek_args: list[str],
+    sensitivity: float,
+    max_seqs: int,
 ) -> str:
     payload = {
         "pdb_dir": str(pdb_dir),
@@ -101,6 +127,11 @@ def truth_cache_key(
         "queries": [str(path) for path in query_paths],
         "seed": seed,
         "aligner": "ferritin.tm_align_one_to_many.fast",
+        "truth_mode": truth_mode,
+        "truth_candidate_top_k": truth_candidate_top_k,
+        "foldseek_args": foldseek_args,
+        "foldseek_sensitivity": sensitivity,
+        "foldseek_max_seqs": max_seqs,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -242,6 +273,8 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=16)
     parser.add_argument("--sensitivity", type=float, default=9.5)
     parser.add_argument("--max-seqs", type=int, default=1000)
+    parser.add_argument("--truth-mode", choices=["candidates", "exhaustive"], default="candidates")
+    parser.add_argument("--truth-candidate-top-k", type=int, default=500)
     parser.add_argument("--truth-cache", default=None)
     parser.add_argument("--reuse-truth", action="store_true")
     parser.add_argument("--thresholds", nargs="*", type=float, default=[0.5, 0.7, 0.9])
@@ -265,67 +298,12 @@ def main() -> None:
     target_paths = sample_targets(all_paths, args.n_targets, args.seed)
     query_paths = sample_queries(target_paths, args.n_queries, args.seed)
     assert_unique_stems(target_paths)
+    if args.truth_candidate_top_k < args.top_k:
+        raise SystemExit("--truth-candidate-top-k must be >= --top-k")
     print(
         f"Sampled {len(target_paths)} targets and {len(query_paths)} queries from {pdb_dir}",
         flush=True,
     )
-
-    t0 = time.time()
-    print("Loading sampled target structures...", flush=True)
-    loaded_targets = ferritin.batch_load_tolerant(target_paths, n_threads=-1)
-    load_s = time.time() - t0
-    if not loaded_targets:
-        raise SystemExit("No target structures could be loaded for brute-force evaluation")
-    loaded_target_map = {
-        str(target_paths[idx]): structure
-        for idx, structure in loaded_targets
-    }
-    target_paths = [path for path in target_paths if str(path) in loaded_target_map]
-    query_paths = [path for path in query_paths if str(path) in loaded_target_map]
-    target_structures = [loaded_target_map[str(path)] for path in target_paths]
-    if not query_paths:
-        raise SystemExit("No query structures remain after filtering to loadable targets")
-    print(
-        f"Loaded {len(target_paths)} targets and retained {len(query_paths)} queries in {load_s:.3f}s",
-        flush=True,
-    )
-
-    cache_key = truth_cache_key(
-        pdb_dir=pdb_dir,
-        target_paths=target_paths,
-        query_paths=query_paths,
-        seed=args.seed,
-    )
-    truth_cache_path = Path(args.truth_cache) if args.truth_cache else Path(str(args.output) + ".truth.json")
-    truth_cache = load_truth_cache(truth_cache_path, cache_key) if args.reuse_truth else None
-    truth_cache_hit = truth_cache is not None
-    if truth_cache is None:
-        truth_cache = {}
-
-    brute_force_s = 0.0
-    for query_idx, query_path in enumerate(query_paths, start=1):
-        query_key = str(query_path)
-        if query_key in truth_cache:
-            print(f"Truth {query_idx}/{len(query_paths)} cache hit: {query_path.name}", flush=True)
-            continue
-        print(
-            f"Truth {query_idx}/{len(query_paths)} computing {query_path.name} vs {len(target_paths)} targets...",
-            flush=True,
-        )
-        t0 = time.time()
-        truth_cache[query_key] = build_truth_for_query(
-            ferritin.load(query_path),
-            target_paths,
-            target_structures,
-        )
-        query_truth_s = time.time() - t0
-        brute_force_s += query_truth_s
-        print(
-            f"Truth {query_idx}/{len(query_paths)} done in {query_truth_s:.3f}s",
-            flush=True,
-        )
-    if not truth_cache_hit:
-        save_truth_cache(truth_cache_path, cache_key=cache_key, truth=truth_cache)
 
     work_context = None if args.keep_work_dir else (
         tempfile.TemporaryDirectory(prefix="ferritin_foldseek_")
@@ -369,6 +347,84 @@ def main() -> None:
 
     stem_to_path = {path.stem: path for path in target_paths}
     hits_by_query = parse_foldseek_hits(foldseek_out, stem_to_path)
+
+    if args.truth_mode == "exhaustive":
+        t0 = time.time()
+        print("Loading sampled target structures for exhaustive truth...", flush=True)
+        target_paths, target_structures = load_structures_for_paths(target_paths)
+        load_s = time.time() - t0
+        loadable_target_set = {str(path) for path in target_paths}
+        query_paths = [path for path in query_paths if str(path) in loadable_target_set]
+        if not query_paths:
+            raise SystemExit("No query structures remain after filtering to loadable targets")
+        print(
+            f"Loaded {len(target_paths)} targets and retained {len(query_paths)} queries in {load_s:.3f}s",
+            flush=True,
+        )
+    else:
+        target_structures = []
+        load_s = 0.0
+
+    cache_key = truth_cache_key(
+        pdb_dir=pdb_dir,
+        target_paths=target_paths,
+        query_paths=query_paths,
+        seed=args.seed,
+        truth_mode=args.truth_mode,
+        truth_candidate_top_k=args.truth_candidate_top_k,
+        foldseek_args=args.foldseek_args,
+        sensitivity=args.sensitivity,
+        max_seqs=args.max_seqs,
+    )
+    truth_cache_path = Path(args.truth_cache) if args.truth_cache else Path(str(args.output) + ".truth.json")
+    truth_cache = load_truth_cache(truth_cache_path, cache_key) if args.reuse_truth else None
+    truth_cache_hit = truth_cache is not None
+    if truth_cache is None:
+        truth_cache = {}
+
+    brute_force_s = 0.0
+    for query_idx, query_path in enumerate(query_paths, start=1):
+        query_key = str(query_path)
+        if query_key in truth_cache:
+            print(f"Truth {query_idx}/{len(query_paths)} cache hit: {query_path.name}", flush=True)
+            continue
+        if args.truth_mode == "exhaustive":
+            print(
+                f"Truth {query_idx}/{len(query_paths)} exhaustive {query_path.name} vs {len(target_paths)} targets...",
+                flush=True,
+            )
+            t0 = time.time()
+            truth_cache[query_key] = build_truth_for_query(
+                ferritin.load(query_path),
+                target_paths,
+                target_structures,
+            )
+        else:
+            candidate_paths = []
+            seen_candidates = set()
+            for path in [query_path] + [
+                Path(hit["source_path"])
+                for hit in hits_by_query.get(str(query_path), [])[:args.truth_candidate_top_k]
+            ]:
+                key = str(path)
+                if key in seen_candidates:
+                    continue
+                seen_candidates.add(key)
+                candidate_paths.append(path)
+            print(
+                f"Truth {query_idx}/{len(query_paths)} candidates {query_path.name} vs {len(candidate_paths)} structures...",
+                flush=True,
+            )
+            t0 = time.time()
+            truth_cache[query_key] = build_candidate_truth_for_query(query_path, candidate_paths)
+        query_truth_s = time.time() - t0
+        brute_force_s += query_truth_s
+        print(
+            f"Truth {query_idx}/{len(query_paths)} done in {query_truth_s:.3f}s",
+            flush=True,
+        )
+    if not truth_cache_hit:
+        save_truth_cache(truth_cache_path, cache_key=cache_key, truth=truth_cache)
 
     threshold_metrics = {
         str(threshold): []
@@ -427,6 +483,8 @@ def main() -> None:
             "thresholds": args.thresholds,
             "truth_cache": str(truth_cache_path),
             "truth_cache_hit": truth_cache_hit,
+            "truth_mode": args.truth_mode,
+            "truth_candidate_top_k": args.truth_candidate_top_k,
         },
         "foldseek": {
             "executable": str(foldseek),
@@ -436,6 +494,7 @@ def main() -> None:
             "extra_args": args.foldseek_args,
         },
         "timing": {
+            "load_s": round(load_s, 3),
             "brute_force_s": round(brute_force_s, 3),
             "foldseek_s": round(foldseek_s, 3),
         },
