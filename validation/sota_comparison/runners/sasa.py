@@ -311,3 +311,91 @@ if _FREESASA_OK:
                 "radii": "freesasa-default",
             },
         )
+
+    # ------------------------------------------------------------------
+    # Process-isolated batched FreeSASA runner (P1b)
+    # ------------------------------------------------------------------
+    #
+    # Why this exists: on the 100-PDB scaling demo, FreeSASA segfaulted in
+    # C (EXIT=139) somewhere in the per-structure loop. The same loop ran
+    # cleanly in a standalone freesasa-only script, so the suspect is a
+    # C-state / GIL interaction with ferritin's rayon pool inherited via
+    # the same Python process. `skip-unknown=True` does not fix it.
+    #
+    # Fix: wrap each freesasa() call in its own short-lived worker process
+    # via multiprocessing.Pool with maxtasksperchild=1. Each task spawns
+    # a fresh process, runs once, dies. A SIGSEGV in a worker is contained
+    # to that worker — the parent records the crash as a per-structure
+    # error and the next task gets a clean process. Spawn context (not
+    # fork) so the child does NOT inherit the parent's rayon-touched
+    # C state in the first place.
+    #
+    # Cost: ~50-100 ms of process spawn overhead per call vs ~10-50 ms
+    # for the FreeSASA call itself on small structures. Worth it: the
+    # alternative is "the driver crashes on PDB #47 of 10000".
+
+    def _freesasa_worker(pdb_path: str) -> RunnerResult:
+        """Top-level worker called inside a child process by freesasa_batch.
+
+        Must be defined at module top-level (within the `if _FREESASA_OK:`
+        guard, which is module-level under spawn) so multiprocessing can
+        pickle it by qualified name. Returns a RunnerResult dataclass —
+        dataclasses pickle cleanly.
+        """
+        try:
+            return freesasa(pdb_path)
+        except Exception as e:
+            return RunnerResult(
+                op="sasa", impl="freesasa", impl_version=_FREESASA_VERSION,
+                pdb_id="", pdb_path=pdb_path, elapsed_s=0.0,
+                status="error",
+                error=f"{type(e).__name__}: {e}",
+                payload={},
+            )
+
+    @register_batch("sasa", "freesasa")
+    def freesasa_batch(pdb_paths: _List[str]) -> _List[RunnerResult]:
+        """Process-isolated batched FreeSASA runner.
+
+        Submits one apply_async per path against a Pool with
+        maxtasksperchild=1, then collects results with .get(timeout=...).
+        Worker crashes (SIGSEGV / signal kill) raise on the parent side
+        and are recorded as per-structure errors; the next task spawns
+        a fresh worker because of maxtasksperchild=1.
+
+        Pool size is capped at 8 because (a) FreeSASA is fast enough that
+        the Amdahl's bottleneck is process spawn overhead, not concurrent
+        SASA work, and (b) the driver is typically running in parallel
+        with the ferritin batch on the same node and we don't want to
+        oversubscribe a 120-core box across runners.
+        """
+        import multiprocessing as _mp
+        t_total = _time_perf()
+        ctx = _mp.get_context("spawn")
+        n_workers = min(8, max(1, len(pdb_paths)))
+        out: _List[RunnerResult] = []
+        with ctx.Pool(processes=n_workers, maxtasksperchild=1) as pool:
+            async_results = [
+                pool.apply_async(_freesasa_worker, (p,)) for p in pdb_paths
+            ]
+            for p, ar in zip(pdb_paths, async_results):
+                try:
+                    # 5 min per structure is a generous ceiling — FreeSASA
+                    # finishes in well under a second on everything we've
+                    # seen. The cap exists so a hung worker can't stall
+                    # the whole batch.
+                    out.append(ar.get(timeout=300))
+                except Exception as e:
+                    out.append(RunnerResult(
+                        op="sasa", impl="freesasa",
+                        impl_version=_FREESASA_VERSION,
+                        pdb_id="", pdb_path=p, elapsed_s=0.0,
+                        status="error",
+                        error=f"freesasa worker crashed: {type(e).__name__}: {e}",
+                        payload={},
+                    ))
+        # Stamp aggregate wall time on the first ok result for reporting,
+        # mirroring the ferritin_batch convention.
+        if out and out[0].status == "ok":
+            out[0].elapsed_s = _time_perf() - t_total
+        return out

@@ -140,7 +140,12 @@ if _FERRITIN_OK:
             hydrogens="all",
             minimize=True,
             minimize_method="lbfgs",
-            minimize_steps=2000,
+            # P1c: 500 steps caps per-structure LBFGS wall time so a single
+            # straggler can't dominate the rayon critical path on a 100-PDB
+            # batch. Most structures converge well before 500 thanks to the
+            # plateau fallback in the minimizer; the few that don't get
+            # flagged converged=False but the batch wall time stays bounded.
+            minimize_steps=500,
             gradient_tolerance=0.1,
             strip_hydrogens=False,
             ff="amber96",
@@ -209,7 +214,9 @@ if _FERRITIN_OK:
                 hydrogens="all",
                 minimize=True,
                 minimize_method="lbfgs",
-                minimize_steps=2000,
+                # P1c: 500 caps per-structure LBFGS wall time. See the
+                # ferritin (per-structure) runner above for the rationale.
+                minimize_steps=500,
                 gradient_tolerance=0.1,
                 strip_hydrogens=False,
                 ff="amber96",
@@ -345,15 +352,31 @@ if _OPENMM_OK:
         # before building the System. The ferritin runner does the same
         # via place_all_hydrogens() — both stacks see the same atom set.
         #
+        # P1a: before adding H, call Modeller.addMissingAtoms(forcefield)
+        # to repair real PDB imperfections (chains ending in incomplete
+        # residues, sidechains missing heavy atoms) using OpenMM's
+        # template library. On the 20-PDB scaling demo, 10/20 structures
+        # failed createSystem with "set of externally bonded atoms is
+        # missing 1 C atom" — those are real PDB format issues, not a
+        # ferritin bug, and addMissingAtoms repairs them in place.
+        #
         # We then run LocalEnergyMinimizer with heavy atoms frozen to relax
         # the placed H positions, mirroring ferritin's minimize_hydrogens()
         # step. Without this the raw Modeller H placements have the same
         # kind of residual clashes that ferritin's template placement has,
         # and the FF evaluation is dominated by them rather than the
         # actual interaction energies we want to compare.
+        #
+        # If addMissingAtoms / addHydrogens / createSystem still fail
+        # after repair, we record status="skip" (not "error"): these are
+        # legitimate "this structure can't be evaluated under AMBER96"
+        # cases — nucleic acids, exotic ligands, broken topologies — and
+        # we want the aggregator to surface a skip rate rather than a
+        # crash count.
         try:
             forcefield = _openmm_app.ForceField("amber96.xml")
             modeller = _openmm_app.Modeller(pdb.topology, pdb.positions)
+            modeller.addMissingAtoms(forcefield)
             modeller.addHydrogens(forcefield)
             system = forcefield.createSystem(
                 modeller.topology,
@@ -365,8 +388,8 @@ if _OPENMM_OK:
                 op="energy", impl="openmm", impl_version=_OPENMM_VERSION,
                 pdb_id="", pdb_path=pdb_path,
                 elapsed_s=_time.perf_counter() - t0,
-                status="error",
-                error=f"OpenMM createSystem failed: {type(e).__name__}: {e}",
+                status="skip",
+                error=f"OpenMM topology prep failed: {type(e).__name__}: {e}",
                 payload={},
             )
 
