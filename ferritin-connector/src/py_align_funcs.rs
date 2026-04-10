@@ -34,13 +34,7 @@ fn chars_to_u8(v: &[char]) -> Vec<u8> {
     v.iter().map(|c| *c as u8).collect()
 }
 
-/// Resolve n_threads: None or -1 → 0 (rayon default = all cores), otherwise the value.
-fn resolve_threads(n: Option<i32>) -> usize {
-    match n {
-        None | Some(-1) => 0,
-        Some(n) => n.max(1) as usize,
-    }
-}
+use crate::parallel::resolve_threads;
 
 /// Build a rayon thread pool with the given thread count.
 fn build_pool(n_threads: usize) -> rayon::ThreadPool {

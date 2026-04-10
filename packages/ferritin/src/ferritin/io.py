@@ -84,7 +84,8 @@ def batch_load(
 
     Args:
         paths: List of file paths (.pdb, .cif, .mmcif).
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of Structure objects (same order as paths).
@@ -111,7 +112,8 @@ def batch_load_tolerant(
 
     Args:
         paths: List of file paths.
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of (index, Structure) tuples for files that loaded successfully.

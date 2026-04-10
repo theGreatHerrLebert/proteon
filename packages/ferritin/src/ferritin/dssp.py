@@ -90,7 +90,8 @@ def batch_dssp(
 
     Args:
         structures: List of ferritin Structure objects.
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of SS strings.
@@ -108,7 +109,8 @@ def load_and_dssp(
 
     Args:
         paths: List of file paths.
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of (index, ss_string) tuples.

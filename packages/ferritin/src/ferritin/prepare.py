@@ -184,7 +184,8 @@ def batch_prepare(
         minimize_method: "sd", "cg", or "lbfgs" (default "lbfgs").
         minimize_steps: Max minimization steps (default 500).
         gradient_tolerance: Convergence criterion in kcal/mol/A (default 0.1).
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of PrepReport, one per structure.

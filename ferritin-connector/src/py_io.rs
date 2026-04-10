@@ -132,12 +132,7 @@ pub fn save_mmcif(pdb: &PyPDB, path: &str) -> PyResult<()> {
 // Batch loading (rayon parallel, GIL released)
 // ---------------------------------------------------------------------------
 
-fn resolve_threads(n: Option<i32>) -> usize {
-    match n {
-        None | Some(-1) => 0,
-        Some(n) => n.max(1) as usize,
-    }
-}
+use crate::parallel::resolve_threads;
 
 fn build_pool(n_threads: usize) -> rayon::ThreadPool {
     let mut builder = rayon::ThreadPoolBuilder::new();

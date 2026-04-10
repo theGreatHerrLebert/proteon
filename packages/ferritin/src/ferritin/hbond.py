@@ -117,7 +117,8 @@ def batch_backbone_hbonds(
     Args:
         structures: List of ferritin Structure objects.
         energy_cutoff: Kabsch-Sander energy cutoff (default -0.5).
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of Nx4 arrays, one per structure.

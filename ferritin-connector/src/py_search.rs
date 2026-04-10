@@ -6,14 +6,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rayon::prelude::*;
 
+use crate::parallel::resolve_threads;
 use crate::py_pdb::PyPDB;
-
-fn resolve_threads(n: Option<i32>) -> usize {
-    match n {
-        None | Some(-1) => 0,
-        Some(n) => n.max(1) as usize,
-    }
-}
 
 fn build_pool(n_threads: usize) -> rayon::ThreadPool {
     let mut builder = rayon::ThreadPoolBuilder::new();

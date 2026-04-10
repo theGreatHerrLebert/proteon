@@ -10,8 +10,12 @@ use crate::py_pdb::PyPDB;
 
 /// Apply minimized coordinates back to a PDB structure.
 ///
-/// Iterates chains → residues → atoms in the same order as topology building,
-/// and sets each atom's position from the flat coordinate array.
+/// Iterates chains → residues → **primary conformer** → atoms in the same
+/// order as topology building, and sets each atom's position from the flat
+/// coordinate array. The primary-conformer selection mirrors
+/// [`crate::altloc::primary_conformer`]: blank altLoc first, then "A", then
+/// the first available conformer.
+///
 /// Panics if the coordinate array doesn't match the atom count.
 fn apply_coords_to_pdb(pdb: &mut pdbtbx::PDB, coords: &[[f64; 3]]) {
     let mut idx = 0;
@@ -22,15 +26,42 @@ fn apply_coords_to_pdb(pdb: &mut pdbtbx::PDB, coords: &[[f64; 3]]) {
     };
     for chain in first_model.chains_mut() {
         for residue in chain.residues_mut() {
-            for atom in residue.atoms_mut() {
-                assert!(
-                    idx < coords.len(),
-                    "apply_coords_to_pdb: coord array too short ({} coords, atom index {})",
-                    coords.len(), idx,
-                );
-                atom.set_pos((coords[idx][0], coords[idx][1], coords[idx][2]))
-                    .expect("apply_coords_to_pdb: invalid coordinates (NaN/Inf)");
-                idx += 1;
+            // Determine the primary-conformer alt_loc in an immutable scan,
+            // then iterate mutably and update only atoms in that conformer.
+            let primary_alt: Option<Option<String>> = {
+                let blank = residue
+                    .conformers()
+                    .find(|c| c.alternative_location().is_none());
+                let a = residue
+                    .conformers()
+                    .find(|c| c.alternative_location() == Some("A"));
+                blank
+                    .or(a)
+                    .or_else(|| residue.conformers().next())
+                    .map(|c| c.alternative_location().map(str::to_string))
+            };
+            let Some(target_alt) = primary_alt else { continue };
+
+            for conformer in residue.conformers_mut() {
+                let matches = match (conformer.alternative_location(), target_alt.as_deref()) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => a == b,
+                    _ => false,
+                };
+                if !matches {
+                    continue;
+                }
+                for atom in conformer.atoms_mut() {
+                    assert!(
+                        idx < coords.len(),
+                        "apply_coords_to_pdb: coord array too short ({} coords, atom index {})",
+                        coords.len(), idx,
+                    );
+                    atom.set_pos((coords[idx][0], coords[idx][1], coords[idx][2]))
+                        .expect("apply_coords_to_pdb: invalid coordinates (NaN/Inf)");
+                    idx += 1;
+                }
+                break;
             }
         }
     }
@@ -41,12 +72,7 @@ fn apply_coords_to_pdb(pdb: &mut pdbtbx::PDB, coords: &[[f64; 3]]) {
     );
 }
 
-fn resolve_threads(n: Option<i32>) -> usize {
-    match n {
-        None | Some(-1) => 0,
-        Some(n) => n.max(1) as usize,
-    }
-}
+use crate::parallel::resolve_threads;
 
 fn build_pool(n_threads: usize) -> rayon::ThreadPool {
     let mut builder = rayon::ThreadPoolBuilder::new();

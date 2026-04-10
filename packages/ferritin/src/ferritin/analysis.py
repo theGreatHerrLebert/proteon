@@ -262,7 +262,8 @@ def batch_extract_ca(
 
     Args:
         structures: List of ferritin Structure objects.
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of Mx3 numpy arrays.
@@ -299,7 +300,8 @@ def batch_contact_maps(
     Args:
         structures: List of ferritin Structure objects.
         cutoff: Distance threshold in Angstroms (default 8.0).
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of NxN boolean arrays.
@@ -359,7 +361,8 @@ def load_and_analyze(
     Args:
         paths: List of file paths (.pdb, .cif).
         cutoff: Contact map cutoff in Angstroms (default 8.0).
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of dicts, each containing:
@@ -386,7 +389,8 @@ def load_and_extract_ca(
 
     Args:
         paths: List of file paths.
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of (index, Mx3 array) tuples.
@@ -406,7 +410,8 @@ def load_and_contact_maps(
     Args:
         paths: List of file paths.
         cutoff: Distance cutoff in Angstroms.
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of (index, MxM bool array) tuples.

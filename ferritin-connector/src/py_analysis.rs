@@ -8,18 +8,15 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use rayon::prelude::*;
 
+use crate::altloc::{
+    pdb_atom_count_primary, pdb_atoms_primary, residue_atoms_primary,
+};
+use crate::parallel::resolve_threads;
 use crate::py_pdb::PyPDB;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn resolve_threads(n: Option<i32>) -> usize {
-    match n {
-        None | Some(-1) => 0,
-        Some(n) => n.max(1) as usize,
-    }
-}
 
 fn build_pool(n_threads: usize) -> rayon::ThreadPool {
     let mut builder = rayon::ThreadPoolBuilder::new();
@@ -29,9 +26,10 @@ fn build_pool(n_threads: usize) -> rayon::ThreadPool {
     builder.build().expect("failed to build rayon thread pool")
 }
 
-/// Extract CA atom coordinates from a pdbtbx PDB (first model).
+/// Extract CA atom coordinates from a pdbtbx PDB (first model, primary
+/// conformer per residue — avoids altloc duplication; see crate::altloc).
 fn extract_ca(pdb: &pdbtbx::PDB) -> Vec<[f64; 3]> {
-    pdb.atoms()
+    pdb_atoms_primary(pdb)
         .filter(|a| a.name().trim() == "CA")
         .map(|a| {
             let (x, y, z) = a.pos();
@@ -70,7 +68,7 @@ fn extract_backbone(
             let mut ca_pos: Option<[f64; 3]> = None;
             let mut c_pos: Option<[f64; 3]> = None;
 
-            for atom in residue.atoms() {
+            for atom in residue_atoms_primary(residue) {
                 let name = atom.name().trim();
                 let (x, y, z) = atom.pos();
                 match name {
@@ -800,13 +798,12 @@ pub fn load_and_analyze<'py>(
                         let (bb, chain_starts) = extract_backbone(&pdb);
                         let (phi, psi, omega) = compute_dihedrals(&bb, &chain_starts);
 
-                        let n_atoms = pdb.atom_count();
+                        let n_atoms = pdb_atom_count_primary(&pdb);
                         let n_chains = pdb.chain_count();
                         let n_residues = pdb.residue_count();
 
-                        // Rg
-                        let all_coords: Vec<[f64; 3]> = pdb
-                            .atoms()
+                        // Rg — primary conformer only (see crate::altloc).
+                        let all_coords: Vec<[f64; 3]> = pdb_atoms_primary(&pdb)
                             .map(|a| {
                                 let (x, y, z) = a.pos();
                                 [x, y, z]

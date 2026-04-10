@@ -201,7 +201,8 @@ def batch_minimize_hydrogens(
         structures: List of ferritin Structure objects.
         max_steps: Maximum optimization steps per structure.
         gradient_tolerance: Convergence criterion.
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
         units: Energy units — "kJ/mol" (default) or "kcal/mol".
 
     Returns:
@@ -229,7 +230,8 @@ def load_and_minimize_hydrogens(
         paths: List of file paths.
         max_steps: Maximum optimization steps per structure.
         gradient_tolerance: Convergence criterion.
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of (index, result_dict) tuples. Files that fail to load are skipped.

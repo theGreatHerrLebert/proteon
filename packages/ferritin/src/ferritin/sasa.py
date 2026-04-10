@@ -147,7 +147,8 @@ def batch_total_sasa(
         structures: List of ferritin Structure objects.
         probe: Probe radius in Angstroms (default 1.4).
         n_points: Test points per sphere (default 960).
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
         radii: Atomic radii table ("bondi" or "protor").
 
     Returns:
@@ -171,7 +172,8 @@ def load_and_sasa(
         paths: List of file paths.
         probe: Probe radius (default 1.4).
         n_points: Test points per sphere (default 960).
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of (index, total_sasa) tuples for files that loaded.

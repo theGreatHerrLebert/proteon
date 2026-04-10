@@ -2,9 +2,22 @@
 //!
 //! Wraps PDB → Model → Chain → Residue → Atom with Pythonic access,
 //! numpy array extraction, and hierarchy navigation.
+//!
+//! Altloc handling: every atom-level iteration in this module goes
+//! through [`crate::altloc`] primary-conformer helpers. See the
+//! module-level doc in `altloc.rs` for the full story — in short,
+//! pdbtbx's `Residue::atoms()` / `PDB::atoms()` return duplicated
+//! backbone entries for altloc residues, which we cannot expose to
+//! Python consumers or the force-field topology builder.
 
 use numpy::{IntoPyArray, PyArrayMethods};
 use pyo3::prelude::*;
+
+use crate::altloc::{
+    chain_atom_count_primary, model_atom_count_primary, pdb_atom_count_primary,
+    pdb_atoms_primary, pdb_total_atom_count_primary, residue_atom_count_primary,
+    residue_atoms_primary,
+};
 
 // ---------------------------------------------------------------------------
 // PyAtom
@@ -184,7 +197,7 @@ impl PyResidue {
 
     /// Number of atoms in the primary conformer.
     fn __len__(&self) -> usize {
-        self.inner.atom_count()
+        residue_atom_count_primary(&self.inner)
     }
 
     /// Names of alternate conformers present.
@@ -202,7 +215,12 @@ impl PyResidue {
             .collect()
     }
 
-    /// All atoms in this residue (across all conformers).
+    /// Atoms in this residue's primary conformer.
+    ///
+    /// See the module-level doc on altloc handling: pdbtbx's
+    /// `Residue::atoms()` iterates every conformer and would return
+    /// duplicated backbone atoms for altloc residues. We select one
+    /// primary conformer per residue so the Python view is consistent.
     #[getter]
     fn atoms(&self) -> Vec<PyAtom> {
         let res_name = self
@@ -216,8 +234,7 @@ impl PyResidue {
             .insertion_code()
             .map(|s| s.to_string());
 
-        self.inner
-            .atoms()
+        residue_atoms_primary(&self.inner)
             .map(|a| PyAtom {
                 inner: a.clone(),
                 res_name: res_name.clone(),
@@ -233,7 +250,7 @@ impl PyResidue {
             "Residue(name='{}', serial={}, atoms={})",
             self.inner.name().unwrap_or("?"),
             self.inner.serial_number(),
-            self.inner.atom_count(),
+            residue_atom_count_primary(&self.inner),
         )
     }
 }
@@ -263,10 +280,10 @@ impl PyChain {
         self.inner.residue_count()
     }
 
-    /// Number of atoms.
+    /// Number of atoms in this chain (primary conformer per residue).
     #[getter]
     fn atom_count(&self) -> usize {
-        self.inner.atom_count()
+        chain_atom_count_primary(&self.inner)
     }
 
     /// All residues in this chain.
@@ -282,7 +299,7 @@ impl PyChain {
             .collect()
     }
 
-    /// All atoms in this chain (flattened).
+    /// All atoms in this chain (primary conformer per residue, flattened).
     #[getter]
     fn atoms(&self) -> Vec<PyAtom> {
         let chain_id = self.inner.id().to_string();
@@ -293,7 +310,7 @@ impl PyChain {
                 let serial = r.serial_number();
                 let ins = r.insertion_code().map(|s| s.to_string());
                 let cid = chain_id.clone();
-                r.atoms().map(move |a| PyAtom {
+                residue_atoms_primary(r).map(move |a| PyAtom {
                     inner: a.clone(),
                     res_name: res_name.clone(),
                     chain_id: cid.clone(),
@@ -313,7 +330,7 @@ impl PyChain {
             "Chain(id='{}', residues={}, atoms={})",
             self.inner.id(),
             self.inner.residue_count(),
-            self.inner.atom_count(),
+            chain_atom_count_primary(&self.inner),
         )
     }
 }
@@ -349,10 +366,10 @@ impl PyModel {
         self.inner.residue_count()
     }
 
-    /// Number of atoms.
+    /// Number of atoms in this model (primary conformer per residue).
     #[getter]
     fn atom_count(&self) -> usize {
-        self.inner.atom_count()
+        model_atom_count_primary(&self.inner)
     }
 
     /// All chains in this model.
@@ -379,7 +396,8 @@ impl PyModel {
             .collect()
     }
 
-    /// All atoms (flattened across chains and residues).
+    /// All atoms in this model (primary conformer per residue, flattened
+    /// across chains and residues).
     #[getter]
     fn atoms(&self) -> Vec<PyAtom> {
         atoms_from_model(&self.inner)
@@ -390,7 +408,7 @@ impl PyModel {
             "Model(serial={}, chains={}, atoms={})",
             self.inner.serial_number(),
             self.inner.chain_count(),
-            self.inner.atom_count(),
+            model_atom_count_primary(&self.inner),
         )
     }
 }
@@ -436,16 +454,17 @@ impl PyPDB {
         self.inner.residue_count()
     }
 
-    /// Number of atoms (first model).
+    /// Number of atoms (first model, primary conformer per residue).
     #[getter]
     fn atom_count(&self) -> usize {
-        self.inner.atom_count()
+        pdb_atom_count_primary(&self.inner)
     }
 
-    /// Total number of atoms across all models.
+    /// Total number of atoms across all models (primary conformer per
+    /// residue).
     #[getter]
     fn total_atom_count(&self) -> usize {
-        self.inner.total_atom_count()
+        pdb_total_atom_count_primary(&self.inner)
     }
 
     // -- hierarchy navigation -----------------------------------------------
@@ -492,14 +511,12 @@ impl PyPDB {
         }
     }
 
-    // -- bulk numpy arrays (first model) ------------------------------------
+    // -- bulk numpy arrays (first model, primary conformer) ----------------
 
     /// All atom coordinates as Nx3 numpy array (float64).
     #[getter]
     fn coords<'py>(&self, py: Python<'py>) -> Bound<'py, numpy::PyArray2<f64>> {
-        let flat: Vec<f64> = self
-            .inner
-            .atoms()
+        let flat: Vec<f64> = pdb_atoms_primary(&self.inner)
             .flat_map(|a| {
                 let (x, y, z) = a.pos();
                 [x, y, z]
@@ -514,24 +531,27 @@ impl PyPDB {
     /// All B-factors as numpy array (float64).
     #[getter]
     fn b_factors<'py>(&self, py: Python<'py>) -> Bound<'py, numpy::PyArray1<f64>> {
-        let vals: Vec<f64> = self.inner.atoms().map(|a| a.b_factor()).collect();
+        let vals: Vec<f64> = pdb_atoms_primary(&self.inner)
+            .map(|a| a.b_factor())
+            .collect();
         vals.into_pyarray(py)
     }
 
     /// All occupancies as numpy array (float64).
     #[getter]
     fn occupancies<'py>(&self, py: Python<'py>) -> Bound<'py, numpy::PyArray1<f64>> {
-        let vals: Vec<f64> = self.inner.atoms().map(|a| a.occupancy()).collect();
+        let vals: Vec<f64> = pdb_atoms_primary(&self.inner)
+            .map(|a| a.occupancy())
+            .collect();
         vals.into_pyarray(py)
     }
 
-    // -- bulk metadata lists (first model) ----------------------------------
+    // -- bulk metadata lists (first model, primary conformer) --------------
 
     /// All atom names as a list of strings.
     #[getter]
     fn atom_names(&self) -> Vec<String> {
-        self.inner
-            .atoms()
+        pdb_atoms_primary(&self.inner)
             .map(|a| a.name().to_string())
             .collect()
     }
@@ -539,8 +559,7 @@ impl PyPDB {
     /// All element symbols as a list of strings.
     #[getter]
     fn elements(&self) -> Vec<String> {
-        self.inner
-            .atoms()
+        pdb_atoms_primary(&self.inner)
             .map(|a| {
                 a.element()
                     .map_or_else(|| "?".to_string(), |e| e.symbol().to_string())
@@ -556,7 +575,7 @@ impl PyPDB {
             .flat_map(|c| {
                 c.residues().flat_map(|r| {
                     let name = r.name().unwrap_or("?").to_string();
-                    let count = r.atom_count();
+                    let count = residue_atom_count_primary(r);
                     std::iter::repeat(name).take(count)
                 })
             })
@@ -570,7 +589,7 @@ impl PyPDB {
             .chains()
             .flat_map(|c| {
                 let id = c.id().to_string();
-                let count = c.atom_count();
+                let count = chain_atom_count_primary(c);
                 std::iter::repeat(id).take(count)
             })
             .collect()
@@ -588,7 +607,7 @@ impl PyPDB {
             .flat_map(|c| {
                 c.residues().flat_map(|r| {
                     let serial = r.serial_number() as i64;
-                    let count = r.atom_count();
+                    let count = residue_atom_count_primary(r);
                     std::iter::repeat(serial).take(count)
                 })
             })
@@ -599,7 +618,7 @@ impl PyPDB {
     // -- dunder methods -----------------------------------------------------
 
     fn __len__(&self) -> usize {
-        self.inner.atom_count()
+        pdb_atom_count_primary(&self.inner)
     }
 
     fn __repr__(&self) -> String {
@@ -614,7 +633,7 @@ impl PyPDB {
             self.inner.model_count(),
             self.inner.chain_count(),
             self.inner.residue_count(),
-            self.inner.atom_count(),
+            pdb_atom_count_primary(&self.inner),
         )
     }
 }
@@ -629,7 +648,8 @@ impl PyPDB {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Extract all atoms from a model with full hierarchy context.
+/// Extract all atoms from a model with full hierarchy context
+/// (primary conformer per residue — see module-level doc on altloc).
 fn atoms_from_model(model: &pdbtbx::Model) -> Vec<PyAtom> {
     model
         .chains()
@@ -640,7 +660,7 @@ fn atoms_from_model(model: &pdbtbx::Model) -> Vec<PyAtom> {
                 let serial = r.serial_number();
                 let ins = r.insertion_code().map(|s| s.to_string());
                 let chain_id = chain_id.clone();
-                r.atoms().map(move |a| PyAtom {
+                residue_atoms_primary(r).map(move |a| PyAtom {
                     inner: a.clone(),
                     res_name: res_name.clone(),
                     chain_id: chain_id.clone(),

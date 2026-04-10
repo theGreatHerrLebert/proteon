@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::params::ForceField;
+use crate::altloc::residue_atoms_primary;
 use crate::fragment_templates;
 
 /// Per-atom data for force field computation.
@@ -103,9 +104,10 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
             if is_aa {
                 chain_residues.push((res_idx, name.clone()));
             }
-            // Find SG atoms for disulfide detection
+            // Find SG atoms for disulfide detection (primary conformer only —
+            // see crate::altloc for the altloc-duplication background).
             if name == "CYS" {
-                for atom in residue.atoms() {
+                for atom in residue_atoms_primary(residue) {
                     if atom.name().trim() == "SG" {
                         let (x, y, z) = atom.pos();
                         sg_positions.push((res_idx, [x, y, z]));
@@ -140,7 +142,11 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                 .cloned()
                 .unwrap_or_else(|| base_name.clone());
 
-            for atom in residue.atoms() {
+            // Primary conformer only: pdbtbx duplicates non-altloc backbone
+            // atoms into every altloc conformer, which would otherwise yield
+            // a zero-distance atom pair and blow up 1/r^12 vdW terms.
+            // See crate::altloc for the full story.
+            for atom in residue_atoms_primary(residue) {
                 let (x, y, z) = atom.pos();
                 let atom_name = atom.name().trim().to_string();
                 let element = atom

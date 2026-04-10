@@ -1,5 +1,25 @@
 //! Shared rayon thread pool helpers with memory-aware auto-tuning.
 //!
+//! # `n_threads` convention
+//!
+//! Every public batch operation accepts an `n_threads` argument with the
+//! following semantics, mirroring the conventions users expect from
+//! sklearn / polars / joblib:
+//!
+//! | Value           | Meaning                                    |
+//! |-----------------|--------------------------------------------|
+//! | `None`          | Use all available cores (default)          |
+//! | `Some(-1)`      | Use all available cores                    |
+//! | `Some(0)`       | Use all available cores                    |
+//! | `Some(n > 0)`   | Use exactly `n` threads                    |
+//!
+//! **Only strictly positive integers request a specific thread count.** Any
+//! non-positive value means "all cores" — a deliberate choice to prevent the
+//! `n_threads=0 → serial` footgun that would otherwise silently cripple
+//! parallel workloads.
+//!
+//! # Memory-aware auto-tuning
+//!
 //! On high-core-count machines, naive `n_threads = num_cpus` can cause OOM
 //! when each parallel task has a non-trivial working set. For example, on a
 //! 120-core / 250 GB box, batch SASA with a 3 GB CellList per task needs
@@ -8,15 +28,17 @@
 //! `auto_threads` clamps the requested thread count by `available_ram /
 //! per_task_bytes` so the parallel pool fits in memory.
 
-/// Resolve a user-provided thread count to an integer.
+/// Resolve a user-provided thread count to an integer for [`build_pool`].
 ///
-/// `None` and `Some(-1)` mean "auto" (returns 0, which means use all CPUs).
-/// Any other value is clamped to a minimum of 1.
-#[allow(dead_code)]
+/// Returns `0` (meaning "use all CPUs") for `None`, `Some(-1)`, and `Some(0)`.
+/// Any strictly positive value is used as-is.
+///
+/// See the module-level docs for the full `n_threads` convention.
 pub fn resolve_threads(n: Option<i32>) -> usize {
     match n {
-        None | Some(-1) => 0,
-        Some(n) => n.max(1) as usize,
+        None => 0,
+        Some(n) if n <= 0 => 0,
+        Some(n) => n as usize,
     }
 }
 
@@ -64,9 +86,11 @@ pub fn auto_threads(requested: Option<i32>, per_task_bytes: usize) -> usize {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
+    // Mirror resolve_threads: any non-positive value means "all cores".
     let user_requested = match requested {
-        None | Some(-1) => cpus,
-        Some(n) => (n.max(1) as usize).min(cpus),
+        None => cpus,
+        Some(n) if n <= 0 => cpus,
+        Some(n) => (n as usize).min(cpus),
     };
 
     if per_task_bytes == 0 {
@@ -88,10 +112,26 @@ mod tests {
 
     #[test]
     fn test_resolve_threads() {
+        // None, -1, and 0 all mean "use all CPUs" (rayon default sentinel = 0).
         assert_eq!(resolve_threads(None), 0);
         assert_eq!(resolve_threads(Some(-1)), 0);
-        assert_eq!(resolve_threads(Some(0)), 1);
+        assert_eq!(resolve_threads(Some(0)), 0);
+        assert_eq!(resolve_threads(Some(-42)), 0);
+        // Positive integers are used as-is.
+        assert_eq!(resolve_threads(Some(1)), 1);
         assert_eq!(resolve_threads(Some(4)), 4);
+    }
+
+    #[test]
+    fn test_auto_threads_zero_means_all_cores() {
+        // Regression: Some(0) used to silently map to 1 thread (serial).
+        // It should now behave the same as None and Some(-1).
+        let n_none = auto_threads(None, 0);
+        let n_neg1 = auto_threads(Some(-1), 0);
+        let n_zero = auto_threads(Some(0), 0);
+        assert_eq!(n_none, n_neg1);
+        assert_eq!(n_none, n_zero);
+        assert!(n_zero >= 1);
     }
 
     #[test]

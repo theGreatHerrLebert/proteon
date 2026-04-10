@@ -80,7 +80,8 @@ def batch_place_peptide_hydrogens(
 
     Args:
         structures: List of ferritin Structure objects.
-        n_threads: Thread count. None/-1 = all cores.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
 
     Returns:
         List of (n_added, n_skipped) tuples, one per structure.
