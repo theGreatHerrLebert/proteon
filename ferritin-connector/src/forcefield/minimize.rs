@@ -96,6 +96,44 @@ pub struct MinimizeResult {
     pub converged: bool,
 }
 
+/// Energy plateau fallback for the convergence check.
+///
+/// The pure `max_grad < tol` criterion is brittle near the boundary: structures
+/// whose largest gradient hovers around `gradient_tolerance` end up burning the
+/// step budget without ever crossing it, even though their energy has stopped
+/// moving meaningfully. Some of those flips are also non-deterministic across
+/// runs because parallel-reduction order can perturb the gradient norm by a
+/// few ppm.
+///
+/// To make convergence robust, every minimizer in this module ALSO declares
+/// success when the absolute energy change has stayed below
+/// `PLATEAU_REL_TOL * max(|energy|, 1.0)` for `PLATEAU_PATIENCE` consecutive
+/// iterations. This is the same energy-plateau pattern OpenMM and AMBER use
+/// (though with slightly different parameters).
+const PLATEAU_REL_TOL: f64 = 1.0e-6;
+const PLATEAU_PATIENCE: usize = 5;
+
+/// Update the consecutive-tiny-change counter and report whether the energy
+/// has plateaued. `prev_energy` is `None` on the first call (no comparison
+/// possible yet). Returns the new counter value and whether convergence
+/// should be declared.
+fn check_energy_plateau(
+    prev_energy: Option<f64>,
+    energy: f64,
+    counter: usize,
+) -> (usize, bool) {
+    let Some(prev) = prev_energy else {
+        return (0, false);
+    };
+    let denom = energy.abs().max(1.0);
+    if (prev - energy).abs() / denom < PLATEAU_REL_TOL {
+        let new_counter = counter + 1;
+        (new_counter, new_counter >= PLATEAU_PATIENCE)
+    } else {
+        (0, false)
+    }
+}
+
 /// Minimize energy using steepest descent with line search.
 ///
 /// # Arguments
@@ -124,11 +162,14 @@ pub fn steepest_descent(
     let mut prev_energy = initial_energy;
     let mut converged = false;
     let mut steps = 0;
+    let mut plateau_counter = 0usize;
+    let mut plateau_prev: Option<f64> = None;
 
     for step in 0..max_steps {
         steps = step + 1;
 
-        let (_energy, forces) = nbc.energy_and_forces(&pos, topo, params);
+        let (energy_res, forces) = nbc.energy_and_forces(&pos, topo, params);
+        let cur_energy = energy_res.total;
 
         // Compute max force magnitude
         let mut max_force = 0.0f64;
@@ -147,6 +188,16 @@ pub fn steepest_descent(
             converged = true;
             break;
         }
+
+        // Plateau fallback
+        let (new_counter, plateaued) =
+            check_energy_plateau(plateau_prev, cur_energy, plateau_counter);
+        plateau_counter = new_counter;
+        if plateaued {
+            converged = true;
+            break;
+        }
+        plateau_prev = Some(cur_energy);
 
         // Take step along gradient direction
         let mut new_pos = pos.clone();
@@ -335,6 +386,8 @@ pub fn conjugate_gradient(
     let mut converged = false;
     let mut steps = 0;
     let restart_frequency = 3 * n;
+    let mut plateau_counter = 0usize;
+    let mut plateau_prev: Option<f64> = None;
 
     for step in 0..max_steps {
         steps = step + 1;
@@ -350,6 +403,16 @@ pub fn conjugate_gradient(
             converged = true;
             break;
         }
+
+        // Plateau fallback
+        let (new_counter, plateaued) =
+            check_energy_plateau(plateau_prev, energy, plateau_counter);
+        plateau_counter = new_counter;
+        if plateaued {
+            converged = true;
+            break;
+        }
+        plateau_prev = Some(energy);
 
         // Line search along direction
         // grad_dot_dir = -forces · direction (gradient = -force)
@@ -470,6 +533,8 @@ pub fn lbfgs(
     let mut energy = initial_energy;
     let mut converged = false;
     let mut steps = 0;
+    let mut plateau_counter = 0usize;
+    let mut prev_energy: Option<f64> = None;
 
     for step in 0..max_steps {
         steps = step + 1;
@@ -485,6 +550,17 @@ pub fn lbfgs(
             converged = true;
             break;
         }
+
+        // Plateau fallback: declare convergence if energy has stopped moving
+        // even though the gradient norm is still hovering above the threshold.
+        let (new_counter, plateaued) =
+            check_energy_plateau(prev_energy, energy, plateau_counter);
+        plateau_counter = new_counter;
+        if plateaued {
+            converged = true;
+            break;
+        }
+        prev_energy = Some(energy);
 
         // Two-loop recursion to compute search direction: d = -H_k * g_k
         let direction = lbfgs_two_loop(&grad, &s_hist, &y_hist, &rho_hist, constrained);
@@ -732,4 +808,58 @@ pub fn minimize_hydrogens_lbfgs(
         .collect();
 
     lbfgs(coords, topo, params, max_steps, gradient_tolerance, &constrained)
+}
+
+#[cfg(test)]
+mod plateau_tests {
+    use super::*;
+
+    #[test]
+    fn first_call_never_plateaus() {
+        let (counter, plateaued) = check_energy_plateau(None, -1000.0, 0);
+        assert_eq!(counter, 0);
+        assert!(!plateaued);
+    }
+
+    #[test]
+    fn large_change_resets_counter() {
+        // Energy moved by ~10% — well above any reasonable plateau tolerance.
+        let (counter, plateaued) = check_energy_plateau(Some(-1000.0), -1100.0, 4);
+        assert_eq!(counter, 0);
+        assert!(!plateaued);
+    }
+
+    #[test]
+    fn small_change_increments_counter() {
+        // Energy moved by 1e-8 of magnitude — well below PLATEAU_REL_TOL=1e-6.
+        let (counter, plateaued) = check_energy_plateau(Some(-1000.0), -1000.000_01, 0);
+        assert_eq!(counter, 1);
+        assert!(!plateaued);
+    }
+
+    #[test]
+    fn patience_threshold_triggers_convergence() {
+        // After PLATEAU_PATIENCE-1 tiny-change steps, one more triggers it.
+        let (counter, plateaued) =
+            check_energy_plateau(Some(-1000.0), -1000.000_01, PLATEAU_PATIENCE - 1);
+        assert_eq!(counter, PLATEAU_PATIENCE);
+        assert!(plateaued);
+    }
+
+    #[test]
+    fn handles_near_zero_energy() {
+        // Denominator is clamped to max(|e|, 1.0) so a near-zero energy
+        // doesn't blow up the relative-change check.
+        let (counter, plateaued) = check_energy_plateau(Some(0.0), 1e-10, 0);
+        assert_eq!(counter, 1);
+        assert!(!plateaued);
+    }
+
+    #[test]
+    fn plateau_tol_is_strict_enough_to_distinguish_real_progress() {
+        // 5e-6 relative change should NOT be flagged as plateau (above 1e-6).
+        let (counter, plateaued) = check_energy_plateau(Some(-1000.0), -1000.005, 4);
+        assert_eq!(counter, 0);
+        assert!(!plateaued);
+    }
 }
