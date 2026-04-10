@@ -75,10 +75,19 @@ if _FERRITIN_OK:
     def ferritin(pdb_path: str) -> RunnerResult:
         """Compute AMBER96 energy via ferritin.compute_energy.
 
-        Returns kJ/mol (ferritin's default unit). Used as the baseline against
-        which OpenMM and BALL are compared.
+        Loads the structure and places all standard hydrogens via
+        `place_all_hydrogens()` before computing the energy. H placement
+        is required because AMBER96 parameterizes H atoms; a heavy-only
+        input gives nonsensical energies.
+
+        The same H placement step is performed by the OpenMM runner (via
+        Modeller.addHydrogens), keeping both runners on comparable atom
+        sets for the FF-to-FF comparison. Returns kJ/mol (ferritin's
+        default unit).
         """
         s, _ = time_call(_ferritin.load, pdb_path)
+        # Add hydrogens in place — matches OpenMM runner's Modeller.addHydrogens
+        _ferritin.place_all_hydrogens(s)
         result, elapsed = time_call(
             _ferritin.compute_energy, s, ff="amber96", units="kJ/mol"
         )
@@ -98,6 +107,7 @@ if _FERRITIN_OK:
                 "ff": "amber96",
                 "components": _normalize_components(result),
                 "n_unassigned_atoms": int(result.get("n_unassigned_atoms", 0)),
+                "n_atoms_after_h": int(s.atom_count),
             },
         )
 
@@ -182,10 +192,17 @@ if _OPENMM_OK:
                 payload={},
             )
 
+        # AMBER96 requires hydrogens on every standard residue. The input
+        # PDBs are heavy-atom only, so add H via Modeller.addHydrogens
+        # before building the System. The ferritin runner does the same
+        # via place_all_hydrogens() — both stacks see the same atom set
+        # for the FF-to-FF comparison.
         try:
             forcefield = _openmm_app.ForceField("amber96.xml")
+            modeller = _openmm_app.Modeller(pdb.topology, pdb.positions)
+            modeller.addHydrogens(forcefield)
             system = forcefield.createSystem(
-                pdb.topology,
+                modeller.topology,
                 nonbondedMethod=_openmm_app.NoCutoff,
                 constraints=None,
             )
@@ -214,7 +231,7 @@ if _OPENMM_OK:
             # Fall back to Reference if CPU platform isn't available
             context = _openmm.Context(system, integrator)
 
-        context.setPositions(pdb.positions)
+        context.setPositions(modeller.positions)
 
         # Per-group energies
         group_energies = {}
@@ -271,5 +288,6 @@ if _OPENMM_OK:
                 # ferritin.improper_torsion).
                 "nonbonded_total": float(nonbonded_total) if nonbonded_total is not None else None,
                 "n_unassigned_atoms": -1,  # OpenMM doesn't have the concept
+                "n_atoms_after_h": int(modeller.topology.getNumAtoms()),
             },
         )
