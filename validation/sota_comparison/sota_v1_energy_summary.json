@@ -1,0 +1,205 @@
+{
+  "by_op": {
+    "energy": {
+      "by_impl": {
+        "openmm": {
+          "by_pdb": {
+            "1ake": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": -4,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 117.76643635350901,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 3.2697839278335388,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 18.793787640849708,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 11.730960162725031,
+                  "band": "FAIL"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 126.87121657552092,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1aki": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": 0,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 125.5878865425846,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 4.398263249542671,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 22.220775730835925,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 2.564554623352231,
+                  "band": "WARN"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 139.40186878220368,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1bpi": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": 1,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 126.95726140719603,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 0.38349273860633626,
+                  "band": "PASS"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 9.036823005177915,
+                  "band": "WARN"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 5.638016449622326,
+                  "band": "WARN"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 162.26444131515473,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1crn": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": 1,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 140.31379161562617,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 1.895162370470484,
+                  "band": "PASS"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 16.331093852100395,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 3.9302181981476525,
+                  "band": "WARN"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 167.24551418587518,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1pgb": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": 0,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 130.46984772559824,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 1.528144506862842,
+                  "band": "PASS"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 1.9009959385654405,
+                  "band": "PASS"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 9.220166969124573,
+                  "band": "WARN"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 152.831782420762,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1ubq": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": 1,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 126.89430321700235,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 5.595571404834809,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 16.829350738147372,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 12.50438127181018,
+                  "band": "FAIL"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 137.31767100158024,
+                  "band": "FAIL"
+                }
+              }
+            }
+          },
+          "n_pdbs": 6,
+          "totals": {
+            "FAIL": 18,
+            "WARN": 8,
+            "PASS": 4
+          }
+        }
+      }
+    }
+  },
+  "global_totals": {
+    "FAIL": 18,
+    "WARN": 8,
+    "PASS": 4
+  },
+  "n_pdbs": 6,
+  "n_ops": 1
+}

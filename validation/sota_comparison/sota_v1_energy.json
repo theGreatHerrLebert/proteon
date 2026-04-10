@@ -1,0 +1,341 @@
+{
+  "meta": {
+    "pdb_dir": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs",
+    "n_pdbs": 6,
+    "n_ops": 1,
+    "wall_s": 345.5935051139968,
+    "import_failures": {}
+  },
+  "records": [
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1crn",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1crn.pdb",
+      "elapsed_s": 14.680085838001105,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 10752.69290971452,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 369.8838173440081,
+          "angle_bend": 441.96476278081474,
+          "torsion": 988.0762421511021,
+          "improper_torsion": 2.212303925995651,
+          "vdw": -704.7622715966047,
+          "electrostatic": 9655.318055109203,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 643,
+        "minimizer_steps": 1074,
+        "minimizer_converged": true,
+        "initial_energy": 795063.0571486533
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1crn",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1crn.pdb",
+      "elapsed_s": 0.5122903680021409,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -4334.81821269052,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 362.8739184232447,
+          "angle_bend": 369.787082577867,
+          "torsion": 951.3680454250039,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -6018.847259116636,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 642
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1ubq",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1ubq.pdb",
+      "elapsed_s": 40.374448795002536,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 33693.592081582574,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 290.79240253298536,
+          "angle_bend": 794.9386351396762,
+          "torsion": 1720.3356901318439,
+          "improper_torsion": 19.191375063189625,
+          "vdw": -1343.3909033840198,
+          "electrostatic": 32211.7248820989,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 1232,
+        "minimizer_steps": 902,
+        "minimizer_converged": true,
+        "initial_energy": 8254161.451493377
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1ubq",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1ubq.pdb",
+      "elapsed_s": 2.025633696001023,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -9061.65681912071,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 274.5209060094175,
+          "angle_bend": 661.1556240789785,
+          "torsion": 1522.0099686367164,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -11519.343317845822,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 1231
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1bpi",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1bpi.pdb",
+      "elapsed_s": 22.490652403008426,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 13916.044761716872,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 1140.750116872344,
+          "angle_bend": 674.6699427673879,
+          "torsion": 1134.7920691692361,
+          "improper_torsion": 3.361435848420885,
+          "vdw": -946.8363213980592,
+          "electrostatic": 11909.307518457543,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 893,
+        "minimizer_steps": 888,
+        "minimizer_converged": true,
+        "initial_energy": 1225688.8464131602
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1bpi",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1bpi.pdb",
+      "elapsed_s": 1.5494047239917563,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -3751.3845639584274,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 1136.3754230084953,
+          "angle_bend": 735.6386713644118,
+          "torsion": 1202.3227868525055,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -6825.72144518384,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 892
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1ake",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1ake.pdb",
+      "elapsed_s": 155.29697866099013,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 238178.4453734931,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 1974.3263585097084,
+          "angle_bend": 6959.79576494114,
+          "torsion": 10172.495196657941,
+          "improper_torsion": 9.312944640357463,
+          "vdw": -8768.446250981022,
+          "electrostatic": 227830.96135972498,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 6678,
+        "minimizer_steps": 739,
+        "minimizer_converged": true,
+        "initial_energy": 9801207.470819244
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1ake",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1ake.pdb",
+      "elapsed_s": 2.7148793889937224,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -42315.821905058896,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 1909.7701525561768,
+          "angle_bend": 5651.786528641251,
+          "torsion": 8987.384284397502,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -58864.76287065382,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 6682
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1pgb",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1pgb.pdb",
+      "elapsed_s": 28.205166066007223,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 13101.815221157249,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 418.20817014704085,
+          "angle_bend": 480.66593036649857,
+          "torsion": 968.3187331068465,
+          "improper_torsion": 1.482818194048311,
+          "vdw": -765.487351364043,
+          "electrostatic": 11998.626920706856,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 855,
+        "minimizer_steps": 1150,
+        "minimizer_converged": true,
+        "initial_energy": 1054255.9124470898
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1pgb",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1pgb.pdb",
+      "elapsed_s": 1.51690245399368,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -3992.1031471758665,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 411.81734496768723,
+          "angle_bend": 471.52849055216365,
+          "torsion": 1059.2188735999976,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -5934.667856295715,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 855
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1aki",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1aki.pdb",
+      "elapsed_s": 74.57287418299529,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 56919.61466557632,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 502.91726528893713,
+          "angle_bend": 2132.815623576307,
+          "torsion": 3363.6446516340147,
+          "improper_torsion": 59.87501337537063,
+          "vdw": -2507.355639129404,
+          "electrostatic": 53367.7177508311,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 1960,
+        "minimizer_steps": 923,
+        "minimizer_converged": true,
+        "initial_energy": 2676842.867745516
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1aki",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1aki.pdb",
+      "elapsed_s": 1.6256204119999893,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -14564.526421104007,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 480.7976400341288,
+          "angle_bend": 1658.8874471091863,
+          "torsion": 3335.7216331590143,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -20039.933141406334,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 1960
+      }
+    }
+  ]
+}

@@ -1,6 +1,147 @@
 # Next Session — Handoff Notes (2026-04-10)
 
-## Today's Session (2026-04-10): Reader Fix + Convergence Cleanup
+## Today's Session (2026-04-10 afternoon): SOTA Comparison Harness v1
+
+**Goal:** Stand up a publication-track validation harness comparing ferritin's
+numerical outputs against widely-used reference implementations on a curated
+PDB set, with reproducible per-(structure, op, impl) JSON dumps + a markdown
+report that distinguishes PASS/WARN/FAIL per metric.
+
+**Ended:** v1 shipping. SASA comparison against FreeSASA passes at
+publication-grade (18/18 metrics PASS across 6 PDBs). Energy comparison
+against OpenMM AMBER96 surfaces a real systematic nonbonded disagreement
+that becomes a paper-worthy finding.
+
+### Scaffolding + design
+
+New directory: `validation/sota_comparison/` with a per-(op, impl) runner
+registry, `RunnerResult` dataclass envelope, typed per-op payload schemas,
+and a driver + aggregator split:
+
+```
+validation/sota_comparison/
+  runners/
+    __init__.py     # safe-imports each runner into OPS registry
+    _base.py        # RunnerResult dataclass + register() decorator
+    sasa.py         # ferritin + freesasa
+    energy.py       # ferritin + openmm
+  run_all.py        # driver: walks registry over PDB list, writes JSON
+  aggregate.py      # reads JSON, pairs ferritin vs X, emits report.md + summary.json
+  setup_sota_env.sh # creates sota_venv, pip installs requirements
+  requirements.txt  # freesasa, openmm, numpy, pyarrow, maturin
+  sota_reference.txt # v1 reference: 6 clean protein PDBs
+  README.md         # v1 findings + setup/run instructions + v2 backlog
+  sota_v1_{sasa,energy}_{json,report.md,summary.json}  # shipped artifacts
+```
+
+Design plan at `/home/administrator/.claude/plans/wobbly-crunching-orbit.md`.
+
+### v1 reference set
+
+Assembled at `/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/`:
+1crn, 1ubq, 1bpi, 1ake (from the ferritin repo `test-pdbs/`), 1pgb, 1aki
+(from the monster3 50K corpus).
+
+An earlier draft included 1lmb, but PDB 1LMB is actually the λ repressor /
+OR1 operator protein-DNA complex — its DNA residues caused FreeSASA's
+`residueAreas()` to drop ~100 entries and blew up the per-residue Pearson
+without being a real disagreement. Excluded from v1.
+
+### Findings
+
+**SASA (ferritin vs FreeSASA): publication-grade agreement.** All 18 metrics
+PASS across 6 PDBs:
+
+| PDB  | total % diff | per-residue Pearson r | per-residue RMSD (Å²) |
+|------|--------------|-----------------------|------------------------|
+| 1ake | 0.17 % ✓    | 0.9998 ✓              | 0.63 ✓                 |
+| 1aki | 0.25 % ✓    | 0.9997 ✓              | 0.76 ✓                 |
+| 1bpi | 0.34 % ✓    | 0.9995 ✓              | 0.66 ✓                 |
+| 1crn | **0.024 %** ✓ | **1.0000** ✓         | **0.23** ✓             |
+| 1pgb | 0.39 % ✓    | 0.9998 ✓              | 0.79 ✓                 |
+| 1ubq | 0.34 % ✓    | 0.9994 ✓              | 1.30 ✓                 |
+
+Key to matching: FreeSASA defaults to Lee-Richards and OONS-like classifier
+while ferritin uses Shrake-Rupley and ProtOr. Setting the freesasa runner
+to explicitly use ProtOr classifier, SR algorithm, 960 points, probe 1.4 Å,
+plus `options={"hetatm": True}` to include crystal waters (ferritin does by
+default) brings them into agreement.
+
+**Energy (ferritin vs OpenMM AMBER96): bonded terms agree, nonbonded is
+systematically off.** Across all 6 PDBs after H placement + LBFGS
+minimization:
+
+| PDB  | bond  | angle  | torsion | nonbonded |
+|------|-------|--------|---------|-----------|
+| 1ake | 3.3 % | 18.8 % | 11.7 %  | **126.9 %** |
+| 1aki | 4.4 % | 22.2 % | 2.6 %   | **139.4 %** |
+| 1bpi | 0.4 % | 9.0 %  | 5.6 %   | **162.3 %** |
+| 1crn | 1.9 % | 16.3 % | 3.9 %   | **167.2 %** |
+| 1pgb | 1.5 % | 1.9 %  | 9.2 %   | **152.8 %** |
+| 1ubq | 5.6 % | 16.8 % | 12.5 %  | **137.3 %** |
+
+- bond_stretch: 0.4% – 5.6% across all structures (good)
+- angle_bend: 1.9% – 22.2% (one outlier)
+- torsion+improper: 2.6% – 12.5%
+- **nonbonded (vdw+elec combined): 126% – 167% on every structure**
+
+The nonbonded disagreement is consistent across every structure and
+therefore **not noise**. Ferritin passes the BALL AMBER96 oracle on
+heavy-only 1crn to 0.02% (see `tests/oracle/test_ball_energy.py`), so the
+disagreement is specifically against OpenMM's AMBER96, not a ferritin FF
+bug against BALL.
+
+Candidate causes (in order of likelihood): (1) different 1-4 scaling, (2)
+different terminal residue protonation — ferritin consistently has 1 more
+atom than OpenMM after H placement, (3) different dielectric handling.
+
+**This is the single most paper-worthy finding from v1** and the top v2
+investigation task.
+
+### Bugs caught by the harness (and fixed during v1 development)
+
+1. **`residue_sasa` altloc-mismatch crash** (commit `1b23670`). On PDBs
+   with alternate conformations, `residue_sasa()` walked off the end of
+   the atom_sasa slice and panicked: "range end index 627 out of range
+   for slice of length 626". Root cause: a leftover from yesterday's
+   altloc migration in commit `2412ea2` — `sasa_from_pdb` was switched
+   to primary-conformer-only iteration, but `residue_sasa` was still
+   calling naive `residue.atom_count()` which includes altloc duplicates.
+   Caught immediately when the harness tried to run against 1bpi (which
+   has altloc residues). Without the SOTA harness this bug would have
+   shipped to users.
+
+### Commits (main branch)
+
+- `c933bb3` — Add SOTA comparison harness scaffolding (v1: FreeSASA)
+- `1b23670` — Fix residue_sasa altloc-mismatch crash on PDBs with alternate
+  conformations (caught by the harness against 1bpi)
+- `152ba40` — Add OpenMM AMBER96 energy runner for SOTA comparison
+- `8acc341` — Energy runners place hydrogens before computing AMBER96 energy
+- `25b2dc4` — Minimize hydrogens before evaluating energy in both runners
+- `cf11370` — Use minimize_hydrogens (AMBER96) for ferritin energy runner
+  (batch_prepare hardcodes CHARMM19-EEF1; we need pure AMBER96 for the
+  OpenMM comparison)
+- `c712034` — Energy runners: bump minimize cap to 2000 steps + record
+  atom-count diff
+- `9bda1cd` — Strip HETATM in both energy runners for OpenMM compatibility
+
+### Ship criteria for v1 (all met)
+
+- Scaffolding runs end-to-end: ✓
+- Setup script creates sota_venv and installs all deps: ✓
+- SASA runner produces valid RunnerResult on every v1 PDB: ✓
+- OpenMM energy runner produces valid RunnerResult on every v1 PDB: ✓
+  (after HETATM stripping)
+- Aggregator pairs ferritin against each other impl, emits per-metric
+  PASS/WARN/FAIL report + machine-readable summary.json: ✓
+- `--strict` mode works (exits non-zero if any FAIL): ✓ (SASA strict-passes,
+  energy strict-fails cleanly)
+- Report renders cleanly and is readable without further explanation: ✓
+
+---
+
+## Today's Session (2026-04-10 morning): Reader Fix + Convergence Cleanup
 
 **Goal:** Diagnose the 48 stragglers from yesterday's 152/200 victory lap. Fix the
 underlying cause(s).

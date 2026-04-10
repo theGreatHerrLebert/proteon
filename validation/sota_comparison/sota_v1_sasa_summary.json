@@ -1,0 +1,201 @@
+{
+  "by_op": {
+    "sasa": {
+      "by_impl": {
+        "freesasa": {
+          "by_pdb": {
+            "1ake": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "total_pct_diff": {
+                  "value": 0.16521600862602817,
+                  "band": "PASS"
+                },
+                "per_residue_pearson": {
+                  "value": 0.9998106882374589,
+                  "band": "PASS"
+                },
+                "per_residue_rmsd": {
+                  "value": 0.6278809099694166,
+                  "band": "PASS"
+                },
+                "_n_joined_residues": {
+                  "value": 566,
+                  "band": "INFO"
+                },
+                "_n_ferritin_residues": {
+                  "value": 808,
+                  "band": "INFO"
+                },
+                "_n_other_residues": {
+                  "value": 807,
+                  "band": "INFO"
+                }
+              }
+            },
+            "1aki": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "total_pct_diff": {
+                  "value": 0.24953983191137374,
+                  "band": "PASS"
+                },
+                "per_residue_pearson": {
+                  "value": 0.9997374974633567,
+                  "band": "PASS"
+                },
+                "per_residue_rmsd": {
+                  "value": 0.757194658101867,
+                  "band": "PASS"
+                },
+                "_n_joined_residues": {
+                  "value": 207,
+                  "band": "INFO"
+                },
+                "_n_ferritin_residues": {
+                  "value": 207,
+                  "band": "INFO"
+                },
+                "_n_other_residues": {
+                  "value": 207,
+                  "band": "INFO"
+                }
+              }
+            },
+            "1bpi": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "total_pct_diff": {
+                  "value": 0.3359101697677259,
+                  "band": "PASS"
+                },
+                "per_residue_pearson": {
+                  "value": 0.9995039605566534,
+                  "band": "PASS"
+                },
+                "per_residue_rmsd": {
+                  "value": 0.6633730153437742,
+                  "band": "PASS"
+                },
+                "_n_joined_residues": {
+                  "value": 226,
+                  "band": "INFO"
+                },
+                "_n_ferritin_residues": {
+                  "value": 226,
+                  "band": "INFO"
+                },
+                "_n_other_residues": {
+                  "value": 226,
+                  "band": "INFO"
+                }
+              }
+            },
+            "1crn": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "total_pct_diff": {
+                  "value": 0.02400501705247978,
+                  "band": "PASS"
+                },
+                "per_residue_pearson": {
+                  "value": 0.9999848689195675,
+                  "band": "PASS"
+                },
+                "per_residue_rmsd": {
+                  "value": 0.23036304107653743,
+                  "band": "PASS"
+                },
+                "_n_joined_residues": {
+                  "value": 46,
+                  "band": "INFO"
+                },
+                "_n_ferritin_residues": {
+                  "value": 46,
+                  "band": "INFO"
+                },
+                "_n_other_residues": {
+                  "value": 46,
+                  "band": "INFO"
+                }
+              }
+            },
+            "1pgb": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "total_pct_diff": {
+                  "value": 0.3872788485245097,
+                  "band": "PASS"
+                },
+                "per_residue_pearson": {
+                  "value": 0.9997705993840641,
+                  "band": "PASS"
+                },
+                "per_residue_rmsd": {
+                  "value": 0.7850512624893732,
+                  "band": "PASS"
+                },
+                "_n_joined_residues": {
+                  "value": 80,
+                  "band": "INFO"
+                },
+                "_n_ferritin_residues": {
+                  "value": 80,
+                  "band": "INFO"
+                },
+                "_n_other_residues": {
+                  "value": 80,
+                  "band": "INFO"
+                }
+              }
+            },
+            "1ubq": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "total_pct_diff": {
+                  "value": 0.34194053616350156,
+                  "band": "PASS"
+                },
+                "per_residue_pearson": {
+                  "value": 0.9993808633767647,
+                  "band": "PASS"
+                },
+                "per_residue_rmsd": {
+                  "value": 1.301754300716337,
+                  "band": "PASS"
+                },
+                "_n_joined_residues": {
+                  "value": 116,
+                  "band": "INFO"
+                },
+                "_n_ferritin_residues": {
+                  "value": 116,
+                  "band": "INFO"
+                },
+                "_n_other_residues": {
+                  "value": 116,
+                  "band": "INFO"
+                }
+              }
+            }
+          },
+          "n_pdbs": 6,
+          "totals": {
+            "PASS": 18
+          }
+        }
+      }
+    }
+  },
+  "global_totals": {
+    "PASS": 18
+  },
+  "n_pdbs": 6,
+  "n_ops": 1
+}
