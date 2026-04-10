@@ -254,7 +254,7 @@ pub fn batch_place_peptide_hydrogens(
 /// Runs the full preparation pipeline on each structure using rayon parallelism.
 /// Returns list of dicts with preparation statistics.
 #[pyfunction]
-#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=0.1, n_threads=None, strip_hydrogens=false))]
+#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=0.1, n_threads=None, strip_hydrogens=true))]
 #[allow(clippy::too_many_arguments)]
 pub fn batch_prepare(
     py: Python<'_>,
