@@ -126,40 +126,110 @@ def compare_sasa(ferritin_payload: dict, other_payload: dict) -> Dict[str, dict]
     return out
 
 
+def _pct_diff(a: float, b: float) -> float:
+    """Return abs(a-b)/|a| in percent, or nan if a is ~zero."""
+    if a is None or b is None:
+        return float("nan")
+    if abs(a) < 1e-9:
+        return float("nan")
+    return abs(a - b) / abs(a) * 100.0
+
+
 def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dict]:
     """Compare ferritin energy against another impl's energy.
 
     Returns total %diff (PASS ≤ 1%, WARN ≤ 5%, FAIL > 5%) and per-component
     %diff (PASS ≤ 2%, WARN ≤ 10%, FAIL > 10%).
+
+    Handles cross-impl component-grouping differences:
+
+    - OpenMM reports `torsion` as the sum of proper + improper (PeriodicTorsionForce
+      handles both); ferritin splits them. For the comparison, we sum ferritin's
+      torsion + improper_torsion and compare against OpenMM's torsion.
+
+    - OpenMM reports `nonbonded_total` (NonbondedForce); ferritin splits into
+      vdw + electrostatic. We compare the sum to OpenMM's nonbonded_total.
     """
     out: Dict[str, dict] = {}
 
-    a_total = ferritin_payload.get("total")
-    b_total = other_payload.get("total")
-    if a_total is not None and b_total is not None and abs(a_total) > 1e-9:
-        pct = abs(a_total - b_total) / abs(a_total) * 100.0
-    else:
-        pct = float("nan")
+    # Total
     out["total_pct_diff"] = {
-        "value": pct,
-        "band": _band(pct, 1.0, 5.0, lower_is_better=True),
+        "value": _pct_diff(ferritin_payload.get("total"), other_payload.get("total")),
+        "band": _band(
+            _pct_diff(ferritin_payload.get("total"), other_payload.get("total")),
+            1.0, 5.0, lower_is_better=True,
+        ),
     }
 
     a_comp = ferritin_payload.get("components", {}) or {}
     b_comp = other_payload.get("components", {}) or {}
-    for key in sorted(set(a_comp) | set(b_comp)):
+
+    # Direct per-component comparisons: bond_stretch, angle_bend
+    for key in ("bond_stretch", "angle_bend"):
         a = a_comp.get(key)
         b = b_comp.get(key)
         if a is None or b is None:
             continue
-        if abs(a) > 1e-9:
-            cpct = abs(a - b) / abs(a) * 100.0
-        else:
-            cpct = float("nan")
-        out[f"component_{key}_pct_diff"] = {
-            "value": cpct,
-            "band": _band(cpct, 2.0, 10.0, lower_is_better=True),
+        pct = _pct_diff(a, b)
+        out[f"{key}_pct_diff"] = {
+            "value": pct,
+            "band": _band(pct, 2.0, 10.0, lower_is_better=True),
         }
+
+    # Torsion: OpenMM PeriodicTorsionForce combines proper + improper.
+    # If the "other" runner only has a combined torsion, sum ferritin's
+    # torsion + improper for the comparison. Otherwise compare directly.
+    a_tor = a_comp.get("torsion")
+    a_imp = a_comp.get("improper_torsion")
+    b_tor = b_comp.get("torsion")
+    b_imp = b_comp.get("improper_torsion")
+    if a_tor is not None and b_tor is not None:
+        if b_imp is None and a_imp is not None:
+            # Other runner has combined torsion; sum ferritin sides.
+            a_sum = a_tor + a_imp
+            pct = _pct_diff(a_sum, b_tor)
+            out["torsion_combined_pct_diff"] = {
+                "value": pct,
+                "band": _band(pct, 2.0, 10.0, lower_is_better=True),
+            }
+        else:
+            pct = _pct_diff(a_tor, b_tor)
+            out["torsion_pct_diff"] = {
+                "value": pct,
+                "band": _band(pct, 2.0, 10.0, lower_is_better=True),
+            }
+            if a_imp is not None and b_imp is not None:
+                pct_i = _pct_diff(a_imp, b_imp)
+                out["improper_torsion_pct_diff"] = {
+                    "value": pct_i,
+                    "band": _band(pct_i, 2.0, 10.0, lower_is_better=True),
+                }
+
+    # Nonbonded: OpenMM reports a single nonbonded_total; ferritin splits
+    # into vdw + electrostatic. Compare the sum to the other's nonbonded_total
+    # if present, otherwise compare vdw and electrostatic directly.
+    a_vdw = a_comp.get("vdw")
+    a_elec = a_comp.get("electrostatic")
+    b_nonbonded_total = other_payload.get("nonbonded_total")
+    if b_nonbonded_total is not None and a_vdw is not None and a_elec is not None:
+        a_sum = a_vdw + a_elec
+        pct = _pct_diff(a_sum, b_nonbonded_total)
+        out["nonbonded_combined_pct_diff"] = {
+            "value": pct,
+            "band": _band(pct, 2.0, 10.0, lower_is_better=True),
+        }
+    else:
+        for key in ("vdw", "electrostatic"):
+            a = a_comp.get(key)
+            b = b_comp.get(key)
+            if a is None or b is None:
+                continue
+            pct = _pct_diff(a, b)
+            out[f"{key}_pct_diff"] = {
+                "value": pct,
+                "band": _band(pct, 2.0, 10.0, lower_is_better=True),
+            }
+
     return out
 
 
