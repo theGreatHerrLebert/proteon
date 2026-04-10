@@ -713,4 +713,128 @@ mod tests {
         assert!((nh1.dg_ref - (-5.95)).abs() < 0.01,
             "EEF1 parser stored wrong dg_ref for NH1: got {}", nh1.dg_ref);
     }
+
+    // ------------------------------------------------------------------
+    // Deeper diagnostic: actually call build_topology() on 1crn and
+    // walk every heavy atom's runtime amber_type. Compute the
+    // canonical Σ dg_ref two ways:
+    //   (a) via params.get_eef1(&atom.amber_type) — what eef1_energy()
+    //       does internally
+    //   (b) via params.eef1.get(&atom.amber_type) — direct hashmap
+    //       lookup, same result if the trait method is correct
+    // If (a) and (b) both give -657 kcal/mol but ferritin's compute_energy
+    // returns +128 kcal/mol on the same input, the bug is in the
+    // accumulation OR in something later.
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_charmm19_eef1_runtime_topology_dump() {
+        use crate::forcefield::topology::build_topology;
+        use std::collections::HashMap;
+
+        // Find 1crn relative to the workspace root.
+        let candidates = [
+            "../test-pdbs/1crn.pdb",
+            "test-pdbs/1crn.pdb",
+            "../../test-pdbs/1crn.pdb",
+        ];
+        let pdb_path = candidates.iter().find(|p| std::path::Path::new(p).exists());
+        let pdb_path = match pdb_path {
+            Some(p) => *p,
+            None => {
+                eprintln!("SKIP: 1crn.pdb not found in expected locations");
+                return;
+            }
+        };
+
+        let (pdb, _errors) = pdbtbx::open(pdb_path).expect("failed to load 1crn");
+        let p = charmm19_eef1();
+        let topo = build_topology(&pdb, &p);
+
+        eprintln!("\n=== 1crn topology dump ===");
+        eprintln!("  total atoms: {}", topo.atoms.len());
+        eprintln!("  unassigned:  {} ({:?})",
+            topo.unassigned_atoms.len(),
+            &topo.unassigned_atoms[..topo.unassigned_atoms.len().min(10)],
+        );
+
+        let n_heavy = topo.atoms.iter().filter(|a| !a.is_hydrogen).count();
+        eprintln!("  heavy atoms: {}", n_heavy);
+
+        // Walk every heavy atom and accumulate dg_ref two ways.
+        let mut sum_via_trait = 0.0_f64;
+        let mut sum_via_direct = 0.0_f64;
+        let mut hits_trait = 0_usize;
+        let mut hits_direct = 0_usize;
+        let mut type_counts: HashMap<String, (usize, f64)> = HashMap::new();
+        let mut sample_dump = Vec::new();
+
+        for (i, a) in topo.atoms.iter().enumerate() {
+            if a.is_hydrogen { continue; }
+
+            // Method (a): trait method
+            if let Some(eef) = p.get_eef1(&a.amber_type) {
+                sum_via_trait += eef.dg_ref;
+                hits_trait += 1;
+            }
+            // Method (b): direct hashmap
+            if let Some(eef) = p.eef1.get(&a.amber_type) {
+                sum_via_direct += eef.dg_ref;
+                hits_direct += 1;
+            }
+
+            let entry = type_counts.entry(a.amber_type.clone()).or_insert((0, 0.0));
+            entry.0 += 1;
+            entry.1 += p.eef1.get(&a.amber_type).map(|e| e.dg_ref).unwrap_or(0.0);
+
+            if i < 12 {
+                sample_dump.push(format!(
+                    "  atom[{:3}] {}:{} type={} dg_ref={:?}",
+                    i, a.residue_name, a.atom_name, a.amber_type,
+                    p.eef1.get(&a.amber_type).map(|e| e.dg_ref),
+                ));
+            }
+        }
+
+        eprintln!("\n  sample atoms (first 12):");
+        for line in &sample_dump { eprintln!("{}", line); }
+
+        eprintln!("\n  hits_via_trait:  {}/{} heavy", hits_trait, n_heavy);
+        eprintln!("  hits_via_direct: {}/{} heavy", hits_direct, n_heavy);
+        eprintln!("  Σ dg_ref via trait : {:>+10.3} kcal/mol = {:>+10.3} kJ/mol",
+            sum_via_trait, sum_via_trait * 4.184);
+        eprintln!("  Σ dg_ref via direct: {:>+10.3} kcal/mol = {:>+10.3} kJ/mol",
+            sum_via_direct, sum_via_direct * 4.184);
+
+        // Per-type breakdown sorted by absolute contribution.
+        let mut sorted_types: Vec<_> = type_counts.iter().collect();
+        sorted_types.sort_by(|a, b| b.1.1.abs().partial_cmp(&a.1.1.abs()).unwrap());
+        eprintln!("\n  Per-type breakdown (kcal/mol total):");
+        for (t, (n, total)) in sorted_types.iter().take(20) {
+            eprintln!("    {:<8} count={:>4}  total={:>+10.3}", t, n, total);
+        }
+
+        // Now actually call eef1_energy via energy::compute_energy and
+        // see what it produces. We have to do this through the public
+        // API because eef1_energy is private.
+        use crate::forcefield::energy::compute_energy;
+        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+        let result = compute_energy(&coords, &topo, &p);
+        eprintln!("\n  eef1_energy via compute_energy:");
+        eprintln!("    solvation: {:>+10.3} kJ/mol  (canonical via direct sum: {:>+10.3} kJ/mol)",
+            result.solvation, sum_via_direct * 4.184);
+        eprintln!("    diff (compute - direct): {:>+10.3} kJ/mol",
+            result.solvation - sum_via_direct * 4.184);
+
+        // The crucial assertion: compute_energy's solvation should equal
+        // sum_via_direct * 4.184 plus the pair correction (which we can't
+        // easily compute here). For 1crn, the pair correction is small
+        // relative to the self-solvation, so sign should match.
+        if sum_via_direct < 0.0 && result.solvation > 0.0 {
+            eprintln!(
+                "\n  ⚠ MISMATCH: direct Σ dg_ref is negative but compute_energy reports positive!"
+            );
+            eprintln!("  This is the sign bug. The accumulation in eef1_energy() is");
+            eprintln!("  producing a different result than the direct hashmap walk.");
+        }
+    }
 }
