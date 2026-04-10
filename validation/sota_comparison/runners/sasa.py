@@ -245,7 +245,15 @@ if _FREESASA_OK:
             "hetatm": True,          # include HETATM to match ferritin
             "hydrogen": False,       # ferritin-loaded crystal files have no H
             "join-models": False,    # first model only, same as ferritin
-            "skip-unknown": False,
+            # skip-unknown: skip atoms that freesasa can't classify instead
+            # of trying to include them as generic atoms. Without this,
+            # freesasa segfaults in C on PDBs containing e.g. cobalt,
+            # uranium, or exotic heme variants (we hit this on 1 of 100
+            # sampled PDBs from the 50K corpus). skip-unknown causes a
+            # small atom-count drift vs ferritin on HETATM-heavy
+            # structures, but the per-residue agreement on standard
+            # protein atoms stays intact.
+            "skip-unknown": True,
             "halt-at-unknown": False,
         }
         classifier = _freesasa.Classifier.getStandardClassifier("protor")
