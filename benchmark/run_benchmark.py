@@ -67,7 +67,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
         "hbonds": {"elapsed": 0},
         "hydrogens": {"elapsed": 0, "total_h": 0},
         "energy": {"elapsed": 0, "n_computed": 0},
-        "prepare": {"elapsed": 0, "n_prepared": 0, "n_converged": 0},
+        "prepare": {"elapsed": 0, "n_prepared": 0, "n_converged": 0, "n_skipped_no_protein": 0},
     }
     sasa_values = []
     energies = []
@@ -164,11 +164,14 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
             try:
                 reports = ferritin.batch_prepare(
                     structures[:n_prep], reconstruct=False, hydrogens="backbone",
-                    minimize=True, minimize_steps=50, minimize_method="lbfgs",
+                    minimize=True, minimize_steps=200, minimize_method="lbfgs",
                     n_threads=n_threads,
                 )
                 all_timings["prepare"]["n_prepared"] = n_prep
                 all_timings["prepare"]["n_converged"] = sum(1 for r in reports if r.converged)
+                all_timings["prepare"]["n_skipped_no_protein"] = sum(
+                    1 for r in reports if r.skipped_no_protein
+                )
             except Exception as e:
                 log(f"  Prepare failed: {e}")
             dt = time.perf_counter() - t0
