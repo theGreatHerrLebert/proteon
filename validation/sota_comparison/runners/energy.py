@@ -99,7 +99,7 @@ if _FERRITIN_OK:
         # internally (verified in ferritin-connector/src/py_forcefield.rs).
         result = _ferritin.minimize_hydrogens(
             s,
-            max_steps=500,
+            max_steps=2000,  # 1crn hit the 500-step cap without converging
             gradient_tolerance=0.1,
             method="lbfgs",
             units="kJ/mol",
@@ -269,7 +269,7 @@ if _OPENMM_OK:
 
         try:
             _openmm.LocalEnergyMinimizer.minimize(
-                context, tolerance=0.1, maxIterations=500
+                context, tolerance=0.1, maxIterations=2000
             )
         except Exception as e:
             return RunnerResult(

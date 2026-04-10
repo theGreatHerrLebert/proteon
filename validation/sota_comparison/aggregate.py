@@ -152,6 +152,18 @@ def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dic
     """
     out: Dict[str, dict] = {}
 
+    # Atom-count diff: a non-zero value here is the single most likely
+    # explanation for energy disagreements, because it usually means the
+    # two tools placed different numbers of H atoms on terminal residues
+    # (different protonation states -> different charges).
+    a_atoms = ferritin_payload.get("n_atoms_after_h")
+    b_atoms = other_payload.get("n_atoms_after_h")
+    if a_atoms is not None and b_atoms is not None and a_atoms >= 0 and b_atoms >= 0:
+        out["_n_atoms_diff"] = {
+            "value": a_atoms - b_atoms,
+            "band": "INFO",
+        }
+
     # Total
     out["total_pct_diff"] = {
         "value": _pct_diff(ferritin_payload.get("total"), other_payload.get("total")),
