@@ -252,6 +252,164 @@ COMPARATORS = {
 
 
 # ---------------------------------------------------------------------------
+# Distribution statistics (for runs with N >> 6 PDBs)
+# ---------------------------------------------------------------------------
+#
+# At ≥100 PDBs the per-structure table becomes unreadable, and at 10K it's
+# useless. The distribution mode collapses each metric across all PDBs in
+# an (op, impl) section into mean/median/p50/p90/p99/max/min/std plus a
+# top-K outlier list (worst PDBs per metric, ranked by the metric's
+# "wrong direction"). Trigger threshold is configurable but defaults to
+# auto-switch when n_pdbs > 20.
+
+# Default outlier list size. Captures the worst 20 PDBs per metric — small
+# enough to read in a terminal, large enough to spot patterns in the tail.
+_DEFAULT_OUTLIER_TOP_K = 20
+
+# Auto-switch threshold: per-PDB table at or below this many structures,
+# distribution summary above. Picked at the boundary where a markdown
+# table becomes hard to scan in a terminal.
+_DEFAULT_AUTO_DISTRIBUTION_THRESHOLD = 20
+
+
+def _is_lower_better(metric_name: str) -> bool:
+    """Whether 'better' for `metric_name` means smaller values.
+
+    Heuristic: agreement metrics like Pearson r are higher-is-better;
+    everything else (percent diffs, RMSDs) is lower-is-better. Currently
+    only `*pearson*` and `*_r2*` are higher-is-better. If this list grows,
+    consider an explicit registry instead.
+    """
+    if "pearson" in metric_name or "_r2" in metric_name:
+        return False
+    return True
+
+
+def _percentile(sorted_values: list, p: float) -> float:
+    """Linear-interpolation percentile of an already-sorted list.
+
+    Matches numpy's default `linear` interpolation. Returns nan on empty.
+    """
+    if not sorted_values:
+        return float("nan")
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    rank = (len(sorted_values) - 1) * (p / 100.0)
+    lo = int(rank)
+    hi = lo + 1
+    if hi >= len(sorted_values):
+        return float(sorted_values[-1])
+    frac = rank - lo
+    return float(sorted_values[lo] * (1.0 - frac) + sorted_values[hi] * frac)
+
+
+def _summarize_values(values: list) -> dict:
+    """Compute distribution statistics for a list of metric values.
+
+    Drops NaN/None silently. Returns nan-filled stats when fewer than 1
+    values remain after filtering.
+    """
+    clean = [
+        float(v) for v in values
+        if v is not None and not (isinstance(v, float) and math.isnan(v))
+    ]
+    n_dropped = len(values) - len(clean)
+    if not clean:
+        return {
+            "n": 0,
+            "n_dropped": n_dropped,
+            "mean": float("nan"),
+            "median": float("nan"),
+            "p50": float("nan"),
+            "p90": float("nan"),
+            "p99": float("nan"),
+            "min": float("nan"),
+            "max": float("nan"),
+            "std": float("nan"),
+        }
+    s = sorted(clean)
+    n = len(s)
+    mean = sum(s) / n
+    if n >= 2:
+        var = sum((x - mean) ** 2 for x in s) / (n - 1)
+        std = math.sqrt(var)
+    else:
+        std = float("nan")
+    return {
+        "n": n,
+        "n_dropped": n_dropped,
+        "mean": mean,
+        "median": _percentile(s, 50.0),
+        "p50": _percentile(s, 50.0),
+        "p90": _percentile(s, 90.0),
+        "p99": _percentile(s, 99.0),
+        "min": float(s[0]),
+        "max": float(s[-1]),
+        "std": std,
+    }
+
+
+def _collect_distribution(impl_section: dict) -> dict:
+    """Walk impl_section['by_pdb'] and compute per-metric distribution stats.
+
+    Returns:
+        {
+            "metric_name": {<stats dict from _summarize_values>},
+            ...
+        }
+    Excludes metric keys starting with '_' (those are INFO-only sidecar
+    fields like _n_atoms_diff that don't have a band).
+    """
+    by_metric: Dict[str, list] = defaultdict(list)
+    for pdb_section in impl_section["by_pdb"].values():
+        metrics = pdb_section.get("metrics", {})
+        for k, v in metrics.items():
+            if k.startswith("_"):
+                continue
+            by_metric[k].append(v.get("value"))
+    return {k: _summarize_values(vs) for k, vs in by_metric.items()}
+
+
+def _collect_outliers(impl_section: dict, top_k: int = _DEFAULT_OUTLIER_TOP_K) -> dict:
+    """For each metric, return the top-k WORST PDBs.
+
+    "Worst" is direction-aware: for lower-is-better metrics (e.g.
+    pct_diff, RMSD), the worst are the largest values; for higher-is-
+    better (e.g. Pearson r), the worst are the smallest values.
+
+    Returns:
+        {
+            "metric_name": [
+                {"pdb_id": "1abc", "value": 167.12, "band": "FAIL"},
+                ...
+            ],
+            ...
+        }
+    """
+    by_metric: Dict[str, list] = defaultdict(list)
+    for pdb_id, pdb_section in impl_section["by_pdb"].items():
+        metrics = pdb_section.get("metrics", {})
+        for k, v in metrics.items():
+            if k.startswith("_"):
+                continue
+            value = v.get("value")
+            if value is None or (isinstance(value, float) and math.isnan(value)):
+                continue
+            by_metric[k].append({
+                "pdb_id": pdb_id,
+                "value": float(value),
+                "band": v.get("band", "INFO"),
+            })
+
+    out: Dict[str, list] = {}
+    for k, entries in by_metric.items():
+        reverse = _is_lower_better(k)  # lower-better → biggest values are worst
+        entries.sort(key=lambda e: e["value"], reverse=reverse)
+        out[k] = entries[:top_k]
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
@@ -333,6 +491,11 @@ def aggregate(records: List[dict]) -> dict:
                         global_totals[band] += 1
             impl_section["n_pdbs"] = len(impl_section["by_pdb"])
             impl_section["totals"] = dict(band_counts)
+            # Distribution stats and outliers always computed; the
+            # renderer decides whether to show them based on n_pdbs.
+            # Cheap to compute even at 10K (sorted-list percentiles).
+            impl_section["distribution"] = _collect_distribution(impl_section)
+            impl_section["outliers"] = _collect_outliers(impl_section)
             op_section["by_impl"][other] = impl_section
         by_op[op] = op_section
 
@@ -362,7 +525,116 @@ def _fmt_value(v: float) -> str:
     return f"{v:.4f}"
 
 
-def render_markdown(summary: dict, n_records: int) -> str:
+def _render_per_pdb_table(impl_section: dict) -> List[str]:
+    """Render the original per-PDB table. Used in 'table' mode (small N)."""
+    lines: List[str] = []
+    metric_names: List[str] = []
+    for pdb_section in impl_section["by_pdb"].values():
+        for k in pdb_section.get("metrics", {}).keys():
+            if not k.startswith("_") and k not in metric_names:
+                metric_names.append(k)
+    if not metric_names:
+        lines.append("_No successful comparisons._")
+        lines.append("")
+        return lines
+    header = "| PDB | " + " | ".join(metric_names) + " |"
+    sep = "|" + "|".join(["---"] * (len(metric_names) + 1)) + "|"
+    lines.append(header)
+    lines.append(sep)
+    for pid in sorted(impl_section["by_pdb"]):
+        row = impl_section["by_pdb"][pid]
+        metrics = row.get("metrics", {})
+        if not metrics:
+            err = row.get("ferritin_error") or row.get("other_error") or "skipped"
+            cell = f"_{err}_"
+            lines.append(f"| {pid} | " + " | ".join([cell] * len(metric_names)) + " |")
+            continue
+        cells = []
+        for m in metric_names:
+            if m not in metrics:
+                cells.append("—")
+                continue
+            v = metrics[m]["value"]
+            band = metrics[m]["band"]
+            cells.append(f"{_band_emoji(band)} {_fmt_value(v)}")
+        lines.append(f"| {pid} | " + " | ".join(cells) + " |")
+    lines.append("")
+    return lines
+
+
+def _render_distribution(impl_section: dict, top_k: int) -> List[str]:
+    """Render the distribution-stats table + outlier list. Large-N mode."""
+    lines: List[str] = []
+    distribution = impl_section.get("distribution", {})
+    outliers = impl_section.get("outliers", {})
+    if not distribution:
+        lines.append("_No successful comparisons._")
+        lines.append("")
+        return lines
+
+    # Distribution table: rows = metrics, cols = stats. Same metric order
+    # the per-PDB table would have used (insertion order from by_pdb).
+    metric_names: List[str] = []
+    for pdb_section in impl_section["by_pdb"].values():
+        for k in pdb_section.get("metrics", {}).keys():
+            if not k.startswith("_") and k not in metric_names:
+                metric_names.append(k)
+
+    lines.append("**Distribution per metric** (n = number of valid pairs after filtering NaN):")
+    lines.append("")
+    lines.append("| metric | n | mean | median | p90 | p99 | max | std | direction |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
+    for m in metric_names:
+        stats = distribution.get(m)
+        if stats is None:
+            continue
+        direction = "↓" if _is_lower_better(m) else "↑"
+        lines.append(
+            f"| {m} | {stats['n']} | {_fmt_value(stats['mean'])} | "
+            f"{_fmt_value(stats['median'])} | {_fmt_value(stats['p90'])} | "
+            f"{_fmt_value(stats['p99'])} | {_fmt_value(stats['max'])} | "
+            f"{_fmt_value(stats['std'])} | {direction} |"
+        )
+    lines.append("")
+
+    # Outlier lists per metric. Compact format: a small section per metric
+    # with the worst K PDBs ranked by direction.
+    any_outliers = any(outliers.get(m) for m in metric_names)
+    if any_outliers:
+        lines.append(f"**Top-{top_k} outliers per metric** (worst values first):")
+        lines.append("")
+        for m in metric_names:
+            entries = outliers.get(m, [])
+            if not entries:
+                continue
+            direction = "lowest" if not _is_lower_better(m) else "highest"
+            lines.append(f"_{m}_ (worst = {direction})")
+            lines.append("")
+            lines.append("| rank | pdb | value | band |")
+            lines.append("|---|---|---|---|")
+            for i, e in enumerate(entries, start=1):
+                lines.append(
+                    f"| {i} | {e['pdb_id']} | {_fmt_value(e['value'])} | "
+                    f"{_band_emoji(e['band'])} {e['band']} |"
+                )
+            lines.append("")
+    return lines
+
+
+def render_markdown(
+    summary: dict,
+    n_records: int,
+    summary_mode: str = "auto",
+    auto_threshold: int = _DEFAULT_AUTO_DISTRIBUTION_THRESHOLD,
+    outlier_top_k: int = _DEFAULT_OUTLIER_TOP_K,
+) -> str:
+    """Render the report.
+
+    summary_mode:
+        "table"        — always use the per-PDB table (small N or v1 reports)
+        "distribution" — always use distribution stats + outliers (10K runs)
+        "auto"         — switch based on n_pdbs vs auto_threshold (default)
+    """
     lines = ["# SOTA Comparison Report", ""]
     totals = summary["global_totals"]
     lines.append(
@@ -371,6 +643,18 @@ def render_markdown(summary: dict, n_records: int) -> str:
         f"FAIL={totals.get('FAIL', 0)} errored={totals.get('errored_pairs', 0)}"
     )
     lines.append("")
+
+    use_distribution = (
+        summary_mode == "distribution"
+        or (summary_mode == "auto" and summary["n_pdbs"] > auto_threshold)
+    )
+    if use_distribution:
+        lines.append(
+            f"_Mode: distribution (n_pdbs={summary['n_pdbs']} > "
+            f"auto_threshold={auto_threshold} or explicit). Use "
+            f"`--summary-mode table` for the per-PDB layout._"
+        )
+        lines.append("")
 
     for op, op_section in summary["by_op"].items():
         lines.append(f"## {op}")
@@ -384,39 +668,10 @@ def render_markdown(summary: dict, n_records: int) -> str:
                 f"FAIL={t.get('FAIL', 0)}"
             )
             lines.append("")
-            # Build a per-pdb table
-            # First, collect the metric names from any successful comparison.
-            metric_names: List[str] = []
-            for pdb_section in impl_section["by_pdb"].values():
-                for k in pdb_section.get("metrics", {}).keys():
-                    if not k.startswith("_") and k not in metric_names:
-                        metric_names.append(k)
-            if not metric_names:
-                lines.append("_No successful comparisons._")
-                lines.append("")
-                continue
-            header = "| PDB | " + " | ".join(metric_names) + " |"
-            sep = "|" + "|".join(["---"] * (len(metric_names) + 1)) + "|"
-            lines.append(header)
-            lines.append(sep)
-            for pid in sorted(impl_section["by_pdb"]):
-                row = impl_section["by_pdb"][pid]
-                metrics = row.get("metrics", {})
-                if not metrics:
-                    err = row.get("ferritin_error") or row.get("other_error") or "skipped"
-                    cell = f"_{err}_"
-                    lines.append(f"| {pid} | " + " | ".join([cell] * len(metric_names)) + " |")
-                    continue
-                cells = []
-                for m in metric_names:
-                    if m not in metrics:
-                        cells.append("—")
-                        continue
-                    v = metrics[m]["value"]
-                    band = metrics[m]["band"]
-                    cells.append(f"{_band_emoji(band)} {_fmt_value(v)}")
-                lines.append(f"| {pid} | " + " | ".join(cells) + " |")
-            lines.append("")
+            if use_distribution:
+                lines.extend(_render_distribution(impl_section, outlier_top_k))
+            else:
+                lines.extend(_render_per_pdb_table(impl_section))
     return "\n".join(lines)
 
 
@@ -428,6 +683,35 @@ def main() -> int:
                         help="Also write the summary as JSON to this path")
     parser.add_argument("--strict", action="store_true",
                         help="Exit non-zero if any metric is FAIL")
+    parser.add_argument(
+        "--summary-mode",
+        choices=("auto", "table", "distribution"),
+        default="auto",
+        help=(
+            "How to render per-(op, impl) sections. 'table' is the original "
+            "per-PDB markdown table (good for ≤20 PDBs). 'distribution' "
+            "shows mean/median/p90/p99/max/std plus a top-K outlier list "
+            "(good for ≥100 PDBs). 'auto' (default) picks based on n_pdbs."
+        ),
+    )
+    parser.add_argument(
+        "--auto-threshold",
+        type=int,
+        default=_DEFAULT_AUTO_DISTRIBUTION_THRESHOLD,
+        help=(
+            "When --summary-mode=auto, switch to distribution mode if "
+            f"n_pdbs > this value. Default: {_DEFAULT_AUTO_DISTRIBUTION_THRESHOLD}."
+        ),
+    )
+    parser.add_argument(
+        "--outlier-top-k",
+        type=int,
+        default=_DEFAULT_OUTLIER_TOP_K,
+        help=(
+            "How many worst-PDB outliers to list per metric in distribution "
+            f"mode. Default: {_DEFAULT_OUTLIER_TOP_K}."
+        ),
+    )
     args = parser.parse_args()
 
     with open(args.results_json) as f:
@@ -435,7 +719,13 @@ def main() -> int:
     records = data.get("records", [])
     summary = aggregate(records)
 
-    md = render_markdown(summary, n_records=len(records))
+    md = render_markdown(
+        summary,
+        n_records=len(records),
+        summary_mode=args.summary_mode,
+        auto_threshold=args.auto_threshold,
+        outlier_top_k=args.outlier_top_k,
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(md)
     print(f"Wrote {args.output}", file=sys.stderr)
