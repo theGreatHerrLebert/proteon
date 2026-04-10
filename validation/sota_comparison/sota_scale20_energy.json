@@ -1,0 +1,951 @@
+{
+  "meta": {
+    "pdb_dir": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k",
+    "n_pdbs": 20,
+    "n_ops": 1,
+    "wall_s": 387.7551120279968,
+    "import_failures": {}
+  },
+  "records": [
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1ae7",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1ae7.pdb",
+      "elapsed_s": 363.44221360400843,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 287327.799155158,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 552.6142895289536,
+          "angle_bend": 1840.9157840068897,
+          "torsion": 2854.9745170005053,
+          "improper_torsion": 2.150325385215671,
+          "vdw": 238952.23183632098,
+          "electrostatic": 43124.912402915485,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 1808,
+        "minimizer_steps": 384,
+        "minimizer_converged": true,
+        "initial_energy": 2557253.1012157006
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1dhn",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1dhn.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 55026.55132334872,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 318.5044537957142,
+          "angle_bend": 1378.9368052616223,
+          "torsion": 2599.861929473844,
+          "improper_torsion": 1.3610099822957666,
+          "vdw": -2408.9457260903687,
+          "electrostatic": 53136.83285092561,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 1929,
+        "minimizer_steps": 852,
+        "minimizer_converged": true,
+        "initial_energy": 2715158.539019984
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1gqa",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1gqa.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 81174.19307417203,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 1246.4663660988012,
+          "angle_bend": 2455.8000224619204,
+          "torsion": 5500.497199888101,
+          "improper_torsion": 4.043347127805022,
+          "vdw": -4052.081640016179,
+          "electrostatic": 76019.46777861156,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 3718,
+        "minimizer_steps": 998,
+        "minimizer_converged": true,
+        "initial_energy": 4808694.484069574
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1iab",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1iab.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 77255.15060368563,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 713.1915779123382,
+          "angle_bend": 2120.339625466941,
+          "torsion": 4701.316802516282,
+          "improper_torsion": 20.754356414197712,
+          "vdw": -4119.210972910489,
+          "electrostatic": 73818.75921428636,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 3061,
+        "minimizer_steps": 766,
+        "minimizer_converged": true,
+        "initial_energy": 3600938.1702153995
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1k24",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1k24.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 107711.00960952968,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 1414.6396388650817,
+          "angle_bend": 3242.240674762812,
+          "torsion": 5349.954377690385,
+          "improper_torsion": 2.7167470087547327,
+          "vdw": -1220.4922444039937,
+          "electrostatic": 98921.95041560663,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 3907,
+        "minimizer_steps": 914,
+        "minimizer_converged": true,
+        "initial_energy": 5435302.060614373
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1n7l",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1n7l.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 19118.297926310053,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 382.4926827672584,
+          "angle_bend": 422.08425337524625,
+          "torsion": 1266.6856650226434,
+          "improper_torsion": 0.15281919927179702,
+          "vdw": 463.4125779404801,
+          "electrostatic": 16583.469928005154,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 909,
+        "minimizer_steps": 944,
+        "minimizer_converged": true,
+        "initial_energy": 1556922.5491672512
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1onp",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1onp.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 491858.21515899326,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 1961.9385085233578,
+          "angle_bend": 9091.07584155295,
+          "torsion": 18978.22321776376,
+          "improper_torsion": 13.907079185523756,
+          "vdw": -12125.838862243514,
+          "electrostatic": 473938.90937421116,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 12130,
+        "minimizer_steps": 736,
+        "minimizer_converged": true,
+        "initial_energy": 17114774.627198048
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1s1y",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1s1y.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 48906.127399187026,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 578.7924320140913,
+          "angle_bend": 1525.7978194716407,
+          "torsion": 2507.3578127221717,
+          "improper_torsion": 4.219244762044452,
+          "vdw": -2281.1947280780746,
+          "electrostatic": 46571.15481829515,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 1913,
+        "minimizer_steps": 907,
+        "minimizer_converged": true,
+        "initial_energy": 2499255.4698340455
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1yj1",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1yj1.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 126394.1919165485,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 944.5795805351906,
+          "angle_bend": 2728.816280229403,
+          "torsion": 5212.15711061249,
+          "improper_torsion": 5.2820175253264825,
+          "vdw": -4545.400566350998,
+          "electrostatic": 122048.75749399708,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 3517,
+        "minimizer_steps": 854,
+        "minimizer_converged": true,
+        "initial_energy": 5301870.020061361
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1ywy",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1ywy.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 27114.523433095244,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 103.26921635865821,
+          "angle_bend": 770.8465788003953,
+          "torsion": 1738.8913743303474,
+          "improper_torsion": 0.0017100677493250783,
+          "vdw": -405.03065961187536,
+          "electrostatic": 24906.54521314997,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 1132,
+        "minimizer_steps": 921,
+        "minimizer_converged": true,
+        "initial_energy": 1618561.8155950347
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "1zmm",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1zmm.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 39817.339041918574,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 516.2854726477758,
+          "angle_bend": 1011.269928147181,
+          "torsion": 2344.552842966162,
+          "improper_torsion": 3.1832557848980825,
+          "vdw": -1928.4262977913243,
+          "electrostatic": 37870.473840163875,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 1976,
+        "minimizer_steps": 1148,
+        "minimizer_converged": true,
+        "initial_energy": 2626646.220416262
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "2bgs",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2bgs.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 152445.9944110357,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 977.3904509908277,
+          "angle_bend": 3786.326323239894,
+          "torsion": 6862.519242455301,
+          "improper_torsion": 5.345207355903582,
+          "vdw": -6513.763955081754,
+          "electrostatic": 147328.17714207552,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 4863,
+        "minimizer_steps": 869,
+        "minimizer_converged": true,
+        "initial_energy": 6774653.687081834
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "2buq",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2buq.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 249228.21560811243,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 3080.1883705294827,
+          "angle_bend": 5651.6685034087195,
+          "torsion": 9458.711486082426,
+          "improper_torsion": 18.4348492958955,
+          "vdw": -8697.146779229866,
+          "electrostatic": 239716.35917802577,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 6926,
+        "minimizer_steps": 815,
+        "minimizer_converged": true,
+        "initial_energy": 9375139.377563644
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "2gey",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2gey.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 302188.71073642693,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 1391.2067787738642,
+          "angle_bend": 6369.428568015442,
+          "torsion": 12519.925653542085,
+          "improper_torsion": 4.884209700953769,
+          "vdw": -13216.450249672982,
+          "electrostatic": 295119.7157760676,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 9103,
+        "minimizer_steps": 804,
+        "minimizer_converged": true,
+        "initial_energy": 12577466.178229889
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "2ksa",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2ksa.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 142937.0021085985,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 2092.659817182487,
+          "angle_bend": 6065.810268953686,
+          "torsion": 9940.422024059639,
+          "improper_torsion": 40.54239449476193,
+          "vdw": 3381.659586943449,
+          "electrostatic": 121415.90801696447,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 6071,
+        "minimizer_steps": 892,
+        "minimizer_converged": true,
+        "initial_energy": 5971800.314237211
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "2kzr",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2kzr.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 34454.377292932826,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 488.48342674582125,
+          "angle_bend": 944.472688606542,
+          "torsion": 1991.4004315683455,
+          "improper_torsion": 0.62583956041891,
+          "vdw": -1987.0800531218247,
+          "electrostatic": 33016.47495957353,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 1332,
+        "minimizer_steps": 874,
+        "minimizer_converged": true,
+        "initial_energy": 2107769.382074335
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "2l34",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2l34.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 14891.379381133973,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 86.89441449470438,
+          "angle_bend": 192.85134988882538,
+          "torsion": 1284.3022201957049,
+          "improper_torsion": 0.0031275425344664356,
+          "vdw": 39.88399487808066,
+          "electrostatic": 13287.444274134124,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 986,
+        "minimizer_steps": 893,
+        "minimizer_converged": true,
+        "initial_energy": 1444496.4978268605
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "2nce",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2nce.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 61607.77884189826,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 307.34317344005837,
+          "angle_bend": 1223.8622107013766,
+          "torsion": 3031.664293725054,
+          "improper_torsion": 0.8008075037143028,
+          "vdw": -2451.9375030491997,
+          "electrostatic": 59496.04585957726,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 2287,
+        "minimizer_steps": 958,
+        "minimizer_converged": true,
+        "initial_energy": 3541236.1875135154
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "2ogw",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2ogw.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 256444.0392108333,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 2248.5941256008086,
+          "angle_bend": 5400.361394488813,
+          "torsion": 11139.241754627885,
+          "improper_torsion": 7.259051595090159,
+          "vdw": -10569.489672181526,
+          "electrostatic": 248218.07255670222,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 7826,
+        "minimizer_steps": 870,
+        "minimizer_converged": true,
+        "initial_energy": 10838907.234659785
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "ferritin",
+      "impl_version": "ferritin 0.1.0",
+      "pdb_id": "2otr",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2otr.pdb",
+      "elapsed_s": 0.0,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 35811.2740557806,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 137.6874233985999,
+          "angle_bend": 815.2739587893432,
+          "torsion": 2198.1707910621053,
+          "improper_torsion": 0.0046898735085815265,
+          "vdw": -1080.5646749812206,
+          "electrostatic": 33740.701867638265,
+          "solvation": 0.0
+        },
+        "n_atoms_after_h": 1522,
+        "minimizer_steps": 1057,
+        "minimizer_converged": true,
+        "initial_energy": 2414612.5229439726
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1ae7",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1ae7.pdb",
+      "elapsed_s": 1.8590393159975065,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -8480.891807977821,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 544.1921835365698,
+          "angle_bend": 1537.5689894778072,
+          "torsion": 2621.266633658868,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -13183.919614651068,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 1812
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1dhn",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1dhn.pdb",
+      "elapsed_s": 1.8756179560004966,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -13727.735325312753,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 307.85586640354285,
+          "angle_bend": 1117.0833594972705,
+          "torsion": 2246.5826034654515,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -17399.257154679017,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 1932
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1gqa",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1gqa.pdb",
+      "elapsed_s": 2.180964896993828,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -10269.41312664027,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 1215.21955816493,
+          "angle_bend": 2527.598941257911,
+          "torsion": 5417.034337396503,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -19429.265963459613,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 3722
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1iab",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1iab.pdb",
+      "elapsed_s": 2.065713042000425,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -15531.821836420197,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 670.385454893174,
+          "angle_bend": 1599.207970858749,
+          "torsion": 4312.842911865651,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -22114.258174037772,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 3067
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1k24",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1k24.pdb",
+      "elapsed_s": 0.22263244701025542,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 248 (PHE).  The atoms and bonds in the residue match PHE, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1n7l",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1n7l.pdb",
+      "elapsed_s": 1.68968629000301,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -4222.154831876942,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 410.635340281025,
+          "angle_bend": 512.3573085789595,
+          "torsion": 1696.7751355511373,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -6841.922616288064,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 908
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1onp",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1onp.pdb",
+      "elapsed_s": 0.6168726770119974,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 396 (ALA).  The atoms and bonds in the residue match ALA, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1s1y",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1s1y.pdb",
+      "elapsed_s": 1.8199281609995523,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -9486.455124530603,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 562.0367028560021,
+          "angle_bend": 1380.9427291997702,
+          "torsion": 2393.512487477709,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -13822.947044064085,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 1914
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1yj1",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1yj1.pdb",
+      "elapsed_s": 0.20280030400317628,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 69 (LEU).  The atoms and bonds in the residue match LEU, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1ywy",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1ywy.pdb",
+      "elapsed_s": 0.21224184200400487,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 73 (ASP).  The atoms and bonds in the residue match ASP, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "1zmm",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/1zmm.pdb",
+      "elapsed_s": 0.11551574600161985,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 30 (THR).  The atoms and bonds in the residue match THR, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "2bgs",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2bgs.pdb",
+      "elapsed_s": 0.2525309110060334,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 198 (ILE).  The set of heavy atoms matches VAL, but the residue is missing 1 H atom.  You may be able to add it with Modeller.addHydrogens().  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "2buq",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2buq.pdb",
+      "elapsed_s": 2.923456640011864,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -54592.596019260425,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 2984.5793761670734,
+          "angle_bend": 4445.635331886503,
+          "torsion": 8435.689742794513,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -70458.50047010851,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 6941
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "2gey",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2gey.pdb",
+      "elapsed_s": 0.4676827050134307,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 289 (PRO).  The atoms and bonds in the residue match PRO, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "2ksa",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2ksa.pdb",
+      "elapsed_s": 2.836661957000615,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": 8134.049477143701,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 2568.398411799236,
+          "angle_bend": 9150.935738284243,
+          "torsion": 9845.004290703218,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -13430.288963642997,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 6071
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "2kzr",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2kzr.pdb",
+      "elapsed_s": 1.818800093999016,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -8875.267331555875,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 471.71959152669285,
+          "angle_bend": 661.3657306887508,
+          "torsion": 1722.0071662297867,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -11730.359820001106,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 1331
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "2l34",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2l34.pdb",
+      "elapsed_s": 0.16140046199143399,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 32 (LEU).  The set of atoms is similar to LEU, but is missing 1 O atom.  Is the chain terminated in a way that is unsupported by the force field?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "2nce",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2nce.pdb",
+      "elapsed_s": 2.179346847013221,
+      "status": "ok",
+      "error": null,
+      "payload": {
+        "total": -11343.263208931994,
+        "units": "kJ/mol",
+        "ff": "amber96",
+        "components": {
+          "bond_stretch": 310.7381867861343,
+          "angle_bend": 1066.7041276869968,
+          "torsion": 2776.763520497458,
+          "improper_torsion": null,
+          "vdw": null,
+          "electrostatic": null,
+          "solvation": null
+        },
+        "nonbonded_total": -15497.469043902584,
+        "n_unassigned_atoms": -1,
+        "n_atoms_after_h": 2286
+      }
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "2ogw",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2ogw.pdb",
+      "elapsed_s": 0.4184051240008557,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 253 (LYS).  The atoms and bonds in the residue match LYS, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    },
+    {
+      "op": "energy",
+      "impl": "openmm",
+      "impl_version": "openmm 8.5.0.dev-b55e608",
+      "pdb_id": "2otr",
+      "pdb_path": "/globalscratch/dateschn/ferritin-benchmark/pdbs_50k/2otr.pdb",
+      "elapsed_s": 0.29599786999460775,
+      "status": "error",
+      "error": "OpenMM createSystem failed: ValueError: No template found for residue 89 (PHE).  The atoms and bonds in the residue match PHE, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+      "payload": {}
+    }
+  ]
+}

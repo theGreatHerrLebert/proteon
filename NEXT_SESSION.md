@@ -1,5 +1,137 @@
 # Next Session — Handoff Notes (2026-04-10)
 
+## Today's Session (2026-04-10 evening): Scale the SOTA harness
+
+**Goal:** Unlock 10K-scale SOTA comparison by (a) adding an `ff` parameter to
+`batch_prepare` so the NBL-cached fast minimizer path can run with AMBER96
+instead of only CHARMM19-EEF1, and (b) extending the SOTA harness with
+batched runner support so the driver can send whole PDB lists to the
+batched Rust APIs rather than iterating single-structure.
+
+**Ended:** Both infrastructure pieces committed and working. On a 6-PDB
+batched energy sweep the ferritin side is 2.5× faster than the single-
+structure path (160s vs 400s). On a 20-PDB scaling demo from the monster3
+50K corpus, ferritin batched runs in 18s/structure averaged, OpenMM
+crashes on 10/20 due to pre-existing PDB format issues (missing terminal
+caps / missing atoms) that Modeller.addHydrogens can't auto-repair.
+Remaining scaling work is documented below.
+
+### Rust + Python changes
+
+**`batch_prepare(ff="charmm19_eef1"|"amber96")`** — new parameter. The
+batch_prepare entry point dispatches on the ff string and calls a new
+generic inner function `batch_prepare_inner<F: ForceField + Sync>`. Both
+parameter sets go through the same monomorphized hot path, so there's no
+runtime dispatch overhead; the `ff` string just picks which monomorphic
+specialization gets instantiated.
+
+**Per-component energy breakdown in the result dict** — previously
+batch_prepare only returned `initial_energy` / `final_energy` (totals).
+Now the result dict has a `components` sub-dict with
+`{bond_stretch, angle_bend, torsion, improper_torsion, vdw,
+electrostatic, solvation}`, populated from the minimizer's final
+`EnergyResult`. Zero when `minimize=False` or `skipped_no_protein=True`.
+This eliminates the need for a separate `compute_energy` call after
+prepare — the SOTA energy runner reads components directly from
+PrepReport.components.
+
+**kcal/mol → kJ/mol conversion in the Python wrapper** — the Rust
+minimizer reports energies in AMBER/CHARMM-native kcal/mol. The rest
+of the ferritin Python API defaults to kJ/mol (via
+`_convert_energy_dict` in forcefield.py). Added a mirror helper
+`_convert_prep_result_to_kj` in prepare.py that touches `initial_energy`,
+`final_energy`, and every component in `components`, applied at all
+three batch_prepare call sites. Without this, `ferritin.batch_prepare`
+results were off by a factor of 4.184 from the expected kJ/mol values.
+
+### SOTA harness: batched runner infrastructure
+
+**`@register_batch(op, impl)`** decorator (in `runners/_base.py`). Keyed
+by `(op, impl)`; registered functions have signature
+`def batch_fn(pdb_paths: List[str]) -> List[RunnerResult]`. The driver
+checks `BATCH_RUNNERS.get((op, impl))` and prefers the batched runner
+when present and when there are >1 PDBs.
+
+**Batched ferritin SASA runner** (`runners/sasa.py::ferritin_batch`):
+one `batch_load_tolerant` + one `batch_total_sasa` across the whole
+PDB list. Per-residue SASA is still single-structure (cheap).
+
+**Batched ferritin energy runner**
+(`runners/energy.py::ferritin_batch`): HETATM strip per path → one
+`batch_load_tolerant` → one `batch_prepare(ff="amber96")` across the
+whole list. This is the unlock that makes scale-up feasible.
+
+**Driver fast path** (`run_all.py`): main loop now checks
+`BATCH_RUNNERS[(op, impl)]` first. When present and N>1, calls the
+batched runner once with all PDB paths. Falls back to the per-structure
+loop on error or when `--force-serial` is set.
+
+**Corpus sampler** (`sample_corpus.py`): seed-stable random sampler
+that pulls N protein-only PDBs from the monster3 50K corpus. Filters
+nucleic acids (DA/DT/DG/DC, RA/RU/RG/RC) by quick-scanning the first
+5000 ATOM lines. Writes a PDB ID list suitable for
+`run_all.py --pdbs @sample.txt`.
+
+### Measured speedup
+
+| Run | N | Wall time | Per-structure avg | Notes |
+|---|---|---|---|---|
+| v1 per-structure (pre plan B) | 6 | 398 s | 66 s | `minimize_hydrogens` single-struct path |
+| Batched, 6 clean PDBs | 6 | 160 s | 27 s | 2.5× faster, low parallelism (only 6 workers) |
+| Batched, 20 random corpus | 20 | 363 s | 18 s | better parallelism saturation, ferritin side only |
+
+Linear extrapolation to 10K with full 120-core saturation:
+~18 s/structure × 10K / 120 cores ≈ **25 minutes** for ferritin side.
+OpenMM per-structure at ~1.7 s/structure → 4.7 hours serial,
+~3 min with a multiprocessing Pool (not yet implemented).
+
+### Failure modes surfaced during scaling
+
+1. **OpenMM `createSystem` fails on ~50% of random PDBs** with errors
+   like "missing 1 C atom, is chain missing a terminal capping group?"
+   These are real format imperfections in the 50K corpus — chains
+   ending in an incomplete residue, residues with missing heavy atoms
+   that Modeller.addHydrogens can't repair. v2 fix: preprocess with
+   `Modeller.addMissingAtoms(forcefield)` before `createSystem`.
+   Alternatively, use PDBFixer.
+
+2. **FreeSASA cross-library segfault** when called downstream of a
+   ferritin batched run. Reproducible in the driver but NOT in
+   standalone freesasa loops over the same 100 PDBs. Likely a C-state
+   or GIL interaction between the two foreign libraries. Skip-unknown
+   option set but doesn't fix it. v2 fix: process isolation — run each
+   freesasa call in a `multiprocessing.Pool` worker with
+   `maxtasksperchild=1` so a crash only kills one worker.
+
+3. **LBFGS stragglers dominate batched wall time**. On 100 PDBs one
+   outlier structure took >5 minutes of CPU time, becoming the rayon
+   critical-path tail. v2 option: add progress-aware early termination
+   (e.g. "stop after N steps regardless of gradient tolerance, report
+   not-converged") so per-structure cost is bounded.
+
+### Commits (main branch)
+
+- `a3ff0be` — Add ff parameter to batch_prepare for fast AMBER96 path
+- `ff42420` — Convert batch_prepare kcal/mol → kJ/mol in the Python wrapper
+- `f93ffd0` — SOTA harness: add @register_batch + batched ferritin runners
+  + driver fast path
+- `47fc4dc` — SOTA harness: add corpus sampler + freesasa skip-unknown
+  hardening
+
+### Ship status (plan B)
+
+- ✓ `ff="amber96"` parameter works and produces correct kJ/mol output
+  matching the old `minimize_hydrogens` path exactly (total 10752 kJ/mol
+  on 1crn identical both paths)
+- ✓ Batched runners demonstrate 2.5× speedup on 6 v1 PDBs
+- ✓ Corpus sampler produces clean random samples from the 50K corpus
+- ⚠ Scaling to 100-PDB random samples surfaces cross-library robustness
+  issues that need process isolation to fix (v2 task)
+- ⚠ OpenMM pre-processing (Modeller.addMissingAtoms) needed for ~50% of
+  random PDBs (v2 task)
+
+---
+
 ## Today's Session (2026-04-10 afternoon): SOTA Comparison Harness v1
 
 **Goal:** Stand up a publication-track validation harness comparing ferritin's

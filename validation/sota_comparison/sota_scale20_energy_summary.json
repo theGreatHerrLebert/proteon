@@ -1,0 +1,396 @@
+{
+  "by_op": {
+    "energy": {
+      "by_impl": {
+        "openmm": {
+          "by_pdb": {
+            "1ae7": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": -4,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 102.95164332616424,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 1.524047812727162,
+                  "band": "PASS"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 16.478037570454507,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 8.255089355140303,
+                  "band": "WARN"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 104.6738702102959,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1dhn": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": -3,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 124.94747534630221,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 3.3433087874498786,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 18.989517486602367,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 13.633600204403711,
+                  "band": "FAIL"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 134.29919545409322,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1gqa": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": -4,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 112.65108125837075,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 2.5068312137187996,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 2.9236468010132506,
+                  "band": "WARN"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 1.5897096019547141,
+                  "band": "PASS"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 126.99732060025437,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1iab": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": -6,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 120.10457777255206,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 6.002051110091159,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 24.57774444947368,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 8.666287171274151,
+                  "band": "WARN"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 131.72797920791982,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1k24": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 248 (PHE).  The atoms and bonds in the residue match PHE, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            },
+            "1n7l": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": 1,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 122.08436571158636,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 7.357698272855859,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 21.3874491838618,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 33.9377637073669,
+                  "band": "FAIL"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 140.13591701533537,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1onp": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 396 (ALA).  The atoms and bonds in the residue match ALA, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            },
+            "1s1y": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": -1,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 119.39727316190711,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 2.8949461380796553,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 9.493727702536074,
+                  "band": "WARN"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 4.700814161950092,
+                  "band": "WARN"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 131.21011402111728,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "1yj1": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 69 (LEU).  The atoms and bonds in the residue match LEU, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            },
+            "1ywy": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 73 (ASP).  The atoms and bonds in the residue match ASP, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            },
+            "1zmm": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 30 (THR).  The atoms and bonds in the residue match THR, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            },
+            "2bgs": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 198 (ILE).  The set of heavy atoms matches VAL, but the residue is missing 1 H atom.  You may be able to add it with Modeller.addHydrogens().  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            },
+            "2buq": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": -15,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 121.90466110992107,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 3.1039982904024184,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 21.339418099182843,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 10.989136979937056,
+                  "band": "FAIL"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 130.49897873795874,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "2gey": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 289 (PRO).  The atoms and bonds in the residue match PRO, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            },
+            "2ksa": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": 0,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 94.3093465252869,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 22.733680396141647,
+                  "band": "FAIL"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 50.860896278292614,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 1.3621942945556929,
+                  "band": "PASS"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 110.76165923863923,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "2kzr": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": 1,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 125.7594768179901,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 3.431812483548461,
+                  "band": "WARN"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 29.975134414472283,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 13.554997181135253,
+                  "band": "FAIL"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 137.80402375027333,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "2l34": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 32 (LEU).  The set of atoms is similar to LEU, but is missing 1 O atom.  Is the chain terminated in a way that is unsupported by the force field?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            },
+            "2nce": {
+              "ferritin_status": "ok",
+              "other_status": "ok",
+              "metrics": {
+                "_n_atoms_diff": {
+                  "value": 1,
+                  "band": "INFO"
+                },
+                "total_pct_diff": {
+                  "value": 118.41206325266454,
+                  "band": "FAIL"
+                },
+                "bond_stretch_pct_diff": {
+                  "value": 1.1046327491435441,
+                  "band": "PASS"
+                },
+                "angle_bend_pct_diff": {
+                  "value": 12.841158231719152,
+                  "band": "FAIL"
+                },
+                "torsion_combined_pct_diff": {
+                  "value": 8.432135975042176,
+                  "band": "WARN"
+                },
+                "nonbonded_combined_pct_diff": {
+                  "value": 127.1675191187892,
+                  "band": "FAIL"
+                }
+              }
+            },
+            "2ogw": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 253 (LYS).  The atoms and bonds in the residue match LYS, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            },
+            "2otr": {
+              "ferritin_status": "ok",
+              "other_status": "error",
+              "ferritin_error": null,
+              "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 89 (PHE).  The atoms and bonds in the residue match PHE, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
+              "metrics": {}
+            }
+          },
+          "n_pdbs": 20,
+          "totals": {
+            "FAIL": 33,
+            "PASS": 4,
+            "WARN": 13
+          }
+        }
+      }
+    }
+  },
+  "global_totals": {
+    "FAIL": 33,
+    "PASS": 4,
+    "WARN": 13,
+    "errored_pairs": 10
+  },
+  "n_pdbs": 20,
+  "n_ops": 1
+}
