@@ -92,11 +92,21 @@ if _FERRITIN_OK:
         that's a v2 item.
         """
         s, _ = time_call(_ferritin.load, pdb_path)
-        # Add hydrogens via ferritin's template-based placement
-        _ferritin.place_all_hydrogens(s)
-        # Minimize H positions only, heavy atoms constrained
-        _ferritin.minimize_hydrogens(s, max_steps=500, method="lbfgs")
-        # Evaluate the resulting energy
+        # Full prepare pipeline: place_all_hydrogens + minimize_hydrogens,
+        # all in-place. strip_hydrogens=False because we loaded a heavy-only
+        # PDB (no H to strip). reconstruct=False because the test corpus
+        # doesn't have missing heavy atoms.
+        _ferritin.batch_prepare(
+            [s],
+            reconstruct=False,
+            hydrogens="all",
+            minimize=True,
+            minimize_method="lbfgs",
+            minimize_steps=500,
+            gradient_tolerance=0.1,
+            strip_hydrogens=False,
+        )
+        # Evaluate the post-minimization energy
         result, elapsed = time_call(
             _ferritin.compute_energy, s, ff="amber96", units="kJ/mol"
         )
