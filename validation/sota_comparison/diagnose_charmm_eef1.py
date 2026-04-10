@@ -59,6 +59,119 @@ COMPONENTS = (
 )
 
 
+def _find_charmm_ini():
+    """Locate ferritin-connector/data/charmm19_eef1.ini in the repo."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    # validation/sota_comparison/ → repo root → ferritin-connector/data/...
+    candidates = [
+        os.path.join(here, "..", "..", "ferritin-connector", "data", "charmm19_eef1.ini"),
+        os.path.join(here, "..", "..", "..", "ferritin-connector", "data", "charmm19_eef1.ini"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return os.path.abspath(c)
+    return None
+
+
+def _parse_charmm_ini(path):
+    """Read [ChargesAndTypeNames] and [EEF1Solvation] sections.
+
+    Returns (type_for, dg_ref_for) where:
+        type_for["ALA:N"]   == "NH1"
+        dg_ref_for["NH1"]   == -5.95   (kcal/mol)
+    """
+    type_for = {}
+    dg_ref_for = {}
+    section = None
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith(';') or line.startswith('@'):
+                continue
+            if line.startswith('ver:') or line.startswith('key:') or line.startswith('value:'):
+                continue
+            if line.startswith('['):
+                section = line.strip('[]')
+                continue
+            fields = line.split()
+            if section == "ChargesAndTypeNames" and len(fields) >= 4:
+                # ver name q type
+                name = fields[1]
+                ctype = fields[3]
+                type_for[name] = ctype
+            elif section == "EEF1Solvation" and len(fields) >= 9:
+                # ver type V dG_ref dG_free dH_ref Cp_ref sig_w R_min
+                ctype = fields[1]
+                try:
+                    dg_ref_for[ctype] = float(fields[3])
+                except ValueError:
+                    pass
+    return type_for, dg_ref_for
+
+
+def canonical_eef1_self_solvation(structure):
+    """Walk every residue:atom in `structure`, look up its CHARMM type and
+    dg_ref independently of ferritin's energy kernel, and return the
+    canonical Σ dg_ref over heavy atoms.
+
+    Returns a dict with keys: hits, misses, miss_examples, sum_kcal,
+    sum_kj, type_breakdown (sorted by absolute total contribution).
+    """
+    ini_path = _find_charmm_ini()
+    if ini_path is None:
+        return {
+            "hits": 0, "misses": 0, "miss_examples": ["<charmm19_eef1.ini not found>"],
+            "sum_kcal": 0.0, "sum_kj": 0.0, "type_breakdown": [],
+        }
+    type_for, dg_ref_for = _parse_charmm_ini(ini_path)
+
+    sum_kcal = 0.0
+    hits = 0
+    misses = 0
+    miss_examples = []
+    type_counts = {}  # ctype -> (count, total_kcal)
+
+    for residue in structure.residues:
+        rname = (residue.name or "").strip()
+        for atom in residue.atoms:
+            aname = (atom.name or "").strip()
+            element = (atom.element or "").strip().upper()
+            # eef1_energy() in ferritin skips hydrogens
+            if element in ("H", "D"):
+                continue
+            key = f"{rname}:{aname}"
+            ctype = type_for.get(key)
+            if ctype is None:
+                misses += 1
+                if len(miss_examples) < 30:
+                    miss_examples.append(f"{key} → <no type in [ChargesAndTypeNames]>")
+                continue
+            dg = dg_ref_for.get(ctype)
+            if dg is None:
+                misses += 1
+                if len(miss_examples) < 30:
+                    miss_examples.append(f"{key} → {ctype} → <no dg_ref in [EEF1Solvation]>")
+                continue
+            hits += 1
+            sum_kcal += dg
+            n, t = type_counts.get(ctype, (0, 0.0))
+            type_counts[ctype] = (n + 1, t + dg)
+
+    type_breakdown = sorted(
+        ((ct, n, t) for ct, (n, t) in type_counts.items()),
+        key=lambda r: -abs(r[2]),
+    )
+
+    return {
+        "hits": hits,
+        "misses": misses,
+        "miss_examples": miss_examples,
+        "sum_kcal": sum_kcal,
+        "sum_kj": sum_kcal * 4.184,
+        "type_breakdown": type_breakdown,
+    }
+
+
 def fmt(v):
     if v is None:
         return "None"
@@ -156,6 +269,37 @@ def main():
     print(f"  final_energy:   {r.final_energy:>+14.3f} kJ/mol")
     e_min = ferritin.compute_energy(s_min, ff="charmm19_eef1", units="kJ/mol")
     print_energy("  re-evaluated post-minimization", e_min)
+
+    # ------------------------------------------------------------------
+    # Step 3.5: canonical EEF1 expectation, computed independently
+    # of ferritin's energy kernel by reading the .ini file directly.
+    # This tells us what the correct value SHOULD be.
+    # ------------------------------------------------------------------
+    print()
+    print("=" * 70)
+    print("STEP 3.5: canonical EEF1 expectation (computed from .ini directly)")
+    print("=" * 70)
+    canonical = canonical_eef1_self_solvation(s_raw)
+    print(f"\n  This walks every residue:atom in 1crn, looks up the CHARMM type")
+    print(f"  via [ChargesAndTypeNames], looks up the dg_ref via [EEF1Solvation],")
+    print(f"  and sums. Bypasses ferritin's energy kernel completely.\n")
+    print(f"  hits   (atom found in both tables):  {canonical['hits']}")
+    print(f"  misses (atom not found / no dg_ref): {canonical['misses']}")
+    print(f"  expected Σ dg_ref: {canonical['sum_kcal']:>+12.3f} kcal/mol")
+    print(f"  expected Σ dg_ref: {canonical['sum_kj']:>+12.3f} kJ/mol")
+    print(f"  ferritin actual:   {e_raw['solvation']:>+12.3f} kJ/mol")
+    diff = e_raw['solvation'] - canonical['sum_kj']
+    print(f"  difference (ferritin - canonical): {diff:>+12.3f} kJ/mol")
+    print()
+    if canonical['miss_examples']:
+        print("  Sample missed atoms (first 10):")
+        for ex in canonical['miss_examples'][:10]:
+            print(f"    {ex}")
+    print()
+    if canonical['type_breakdown']:
+        print("  Top contributing atom types (kcal/mol total):")
+        for t, n, total in canonical['type_breakdown'][:15]:
+            print(f"    {t:<8} count={n:>4}  total={total:>+10.3f} kcal/mol")
 
     # ------------------------------------------------------------------
     # Step 4: comparison with raw AMBER96 on the same input (sanity)
