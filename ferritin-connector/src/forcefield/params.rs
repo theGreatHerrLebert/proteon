@@ -833,8 +833,48 @@ mod tests {
             eprintln!(
                 "\n  ⚠ MISMATCH: direct Σ dg_ref is negative but compute_energy reports positive!"
             );
-            eprintln!("  This is the sign bug. The accumulation in eef1_energy() is");
-            eprintln!("  producing a different result than the direct hashmap walk.");
+            eprintln!("  EEF1 pair correction is +{:.1} kcal/mol, dominating self-solvation.",
+                result.solvation - sum_via_direct);
+            eprintln!("  Either the formula is wrong (verified against BALL — it's not)");
+            eprintln!("  OR ferritin is summing more than just self+pair (also unlikely)");
+            eprintln!("  OR the canonical L&K answer for 1crn is genuinely positive.");
+        }
+
+        // Dump all components and the suspect LJ + bond lookups
+        eprintln!("\n  All energy components on 1crn (raw, no H, no minimize):");
+        eprintln!("    bond_stretch    = {:>+12.3} kcal/mol", result.bond_stretch);
+        eprintln!("    angle_bend      = {:>+12.3} kcal/mol", result.angle_bend);
+        eprintln!("    torsion         = {:>+12.3} kcal/mol", result.torsion);
+        eprintln!("    improper_torsion= {:>+12.3} kcal/mol", result.improper_torsion);
+        eprintln!("    vdw             = {:>+12.3} kcal/mol", result.vdw);
+        eprintln!("    electrostatic   = {:>+12.3} kcal/mol", result.electrostatic);
+        eprintln!("    solvation       = {:>+12.3} kcal/mol", result.solvation);
+        eprintln!("    total           = {:>+12.3} kcal/mol", result.total);
+
+        // Suspect: are the LJ params populated for CHARMM atom types?
+        eprintln!("\n  LJ parameter lookups for CHARMM atom types:");
+        for ctype in &[
+            "NH1", "CH1E", "CH2E", "CH3E", "C", "CR", "CT", "O", "OC", "OH1", "S",
+        ] {
+            match p.get_lj(ctype) {
+                Some(lj) => eprintln!("    {:<6} r={:>7.4} eps={:>7.4}", ctype, lj.r, lj.epsilon),
+                None => eprintln!("    {:<6} <NOT IN lj hashmap>", ctype),
+            }
+        }
+
+        // And the bond / angle params
+        eprintln!("\n  Bond parameter lookups for CHARMM atom-type pairs:");
+        for (a, b) in &[
+            ("CH1E", "C"),
+            ("C", "O"),
+            ("C", "NH1"),
+            ("CH1E", "CH3E"),
+            ("CH1E", "NH1"),
+        ] {
+            match p.get_bond(a, b) {
+                Some(bp) => eprintln!("    {:<6}-{:<6}  k={:>7.2} r0={:>6.4}", a, b, bp.k, bp.r0),
+                None => eprintln!("    {:<6}-{:<6}  <NOT IN bonds hashmap>", a, b),
+            }
         }
     }
 }
