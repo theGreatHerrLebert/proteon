@@ -73,21 +73,30 @@ if _FERRITIN_OK:
 
     @register("energy", "ferritin")
     def ferritin(pdb_path: str) -> RunnerResult:
-        """Compute AMBER96 energy via ferritin.compute_energy.
+        """Compute AMBER96 energy via ferritin.compute_energy after H placement
+        and hydrogen minimization.
 
-        Loads the structure and places all standard hydrogens via
-        `place_all_hydrogens()` before computing the energy. H placement
-        is required because AMBER96 parameterizes H atoms; a heavy-only
-        input gives nonsensical energies.
+        The pipeline: load → place_all_hydrogens → minimize_hydrogens (LBFGS,
+        heavy atoms constrained) → compute_energy(ff="amber96"). Minimization
+        is required because `place_all_hydrogens()` alone produces template-
+        placed H positions that can have steric clashes; without relaxation
+        the vdw term blows up (we saw ferritin.vdw = 782,514 kJ/mol on a
+        non-minimized 1crn — 150× larger than OpenMM's nonbonded total).
 
-        The same H placement step is performed by the OpenMM runner (via
-        Modeller.addHydrogens), keeping both runners on comparable atom
-        sets for the FF-to-FF comparison. Returns kJ/mol (ferritin's
-        default unit).
+        Hydrogen-only minimization matches what the OpenMM runner does on
+        its side (LocalEnergyMinimizer on the Modeller-added H atoms only).
+        Both stacks evaluate the FF at each tool's local min for the
+        corresponding H placement algorithm — this measures "FF + H
+        placement + minimizer agreement", not pure FF agreement. For a
+        pure-FF comparison we would need a shared minimized input PDB;
+        that's a v2 item.
         """
         s, _ = time_call(_ferritin.load, pdb_path)
-        # Add hydrogens in place — matches OpenMM runner's Modeller.addHydrogens
+        # Add hydrogens via ferritin's template-based placement
         _ferritin.place_all_hydrogens(s)
+        # Minimize H positions only, heavy atoms constrained
+        _ferritin.minimize_hydrogens(s, max_steps=500, method="lbfgs")
+        # Evaluate the resulting energy
         result, elapsed = time_call(
             _ferritin.compute_energy, s, ff="amber96", units="kJ/mol"
         )
@@ -195,8 +204,14 @@ if _OPENMM_OK:
         # AMBER96 requires hydrogens on every standard residue. The input
         # PDBs are heavy-atom only, so add H via Modeller.addHydrogens
         # before building the System. The ferritin runner does the same
-        # via place_all_hydrogens() — both stacks see the same atom set
-        # for the FF-to-FF comparison.
+        # via place_all_hydrogens() — both stacks see the same atom set.
+        #
+        # We then run LocalEnergyMinimizer with heavy atoms frozen to relax
+        # the placed H positions, mirroring ferritin's minimize_hydrogens()
+        # step. Without this the raw Modeller H placements have the same
+        # kind of residual clashes that ferritin's template placement has,
+        # and the FF evaluation is dominated by them rather than the
+        # actual interaction energies we want to compare.
         try:
             forcefield = _openmm_app.ForceField("amber96.xml")
             modeller = _openmm_app.Modeller(pdb.topology, pdb.positions)
@@ -232,6 +247,29 @@ if _OPENMM_OK:
             context = _openmm.Context(system, integrator)
 
         context.setPositions(modeller.positions)
+
+        # Freeze heavy atoms and minimize H positions only. Mirrors
+        # ferritin.minimize_hydrogens(): mass=0 is OpenMM's idiom for
+        # "don't move this particle" during minimization.
+        for i, atom in enumerate(modeller.topology.atoms()):
+            if atom.element is None or atom.element.symbol != "H":
+                system.setParticleMass(i, 0.0)
+        # Re-initialize the context after changing masses.
+        context.reinitialize(preserveState=True)
+
+        try:
+            _openmm.LocalEnergyMinimizer.minimize(
+                context, tolerance=0.1, maxIterations=500
+            )
+        except Exception as e:
+            return RunnerResult(
+                op="energy", impl="openmm", impl_version=_OPENMM_VERSION,
+                pdb_id="", pdb_path=pdb_path,
+                elapsed_s=_time.perf_counter() - t0,
+                status="error",
+                error=f"OpenMM LocalEnergyMinimizer failed: {type(e).__name__}: {e}",
+                payload={},
+            )
 
         # Per-group energies
         group_energies = {}
