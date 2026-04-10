@@ -306,6 +306,20 @@ except ImportError:
     _OPENMM_OK = False
     _OPENMM_VERSION = ""
 
+# pdbfixer is the standard OpenMM companion for repairing PDB heavy-atom
+# defects (incomplete terminal residues, truncated sidechains, MSE etc).
+# Imported separately so the runner degrades gracefully (no repair, will
+# skip on createSystem failure) in environments where pdbfixer isn't
+# available. Strongly recommended in sota_venv: see P1a in the
+# 2026-04-10 NEXT_SESSION arc — without it 10/20 structures on the
+# scaling demo failed createSystem.
+try:
+    from pdbfixer import PDBFixer as _PDBFixer
+    _PDBFIXER_OK = True
+except ImportError:
+    _PDBFIXER_OK = False
+    _PDBFixer = None  # type: ignore
+
 
 if _OPENMM_OK:
 
@@ -335,30 +349,66 @@ if _OPENMM_OK:
         # templates for water / ligands, so createSystem fails if they are
         # present. Matches the ferritin runner's _strip_hetatm step.
         clean_path = _strip_hetatm_to_tempfile(pdb_path)
-        try:
-            pdb = _openmm_app.PDBFile(clean_path)
-        except Exception as e:
-            return RunnerResult(
-                op="energy", impl="openmm", impl_version=_OPENMM_VERSION,
-                pdb_id="", pdb_path=pdb_path,
-                elapsed_s=_time.perf_counter() - t0,
-                status="error",
-                error=f"OpenMM PDBFile load failed: {type(e).__name__}: {e}",
-                payload={},
-            )
+
+        # P1a v2: PDBFixer repairs real PDB imperfections (incomplete
+        # terminal residues, truncated sidechains, nonstandard residues
+        # like MSE) BEFORE OpenMM tries to assign templates. On the 20-PDB
+        # scaling demo without this step, 10/20 structures failed
+        # createSystem with "set of externally bonded atoms is missing
+        # 1 C atom". Those are real PDB format issues, not a ferritin
+        # bug, and addMissingAtoms repairs them in place using AMBER's
+        # template geometry.
+        #
+        # IMPORTANT: we call findMissingResidues() then immediately clear
+        # fixer.missingResidues = {}. PDBFixer normally tries to add gap-
+        # filling residues for unresolved disordered loops, which would
+        # change the structure significantly and bias the energy
+        # comparison. We only want missing ATOMS within existing residues,
+        # not whole missing residues that the experiment couldn't see.
+        #
+        # If pdbfixer is not installed, we fall through to the raw Modeller
+        # path. The createSystem step will then fail on imperfect PDBs and
+        # we record those as skips instead of crashing.
+        if _PDBFIXER_OK:
+            try:
+                fixer = _PDBFixer(filename=clean_path)
+                fixer.findMissingResidues()
+                fixer.missingResidues = {}  # don't model unresolved loops
+                fixer.findNonstandardResidues()
+                fixer.replaceNonstandardResidues()
+                fixer.findMissingAtoms()
+                fixer.addMissingAtoms()
+                topology_in = fixer.topology
+                positions_in = fixer.positions
+            except Exception as e:
+                return RunnerResult(
+                    op="energy", impl="openmm", impl_version=_OPENMM_VERSION,
+                    pdb_id="", pdb_path=pdb_path,
+                    elapsed_s=_time.perf_counter() - t0,
+                    status="skip",
+                    error=f"PDBFixer prep failed: {type(e).__name__}: {e}",
+                    payload={},
+                )
+        else:
+            try:
+                pdb = _openmm_app.PDBFile(clean_path)
+                topology_in = pdb.topology
+                positions_in = pdb.positions
+            except Exception as e:
+                return RunnerResult(
+                    op="energy", impl="openmm", impl_version=_OPENMM_VERSION,
+                    pdb_id="", pdb_path=pdb_path,
+                    elapsed_s=_time.perf_counter() - t0,
+                    status="error",
+                    error=f"OpenMM PDBFile load failed: {type(e).__name__}: {e}",
+                    payload={},
+                )
 
         # AMBER96 requires hydrogens on every standard residue. The input
-        # PDBs are heavy-atom only, so add H via Modeller.addHydrogens
-        # before building the System. The ferritin runner does the same
-        # via place_all_hydrogens() — both stacks see the same atom set.
-        #
-        # P1a: before adding H, call Modeller.addMissingAtoms(forcefield)
-        # to repair real PDB imperfections (chains ending in incomplete
-        # residues, sidechains missing heavy atoms) using OpenMM's
-        # template library. On the 20-PDB scaling demo, 10/20 structures
-        # failed createSystem with "set of externally bonded atoms is
-        # missing 1 C atom" — those are real PDB format issues, not a
-        # ferritin bug, and addMissingAtoms repairs them in place.
+        # PDBs are heavy-atom only (and PDBFixer doesn't add H by default),
+        # so add H via Modeller.addHydrogens(forcefield) — that uses the
+        # AMBER96 H templates. The ferritin runner does the same via
+        # place_all_hydrogens(): both stacks see the same atom set.
         #
         # We then run LocalEnergyMinimizer with heavy atoms frozen to relax
         # the placed H positions, mirroring ferritin's minimize_hydrogens()
@@ -367,16 +417,14 @@ if _OPENMM_OK:
         # and the FF evaluation is dominated by them rather than the
         # actual interaction energies we want to compare.
         #
-        # If addMissingAtoms / addHydrogens / createSystem still fail
-        # after repair, we record status="skip" (not "error"): these are
-        # legitimate "this structure can't be evaluated under AMBER96"
-        # cases — nucleic acids, exotic ligands, broken topologies — and
-        # we want the aggregator to surface a skip rate rather than a
-        # crash count.
+        # If addHydrogens / createSystem still fail after PDBFixer repair,
+        # we record status="skip" (not "error"): these are legitimate
+        # "this structure can't be evaluated under AMBER96" cases —
+        # nucleic acids, exotic ligands, broken topologies — and we want
+        # the aggregator to surface a skip rate rather than a crash count.
         try:
             forcefield = _openmm_app.ForceField("amber96.xml")
-            modeller = _openmm_app.Modeller(pdb.topology, pdb.positions)
-            modeller.addMissingAtoms(forcefield)
+            modeller = _openmm_app.Modeller(topology_in, positions_in)
             modeller.addHydrogens(forcefield)
             system = forcefield.createSystem(
                 modeller.topology,
