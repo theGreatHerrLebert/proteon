@@ -252,9 +252,61 @@ pub fn batch_place_peptide_hydrogens(
 /// Batch prepare structures in parallel (reconstruct + place H + minimize H).
 ///
 /// Runs the full preparation pipeline on each structure using rayon parallelism.
+/// Per-structure result from batch_prepare. One of these is produced per
+/// input structure and converted to a Python dict at the end.
+struct PrepareResult {
+    reconstructed: usize,
+    h_added: usize,
+    h_skipped: usize,
+    init_e: f64,
+    final_e: f64,
+    bond_stretch: f64,
+    angle_bend: f64,
+    torsion: f64,
+    improper_torsion: f64,
+    vdw: f64,
+    electrostatic: f64,
+    solvation: f64,
+    steps: usize,
+    converged: bool,
+    n_unassigned: usize,
+    skipped_no_protein: bool,
+}
+
+impl PrepareResult {
+    fn empty() -> Self {
+        Self {
+            reconstructed: 0,
+            h_added: 0,
+            h_skipped: 0,
+            init_e: 0.0,
+            final_e: 0.0,
+            bond_stretch: 0.0,
+            angle_bend: 0.0,
+            torsion: 0.0,
+            improper_torsion: 0.0,
+            vdw: 0.0,
+            electrostatic: 0.0,
+            solvation: 0.0,
+            steps: 0,
+            converged: false,
+            n_unassigned: 0,
+            skipped_no_protein: false,
+        }
+    }
+}
+
 /// Returns list of dicts with preparation statistics.
+///
+/// The `ff` parameter picks the force field used by the topology builder
+/// and the minimizer. "charmm19_eef1" (the default) gives physically
+/// meaningful energies on isolated proteins without explicit water —
+/// the EEF1 solvation term dampens the unscreened electrostatic blow-up
+/// that makes raw AMBER96 numbers on bare structures useless. "amber96"
+/// is provided for like-for-like comparison against other AMBER96
+/// implementations (OpenMM, BALL) in the SOTA validation harness.
 #[pyfunction]
-#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=0.1, n_threads=None, strip_hydrogens=true))]
+#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=0.1, n_threads=None, strip_hydrogens=true, ff="charmm19_eef1"))]
 #[allow(clippy::too_many_arguments)]
 pub fn batch_prepare(
     py: Python<'_>,
@@ -268,19 +320,90 @@ pub fn batch_prepare(
     gradient_tolerance: f64,
     n_threads: Option<i32>,
     strip_hydrogens: bool,
+    ff: &str,
 ) -> PyResult<Vec<PyObject>> {
+    let all_results = match ff {
+        "amber" | "amber96" => {
+            let params = crate::forcefield::params::amber96();
+            batch_prepare_inner(
+                py, structures, reconstruct, hydrogens, include_water, minimize,
+                minimize_method, minimize_steps, gradient_tolerance, n_threads,
+                strip_hydrogens, &params,
+            )?
+        }
+        "charmm" | "charmm19" | "charmm19_eef1" => {
+            let params = crate::forcefield::params::charmm19_eef1();
+            batch_prepare_inner(
+                py, structures, reconstruct, hydrogens, include_water, minimize,
+                minimize_method, minimize_steps, gradient_tolerance, n_threads,
+                strip_hydrogens, &params,
+            )?
+        }
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unknown ff '{}'. Use 'amber96' or 'charmm19_eef1'.",
+                ff
+            )));
+        }
+    };
+
+    // Convert to Python dicts
+    Ok(all_results
+        .into_iter()
+        .map(|r| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("atoms_reconstructed", r.reconstructed).unwrap();
+            dict.set_item("hydrogens_added", r.h_added).unwrap();
+            dict.set_item("hydrogens_skipped", r.h_skipped).unwrap();
+            dict.set_item("initial_energy", r.init_e).unwrap();
+            dict.set_item("final_energy", r.final_e).unwrap();
+            dict.set_item("minimizer_steps", r.steps).unwrap();
+            dict.set_item("converged", r.converged).unwrap();
+            dict.set_item("n_unassigned_atoms", r.n_unassigned).unwrap();
+            dict.set_item("skipped_no_protein", r.skipped_no_protein).unwrap();
+            // Component breakdown at the post-minimization geometry (all
+            // zero if minimize=False or skipped_no_protein).
+            let components = pyo3::types::PyDict::new(py);
+            components.set_item("bond_stretch", r.bond_stretch).unwrap();
+            components.set_item("angle_bend", r.angle_bend).unwrap();
+            components.set_item("torsion", r.torsion).unwrap();
+            components.set_item("improper_torsion", r.improper_torsion).unwrap();
+            components.set_item("vdw", r.vdw).unwrap();
+            components.set_item("electrostatic", r.electrostatic).unwrap();
+            components.set_item("solvation", r.solvation).unwrap();
+            dict.set_item("components", components).unwrap();
+            dict.into_any().unbind()
+        })
+        .collect())
+}
+
+/// Generic inner loop for `batch_prepare`, monomorphized over the force
+/// field type so we keep static dispatch inside the hot path (no perf hit
+/// from adding the `ff` parameter).
+#[allow(clippy::too_many_arguments)]
+fn batch_prepare_inner<F>(
+    py: Python<'_>,
+    structures: &Bound<'_, PyList>,
+    reconstruct: bool,
+    hydrogens: &str,
+    include_water: bool,
+    minimize: bool,
+    minimize_method: &str,
+    minimize_steps: usize,
+    gradient_tolerance: f64,
+    n_threads: Option<i32>,
+    strip_hydrogens: bool,
+    ff: &F,
+) -> PyResult<Vec<PrepareResult>>
+where
+    F: crate::forcefield::params::ForceField + Sync,
+{
     let n = resolve_threads(n_threads);
     let h_mode = hydrogens.to_string();
     let method = minimize_method.to_string();
-    // CHARMM19-EEF1 (implicit solvent) is a better default for prepare() than
-    // AMBER96-vacuum: it gives physically meaningful energies on isolated
-    // proteins without needing explicit water, and the EEF1 solvation term
-    // dampens the unscreened electrostatic blow-up that makes raw AMBER96
-    // numbers useless for bare structures.
-    let ff = crate::forcefield::params::charmm19_eef1();
     let total = structures.len();
     let chunk_size = 200; // prepare is heavier per-structure, smaller chunks
-    let mut all_results = Vec::with_capacity(total);
+    let mut all_results: Vec<PrepareResult> = Vec::with_capacity(total);
 
     // Process in chunks to avoid cloning all structures at once
     for start in (0..total).step_by(chunk_size) {
@@ -296,7 +419,7 @@ pub fn batch_prepare(
 
         let h_mode = h_mode.clone();
         let method = method.clone();
-        let results: Vec<(usize, usize, usize, f64, f64, usize, bool, usize, bool)> = py.allow_threads(|| {
+        let results: Vec<PrepareResult> = py.allow_threads(|| {
             let pool = build_pool(n);
             pool.install(|| {
                 chunk_pdbs
@@ -338,7 +461,7 @@ pub fn batch_prepare(
                         // coordinate changes (it depends only on residue/atom
                         // names), so we can compute it before minimization and
                         // reuse the same topology for the minimizer.
-                        let topo = crate::forcefield::topology::build_topology(pdb, &ff);
+                        let topo = crate::forcefield::topology::build_topology(pdb, ff);
                         let n_unassigned = topo.unassigned_atoms.len();
                         let total_atoms = topo.atoms.len();
 
@@ -354,31 +477,42 @@ pub fn batch_prepare(
                         let skipped_no_protein =
                             total_atoms > 0 && n_unassigned * 2 > total_atoms;
 
+                        let mut out = PrepareResult::empty();
+                        out.reconstructed = reconstructed;
+                        out.h_added = h_added;
+                        out.h_skipped = h_skipped;
+                        out.n_unassigned = n_unassigned;
+                        out.skipped_no_protein = skipped_no_protein;
+
                         // Minimize H positions and apply coords back to PDB
                         let has_any_h = crate::altloc::pdb_atoms_primary(pdb).any(|a| {
                             a.element().map_or(false, |e| e.symbol() == "H" || e.symbol() == "D")
                         });
-                        let (init_e, final_e, steps, converged) = if !skipped_no_protein
-                            && minimize
-                            && (h_added > 0 || has_any_h)
-                        {
+                        if !skipped_no_protein && minimize && (h_added > 0 || has_any_h) {
                             let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
                             let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
                             let result = match method.as_str() {
                                 "cg" => crate::forcefield::minimize::conjugate_gradient(
-                                    &coords, &topo, &ff, minimize_steps, gradient_tolerance, &constrained),
+                                    &coords, &topo, ff, minimize_steps, gradient_tolerance, &constrained),
                                 "lbfgs" => crate::forcefield::minimize::lbfgs(
-                                    &coords, &topo, &ff, minimize_steps, gradient_tolerance, &constrained),
+                                    &coords, &topo, ff, minimize_steps, gradient_tolerance, &constrained),
                                 _ => crate::forcefield::minimize::steepest_descent(
-                                    &coords, &topo, &ff, minimize_steps, gradient_tolerance, &constrained),
+                                    &coords, &topo, ff, minimize_steps, gradient_tolerance, &constrained),
                             };
                             apply_coords_to_pdb(pdb, &result.coords);
-                            (result.initial_energy, result.energy.total, result.steps, result.converged)
-                        } else {
-                            (0.0, 0.0, 0, false)
-                        };
-
-                        (reconstructed, h_added, h_skipped, init_e, final_e, steps, converged, n_unassigned, skipped_no_protein)
+                            out.init_e = result.initial_energy;
+                            out.final_e = result.energy.total;
+                            out.bond_stretch = result.energy.bond_stretch;
+                            out.angle_bend = result.energy.angle_bend;
+                            out.torsion = result.energy.torsion;
+                            out.improper_torsion = result.energy.improper_torsion;
+                            out.vdw = result.energy.vdw;
+                            out.electrostatic = result.energy.electrostatic;
+                            out.solvation = result.energy.solvation;
+                            out.steps = result.steps;
+                            out.converged = result.converged;
+                        }
+                        out
                     })
                     .collect()
             })
@@ -394,23 +528,7 @@ pub fn batch_prepare(
         all_results.extend(results);
     }
 
-    // Convert to Python dicts
-    Ok(all_results
-        .into_iter()
-        .map(|(recon, h_add, h_skip, init_e, final_e, steps, conv, unassigned, skipped)| {
-            let dict = pyo3::types::PyDict::new(py);
-            dict.set_item("atoms_reconstructed", recon).unwrap();
-            dict.set_item("hydrogens_added", h_add).unwrap();
-            dict.set_item("hydrogens_skipped", h_skip).unwrap();
-            dict.set_item("initial_energy", init_e).unwrap();
-            dict.set_item("final_energy", final_e).unwrap();
-            dict.set_item("minimizer_steps", steps).unwrap();
-            dict.set_item("converged", conv).unwrap();
-            dict.set_item("n_unassigned_atoms", unassigned).unwrap();
-            dict.set_item("skipped_no_protein", skipped).unwrap();
-            dict.into_any().unbind()
-        })
-        .collect())
+    Ok(all_results)
 }
 
 // ---------------------------------------------------------------------------

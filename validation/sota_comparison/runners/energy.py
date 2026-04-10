@@ -102,19 +102,23 @@ if _FERRITIN_OK:
 
     @register("energy", "ferritin")
     def ferritin(pdb_path: str) -> RunnerResult:
-        """Compute AMBER96 energy via ferritin's H placement + LBFGS minimization.
+        """Compute AMBER96 energy via ferritin's batch_prepare with ff="amber96".
 
-        Pipeline: load → place_all_hydrogens → minimize_hydrogens(method="lbfgs").
+        Pipeline: load → strip HETATM → batch_prepare(hydrogens="all",
+        minimize=True, ff="amber96"). batch_prepare runs place_all_hydrogens
+        then LBFGS minimization under AMBER96, in-place, using the neighbor-
+        list caching fast path (the same one that made the 50K benchmark
+        prepare phase 22s for 200 structures).
 
-        Why not `compute_energy` directly? AMBER96 parameterizes H, so heavy-
-        only input gives nonsensical energies. Why not `batch_prepare`? Because
-        `batch_prepare` hardcodes CHARMM19-EEF1 (commit 73248f7 made that the
-        default for "prepare a loaded PDB" because raw vacuum AMBER96
-        electrostatics blow up). For the SOTA comparison we specifically want
-        vacuum AMBER96 at both ends so the comparison to OpenMM-amber96-xml is
-        apples-to-apples. `minimize_hydrogens` uses AMBER96 internally and
-        returns the full component-decomposed energy dict, so we don't need a
-        separate `compute_energy` call afterwards.
+        Before this runner switched to batch_prepare, the ferritin side used
+        minimize_hydrogens() which runs the O(N²) no-NBL path and takes
+        14-72 seconds per structure on the v1 reference set. batch_prepare
+        drops that to <1 second per structure and makes 10K-scale energy
+        comparison feasible.
+
+        The ff="amber96" parameter was added in the same commit that wires
+        this runner — see commit history of py_add_hydrogens.rs. Without it
+        batch_prepare hardcodes CHARMM19-EEF1.
 
         The same minimize-then-evaluate flow is used by the OpenMM runner
         (Modeller.addHydrogens + LocalEnergyMinimizer with heavy atoms frozen).
@@ -124,22 +128,25 @@ if _FERRITIN_OK:
         # docstring for rationale. Keeps both runners on the same atom set.
         clean_path = _strip_hetatm_to_tempfile(pdb_path)
         s = _ferritin.load(clean_path)
-        # Ferritin's template-based H placement (modifies in place)
-        _ferritin.place_all_hydrogens(s)
-        # Minimize H positions only, heavy atoms frozen. Uses AMBER96
-        # internally (verified in ferritin-connector/src/py_forcefield.rs).
-        result = _ferritin.minimize_hydrogens(
-            s,
-            max_steps=2000,  # 1crn hit the 500-step cap without converging
+        # Full prepare pipeline in one Rust call, AMBER96 throughout.
+        # strip_hydrogens=False because we loaded a heavy-only PDB (no H to
+        # strip). reconstruct=False because the test corpus has complete
+        # heavy atom sets.
+        reports = _ferritin.batch_prepare(
+            [s],
+            reconstruct=False,
+            hydrogens="all",
+            minimize=True,
+            minimize_method="lbfgs",
+            minimize_steps=2000,
             gradient_tolerance=0.1,
-            method="lbfgs",
-            units="kJ/mol",
+            strip_hydrogens=False,
+            ff="amber96",
         )
         elapsed = _time_perf() - t0
+        r = reports[0]
 
-        components_raw = result.get("energy_components", {})
-        total = float(result.get("final_energy", 0.0))
-
+        # PrepReport.components is populated from the minimizer's final state.
         return RunnerResult(
             op="energy",
             impl="ferritin",
@@ -150,14 +157,14 @@ if _FERRITIN_OK:
             status="ok",
             error=None,
             payload={
-                "total": total,
+                "total": float(r.final_energy),
                 "units": "kJ/mol",
                 "ff": "amber96",
-                "components": _normalize_components(components_raw),
+                "components": _normalize_components(r.components),
                 "n_atoms_after_h": int(s.atom_count),
-                "minimizer_steps": int(result.get("steps", 0)),
-                "minimizer_converged": bool(result.get("converged", False)),
-                "initial_energy": float(result.get("initial_energy", 0.0)),
+                "minimizer_steps": int(r.minimizer_steps),
+                "minimizer_converged": bool(r.converged),
+                "initial_energy": float(r.initial_energy),
             },
         )
 

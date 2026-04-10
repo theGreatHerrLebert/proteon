@@ -39,6 +39,14 @@ class PrepReport:
         hydrogens_skipped: Residues where H placement was skipped (e.g., missing backbone).
         initial_energy: Total energy before minimization (kcal/mol).
         final_energy: Total energy after minimization (kcal/mol).
+        components: Per-component energy breakdown at the post-minimization
+            geometry, in the same units as ``initial_energy`` /
+            ``final_energy``. Keys: ``bond_stretch``, ``angle_bend``,
+            ``torsion``, ``improper_torsion``, ``vdw``, ``electrostatic``,
+            ``solvation``. All zero if ``minimize=False`` was passed, or if
+            ``skipped_no_protein`` is True. Populated from the minimizer's
+            final energy state — does NOT require a separate
+            ``compute_energy`` call.
         minimizer_steps: Number of minimization steps taken.
         converged: Whether the minimizer converged. Only meaningful when
             ``skipped_no_protein`` is False — see that field's docs.
@@ -57,6 +65,7 @@ class PrepReport:
     hydrogens_skipped: int = 0
     initial_energy: float = 0.0
     final_energy: float = 0.0
+    components: Dict[str, float] = field(default_factory=dict)
     minimizer_steps: int = 0
     converged: bool = False
     n_unassigned_atoms: int = 0
@@ -99,6 +108,7 @@ def prepare(
     minimize_steps: int = 500,
     gradient_tolerance: float = 0.1,
     strip_hydrogens: bool = True,
+    ff: str = "charmm19_eef1",
 ) -> PrepReport:
     """Prepare a structure for downstream analysis or simulation.
 
@@ -125,6 +135,12 @@ def prepare(
             prevent LBFGS convergence within ``gradient_tolerance``. Set to
             False to retain experimental H positions when their provenance
             is trusted. See batch_prepare docstring for the rescue analysis.
+        ff: Force field used by the topology builder and the minimizer.
+            ``"charmm19_eef1"`` (default) gives physically meaningful energies
+            on isolated proteins via its EEF1 implicit-solvent term.
+            ``"amber96"`` is provided for like-for-like comparison against
+            other AMBER96 implementations (OpenMM, BALL) in the SOTA
+            validation harness.
 
     Returns:
         PrepReport with preparation statistics.
@@ -146,6 +162,7 @@ def prepare(
             [ptr], reconstruct, hydrogens, include_water,
             minimize, minimize_method, minimize_steps, gradient_tolerance, None,
             True,
+            ff,
         )
         if results:
             r = results[0]
@@ -154,6 +171,7 @@ def prepare(
             report.hydrogens_skipped = r["hydrogens_skipped"]
             report.initial_energy = r["initial_energy"]
             report.final_energy = r["final_energy"]
+            report.components = dict(r.get("components", {}))
             report.minimizer_steps = r["minimizer_steps"]
             report.converged = r["converged"]
             report.n_unassigned_atoms = r["n_unassigned_atoms"]
@@ -199,11 +217,13 @@ def prepare(
             [ptr], False, "none", False,
             True, minimize_method, minimize_steps, gradient_tolerance, None,
             False,
+            ff,
         )
         if results:
             r = results[0]
             report.initial_energy = r["initial_energy"]
             report.final_energy = r["final_energy"]
+            report.components = dict(r.get("components", {}))
             report.minimizer_steps = r["minimizer_steps"]
             report.converged = r["converged"]
             report.skipped_no_protein = r["skipped_no_protein"]
@@ -232,6 +252,7 @@ def batch_prepare(
     gradient_tolerance: float = 0.1,
     n_threads: Optional[int] = None,
     strip_hydrogens: bool = True,
+    ff: str = "charmm19_eef1",
 ) -> List[PrepReport]:
     """Prepare many structures in parallel (Rust + rayon, zero GIL).
 
@@ -259,6 +280,12 @@ def batch_prepare(
             convergence rate from 169/200 to 199/200 and cut wall time ~3x
             (stragglers stop burning the LBFGS step cap). Set to False to
             retain experimental H positions when their provenance is trusted.
+        ff: Force field used by the topology builder and the minimizer.
+            ``"charmm19_eef1"`` (default) gives physically meaningful energies
+            on isolated proteins via its EEF1 implicit-solvent term.
+            ``"amber96"`` is provided for like-for-like comparison against
+            other AMBER96 implementations (OpenMM, BALL) in the SOTA
+            validation harness.
 
     Returns:
         List of PrepReport, one per structure.
@@ -268,6 +295,7 @@ def batch_prepare(
         ptrs, reconstruct, hydrogens, include_water,
         minimize, minimize_method, minimize_steps, gradient_tolerance, n_threads,
         strip_hydrogens,
+        ff,
     )
     reports = []
     for r in results:
@@ -277,6 +305,7 @@ def batch_prepare(
             hydrogens_skipped=r["hydrogens_skipped"],
             initial_energy=r["initial_energy"],
             final_energy=r["final_energy"],
+            components=dict(r.get("components", {})),
             minimizer_steps=r["minimizer_steps"],
             converged=r["converged"],
             n_unassigned_atoms=r["n_unassigned_atoms"],
