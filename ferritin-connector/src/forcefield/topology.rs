@@ -3,7 +3,7 @@
 //! Infers bonds from interatomic distances, then builds the lists
 //! of bond/angle/torsion interactions needed for energy computation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::params::ForceField;
 use crate::altloc::residue_atoms_primary;
@@ -211,8 +211,18 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
         .map(|t| (t.0, t))
         .collect();
 
-    // Group atoms by residue_idx
-    let mut residue_atoms: HashMap<usize, Vec<usize>> = HashMap::new();
+    // Group atoms by residue_idx.
+    //
+    // BTreeMap (not HashMap): this map is iterated below in Phase A and
+    // Phase D, and HashMap iteration order is non-deterministic across
+    // instances (RandomState reseeded per-map in std). That would push
+    // bonds into `bonds` in a different order on every build_topology
+    // call, which makes the serial bond_stretch sum FP-reassociate
+    // differently per call — visible as 1 ULP drift in
+    // TestDeterminism.test_two_calls_identical under --release. A
+    // BTreeMap sorts by key, so iteration is deterministic by type and
+    // future edits can't accidentally re-introduce the bug.
+    let mut residue_atoms: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (i, atom) in atoms.iter().enumerate() {
         residue_atoms.entry(atom.residue_idx).or_default().push(i);
     }

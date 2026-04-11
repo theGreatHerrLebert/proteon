@@ -234,21 +234,18 @@ class TestDeterminism:
     tolerance is exact equality (abs=0) because compute_energy on the
     same input should be bit-identical, not just numerically close.
 
-    Currently expected to fail on ``bond_stretch`` with a 1 ULP drift
-    across calls in ``--release`` builds. The root cause is FP
-    reassociation somewhere in the bond-energy accumulation (likely
-    rayon parallel reduction work-stealing order). The drift is
-    ~1e-13 kJ/mol, well below any physical relevance, but the test
-    correctly asserts bit-identical — so it stays marked xfail until
-    someone fixes the determinism.
+    Historical note: until 2026-04-12 this test was marked xfail for
+    a 1 ULP drift on ``bond_stretch``. The root cause was
+    ``build_topology`` iterating a ``HashMap<usize, Vec<usize>>`` of
+    residue-to-atom-indices — HashMap iteration order in Rust is
+    non-deterministic across instances, so each compute_energy call
+    pushed bonds into ``topo.bonds`` in a different order, and the
+    serial sum saw a different FP accumulation order. Fixed by
+    switching to BTreeMap (deterministic by type). If this ever goes
+    xfail again, investigate whether some other HashMap in topology
+    construction has slipped in.
     """
 
-    @pytest.mark.xfail(
-        reason="Pre-existing 1 ULP FP non-determinism in bond_stretch "
-        "under --release builds (parallel reduction reorder). "
-        "Unrelated to the 2026-04-11 EEF1 fix. Fix tracked separately.",
-        strict=False,
-    )
     @pytest.mark.parametrize(
         "spec",
         STRUCTURES,
