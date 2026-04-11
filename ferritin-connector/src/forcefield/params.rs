@@ -876,5 +876,96 @@ mod tests {
                 None => eprintln!("    {:<6}-{:<6}  <NOT IN bonds hashmap>", a, b),
             }
         }
+
+        // -----------------------------------------------------------------
+        // Decisive test: re-run the EEF1 pair loop inline and classify each
+        // pair as 1-2 / 1-3 (excluded_pairs), 1-4 (pairs_14), or "other".
+        // Sum the pair-correction contribution from each class so we can
+        // see exactly where the +716 kcal/mol inflation lives.
+        //
+        // Hypothesis: BALL's EEF1 loop runs over the pre-filtered LJ pair
+        // list (no 1-2, no 1-3). ferritin's eef1_energy() runs over ALL
+        // i<j pairs within 9 Å with NO exclusion check, so it double-counts
+        // bonded partners that are at near-peak Gaussian distance.
+        // -----------------------------------------------------------------
+        const PI_SQRT_PI: f64 = 5.568_327_996_831_708;
+        let cutoff_sq = 9.0_f64 * 9.0;
+
+        let mut pair_12_13 = 0.0_f64;
+        let mut pair_14    = 0.0_f64;
+        let mut pair_other = 0.0_f64;
+        let mut n_12_13    = 0_usize;
+        let mut n_14       = 0_usize;
+        let mut n_other    = 0_usize;
+        let coords_vec: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+
+        for ii in 0..coords_vec.len() {
+            if topo.atoms[ii].is_hydrogen { continue; }
+            let eef_i = match p.get_eef1(&topo.atoms[ii].amber_type) {
+                Some(e) => e,
+                None => continue,
+            };
+            for jj in (ii + 1)..coords_vec.len() {
+                if topo.atoms[jj].is_hydrogen { continue; }
+                let eef_j = match p.get_eef1(&topo.atoms[jj].amber_type) {
+                    Some(e) => e,
+                    None => continue,
+                };
+
+                let dx = coords_vec[ii][0] - coords_vec[jj][0];
+                let dy = coords_vec[ii][1] - coords_vec[jj][1];
+                let dz = coords_vec[ii][2] - coords_vec[jj][2];
+                let r2 = dx * dx + dy * dy + dz * dz;
+                if r2 > cutoff_sq || r2 < 0.01 { continue; }
+                let r = r2.sqrt();
+
+                let mut contrib = 0.0_f64;
+                if eef_i.dg_free.abs() > 1e-10 && eef_j.volume > 1e-10 {
+                    let dr = (r - eef_i.r_min) / eef_i.sigma;
+                    contrib += -0.5 * eef_j.volume * eef_i.dg_free
+                        * (-dr * dr).exp() / (eef_i.sigma * PI_SQRT_PI * r2);
+                }
+                if eef_j.dg_free.abs() > 1e-10 && eef_i.volume > 1e-10 {
+                    let dr = (r - eef_j.r_min) / eef_j.sigma;
+                    contrib += -0.5 * eef_i.volume * eef_j.dg_free
+                        * (-dr * dr).exp() / (eef_j.sigma * PI_SQRT_PI * r2);
+                }
+
+                let pair = (ii, jj); // already ii < jj, matches excluded_pairs keying
+                if topo.excluded_pairs.contains(&pair) {
+                    pair_12_13 += contrib;
+                    n_12_13 += 1;
+                } else if topo.pairs_14.contains(&pair) {
+                    pair_14 += contrib;
+                    n_14 += 1;
+                } else {
+                    pair_other += contrib;
+                    n_other += 1;
+                }
+            }
+        }
+
+        let total_inline = pair_12_13 + pair_14 + pair_other;
+        eprintln!("\n  === EEF1 pair-correction breakdown (1crn, raw) ===");
+        eprintln!("    excluded_pairs size (1-2 + 1-3): {}", topo.excluded_pairs.len());
+        eprintln!("    pairs_14 size:                   {}", topo.pairs_14.len());
+        eprintln!();
+        eprintln!("    class     |     n_pairs |     contribution (kcal/mol)");
+        eprintln!("    ----------+-------------+---------------------------");
+        eprintln!("    1-2 + 1-3 | {:>11} | {:>+14.3}", n_12_13, pair_12_13);
+        eprintln!("    1-4       | {:>11} | {:>+14.3}", n_14, pair_14);
+        eprintln!("    other     | {:>11} | {:>+14.3}", n_other, pair_other);
+        eprintln!("    ----------+-------------+---------------------------");
+        eprintln!("    total     | {:>11} | {:>+14.3}",
+            n_12_13 + n_14 + n_other, total_inline);
+        eprintln!();
+        eprintln!("    self-solvation:              {:>+10.3} kcal/mol", sum_via_direct);
+        eprintln!("    pair correction (inline):    {:>+10.3} kcal/mol", total_inline);
+        eprintln!("    → total (inline):            {:>+10.3} kcal/mol",
+            sum_via_direct + total_inline);
+        eprintln!("    if 1-2+1-3 excluded:         {:>+10.3} kcal/mol",
+            sum_via_direct + pair_14 + pair_other);
+        eprintln!("    if 1-2+1-3 AND 1-4 excluded: {:>+10.3} kcal/mol",
+            sum_via_direct + pair_other);
     }
 }

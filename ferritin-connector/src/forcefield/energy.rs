@@ -609,12 +609,32 @@ pub fn compute_energy_and_forces_nbl(
         }
     }
 
+    // --- EEF1 solvation (if enabled) ---
+    //
+    // The neighbor-list path previously omitted EEF1 entirely — both the
+    // energy contribution and the force contribution — leaving
+    // `result.solvation` at its default 0.0 for any structure that crossed
+    // NBL_AUTO_THRESHOLD (2000 atoms). This silently disabled implicit
+    // solvation for every large structure in batch_prepare / minimize, and
+    // left solvation out of the `total` sum too. Fix both: call the
+    // energy+forces EEF1 kernel and include solvation in the total.
+    //
+    // We use `eef1_energy_and_forces` (not the energy-only variant) so
+    // that minimization, which drives through compute_energy_and_forces_nbl,
+    // gets the solvation gradient. O(N²) over EEF1's 9 Å cutoff is fast
+    // enough at these sizes and matches what the non-NBL path does; a
+    // future optimization could reuse the neighbor-list pairs directly.
+    if params.has_eef1() {
+        eef1_energy_and_forces(coords, topo, params, &mut result.solvation, &mut forces);
+    }
+
     result.total = result.bond_stretch
         + result.angle_bend
         + result.torsion
         + result.improper_torsion
         + result.vdw
-        + result.electrostatic;
+        + result.electrostatic
+        + result.solvation;
     (result, forces)
 }
 
@@ -725,7 +745,14 @@ fn eef1_energy(
         }
     }
 
-    // Pair exclusion
+    // Pair exclusion term (Gaussian shielding of water by neighbor atoms).
+    // 1-2 and 1-3 bonded partners must be skipped: they sit at the Gaussian
+    // peak (r ≈ r_min) and would contribute spurious O(10²) kcal/mol per
+    // pair, inflating total solvation to wrong sign. BALL's CHARMM EEF1
+    // implementation (charmmNonBonded.C) skips them via the LJ pair list
+    // which excludes 1-2/1-3 at construction; we do it by checking
+    // topo.excluded_pairs directly. 1-4 pairs ARE kept (BALL keeps them too,
+    // unscaled for EEF1).
     for i in 0..n {
         if topo.atoms[i].is_hydrogen { continue; }
         let eef_i = match params.get_eef1(&topo.atoms[i].amber_type) {
@@ -735,6 +762,7 @@ fn eef1_energy(
 
         for j in (i + 1)..n {
             if topo.atoms[j].is_hydrogen { continue; }
+            if topo.excluded_pairs.contains(&(i, j)) { continue; }
             let eef_j = match params.get_eef1(&topo.atoms[j].amber_type) {
                 Some(e) => e,
                 None => continue,
@@ -784,7 +812,8 @@ fn eef1_energy_and_forces(
         }
     }
 
-    // Pair exclusion + forces
+    // Pair exclusion + forces. Skip 1-2 and 1-3 bonded partners — see the
+    // comment in eef1_energy() above for rationale.
     for i in 0..n {
         if topo.atoms[i].is_hydrogen { continue; }
         let eef_i = match params.get_eef1(&topo.atoms[i].amber_type) {
@@ -794,6 +823,7 @@ fn eef1_energy_and_forces(
 
         for j in (i + 1)..n {
             if topo.atoms[j].is_hydrogen { continue; }
+            if topo.excluded_pairs.contains(&(i, j)) { continue; }
             let eef_j = match params.get_eef1(&topo.atoms[j].amber_type) {
                 Some(e) => e,
                 None => continue,
@@ -1212,34 +1242,71 @@ mod gradient_tests {
         check_nbl_gradient_on_atoms(&[0, 4, 10, 25, 50]);
     }
 
-    #[test]
-    fn nbl_energy_matches_exact_energy() {
-        // compute_energy_impl and compute_energy_nbl should produce the same
-        // total energy for a structure where the neighbor list covers all
-        // real interactions (which is true for crambin with cutoff 15 Å).
+    /// Shared parity-check helper: compute_energy_impl (O(N²) exact) and
+    /// compute_energy_nbl (neighbor-list) must return identical values for
+    /// EVERY component — including `solvation` and `total` — on a structure
+    /// small enough that the 15 Å neighbor list captures all interactions.
+    ///
+    /// Parametrized over the force field so both AMBER96 and CHARMM19+EEF1
+    /// exercise this assertion. The CHARMM case is specifically what would
+    /// have caught the 2026-04-11 EEF1 bugs:
+    ///   1. eef1_energy() missing 1-2/1-3 exclusions (same on both paths)
+    ///   2. compute_energy_and_forces_nbl() silently skipping EEF1 entirely,
+    ///      leaving solvation=0 and total missing the solvation term.
+    /// Bug #1 corrupts both paths by the same amount so a naive "exact vs
+    /// nbl" comparison on `solvation` wouldn't necessarily flag it, BUT
+    /// bug #2 leaves the NBL solvation at 0 while the exact path computes
+    /// it — an O(10³) kcal/mol divergence that this test catches trivially.
+    fn assert_nbl_matches_exact<F: ForceField>(ff: &F, ff_name: &str) {
         let pdb = crambin_with_h();
-        let ff = amber96();
-        let topo = build_topology(pdb, &ff);
+        let topo = build_topology(pdb, ff);
         let coords = collect_coords(pdb);
         let nbl = NeighborList::build(&coords, 15.0, &topo.excluded_pairs, &topo.pairs_14);
 
-        let e_exact = compute_energy_impl(&coords, &topo, &ff, false);
-        let e_nbl = compute_energy_nbl(&coords, &topo, &ff, &nbl);
+        let e_exact = compute_energy_impl(&coords, &topo, ff, false);
+        let e_nbl = compute_energy_nbl(&coords, &topo, ff, &nbl);
 
-        // Component-by-component comparison — if any one drifts, we want to know.
+        // Component-by-component — if any one drifts, we want to know
+        // which one. Matching all components to 1e-6 is stricter than
+        // matching only `total`, because offsetting component errors
+        // can hide inside an unchanged total.
         let tol = 1e-6;
-        assert!((e_exact.bond_stretch - e_nbl.bond_stretch).abs() < tol,
-            "bond_stretch: exact={:.6} nbl={:.6}", e_exact.bond_stretch, e_nbl.bond_stretch);
-        assert!((e_exact.angle_bend - e_nbl.angle_bend).abs() < tol,
-            "angle_bend: exact={:.6} nbl={:.6}", e_exact.angle_bend, e_nbl.angle_bend);
-        assert!((e_exact.torsion - e_nbl.torsion).abs() < tol,
-            "torsion: exact={:.6} nbl={:.6}", e_exact.torsion, e_nbl.torsion);
-        assert!((e_exact.improper_torsion - e_nbl.improper_torsion).abs() < tol,
-            "improper: exact={:.6} nbl={:.6}", e_exact.improper_torsion, e_nbl.improper_torsion);
-        assert!((e_exact.vdw - e_nbl.vdw).abs() < tol,
-            "vdw: exact={:.6} nbl={:.6}", e_exact.vdw, e_nbl.vdw);
-        assert!((e_exact.electrostatic - e_nbl.electrostatic).abs() < tol,
-            "electrostatic: exact={:.6} nbl={:.6}", e_exact.electrostatic, e_nbl.electrostatic);
+        let components = [
+            ("bond_stretch", e_exact.bond_stretch, e_nbl.bond_stretch),
+            ("angle_bend", e_exact.angle_bend, e_nbl.angle_bend),
+            ("torsion", e_exact.torsion, e_nbl.torsion),
+            ("improper_torsion", e_exact.improper_torsion, e_nbl.improper_torsion),
+            ("vdw", e_exact.vdw, e_nbl.vdw),
+            ("electrostatic", e_exact.electrostatic, e_nbl.electrostatic),
+            ("solvation", e_exact.solvation, e_nbl.solvation),
+            ("total", e_exact.total, e_nbl.total),
+        ];
+        for (name, exact, nbl) in components {
+            assert!(
+                (exact - nbl).abs() < tol,
+                "[{}] {}: exact={:.9} nbl={:.9} diff={:.2e}",
+                ff_name, name, exact, nbl, (exact - nbl).abs()
+            );
+        }
+    }
+
+    #[test]
+    fn nbl_energy_matches_exact_energy_amber96() {
+        // Original parity test — no EEF1 contribution (AMBER96 sets it to zero).
+        assert_nbl_matches_exact(&amber96(), "amber96");
+    }
+
+    #[test]
+    fn nbl_energy_matches_exact_energy_charmm19_eef1() {
+        // Regression guard for the 2026-04-11 EEF1 bugs:
+        //   * pre-fix: exact path produced buggy-but-nonzero solvation (missing
+        //     1-2/1-3 exclusions), NBL path produced exactly 0 (never called
+        //     EEF1 at all) → huge divergence, this test would have failed
+        //     loudly and pointed straight at the gap in compute_energy_and_forces_nbl.
+        //   * post-fix: both paths call eef1_energy_and_forces with proper
+        //     exclusion filtering and must agree to 1e-6 kcal/mol.
+        use crate::forcefield::params::charmm19_eef1;
+        assert_nbl_matches_exact(&charmm19_eef1(), "charmm19_eef1");
     }
 
     #[test]
