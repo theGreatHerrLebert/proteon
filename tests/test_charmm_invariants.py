@@ -307,6 +307,62 @@ class TestMinimizationDecreases:
         )
 
 
+class TestMinimizedTotalIsNegative:
+    """CHARMM19+EEF1 minimized total energy MUST be negative on any
+    folded protein (canonical polar-H united-atom convention).
+
+    Pre-fix rationale: the 2026-04-12 batch of fixes (EEF1 bugs, water,
+    1bpi, polar-H, heavy-atom freeze) incrementally moved totals from
+    spurious-positive to physically-correct negative. Before the final
+    heavy-atom-freeze fix, CHARMM19 minimized totals were
+    wrong-signed on 3 of 4 v1 PDBs because the minimizer was freezing
+    heavy atoms (a sensible default for AMBER96's explicit-H model but
+    wrong for CHARMM19's inflated united-atom radii). This test would
+    have caught that regression immediately — every step along the
+    way a single wrong-signed PDB turns the suite red.
+
+    The negative-total invariant is a STRONGER check than the
+    TestSolvationNegative invariant: solvation can be negative while
+    the total remains positive if the bonded/nonbonded terms
+    overwhelm it. For a minimized small protein under CHARMM19+EEF1
+    the total should always settle negative.
+    """
+
+    @pytest.mark.parametrize(
+        "spec",
+        STRUCTURES,
+        ids=[s.name for s in STRUCTURES],
+    )
+    def test_final_total_negative(self, spec):
+        s = ferritin.load(spec.absolute_path)
+        reports = ferritin.batch_prepare(
+            [s],
+            reconstruct=False,
+            hydrogens="all",
+            minimize=True,
+            minimize_method="lbfgs",
+            # 500 steps: enough for v1 PDBs to reach sign-correct
+            # territory. Full convergence (gradient < 0.1) typically
+            # takes 1000-2000 steps; we don't require convergence here,
+            # only that the minimizer reaches the sign-correct regime.
+            minimize_steps=500,
+            gradient_tolerance=0.1,
+            strip_hydrogens=False,
+            ff=CHARMM,
+        )
+        r = reports[0]
+        assert r.final_energy < 0, (
+            f"{spec.name}: minimized CHARMM19+EEF1 total = "
+            f"{r.final_energy:+.2f} kJ/mol, expected negative. "
+            "A folded protein under a polar-H united-atom force field "
+            "with EEF1 implicit solvation should always settle to a "
+            "negative total. If this regression fires, the most likely "
+            "culprit is the batch_prepare `constrain_heavy` default "
+            "having flipped back to True for CHARMM19 — see the "
+            "2026-04-12 commit for context."
+        )
+
+
 # =========================================================================
 # CHARMM is actually running (not silently falling back to AMBER)
 # =========================================================================

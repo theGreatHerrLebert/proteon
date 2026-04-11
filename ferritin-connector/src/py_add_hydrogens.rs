@@ -363,7 +363,7 @@ impl PrepareResult {
 /// is provided for like-for-like comparison against other AMBER96
 /// implementations (OpenMM, BALL) in the SOTA validation harness.
 #[pyfunction]
-#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=0.1, n_threads=None, strip_hydrogens=true, ff="charmm19_eef1"))]
+#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=0.1, n_threads=None, strip_hydrogens=true, ff="charmm19_eef1", constrain_heavy=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn batch_prepare(
     py: Python<'_>,
@@ -378,22 +378,37 @@ pub fn batch_prepare(
     n_threads: Option<i32>,
     strip_hydrogens: bool,
     ff: &str,
+    // Whether to freeze heavy atoms during minimization:
+    //   * None (default): FF-aware — True for AMBER96 (explicit H absorbs
+    //     clashes via hydrogen motion, heavy atoms already roughly at
+    //     AMBER's minimum on a crystal structure), False for CHARMM19+EEF1
+    //     (united-atom inflated C radii need heavy-atom relaxation).
+    //   * Some(true): always freeze heavy atoms, move only H.
+    //   * Some(false): always move all atoms.
+    // The FF-aware default means existing AMBER96 callers keep exactly the
+    // same behavior while CHARMM19 users automatically get full relaxation.
+    constrain_heavy: Option<bool>,
 ) -> PyResult<Vec<PyObject>> {
     let all_results = match ff {
         "amber" | "amber96" => {
             let params = crate::forcefield::params::amber96();
+            // Default for AMBER96: freeze heavy atoms (H-only min).
+            let constrain_heavy = constrain_heavy.unwrap_or(true);
             batch_prepare_inner(
                 py, structures, reconstruct, hydrogens, include_water, minimize,
                 minimize_method, minimize_steps, gradient_tolerance, n_threads,
-                strip_hydrogens, &params,
+                strip_hydrogens, &params, constrain_heavy,
             )?
         }
         "charmm" | "charmm19" | "charmm19_eef1" => {
             let params = crate::forcefield::params::charmm19_eef1();
+            // Default for CHARMM19+EEF1: move everything. Heavy atoms must
+            // relax against the united-atom inflated carbon radii.
+            let constrain_heavy = constrain_heavy.unwrap_or(false);
             batch_prepare_inner(
                 py, structures, reconstruct, hydrogens, include_water, minimize,
                 minimize_method, minimize_steps, gradient_tolerance, n_threads,
-                strip_hydrogens, &params,
+                strip_hydrogens, &params, constrain_heavy,
             )?
         }
         _ => {
@@ -451,6 +466,7 @@ fn batch_prepare_inner<F>(
     n_threads: Option<i32>,
     strip_hydrogens: bool,
     ff: &F,
+    constrain_heavy: bool,
 ) -> PyResult<Vec<PrepareResult>>
 where
     F: crate::forcefield::params::ForceField + Sync,
@@ -584,7 +600,15 @@ where
                         });
                         if !skipped_no_protein && minimize && (h_added > 0 || has_any_h) {
                             let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-                            let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
+                            // Freeze heavy atoms (move only H) when `constrain_heavy`
+                            // is true. AMBER96 default: True. CHARMM19+EEF1 default:
+                            // False — heavy atoms need to relax against united-atom
+                            // inflated carbon radii for a negative final energy.
+                            let constrained: Vec<bool> = if constrain_heavy {
+                                topo.atoms.iter().map(|a| !a.is_hydrogen).collect()
+                            } else {
+                                vec![false; topo.atoms.len()]
+                            };
                             let result = match method.as_str() {
                                 "cg" => crate::forcefield::minimize::conjugate_gradient(
                                     &coords, &topo, ff, minimize_steps, gradient_tolerance, &constrained),
