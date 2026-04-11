@@ -281,6 +281,7 @@ def batch_prepare(
     n_threads: Optional[int] = None,
     strip_hydrogens: bool = True,
     ff: str = "charmm19_eef1",
+    constrain_heavy: Optional[bool] = None,
 ) -> List[PrepReport]:
     """Prepare many structures in parallel (Rust + rayon, zero GIL).
 
@@ -314,6 +315,16 @@ def batch_prepare(
             ``"amber96"`` is provided for like-for-like comparison against
             other AMBER96 implementations (OpenMM, BALL) in the SOTA
             validation harness.
+        constrain_heavy: Whether to freeze heavy atoms during minimization.
+            ``None`` (default) uses the FF-aware default: True for AMBER96
+            (H-only minimization is the intended pattern — all-atom AMBER
+            in vacuum has unscreened electrostatic issues, so full minimization
+            gives meaningless numbers), False for CHARMM19+EEF1 (polar-H
+            united-atom with inflated carbon radii needs heavy-atom relaxation
+            for correctly-signed totals). Pass ``True`` or ``False`` to
+            override the default explicitly. Primarily useful for testing,
+            profiling, or when you specifically want to preserve
+            experimentally-determined heavy-atom geometry.
 
     Returns:
         List of PrepReport, one per structure.
@@ -324,6 +335,7 @@ def batch_prepare(
         minimize, minimize_method, minimize_steps, gradient_tolerance, n_threads,
         strip_hydrogens,
         ff,
+        constrain_heavy,
     )
     reports = []
     for raw in raw_results:
