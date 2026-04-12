@@ -6,6 +6,7 @@ members = [
     "ferritin-bin",
     "ferritin-connector",
 ]
+exclude = ["gpu-poc"]
 resolver = "2"
 
 [workspace.package]

@@ -1,0 +1,9 @@
+[package]
+name = "gpu-poc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cudarc = { version = "0.19", features = ["std", "driver", "nvrtc", "cuda-12050"] }
+ferritin-connector = { path = "../ferritin-connector" }
+pdbtbx = { git = "https://github.com/douweschulte/pdbtbx", branch = "main" }

@@ -1,13 +1,13 @@
 use pyo3::prelude::*;
 use pyo3::wrap_pymodule;
 
-mod add_hydrogens;
-mod altloc;
+pub(crate) mod add_hydrogens;
+pub(crate) mod altloc;
 mod bond_order;
 mod dssp;
 mod fragment_templates;
 mod reconstruct;
-mod forcefield;
+pub mod forcefield;
 mod hbond;
 mod parallel;
 mod py_add_hydrogens;

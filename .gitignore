@@ -41,3 +41,4 @@ validation/pdb_ids_10k.txt
 foldseek/
 foldseek.tar.gz
 foldseek-src/
+gpu-poc/target/

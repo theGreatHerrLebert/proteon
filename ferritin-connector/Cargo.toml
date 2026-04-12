@@ -6,7 +6,7 @@ description = "PyO3 Python bindings for ferritin structural bioinformatics tools
 
 [lib]
 name = "ferritin_connector"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ferritin-align = { path = "../ferritin-align" }
