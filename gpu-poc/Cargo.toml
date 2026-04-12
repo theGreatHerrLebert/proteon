@@ -15,3 +15,7 @@ path = "src/main.rs"
 [[bin]]
 name = "bench-batch"
 path = "src/bench_batch.rs"
+
+[[bin]]
+name = "bench-sasa"
+path = "src/bench_sasa.rs"

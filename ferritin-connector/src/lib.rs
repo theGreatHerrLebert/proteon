@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::wrap_pymodule;
 
 pub(crate) mod add_hydrogens;
-pub(crate) mod altloc;
+pub mod altloc;
 mod bond_order;
 mod dssp;
 mod fragment_templates;
@@ -25,7 +25,7 @@ mod py_sasa;
 mod py_search;
 mod py_structure;
 mod py_transform;
-mod sasa;
+pub mod sasa;
 
 /// ferritin_connector — PyO3 bindings for the ferritin structural bioinformatics toolkit.
 #[pymodule]
