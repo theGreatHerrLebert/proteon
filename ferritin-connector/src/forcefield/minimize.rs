@@ -24,21 +24,23 @@ const MIN_NBL_THRESHOLD: usize = 2000;
 /// the list when atoms have moved beyond the buffer.
 struct NbCache {
     nbl: Option<NeighborList>,
+    cutoff: f64,
 }
 
 impl NbCache {
-    fn new(coords: &[[f64; 3]], topo: &Topology) -> Self {
+    fn new<F: ForceField>(coords: &[[f64; 3]], topo: &Topology, params: &F) -> Self {
+        let cutoff = params.nonbonded_cutoff();
         let nbl = if coords.len() >= MIN_NBL_THRESHOLD {
             Some(NeighborList::build(
                 coords,
-                15.0,
+                cutoff,
                 &topo.excluded_pairs,
                 &topo.pairs_14,
             ))
         } else {
             None
         };
-        Self { nbl }
+        Self { nbl, cutoff }
     }
 
     /// Rebuild the neighbor list if any atom has drifted further than the buffer
@@ -48,7 +50,7 @@ impl NbCache {
             if nbl.needs_rebuild(coords) {
                 self.nbl = Some(NeighborList::build(
                     coords,
-                    15.0,
+                    self.cutoff,
                     &topo.excluded_pairs,
                     &topo.pairs_14,
                 ));
@@ -153,7 +155,7 @@ pub fn steepest_descent(
 ) -> MinimizeResult {
     let n = coords.len();
     let mut pos: Vec<[f64; 3]> = coords.to_vec();
-    let mut nbc = NbCache::new(&pos, topo);
+    let mut nbc = NbCache::new(&pos, topo, params);
 
     let initial_e = nbc.energy(&pos, topo, params);
     let initial_energy = initial_e.total;
@@ -360,7 +362,7 @@ pub fn conjugate_gradient(
 ) -> MinimizeResult {
     let n = coords.len();
     let mut pos = coords.to_vec();
-    let mut nbc = NbCache::new(&pos, topo);
+    let mut nbc = NbCache::new(&pos, topo, params);
 
     let initial_e = nbc.energy(&pos, topo, params);
     let initial_energy = initial_e.total;
@@ -516,7 +518,7 @@ pub fn lbfgs(
     // Build a neighbor list once for large structures; reuse across iterations
     // and line search trials. This avoids rebuilding ~50×20 times per call on
     // the O(N²) nonbonded loop, which dominates cost above ~2K atoms.
-    let mut nbc = NbCache::new(&pos, topo);
+    let mut nbc = NbCache::new(&pos, topo, params);
 
     let initial_e = nbc.energy(&pos, topo, params);
     let initial_energy = initial_e.total;

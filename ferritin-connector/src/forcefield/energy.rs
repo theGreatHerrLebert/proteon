@@ -90,7 +90,7 @@ pub fn compute_energy_auto(
     nbl_threshold: usize,
 ) -> EnergyResult {
     if coords.len() > nbl_threshold {
-        let nbl = NeighborList::build(coords, 15.0, &topo.excluded_pairs, &topo.pairs_14);
+        let nbl = NeighborList::build(coords, params.nonbonded_cutoff(), &topo.excluded_pairs, &topo.pairs_14);
         compute_energy_nbl(coords, topo, params, &nbl)
     } else {
         compute_energy_impl(coords, topo, params, false)
@@ -180,8 +180,8 @@ fn compute_energy_impl(
 
     // --- Nonbonded: LJ 12-6 + Coulomb with switching ---
     let n = coords.len();
-    let cutoff = 15.0;
-    let cuton = 13.0;
+    let cutoff = params.nonbonded_cutoff();
+    let cuton = params.switching_on();
     let sw = CubicSwitch::new(cutoff, cuton);
     let coulomb_factor = 332.0; // kcal/mol * Å / e²
 
@@ -264,7 +264,7 @@ pub fn compute_energy_and_forces_auto(
     nbl_threshold: usize,
 ) -> (EnergyResult, Vec<[f64; 3]>) {
     if coords.len() > nbl_threshold {
-        let nbl = NeighborList::build(coords, 15.0, &topo.excluded_pairs, &topo.pairs_14);
+        let nbl = NeighborList::build(coords, params.nonbonded_cutoff(), &topo.excluded_pairs, &topo.pairs_14);
         compute_energy_and_forces_nbl(coords, topo, params, &nbl)
     } else {
         compute_energy_and_forces_impl(coords, topo, params, false)
@@ -391,8 +391,8 @@ fn compute_energy_and_forces_impl(
     );
 
     // --- Nonbonded: LJ 12-6 + Coulomb with switching + gradients ---
-    let cutoff = 15.0;
-    let cuton = 13.0;
+    let cutoff = params.nonbonded_cutoff();
+    let cuton = params.switching_on();
     let sw = CubicSwitch::new(cutoff, cuton);
     let coulomb_factor = 332.0;
 
@@ -536,8 +536,8 @@ pub fn compute_energy_and_forces_nbl(
     );
 
     // --- Nonbonded via neighbor list ---
-    let cutoff = 15.0;
-    let cuton = 13.0;
+    let cutoff = params.nonbonded_cutoff();
+    let cuton = params.switching_on();
     let sw = CubicSwitch::new(cutoff, cuton);
     let coulomb_factor = 332.0;
 
@@ -1292,7 +1292,7 @@ mod gradient_tests {
         let ff = amber96();
         let topo = build_topology(pdb, &ff);
         let coords = collect_coords(pdb);
-        let nbl = NeighborList::build(&coords, 15.0, &topo.excluded_pairs, &topo.pairs_14);
+        let nbl = NeighborList::build(&coords, ff.nonbonded_cutoff(), &topo.excluded_pairs, &topo.pairs_14);
         let (_, forces) = compute_energy_and_forces_nbl(&coords, &topo, &ff, &nbl);
 
         let eps = 1e-5;
@@ -1358,7 +1358,7 @@ mod gradient_tests {
         let pdb = crambin_with_h();
         let topo = build_topology(pdb, ff);
         let coords = collect_coords(pdb);
-        let nbl = NeighborList::build(&coords, 15.0, &topo.excluded_pairs, &topo.pairs_14);
+        let nbl = NeighborList::build(&coords, ff.nonbonded_cutoff(), &topo.excluded_pairs, &topo.pairs_14);
 
         let e_exact = compute_energy_impl(&coords, &topo, ff, false);
         let e_nbl = compute_energy_nbl(&coords, &topo, ff, &nbl);

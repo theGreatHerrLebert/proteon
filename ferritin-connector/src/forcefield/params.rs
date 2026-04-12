@@ -40,6 +40,25 @@ pub trait ForceField: Send + Sync {
     fn get_eef1(&self, _atype: &str) -> Option<&EEF1Param> { None }
     /// Whether this force field has EEF1 solvation enabled.
     fn has_eef1(&self) -> bool { false }
+
+    /// Nonbonded interaction cutoff (Å). Pairs beyond this distance are
+    /// ignored in the LJ + Coulomb loops and the NBL builder.
+    ///
+    /// Default: 15.0 Å (conservative, no long-range treatment). Override
+    /// for force fields parameterized with shorter cutoffs: CHARMM19+EEF1
+    /// uses 9.0 Å per BALL's `@CTOFNB=9.0` (the EEF1 solvation damping
+    /// makes the energy less sensitive to truncation), giving a ~4.6×
+    /// reduction in NBL pairs vs 15 Å.
+    fn nonbonded_cutoff(&self) -> f64 { 15.0 }
+
+    /// Distance at which the switching function begins to taper interactions.
+    /// Must be ≤ `nonbonded_cutoff()`. Interactions are full-strength below
+    /// this distance, smoothly tapered between cuton and cutoff, and zero
+    /// above cutoff.
+    ///
+    /// Default: 13.0 Å (consistent with the 15 Å cutoff). CHARMM19+EEF1
+    /// overrides to 7.0 Å per BALL's `@CTONNB=7.0`.
+    fn switching_on(&self) -> f64 { 13.0 }
 }
 
 /// Bond stretch parameters: E = k * (r - r0)²
@@ -578,6 +597,13 @@ impl ForceField for CharmmParams {
         self.eef1.get(atype)
     }
     fn has_eef1(&self) -> bool { !self.eef1.is_empty() }
+    /// CHARMM19+EEF1 canonical cutoff from BALL's param19_eef1.ini:
+    /// `@CTOFNB=9.0`. EEF1 solvation makes the energy less sensitive
+    /// to long-range truncation, so the short cutoff is safe and gives
+    /// ~4.6× fewer NBL pairs vs the default 15 Å.
+    fn nonbonded_cutoff(&self) -> f64 { 9.0 }
+    /// CHARMM19 switching on from BALL: `@CTONNB=7.0`.
+    fn switching_on(&self) -> f64 { 7.0 }
 }
 
 /// Load the embedded CHARMM19 + EEF1 parameter set.
