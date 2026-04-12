@@ -29,6 +29,7 @@ use super::topology::Topology;
 
 const NONBONDED_KERNEL_SRC: &str = include_str!("kernel.cu");
 const BONDED_KERNEL_SRC: &str = include_str!("bonded_kernels.cu");
+const SASA_KERNEL_SRC: &str = include_str!("sasa_kernel.cu");
 
 // ---------------------------------------------------------------------------
 // GpuContext: global singleton (one per process)
@@ -40,6 +41,7 @@ struct GpuKernels {
     bond: CudaFunction,
     angle: CudaFunction,
     torsion: CudaFunction,
+    sasa: CudaFunction,
 }
 
 /// Global GPU context. Created once, shared across all rayon threads.
@@ -89,11 +91,15 @@ impl GpuContext {
         let nb_mod = ctx.load_module(nb_ptx)?;
         let nonbonded = nb_mod.load_function("nonbonded_energy_forces")?;
 
-        let bonded_ptx = compile_ptx_with_opts(BONDED_KERNEL_SRC, opts)?;
+        let bonded_ptx = compile_ptx_with_opts(BONDED_KERNEL_SRC, opts.clone())?;
         let bonded_mod = ctx.load_module(bonded_ptx)?;
         let bond = bonded_mod.load_function("bond_energy_forces")?;
         let angle = bonded_mod.load_function("angle_energy_forces")?;
         let torsion = bonded_mod.load_function("torsion_energy_forces")?;
+
+        let sasa_ptx = compile_ptx_with_opts(SASA_KERNEL_SRC, opts)?;
+        let sasa_mod = ctx.load_module(sasa_ptx)?;
+        let sasa = sasa_mod.load_function("sasa_shrake_rupley")?;
 
         Ok(Self {
             ctx,
@@ -102,6 +108,7 @@ impl GpuContext {
                 bond,
                 angle,
                 torsion,
+                sasa,
             },
         })
     }
@@ -543,4 +550,109 @@ impl GpuStructState {
             .collect();
         Ok((energy, forces))
     }
+}
+
+// ---------------------------------------------------------------------------
+// GPU-accelerated SASA (Shrake-Rupley with neighbor prefilter)
+// ---------------------------------------------------------------------------
+
+/// GPU-accelerated Shrake-Rupley SASA with precomputed neighbor lists.
+///
+/// Builds neighbor lists on CPU (using the same distance-based filtering
+/// as ferritin's sasa.rs CellList), uploads flat neighbor arrays to GPU,
+/// and launches one thread per atom. Each thread loops over N test points
+/// × k neighbors (where k is the prefiltered count, typically 20-50).
+///
+/// Returns the same `Vec<f64>` as `sasa::shrake_rupley` — per-atom SASA
+/// in Å². Falls back to CPU if GPU initialization fails.
+pub(crate) fn gpu_shrake_rupley(
+    coords: &[[f64; 3]],
+    radii: &[f64],
+    probe: f64,
+    n_points: usize,
+) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
+    let gpu = GpuContext::try_global()
+        .ok_or("no GPU available")?;
+
+    let n_atoms = coords.len();
+    let stream = gpu.ctx.default_stream();
+
+    // Pre-compute expanded radii
+    let expanded: Vec<f64> = radii.iter().map(|r| r + probe).collect();
+    let expanded_sq: Vec<f64> = expanded.iter().map(|r| r * r).collect();
+
+    // Build neighbor lists on CPU (same logic as sasa.rs)
+    let mut neighbor_offsets = Vec::with_capacity(n_atoms);
+    let mut neighbor_counts = Vec::with_capacity(n_atoms);
+    let mut neighbor_indices = Vec::new();
+
+    for i in 0..n_atoms {
+        let ri = expanded[i];
+        neighbor_offsets.push(neighbor_indices.len() as i32);
+        let mut count = 0i32;
+        for j in 0..n_atoms {
+            if j == i { continue; }
+            let dx = coords[j][0] - coords[i][0];
+            let dy = coords[j][1] - coords[i][1];
+            let dz = coords[j][2] - coords[i][2];
+            let dist_sq = dx * dx + dy * dy + dz * dz;
+            let sum_r = ri + expanded[j];
+            if dist_sq < sum_r * sum_r {
+                neighbor_indices.push(j as i32);
+                count += 1;
+            }
+        }
+        neighbor_counts.push(count);
+    }
+
+    // Generate golden spiral points (same as sasa.rs)
+    let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+    let dz = 2.0 / n_points as f64;
+    let mut unit_points = Vec::with_capacity(n_points * 3);
+    let mut longitude = 0.0f64;
+    let mut z = 1.0 - dz / 2.0;
+    for _ in 0..n_points {
+        let r = (1.0 - z * z).max(0.0).sqrt();
+        unit_points.push(longitude.cos() * r);
+        unit_points.push(longitude.sin() * r);
+        unit_points.push(z);
+        z -= dz;
+        longitude += golden_angle;
+    }
+
+    let inv_n = 1.0 / n_points as f64;
+    let four_pi = 4.0 * std::f64::consts::PI;
+    let n_atoms_i32 = n_atoms as i32;
+    let n_points_i32 = n_points as i32;
+
+    // Upload
+    let coords_flat: Vec<f64> = coords.iter().flat_map(|c| c.iter().copied()).collect();
+    let d_coords = stream.clone_htod(&coords_flat)?;
+    let d_expanded = stream.clone_htod(&expanded)?;
+    let d_expanded_sq = stream.clone_htod(&expanded_sq)?;
+    let d_unit_points = stream.clone_htod(&unit_points)?;
+    let d_nb_offsets = stream.clone_htod(&neighbor_offsets)?;
+    let d_nb_counts = stream.clone_htod(&neighbor_counts)?;
+    // Ensure at least 1 element for the neighbor array (empty structures)
+    let nb_padded = if neighbor_indices.is_empty() { vec![0i32] } else { neighbor_indices };
+    let d_nb_indices = stream.clone_htod(&nb_padded)?;
+    let mut d_sasa = stream.alloc_zeros::<f64>(n_atoms)?;
+
+    // Launch
+    let cfg = LaunchConfig::for_num_elems(n_atoms as u32);
+    {
+        let mut a = stream.launch_builder(&gpu.kernels.sasa);
+        a.arg(&d_coords); a.arg(&d_expanded); a.arg(&d_expanded_sq);
+        a.arg(&d_unit_points);
+        a.arg(&d_nb_offsets); a.arg(&d_nb_counts); a.arg(&d_nb_indices);
+        a.arg(&n_atoms_i32); a.arg(&n_points_i32);
+        a.arg(&inv_n); a.arg(&four_pi);
+        a.arg(&mut d_sasa);
+        unsafe { a.launch(cfg)?; }
+    }
+    stream.synchronize()?;
+
+    // Download
+    let sasa = stream.clone_dtoh(&d_sasa)?;
+    Ok(sasa)
 }

@@ -267,6 +267,12 @@ impl CellList {
 ///
 /// # Returns
 /// Per-atom SASA in Angstroms², length N.
+/// Minimum atom count to auto-dispatch SASA to GPU.
+/// Below this, the GPU kernel launch overhead dominates the compute gain.
+/// At 500 atoms with 960 test points, the GPU starts winning on the
+/// RTX 5090 (~2k CUDA cores saturated).
+const SASA_GPU_THRESHOLD: usize = 500;
+
 pub fn shrake_rupley(
     coords: &[[f64; 3]],
     radii: &[f64],
@@ -278,6 +284,20 @@ pub fn shrake_rupley(
 
     if n_atoms == 0 {
         return Vec::new();
+    }
+
+    // GPU dispatch: if cuda feature enabled, GPU available, and structure
+    // is large enough, use the GPU kernel with precomputed neighbors.
+    #[cfg(feature = "cuda")]
+    if n_atoms >= SASA_GPU_THRESHOLD {
+        if let Some(_) = crate::forcefield::gpu::GpuContext::try_global() {
+            match crate::forcefield::gpu::gpu_shrake_rupley(coords, radii, probe, n_points) {
+                Ok(sasa) => return sasa,
+                Err(e) => {
+                    eprintln!("[ferritin-gpu] GPU SASA failed, falling back to CPU: {}", e);
+                }
+            }
+        }
     }
 
     // Pre-compute expanded radii
