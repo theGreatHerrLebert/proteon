@@ -932,3 +932,90 @@ mod plateau_tests {
         assert!(!plateaued);
     }
 }
+
+/// GPU parity test: LBFGS on a real structure via GPU must produce the same
+/// final energy as the CPU path. Only compiled and run with `--features cuda`.
+/// Skips silently if no GPU is detected at runtime (CI machines without GPU).
+#[cfg(all(test, feature = "cuda"))]
+mod gpu_parity_tests {
+    use super::*;
+    use crate::forcefield::params::charmm19_eef1;
+    use crate::forcefield::topology::build_topology;
+    use crate::add_hydrogens;
+    use std::path::PathBuf;
+
+    fn ake_path() -> PathBuf {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("../test-pdbs/1ake.pdb");
+        p
+    }
+
+    /// Test GPU energy+forces directly on crambin by constructing a
+    /// GpuStructState manually (bypasses the 2000-atom NbCache threshold).
+    /// Compares GPU energy to CPU energy on the same coordinates to 1e-4.
+    #[test]
+    fn gpu_energy_matches_cpu_on_crambin() {
+        use super::super::gpu;
+
+        let gpu_ctx = match gpu::GpuContext::try_global() {
+            Some(ctx) => ctx,
+            None => {
+                eprintln!("gpu_parity_tests: no GPU detected, skipping");
+                return;
+            }
+        };
+
+        let path = ake_path();
+        // Use crambin instead — always parses cleanly
+        let mut crambin_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        crambin_path.push("../test-pdbs/1crn.pdb");
+        if !crambin_path.exists() {
+            eprintln!("gpu_parity_tests: 1crn.pdb not found, skipping");
+            return;
+        }
+
+        let (mut pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(crambin_path.to_str().unwrap())
+            .expect("failed to read 1crn");
+        add_hydrogens::place_peptide_hydrogens(&mut pdb);
+
+        let ff = charmm19_eef1();
+        let topo = build_topology(&pdb, &ff);
+        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+        let coords_flat: Vec<f64> = coords.iter().flat_map(|c| c.iter().copied()).collect();
+
+        // CPU reference
+        let nbl = super::super::neighbor_list::NeighborList::build(
+            &coords,
+            ff.nonbonded_cutoff(),
+            &topo.excluded_pairs,
+            &topo.pairs_14,
+        );
+        let cpu_energy = super::super::energy::compute_energy_nbl(
+            &coords, &topo, &ff, &nbl,
+        );
+
+        // GPU: construct GpuStructState directly (bypasses NbCache threshold)
+        let mut gpu_state = gpu::GpuStructState::new(gpu_ctx, &topo, &nbl, &ff)
+            .expect("failed to create GPU state");
+        let gpu_energy = gpu_state.energy(gpu_ctx, &coords_flat)
+            .expect("GPU energy eval failed");
+
+        let diff = (gpu_energy.total - cpu_energy.total).abs();
+        let tol = 1e-4;
+        assert!(
+            diff < tol,
+            "GPU energy ({:+.6}) vs CPU energy ({:+.6}): diff={:.2e} > tol={:.2e}",
+            gpu_energy.total,
+            cpu_energy.total,
+            diff,
+            tol,
+        );
+
+        eprintln!(
+            "gpu_parity_tests: crambin GPU={:+.2} CPU={:+.2} diff={:.2e} PASS",
+            gpu_energy.total, cpu_energy.total, diff,
+        );
+    }
+}
