@@ -11,11 +11,19 @@ NumPy-array dict. The dict's field shapes match
 `SequenceExample`'s expected layout so the consumer can splat it into
 `build_sequence_example(structure, msa=..., deletion_matrix=...)`
 without copying field by field.
+
+End-to-end integration is also offered here as
+`build_sequence_example_with_msa`: takes a structure + a search
+engine, derives the query from the structure, runs the search,
+assembles the MSA, and returns a `SequenceExample` with all fields
+populated.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
+
+import numpy as np
 
 try:
     import ferritin_connector
@@ -97,4 +105,97 @@ def search_and_build_msa(
     """
     return engine.search_and_build_msa(
         query, max_seqs=max_seqs, gap_idx=gap_idx
+    )
+
+
+def build_sequence_example_with_msa(
+    structure,
+    engine,
+    *,
+    record_id: Optional[str] = None,
+    source_id: Optional[str] = None,
+    chain_id: Optional[str] = None,
+    code_rev: Optional[str] = None,
+    config_rev: Optional[str] = None,
+    template_mask: Optional[Sequence[float]] = None,
+    max_seqs: int = 256,
+    gap_idx: int = 21,
+):
+    """End-to-end: structure → query → search → MSA → SequenceExample.
+
+    Builds the structure-side fields (`aatype`, `residue_index`,
+    `seq_mask`) the same way `build_sequence_example` does, derives the
+    query string from the chain, runs `engine.search_and_build_msa`,
+    and returns a `SequenceExample` with the MSA-side fields populated
+    from the engine output.
+
+    Parameters mirror `build_sequence_example` plus `max_seqs` /
+    `gap_idx` for the MSA assembly. `chain_id` is required for
+    multi-chain structures.
+
+    Raises `ValueError` if the engine returns an MSA whose
+    `query_len` doesn't match the structure-derived chain length —
+    indicates the engine was built with a different alphabet or the
+    structure has been edited since the engine was constructed.
+    """
+    # Defer import so this module loads even if sequence_example isn't
+    # importable for some unrelated reason (matches the existing optional-
+    # dependency pattern used elsewhere in this package).
+    from .sequence_example import SequenceExample, build_sequence_example
+
+    # Build the structure-side example first (without MSA). This reuses
+    # all the existing chain selection, residue filtering, and field
+    # validation in build_sequence_example so the structure-side
+    # contract stays single-source.
+    base = build_sequence_example(
+        structure,
+        record_id=record_id,
+        source_id=source_id,
+        chain_id=chain_id,
+        code_rev=code_rev,
+        config_rev=config_rev,
+        msa=None,
+        deletion_matrix=None,
+        template_mask=template_mask,
+    )
+
+    msa_dict = search_and_build_msa(
+        engine,
+        base.sequence,
+        max_seqs=max_seqs,
+        gap_idx=gap_idx,
+    )
+
+    if int(msa_dict["query_len"]) != base.length:
+        raise ValueError(
+            f"engine returned MSA query_len={msa_dict['query_len']} "
+            f"but structure chain has length={base.length} — engine and "
+            f"structure must agree on the chain identity"
+        )
+
+    # Cast at the boundary to match the existing SequenceExample schema:
+    #   msa             uint8 → int32
+    #   deletion_matrix uint8 → float32
+    #   msa_mask        float32 → float32 (no-op)
+    # The Rust side keeps uint8 for memory; this pays one O(N*L) cast at
+    # the Python edge, which is dwarfed by the search itself.
+    msa_arr = np.asarray(msa_dict["msa"], dtype=np.int32)
+    deletion_arr = np.asarray(msa_dict["deletion_matrix"], dtype=np.float32)
+    msa_mask_arr = np.asarray(msa_dict["msa_mask"], dtype=np.float32)
+
+    return SequenceExample(
+        record_id=base.record_id,
+        source_id=base.source_id,
+        chain_id=base.chain_id,
+        sequence=base.sequence,
+        length=base.length,
+        code_rev=base.code_rev,
+        config_rev=base.config_rev,
+        aatype=base.aatype,
+        residue_index=base.residue_index,
+        seq_mask=base.seq_mask,
+        msa=msa_arr,
+        deletion_matrix=deletion_arr,
+        msa_mask=msa_mask_arr,
+        template_mask=base.template_mask,
     )
