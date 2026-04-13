@@ -50,6 +50,7 @@ pub fn read_all(path: impl AsRef<Path>) -> Result<Vec<IndexEntry>> {
     Ok(out)
 }
 
+#[allow(dead_code)] // public batch helper; used in tests, exposed for external callers
 pub fn write_all(path: impl AsRef<Path>, entries: &[IndexEntry]) -> Result<()> {
     let mut file = std::io::BufWriter::new(std::fs::File::create(path.as_ref())?);
     for e in entries {
