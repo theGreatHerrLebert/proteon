@@ -74,6 +74,76 @@ fn max_bond_distance(elem_a: &str, elem_b: &str) -> f64 {
     }
 }
 
+/// Return alternate hydrogen atom-name spellings, in priority order.
+///
+/// Background: ferritin's `amber96.ini` / `charmm19_eef1.ini` templates
+/// inherit from BALL (old wwPDB convention) where a methyl/methylene
+/// prefixes the digit: `1HB`, `2HG1`. PDBFixer and modern AMBER/OpenMM
+/// use the PDB v3 convention: `HB1`, `HG12`.
+///
+/// Two cases to bridge:
+///   1. *Methyl* (3 H's on one carbon): names `HB1/HB2/HB3` in PDB v3
+///      correspond to `1HB/2HB/3HB` in BALL. Simple "move the last digit
+///      to the front" rotation suffices.
+///   2. *Methylene* (2 H's on one carbon): PDB v3 uses `HB2/HB3`,
+///      BALL uses `1HB/2HB`. `HB2 → 2HB` works by rotation, but
+///      `HB3 → 3HB` misses because BALL has no `3HB`. We therefore
+///      also offer the "decrement-then-rotate" candidate `2HB` as a
+///      fallback for any trailing-digit name.
+///
+/// Returned candidates are tried in order; the first FF hit wins. Since
+/// methylene H's share atom type, mapping `HB3` to `2HB` gives the right
+/// AMBER type even though `HB2`/`HB3` are chemically indistinguishable.
+/// For methyl H's the rotation always hits before the decrement does.
+///
+/// Names without a leading or trailing digit (`HA`, `HN`, `H`) return
+/// an empty vec — nothing to rotate.
+pub(crate) fn alt_h_name_candidates(name: &str) -> Vec<String> {
+    let mut out = Vec::with_capacity(2);
+    if name.is_empty() {
+        return out;
+    }
+    let bytes = name.as_bytes();
+    let first = bytes[0] as char;
+    let last = bytes[bytes.len() - 1] as char;
+    if first.is_ascii_digit() {
+        // BALL → PDB v3: `1HB` → `HB1`. (Decrement variant unnecessary
+        // here — BALL is the convention we're normalizing *from* in the
+        // input, not the one we're normalizing *to*.)
+        let rest = &name[1..];
+        out.push(format!("{rest}{first}"));
+    } else if last.is_ascii_digit() {
+        let head = &name[..name.len() - 1];
+        let d = last.to_digit(10).unwrap();
+        // Methyl rotation (PDB v3 → BALL): HB1 → 1HB.
+        out.push(format!("{last}{head}"));
+        // Methylene decrement-then-rotate (PDB v3 → BALL): HB3 → 2HB.
+        // Only meaningful for d > 1.
+        if d > 1 {
+            out.push(format!("{}{head}", (d - 1)));
+        }
+    }
+    out
+}
+
+/// Look up an atom type, trying the original name and (for hydrogens) the
+/// alternate PDB v3 <-> BALL naming convention. Returns the first match.
+fn get_atom_type_with_aliases<'a, F: ForceField + ?Sized>(
+    params: &'a F,
+    residue: &str,
+    atom: &str,
+) -> Option<&'a super::params::AtomTypeEntry> {
+    if let Some(e) = params.get_atom_type(residue, atom) {
+        return Some(e);
+    }
+    for alt in alt_h_name_candidates(atom) {
+        if let Some(e) = params.get_atom_type(residue, &alt) {
+            return Some(e);
+        }
+    }
+    None
+}
+
 /// Shared predicate: should this (residue_name, atom_name, element) triple
 /// be included in the force-field topology?
 ///
@@ -115,12 +185,31 @@ pub(crate) fn should_include_atom<F: ForceField + ?Sized>(
     // For hydrogens: skip if the FF has no entry for this
     // (residue, atom_name) pair. Non-H atoms with no entry fall
     // through to the topology-builder fallback for visibility.
+    //
+    // Also try the alternate PDB v3 <-> BALL naming convention — ferritin's
+    // .ini templates use the BALL convention (`1HB`, `2HG1`) but PDBFixer
+    // and modern AMBER emit PDB v3 (`HB1`, `HG12`). Without the alias
+    // lookup, PDBFixer-prepped structures silently lose ~30% of their
+    // hydrogens from the topology. See `alt_h_name` for the rotation rule
+    // and memory/project_amber96_broken.md for the 2026-04-13 diagnosis.
     let is_hydrogen = element == "H" || element == "D";
     if is_hydrogen {
-        let found = params
-            .get_atom_type(lookup_name, atom_name)
-            .or_else(|| params.get_atom_type(residue_name, atom_name))
-            .is_some();
+        let nterm = format!("{residue_name}-N");
+        let cterm = format!("{residue_name}-C");
+        let found = get_atom_type_with_aliases(params, lookup_name, atom_name).is_some()
+            || get_atom_type_with_aliases(params, residue_name, atom_name).is_some()
+            // Also try terminal variants. build_topology computes these
+            // from chain context and passes them via `lookup_name`; but
+            // `apply_coords_to_pdb` has no chain context and passes the
+            // bare residue name, so it would silently skip N-terminal H1
+            // / C-terminal OXT hydrogens and drift out of lockstep with
+            // build_topology, causing a coord-array vs atom-count panic
+            // downstream. Trying the variants here keeps the predicate
+            // symmetric between callers. In practice these H names only
+            // appear at true termini in well-formed PDBs, so we don't
+            // produce false positives.
+            || get_atom_type_with_aliases(params, &nterm, atom_name).is_some()
+            || get_atom_type_with_aliases(params, &cterm, atom_name).is_some();
         if !found {
             return false;
         }
@@ -240,8 +329,8 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                 // include with whatever the lookup gives us, falling back
                 // to a default type if unknown". The fallback path is
                 // retained for visibility of unknown ligand atoms.
-                let lookup = params.get_atom_type(&lookup_name, &atom_name)
-                    .or_else(|| params.get_atom_type(&base_name, &atom_name));
+                let lookup = get_atom_type_with_aliases(params, &lookup_name, &atom_name)
+                    .or_else(|| get_atom_type_with_aliases(params, &base_name, &atom_name));
                 let (amber_type, charge) = match lookup {
                     Some(e) => (e.amber_type.clone(), e.charge),
                     None => {
@@ -286,10 +375,93 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
     let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut bonded_set: HashSet<(usize, usize)> = HashSet::new();
 
-    // Build an index: (residue_idx, atom_name) → global atom index
-    let mut res_atom_index: HashMap<(usize, &str), usize> = HashMap::new();
+    // Build an index: (residue_idx, atom_name) → global atom index.
+    //
+    // Owned String keys (not &str) so we can also store the alternate
+    // PDB v3 <-> BALL hydrogen-naming convention next to the original.
+    // Template bond lists in ferritin use BALL convention (`1HB`), but
+    // PDBFixer-prepped inputs use PDB v3 (`HB1`); inserting both aliases
+    // here lets Phase A find the atom regardless of which convention the
+    // source PDB used.
+    // Classify methylene carbons per residue so the PDB v3 → BALL
+    // name mapping is unambiguous. AMBER's PDB v3 convention numbers
+    // methylene hydrogens as `HB2, HB3` (no `HB1`); BALL numbers the
+    // same two atoms as `1HB, 2HB`. We need the subtract-then-rotate
+    // mapping `HB2→1HB, HB3→2HB` for methylenes, and the plain
+    // rotation `HB1→1HB, HB2→2HB, HB3→3HB` for methyls. Without this
+    // classification we'd guess wrong for one case or the other and
+    // silently drop a bond per methylene. Detect methylenes by
+    // counting: exactly two hydrogens on one carbon-prefix, numbered 2
+    // and 3 (no 1) ⇒ methylene.
+    let mut is_methylene: HashSet<(usize, String)> = HashSet::new();
+    {
+        let mut by_prefix: HashMap<(usize, String), Vec<u32>> = HashMap::new();
+        for atom in &atoms {
+            if !atom.is_hydrogen {
+                continue;
+            }
+            let name = atom.atom_name.as_bytes();
+            if name.len() < 2 {
+                continue;
+            }
+            let first = name[0];
+            let last = name[name.len() - 1];
+            // Only PDB v3 style names have a non-digit leading char and
+            // a trailing digit.
+            if !first.is_ascii_digit() && last.is_ascii_digit() {
+                let d = (last as char).to_digit(10).unwrap();
+                let prefix = atom.atom_name[..atom.atom_name.len() - 1].to_string();
+                by_prefix
+                    .entry((atom.residue_idx, prefix))
+                    .or_default()
+                    .push(d);
+            }
+        }
+        for ((res_idx, prefix), mut digits) in by_prefix {
+            digits.sort();
+            if digits.len() == 2 && digits[0] == 2 && digits[1] == 3 {
+                is_methylene.insert((res_idx, prefix));
+            }
+        }
+    }
+
+    let mut res_atom_index: HashMap<(usize, String), usize> = HashMap::new();
     for (i, atom) in atoms.iter().enumerate() {
-        res_atom_index.insert((atom.residue_idx, &atom.atom_name), i);
+        res_atom_index.insert((atom.residue_idx, atom.atom_name.clone()), i);
+        if atom.is_hydrogen {
+            // Derive the alt name based on methyl-vs-methylene classification.
+            let name = atom.atom_name.as_bytes();
+            if name.is_empty() {
+                continue;
+            }
+            let first = name[0];
+            let last = name[name.len() - 1];
+            if first.is_ascii_digit() {
+                // BALL → PDB v3 rotation (for inputs that already use BALL).
+                let rest = &atom.atom_name[1..];
+                let alt = format!("{rest}{}", first as char);
+                res_atom_index
+                    .entry((atom.residue_idx, alt))
+                    .or_insert(i);
+            } else if last.is_ascii_digit() {
+                let head = &atom.atom_name[..atom.atom_name.len() - 1];
+                let d = (last as char).to_digit(10).unwrap();
+                let methylene_key = (atom.residue_idx, head.to_string());
+                if is_methylene.contains(&methylene_key) && d >= 2 {
+                    // PDB v3 methylene HB2→1HB, HB3→2HB.
+                    let alt = format!("{}{head}", d - 1);
+                    res_atom_index
+                        .entry((atom.residue_idx, alt))
+                        .or_insert(i);
+                } else {
+                    // Methyl (or other): simple rotation HB1→1HB etc.
+                    let alt = format!("{last}{head}", last = last as char);
+                    res_atom_index
+                        .entry((atom.residue_idx, alt))
+                        .or_insert(i);
+                }
+            }
+        }
     }
 
     // Build a template lookup
@@ -323,8 +495,8 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
             let tpl_bonds = template.2;
             for &(a1_name, a2_name) in tpl_bonds {
                 if let (Some(&i), Some(&j)) = (
-                    res_atom_index.get(&(res_idx, a1_name)),
-                    res_atom_index.get(&(res_idx, a2_name)),
+                    res_atom_index.get(&(res_idx, a1_name.to_string())),
+                    res_atom_index.get(&(res_idx, a2_name.to_string())),
                 ) {
                     let pair = (i.min(j), i.max(j));
                     if bonded_set.insert(pair) {
@@ -341,8 +513,8 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
     let max_res_idx = atoms.iter().map(|a| a.residue_idx).max().unwrap_or(0);
     for res_idx in 0..max_res_idx {
         if let (Some(&c_idx), Some(&n_idx)) = (
-            res_atom_index.get(&(res_idx, "C")),
-            res_atom_index.get(&(res_idx + 1, "N")),
+            res_atom_index.get(&(res_idx, "C".to_string())),
+            res_atom_index.get(&(res_idx + 1, "N".to_string())),
         ) {
             let dx = atoms[c_idx].pos[0] - atoms[n_idx].pos[0];
             let dy = atoms[c_idx].pos[1] - atoms[n_idx].pos[1];
@@ -369,7 +541,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
             _ => None,
         };
         if let Some(parent_name) = parent {
-            if let Some(&p_idx) = res_atom_index.get(&(res_idx, parent_name)) {
+            if let Some(&p_idx) = res_atom_index.get(&(res_idx, parent_name.to_string())) {
                 let pair = (i.min(p_idx), i.max(p_idx));
                 if bonded_set.insert(pair) {
                     bonds.push(Bond { i: pair.0, j: pair.1 });

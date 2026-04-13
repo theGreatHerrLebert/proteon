@@ -79,6 +79,18 @@ pub fn compute_energy(
     dict.set_item("solvation", result.solvation)?;
     dict.set_item("total", result.total)?;
     dict.set_item("n_unassigned_atoms", topo.unassigned_atoms.len())?;
+    // Topology counts — diagnostic data for cross-tool oracle comparison.
+    // Ferritin silently drops hydrogens whose names aren't in the FF
+    // residue template (see should_include_atom in topology.rs); without
+    // these counts it's impossible to tell from the outside whether a
+    // given PDB's H atoms made it into the bonded/nonbonded sums or not.
+    dict.set_item("n_topo_atoms", topo.atoms.len())?;
+    dict.set_item("n_bonds", topo.bonds.len())?;
+    dict.set_item("n_angles", topo.angles.len())?;
+    dict.set_item("n_torsions", topo.torsions.len())?;
+    dict.set_item("n_impropers", topo.improper_torsions.len())?;
+    dict.set_item("n_excluded_pairs", topo.excluded_pairs.len())?;
+    dict.set_item("n_14_pairs", topo.pairs_14.len())?;
     Ok(dict.into_any().unbind())
 }
 

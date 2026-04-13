@@ -24,6 +24,8 @@ Functions:
 
 from __future__ import annotations
 
+import functools
+import warnings
 from typing import Optional
 
 try:
@@ -31,6 +33,38 @@ try:
     _ff = ferritin_connector.py_forcefield
 except ImportError:
     _ff = None
+
+
+@functools.lru_cache(maxsize=1)
+def _warn_amber96_experimental() -> None:
+    """Warn once per process that ferritin's AMBER96 match to OpenMM is
+    approximate, not reference-quality.
+
+    Status after 2026-04-13 H-naming fix: on identical PDBFixer-prepped
+    crambin, ferritin-AMBER96 agrees with OpenMM-AMBER96 to ~2% on total
+    energy (bond terms to 0.06%, angles 0.2%, nonbonded ~1%). Remaining
+    gap is in torsion enumeration (73 extra torsions in ferritin) and
+    nonbonded cutoff policy (ferritin 15 Å with switching vs OpenMM
+    NoCutoff). See task #46.
+
+    For research needing 1e-4 kcal/mol agreement use OpenMM directly.
+    For structural pipelines (H placement, local minimization), ferritin's
+    AMBER96 is within the noise floor of other MM approximations.
+    """
+    warnings.warn(
+        "ferritin's AMBER96 matches OpenMM AMBER96 to ~2% on total energy "
+        "(crambin oracle, 2026-04-13). Bonded counts now match exactly; "
+        "remaining gap is in torsion enumeration and nonbonded cutoff "
+        "policy. For validated cross-tool comparison use "
+        "ff='charmm19_eef1' (default). See task #46.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _maybe_warn_ff(ff: Optional[str]) -> None:
+    if ff is not None and ff.lower() == "amber96":
+        _warn_amber96_experimental()
 
 # ---------------------------------------------------------------------------
 # Unit conversion
@@ -128,9 +162,22 @@ def compute_energy(
 ) -> dict:
     """Compute force field energy of a structure.
 
+    Force field status:
+        * ``"charmm19_eef1"`` — **validated production path.** Used by the
+          50K battle test (99.1% negative total) and the fold-preservation
+          benchmark (median TM=0.9945 pre/post minimization). This is what
+          downstream code should use.
+        * ``"amber96"`` — **experimental.** Self-consistent within ferritin
+          but does NOT match OpenMM's AMBER96 on identical PDBFixer-prepped
+          inputs (factor-2 disagreement in bonded terms, wrong-sign nonbonded
+          on the 1000-PDB oracle run 2026-04-13). A UserWarning is emitted
+          once per process. Do not rely on these numbers for cross-tool
+          comparison; see task #46 for remediation plan.
+
     Args:
         structure: Ferritin Structure object.
-        ff: Force field — "amber96" (default) or "charmm19_eef1".
+        ff: Force field — "amber96" (experimental) or "charmm19_eef1"
+            (validated, recommended).
         units: Energy units — "kJ/mol" (default) or "kcal/mol".
         nbl_threshold: Optional override for the neighbor-list atom-count
             threshold. None (default) uses the library default of 2000.
@@ -144,6 +191,7 @@ def compute_energy(
         vdw, electrostatic, solvation, total
     """
     u = _validate_units(units)
+    _maybe_warn_ff(ff)
     result = _ff.compute_energy(_get_ptr(structure), ff, nbl_threshold)
     return _convert_energy_dict(result, u)
 
@@ -159,6 +207,11 @@ def minimize_hydrogens(
 
     Freezes all heavy atoms and optimizes only H positions.
 
+    Note:
+        Uses AMBER96, which is experimental in ferritin — energies do not
+        match OpenMM AMBER96 on identical inputs. Positions are self-consistent
+        but not reference-quality. See ``compute_energy`` docstring.
+
     Args:
         structure: A ferritin Structure.
         max_steps: Maximum optimization steps (default 500).
@@ -172,6 +225,7 @@ def minimize_hydrogens(
     """
     u = _validate_units(units)
     _validate_method(method)
+    _maybe_warn_ff("amber96")
     result = _ff.minimize_hydrogens(_get_ptr(structure), max_steps, gradient_tolerance, method)
     return _convert_energy_dict(result, u)
 
@@ -187,6 +241,12 @@ def minimize_structure(
 
     All atoms are free to move.
 
+    Note:
+        Uses AMBER96, which is experimental in ferritin — energies do not
+        match OpenMM AMBER96 on identical inputs. See ``compute_energy``
+        docstring. For validated production use, prepare structures with
+        ``batch_prepare(ff="charmm19_eef1")`` (the default).
+
     Args:
         structure: A ferritin Structure.
         max_steps: Maximum optimization steps (default 1000).
@@ -200,6 +260,7 @@ def minimize_structure(
     """
     u = _validate_units(units)
     _validate_method(method)
+    _maybe_warn_ff("amber96")
     result = _ff.minimize_structure(_get_ptr(structure), max_steps, gradient_tolerance, method)
     return _convert_energy_dict(result, u)
 

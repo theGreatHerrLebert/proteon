@@ -22,6 +22,9 @@ except ImportError:
     _add_h = None
     _ff = None
 
+# Re-use the same once-per-process AMBER96 warning machinery as forcefield.py.
+from .forcefield import _maybe_warn_ff  # noqa: E402
+
 
 def _get_ptr(structure):
     if hasattr(structure, 'get_py_ptr'):
@@ -164,11 +167,12 @@ def prepare(
             False to retain experimental H positions when their provenance
             is trusted. See batch_prepare docstring for the rescue analysis.
         ff: Force field used by the topology builder and the minimizer.
-            ``"charmm19_eef1"`` (default) gives physically meaningful energies
-            on isolated proteins via its EEF1 implicit-solvent term.
-            ``"amber96"`` is provided for like-for-like comparison against
-            other AMBER96 implementations (OpenMM, BALL) in the SOTA
-            validation harness.
+            ``"charmm19_eef1"`` (default) is the **validated production
+            path** — used by the 50K battle test and the fold-preservation
+            benchmark. ``"amber96"`` is **experimental**; ferritin's AMBER96
+            energies do NOT match OpenMM AMBER96 on identical inputs
+            (diagnosed 2026-04-13). Emits a UserWarning once per process.
+            Do not use for cross-tool oracle comparison; see task #46.
 
     Returns:
         PrepReport with preparation statistics.
@@ -181,6 +185,7 @@ def prepare(
     """
     ptr = _get_ptr(structure)
     report = PrepReport()
+    _maybe_warn_ff(ff)
 
     # Step 0: Optionally strip existing hydrogens.
     if strip_hydrogens:
@@ -310,11 +315,12 @@ def batch_prepare(
             (stragglers stop burning the LBFGS step cap). Set to False to
             retain experimental H positions when their provenance is trusted.
         ff: Force field used by the topology builder and the minimizer.
-            ``"charmm19_eef1"`` (default) gives physically meaningful energies
-            on isolated proteins via its EEF1 implicit-solvent term.
-            ``"amber96"`` is provided for like-for-like comparison against
-            other AMBER96 implementations (OpenMM, BALL) in the SOTA
-            validation harness.
+            ``"charmm19_eef1"`` (default) is the **validated production
+            path** — used by the 50K battle test and the fold-preservation
+            benchmark. ``"amber96"`` is **experimental**; ferritin's AMBER96
+            energies do NOT match OpenMM AMBER96 on identical inputs
+            (diagnosed 2026-04-13). Emits a UserWarning once per process.
+            Do not use for cross-tool oracle comparison; see task #46.
         constrain_heavy: Whether to freeze heavy atoms during minimization.
             ``None`` (default) uses the FF-aware default: True for AMBER96
             (H-only minimization is the intended pattern — all-atom AMBER
@@ -329,6 +335,7 @@ def batch_prepare(
     Returns:
         List of PrepReport, one per structure.
     """
+    _maybe_warn_ff(ff)
     ptrs = [_get_ptr(s) for s in structures]
     raw_results = _add_h.batch_prepare(
         ptrs, reconstruct, hydrogens, include_water,
