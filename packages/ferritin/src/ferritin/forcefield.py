@@ -40,23 +40,24 @@ def _warn_amber96_experimental() -> None:
     """Warn once per process that ferritin's AMBER96 match to OpenMM is
     approximate, not reference-quality.
 
-    Status after 2026-04-13 H-naming fix: on identical PDBFixer-prepped
-    crambin, ferritin-AMBER96 agrees with OpenMM-AMBER96 to ~2% on total
-    energy (bond terms to 0.06%, angles 0.2%, nonbonded ~1%). Remaining
-    gap is in torsion enumeration (73 extra torsions in ferritin) and
-    nonbonded cutoff policy (ferritin 15 Å with switching vs OpenMM
-    NoCutoff). See task #46.
+    Status after 2026-04-13 fixes (H-name aliases + double-wildcard
+    improper lookup): on identical PDBFixer-prepped crambin, ferritin-
+    AMBER96 agrees with OpenMM-AMBER96 to ~1.4% on total energy. Bond
+    terms match to 0.008%, angles 0.2%, torsions 0.5%. Remaining gap is
+    in nonbonded cutoff policy (ferritin 15 Å switching vs OpenMM
+    NoCutoff) and small enumeration differences in the proper-torsion
+    graph traversal.
 
     For research needing 1e-4 kcal/mol agreement use OpenMM directly.
     For structural pipelines (H placement, local minimization), ferritin's
-    AMBER96 is within the noise floor of other MM approximations.
+    AMBER96 is now a reasonable AMBER oracle.
     """
     warnings.warn(
-        "ferritin's AMBER96 matches OpenMM AMBER96 to ~2% on total energy "
-        "(crambin oracle, 2026-04-13). Bonded counts now match exactly; "
-        "remaining gap is in torsion enumeration and nonbonded cutoff "
-        "policy. For validated cross-tool comparison use "
-        "ff='charmm19_eef1' (default). See task #46.",
+        "ferritin's AMBER96 matches OpenMM AMBER96 to ~1.4% on total "
+        "energy (crambin oracle, 2026-04-13). Bonded terms match to "
+        "0.5% or better; remaining gap is nonbonded cutoff policy. For "
+        "validated cross-tool comparison use ff='charmm19_eef1' "
+        "(default). See task #47.",
         UserWarning,
         stacklevel=3,
     )

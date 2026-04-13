@@ -368,8 +368,19 @@ impl AmberParams {
 
     /// Look up improper torsion parameters.
     ///
-    /// More restrictive than proper torsions — requires at least one non-wildcard
-    /// outer atom to avoid over-matching (e.g., *-*-C-O matching every backbone C).
+    /// AMBER's improper-torsion templates commonly use double wildcards in
+    /// the first two positions to match "any two substituents around a
+    /// given center with a specific terminal atom" — e.g. `* * N H`
+    /// enforces amide-plane planarity for every backbone N regardless of
+    /// what else the N is attached to. Without the double-wildcard
+    /// fallback, ferritin silently failed to find these entries, leading
+    /// to only ~15 impropers on a 46-residue protein (should be ~92).
+    /// The diagnostic that surfaced this: 2026-04-13 OpenMM oracle on
+    /// crambin showed 113 "omm-only" torsions all of the form
+    /// `Cprev-CA-N-H` and `CA-Nnext-C-O` — both amide-plane impropers.
+    ///
+    /// Fallback order (7 patterns):
+    ///   exact → reverse → single-wildcard outer → double-wildcard outer.
     pub fn get_improper_torsion(
         &self,
         type_a: &str,
@@ -379,13 +390,15 @@ impl AmberParams {
     ) -> Option<&Vec<TorsionTerm>> {
         let (a, b, c, d) = (type_a.to_string(), type_b.to_string(), type_c.to_string(), type_d.to_string());
         let w = "*".to_string();
-        // Exact match
         self.improper_torsions.get(&(a.clone(), b.clone(), c.clone(), d.clone()))
-            // Reverse
             .or_else(|| self.improper_torsions.get(&(d.clone(), c.clone(), b.clone(), a.clone())))
-            // One wildcard on outer (specific inner)
             .or_else(|| self.improper_torsions.get(&(w.clone(), b.clone(), c.clone(), d.clone())))
             .or_else(|| self.improper_torsions.get(&(a.clone(), b.clone(), c.clone(), w.clone())))
+            // Double-wildcard outer (AMBER amide-plane pattern).
+            .or_else(|| self.improper_torsions.get(&(w.clone(), w.clone(), c.clone(), d.clone())))
+            .or_else(|| self.improper_torsions.get(&(d.clone(), c.clone(), w.clone(), w.clone())))
+            // `d-c-*-*` reverse is equivalent to `*-*-c-d` on an already-
+            // canonical stored form; include both to handle either store.
     }
 
     // kept for backward compatibility — old 3-pattern version removed

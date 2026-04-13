@@ -78,17 +78,31 @@ class TestBallEnergyOracle:
         pct = abs(fe - ball) / abs(ball) * 100
         assert pct < 0.1, f"Electrostatic: {fe:.2f} vs BALL {ball:.2f} ({pct:.4f}%)"
 
-    def test_improper_order_of_magnitude(self, crambin_energy):
-        """Improper torsion differs ~6.5% due to 5 extra correct impropers.
+    def test_improper_on_same_order_as_ball(self, crambin_energy):
+        """Improper is a small term; ferritin's number is expected to exceed
+        BALL's because ferritin enforces AMBER's full double-wildcard
+        improper lookup (see params.rs::get_improper_torsion) and thus
+        catches the ~100 amide-plane impropers (`* * N H`) that BALL's
+        single-wildcard implementation misses on every peptide bond.
 
-        Ferritin assigns carboxylate planarity (ASP:CG, GLU:CD, ASN-C:C)
-        and TYR hydroxyl planarity (TYR:CZ) that BALL misses due to its
-        permutation iteration order. Absolute difference: 0.13 kJ/mol.
+        Before the 2026-04-13 double-wildcard fix: ferritin had 15
+        impropers = 2.2 kJ/mol, close to BALL's 2.08 kJ/mol.
+        After the fix: 125 impropers = 8.1 kJ/mol, which is the AMBER-
+        canonical value (OpenMM's amber96 agrees within 0.5%).
+
+        We still assert the absolute magnitude is small so this term
+        doesn't quietly explode.
         """
         fe = crambin_energy["improper_torsion"]
         ball = BALL_CRAMBIN_RAW["improper_torsion"]
-        pct = abs(fe - ball) / ball * 100
-        assert pct < 10, f"Improper: {fe:.2f} vs BALL {ball:.2f} ({pct:.1f}%)"
+        # Ferritin expected > BALL but still small in magnitude.
+        assert 0 < fe < 20, f"Improper ferritin: {fe:.2f} kJ/mol (expected 2-15)"
+        # Historical expectation: BALL was ~2 kJ/mol. We should be above that.
+        assert fe >= ball, (
+            f"Improper regressed below BALL: {fe:.2f} < BALL {ball:.2f}. "
+            "Double-wildcard improper matching should catch more amide-plane "
+            "terms than BALL's single-wildcard implementation."
+        )
 
     def test_all_components_finite(self, crambin_energy):
         import numpy as np

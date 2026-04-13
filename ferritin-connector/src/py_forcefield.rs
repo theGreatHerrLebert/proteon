@@ -9,6 +9,47 @@ use crate::forcefield::{energy, md, minimize, params, params::ForceField, topolo
 use crate::parallel::resolve_threads;
 use crate::py_pdb::PyPDB;
 
+/// Dump the raw topology (atom-index tuples for every bond, angle,
+/// torsion, improper torsion) as Python lists. Used by the AMBER96 oracle
+/// to diff ferritin's torsion list against OpenMM's PeriodicTorsionForce
+/// contents — atom-index-only so the two sets can be compared directly.
+#[pyfunction]
+#[pyo3(signature = (pdb, ff="amber96"))]
+pub fn dump_topology<'py>(py: Python<'py>, pdb: &PyPDB, ff: &str) -> PyResult<PyObject> {
+    let topo = match ff {
+        "charmm" | "charmm19" | "charmm19_eef1" => {
+            topology::build_topology(&pdb.inner, &params::charmm19_eef1())
+        }
+        "amber" | "amber96" => topology::build_topology(&pdb.inner, &params::amber96()),
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unknown force field '{ff}'. Use 'amber96' or 'charmm19_eef1'."
+            )))
+        }
+    };
+    let dict = pyo3::types::PyDict::new(py);
+    let bonds: Vec<(usize, usize)> = topo.bonds.iter().map(|b| (b.i, b.j)).collect();
+    let angles: Vec<(usize, usize, usize)> =
+        topo.angles.iter().map(|a| (a.i, a.j, a.k)).collect();
+    let torsions: Vec<(usize, usize, usize, usize)> =
+        topo.torsions.iter().map(|t| (t.i, t.j, t.k, t.l)).collect();
+    let impropers: Vec<(usize, usize, usize, usize)> =
+        topo.improper_torsions.iter().map(|t| (t.i, t.j, t.k, t.l)).collect();
+    // Map each topology atom back to its (residue_idx, atom_name) so the
+    // diff tool can print human-readable identities.
+    let atom_identities: Vec<(usize, String, String)> = topo
+        .atoms
+        .iter()
+        .map(|a| (a.residue_idx, a.residue_name.clone(), a.atom_name.clone()))
+        .collect();
+    dict.set_item("bonds", bonds)?;
+    dict.set_item("angles", angles)?;
+    dict.set_item("torsions", torsions)?;
+    dict.set_item("impropers", impropers)?;
+    dict.set_item("atom_identities", atom_identities)?;
+    Ok(dict.into_any().unbind())
+}
+
 fn build_pool(n_threads: usize) -> rayon::ThreadPool {
     let mut builder = rayon::ThreadPoolBuilder::new();
     if n_threads > 0 {
@@ -572,6 +613,7 @@ pub fn gpu_info(py: Python<'_>) -> PyResult<PyObject> {
 #[pymodule]
 pub fn py_forcefield(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_energy, m)?)?;
+    m.add_function(wrap_pyfunction!(dump_topology, m)?)?;
     m.add_function(wrap_pyfunction!(minimize_hydrogens, m)?)?;
     m.add_function(wrap_pyfunction!(minimize_structure, m)?)?;
     m.add_function(wrap_pyfunction!(batch_minimize_hydrogens, m)?)?;
