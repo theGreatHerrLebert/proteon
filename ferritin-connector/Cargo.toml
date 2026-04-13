@@ -15,6 +15,7 @@ cuda = ["cudarc"]
 ferritin-align = { path = "../ferritin-align" }
 ferritin-arrow = { path = "../ferritin-arrow" }
 ferritin-io = { path = "../ferritin-io" }
+ferritin-search = { path = "../ferritin-search" }
 pdbtbx = { git = "https://github.com/douweschulte/pdbtbx", branch = "main" }
 arrow = { version = "54", features = ["ipc"] }
 pyo3 = { version = "0.23", features = ["extension-module"] }
