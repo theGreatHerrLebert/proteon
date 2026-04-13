@@ -12,5 +12,6 @@ pub mod kmer_generator;
 pub mod matrix;
 pub mod prefilter;
 pub mod reduced_alphabet;
+pub mod search;
 pub mod sequence;
 pub mod ungapped;

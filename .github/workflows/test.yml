@@ -92,6 +92,11 @@ jobs:
           # FASTA defaults to tests/data/oracle_fixture.fasta (vendored);
           # no env override needed.
         run: cargo test -p ferritin-search --test roundtrip -- --nocapture
+      - name: End-to-end search recall oracle (vendored fixture)
+        env:
+          FERRITIN_SEARCH_REQUIRE_ORACLE: "1"
+          FERRITIN_SEARCH_MMSEQS_BIN: ${{ env.MMSEQS_BIN }}
+        run: cargo test -p ferritin-search --test oracle_search -- --nocapture
 
   # Smoke test: binaries build and run
   cli-smoke:
