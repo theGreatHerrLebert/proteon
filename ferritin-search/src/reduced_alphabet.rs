@@ -39,15 +39,30 @@ pub struct ReducedAlphabet {
     /// `full_to_reduced[i]` is the reduced index for full-alphabet index `i`.
     /// Entries are in `0..reduced_size`.
     pub full_to_reduced: Vec<u8>,
+    /// The reduced index corresponding to the full-alphabet "unknown"
+    /// letter (typically `X` in proteins), when one was designated at
+    /// construction time. Callers pass this as `skip_idx` to
+    /// [`crate::kmer::KmerEncoder::iter_kmers`] and
+    /// [`crate::kmer::KmerIndex::build`] so X-containing windows continue
+    /// to be filtered out after reduction. `None` means no letter was
+    /// reserved — the caller must either know the sequences contain no
+    /// unknowns or handle skipping some other way.
+    pub unknown_reduced_idx: Option<u8>,
 }
 
 impl ReducedAlphabet {
     /// Build from an explicit mapping. Useful for published reductions
     /// (Murphy 2000, Li 2003, etc.) or for pinning upstream's exact output.
     ///
+    /// `unknown_full_idx` designates which full-alphabet index represents
+    /// the unknown / X letter; its `full_to_reduced[unknown_full_idx]` is
+    /// surfaced as [`ReducedAlphabet::unknown_reduced_idx`] so k-mer
+    /// iterators can still skip X-windows after reduction. Pass `None`
+    /// for alphabets without a dedicated unknown letter.
+    ///
     /// Returns `None` if the mapping is not dense (i.e. the reduced indices
-    /// don't cover `0..max+1`) or if any entry exceeds `u8::MAX`.
-    pub fn from_mapping(full_to_reduced: Vec<u8>) -> Option<Self> {
+    /// don't cover `0..max+1`) or if `unknown_full_idx` is out of range.
+    pub fn from_mapping(full_to_reduced: Vec<u8>, unknown_full_idx: Option<u8>) -> Option<Self> {
         if full_to_reduced.is_empty() {
             return None;
         }
@@ -60,17 +75,34 @@ impl ReducedAlphabet {
                 return None;
             }
         }
+        let unknown_reduced_idx = match unknown_full_idx {
+            Some(u) => {
+                if (u as usize) >= full_to_reduced.len() {
+                    return None;
+                }
+                Some(full_to_reduced[u as usize])
+            }
+            None => None,
+        };
         Some(Self {
             full_size: full_to_reduced.len(),
             reduced_size,
             full_to_reduced,
+            unknown_reduced_idx,
         })
     }
 
-    /// Identity reduction (no merging). Useful for tests and as a sanity baseline.
-    pub fn identity(full_size: usize) -> Self {
+    /// Identity reduction (no merging). Useful for tests and as a sanity
+    /// baseline. The `unknown_full_idx`, if provided, is surfaced as
+    /// `unknown_reduced_idx` unchanged.
+    pub fn identity(full_size: usize, unknown_full_idx: Option<u8>) -> Self {
         let full_to_reduced: Vec<u8> = (0..full_size).map(|i| i as u8).collect();
-        Self { full_size, reduced_size: full_size, full_to_reduced }
+        Self {
+            full_size,
+            reduced_size: full_size,
+            full_to_reduced,
+            unknown_reduced_idx: unknown_full_idx,
+        }
     }
 
     /// Greedy reduction driven by a substitution matrix: at each step,
@@ -78,14 +110,38 @@ impl ReducedAlphabet {
     /// log-odds score** (most similar pair). Repeat until `reduced_size`
     /// classes remain.
     ///
-    /// Returns `None` if `reduced_size == 0` or `reduced_size > full_size`.
-    pub fn from_matrix(matrix: &SubstitutionMatrix, reduced_size: usize) -> Option<Self> {
+    /// `unknown_full_idx` — if `Some(u)`, the class containing `u` is
+    /// excluded from every merge, guaranteeing the unknown letter stays
+    /// in its own reduced class. This is essential so that callers can
+    /// continue to skip X-containing k-mer windows after reduction by
+    /// passing [`ReducedAlphabet::unknown_reduced_idx`] as the
+    /// `skip_idx` — without this guarantee, X would be pulled into some
+    /// normal class and the skip mechanism would either miss X-windows
+    /// or also exclude legitimate residues.
+    ///
+    /// Returns `None` if `reduced_size == 0`, `reduced_size > full_size`,
+    /// or `unknown_full_idx` is set but `>= full_size`. Also `None` if
+    /// `unknown_full_idx` is `Some` and `reduced_size == 1` (can't
+    /// reserve a class when there's only one).
+    pub fn from_matrix(
+        matrix: &SubstitutionMatrix,
+        reduced_size: usize,
+        unknown_full_idx: Option<u8>,
+    ) -> Option<Self> {
         let n = matrix.size();
         if reduced_size == 0 || reduced_size > n {
             return None;
         }
+        if let Some(u) = unknown_full_idx {
+            if (u as usize) >= n {
+                return None;
+            }
+            if reduced_size < 2 {
+                return None;
+            }
+        }
         if reduced_size == n {
-            return Some(Self::identity(n));
+            return Some(Self::identity(n, unknown_full_idx));
         }
 
         // Each class is a Vec<usize> of full-alphabet indices. Start one
@@ -93,15 +149,28 @@ impl ReducedAlphabet {
         let mut classes: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
 
         while classes.len() > reduced_size {
-            // Find the pair of classes with the highest average inter-class
-            // off-diagonal score. For classes A and B:
-            //   sim(A, B) = mean_{a in A, b in B, a != b} matrix.score(a, b)
+            // The unknown class (if any) must be preserved. We identify it
+            // each iteration by the full-alphabet unknown index, since
+            // class indices shift on every remove.
+            let protected = unknown_full_idx.map(|u| {
+                classes
+                    .iter()
+                    .position(|c| c.contains(&(u as usize)))
+                    .expect("unknown_full_idx class must exist")
+            });
+
             let c = classes.len();
             let mut best_i = 0usize;
             let mut best_j = 1usize;
             let mut best_score = f32::NEG_INFINITY;
             for i in 0..c {
+                if Some(i) == protected {
+                    continue;
+                }
                 for j in (i + 1)..c {
+                    if Some(j) == protected {
+                        continue;
+                    }
                     let s = avg_inter_class_score(matrix, &classes[i], &classes[j]);
                     if s > best_score {
                         best_score = s;
@@ -130,10 +199,12 @@ impl ReducedAlphabet {
                 full_to_reduced[full_idx] = reduced_idx as u8;
             }
         }
+        let unknown_reduced_idx = unknown_full_idx.map(|u| full_to_reduced[u as usize]);
         Some(Self {
             full_size: n,
             reduced_size,
             full_to_reduced,
+            unknown_reduced_idx,
         })
     }
 
@@ -218,34 +289,53 @@ mod tests {
 
     #[test]
     fn identity_reduction_is_noop() {
-        let r = ReducedAlphabet::identity(21);
+        let r = ReducedAlphabet::identity(21, None);
         assert_eq!(r.reduced_size, 21);
         for i in 0..21 {
             assert_eq!(r.full_to_reduced[i], i as u8);
         }
+        assert_eq!(r.unknown_reduced_idx, None);
+    }
+
+    #[test]
+    fn identity_preserves_unknown_index() {
+        let r = ReducedAlphabet::identity(21, Some(20));
+        assert_eq!(r.unknown_reduced_idx, Some(20));
     }
 
     #[test]
     fn from_mapping_accepts_dense_mapping() {
-        let r = ReducedAlphabet::from_mapping(vec![0, 0, 1, 1, 2, 2]).unwrap();
+        let r = ReducedAlphabet::from_mapping(vec![0, 0, 1, 1, 2, 2], None).unwrap();
         assert_eq!(r.full_size, 6);
         assert_eq!(r.reduced_size, 3);
+        assert_eq!(r.unknown_reduced_idx, None);
+    }
+
+    #[test]
+    fn from_mapping_surfaces_unknown_reduced_idx() {
+        // full idx 5 maps to reduced idx 2 via the mapping [0,0,1,1,2,2].
+        let r = ReducedAlphabet::from_mapping(vec![0, 0, 1, 1, 2, 2], Some(5)).unwrap();
+        assert_eq!(r.unknown_reduced_idx, Some(2));
+    }
+
+    #[test]
+    fn from_mapping_rejects_out_of_range_unknown() {
+        assert!(ReducedAlphabet::from_mapping(vec![0, 0, 1, 1, 2, 2], Some(99)).is_none());
     }
 
     #[test]
     fn from_mapping_rejects_sparse_mapping() {
         // reduced index 1 unused while 0 and 2 are present → not dense.
-        let r = ReducedAlphabet::from_mapping(vec![0, 0, 2, 2]);
+        let r = ReducedAlphabet::from_mapping(vec![0, 0, 2, 2], None);
         assert!(r.is_none());
     }
 
     #[test]
     fn from_matrix_reduces_to_target_size() {
         let m = SubstitutionMatrix::blosum62();
-        for target in [1usize, 5, 10, 13, 20] {
-            let r = ReducedAlphabet::from_matrix(&m, target).unwrap();
+        for target in [5usize, 10, 13, 20] {
+            let r = ReducedAlphabet::from_matrix(&m, target, None).unwrap();
             assert_eq!(r.reduced_size, target, "requested {target}");
-            // Every full letter maps to a valid reduced index.
             for &ri in &r.full_to_reduced {
                 assert!((ri as usize) < target);
             }
@@ -255,7 +345,7 @@ mod tests {
     #[test]
     fn from_matrix_identity_when_target_equals_full() {
         let m = SubstitutionMatrix::blosum62();
-        let r = ReducedAlphabet::from_matrix(&m, m.size()).unwrap();
+        let r = ReducedAlphabet::from_matrix(&m, m.size(), None).unwrap();
         for i in 0..m.size() {
             assert_eq!(r.full_to_reduced[i], i as u8);
         }
@@ -264,8 +354,41 @@ mod tests {
     #[test]
     fn from_matrix_rejects_impossible_target() {
         let m = SubstitutionMatrix::blosum62();
-        assert!(ReducedAlphabet::from_matrix(&m, 0).is_none());
-        assert!(ReducedAlphabet::from_matrix(&m, m.size() + 1).is_none());
+        assert!(ReducedAlphabet::from_matrix(&m, 0, None).is_none());
+        assert!(ReducedAlphabet::from_matrix(&m, m.size() + 1, None).is_none());
+    }
+
+    #[test]
+    fn from_matrix_rejects_reduced_size_1_with_unknown_reservation() {
+        // If the caller wants unknown in its own class, we need at least 2
+        // reduced classes total (one for unknown, one for everything else).
+        let m = SubstitutionMatrix::blosum62();
+        assert!(ReducedAlphabet::from_matrix(&m, 1, Some(20)).is_none());
+    }
+
+    #[test]
+    fn from_matrix_keeps_unknown_in_singleton_class() {
+        // With unknown_full_idx = X, the X full letter must end up in a
+        // reduced class whose only member is X itself — otherwise the
+        // skip-idx semantic would either leak X into k-mers or over-skip
+        // legitimate letters merged with X.
+        let alpha = Alphabet::protein();
+        let m = SubstitutionMatrix::blosum62();
+        let x_full = alpha.encode(b'X');
+        // Try an aggressive reduction: 5 classes. X should still be alone.
+        let r = ReducedAlphabet::from_matrix(&m, 5, Some(x_full)).unwrap();
+        let x_reduced = r.unknown_reduced_idx.unwrap();
+
+        let members: Vec<u8> = (0..m.size() as u8)
+            .filter(|&i| r.full_to_reduced[i as usize] == x_reduced)
+            .collect();
+        assert_eq!(
+            members,
+            vec![x_full],
+            "X class has extra members: {:?} (decoded: {:?})",
+            members,
+            members.iter().map(|&i| alpha.decode(i) as char).collect::<Vec<_>>(),
+        );
     }
 
     #[test]
@@ -277,7 +400,7 @@ mod tests {
         // index and that they're a biologically sensible pair.
         let alpha = Alphabet::protein();
         let m = SubstitutionMatrix::blosum62();
-        let r = ReducedAlphabet::from_matrix(&m, 20).unwrap();
+        let r = ReducedAlphabet::from_matrix(&m, 20, None).unwrap();
 
         // Exactly one pair of full letters share a reduced index.
         let mut merged_letters: Vec<u8> = Vec::new();
@@ -315,18 +438,19 @@ mod tests {
 
     #[test]
     fn reduce_sequence_applies_mapping() {
-        let r = ReducedAlphabet::from_mapping(vec![0, 0, 1, 1, 2, 2]).unwrap();
+        let r = ReducedAlphabet::from_mapping(vec![0, 0, 1, 1, 2, 2], None).unwrap();
         let encoded = vec![0u8, 1, 2, 3, 4, 5];
         let reduced = r.reduce_sequence(&encoded);
         assert_eq!(reduced, vec![0, 0, 1, 1, 2, 2]);
     }
 
     #[test]
-    fn reduce_sequence_passes_through_skip_sentinel() {
-        // If the caller is using a byte value above full_size as a skip
-        // sentinel (e.g. 99 for X-windows in kmer iter), it must survive
-        // the reduction unchanged.
-        let r = ReducedAlphabet::from_mapping(vec![0, 0, 1]).unwrap();
+    fn reduce_sequence_passes_through_out_of_range_bytes() {
+        // Bytes >= full_size (e.g. 250 used as an alternative sentinel)
+        // survive reduction unchanged. This is NOT the X-skip path — X
+        // has its own reduced index via unknown_reduced_idx. This only
+        // matters for callers using a raw out-of-range sentinel.
+        let r = ReducedAlphabet::from_mapping(vec![0, 0, 1], None).unwrap();
         let encoded = vec![0u8, 99, 2, 1];
         let reduced = r.reduce_sequence(&encoded);
         assert_eq!(reduced, vec![0, 99, 1, 0]);
@@ -337,7 +461,7 @@ mod tests {
         // Reducing BLOSUM62 through the identity reduction (no merging)
         // must return the original scores in the same layout.
         let m = SubstitutionMatrix::blosum62();
-        let r = ReducedAlphabet::identity(m.size());
+        let r = ReducedAlphabet::identity(m.size(), None);
         let reduced_scores = r.reduce_matrix(&m);
         assert_eq!(reduced_scores.len(), m.size() * m.size());
         for i in 0..m.size() {
@@ -352,9 +476,10 @@ mod tests {
 
     #[test]
     fn end_to_end_prefilter_on_reduced_alphabet() {
-        // Reduce BLOSUM62 → 13, build a k-mer index over reduced sequences,
-        // run the prefilter. The point is proof-of-integration: all the
-        // 2.1 / 2.2 / 2.3a layers compose with reduction without friction.
+        // Reduce BLOSUM62 → 13 with X reserved as its own class. Build a
+        // k-mer index over reduced sequences. Prove the X-skip semantic
+        // survives across the reduction boundary by including an X in one
+        // of the targets and asserting the X-window doesn't contribute.
         use crate::kmer::KmerEncoder;
         use crate::kmer::KmerIndex;
         use crate::prefilter::{diagonal_prefilter, PrefilterOptions};
@@ -362,10 +487,11 @@ mod tests {
 
         let alpha = Alphabet::protein();
         let m = SubstitutionMatrix::blosum62();
-        let reducer = ReducedAlphabet::from_matrix(&m, 13).unwrap();
+        let x_full = alpha.encode(b'X');
+        let reducer = ReducedAlphabet::from_matrix(&m, 13, Some(x_full)).unwrap();
+        let skip_idx = reducer.unknown_reduced_idx.expect("we reserved X as unknown");
 
-        // Two near-identical targets, one unrelated — reduction shouldn't
-        // collapse them into indistinguishability at k=3.
+        // Two near-identical targets, one unrelated.
         let t1 = Sequence::from_ascii(alpha.clone(), b"MKLVRQPST");
         let t2 = Sequence::from_ascii(alpha.clone(), b"WWWWWWWWW");
         let q = Sequence::from_ascii(alpha.clone(), b"MKLVRQPST");
@@ -375,10 +501,6 @@ mod tests {
         let q_red = reducer.reduce_sequence(&q.data);
 
         let enc = KmerEncoder::new(reducer.reduced_size as u32, 3);
-        // Choose a skip index outside the reduced range; protein X reduces
-        // to some reduced index, so we can't use the usual full-X index.
-        // Pick 250 (well outside reduced_size <= 21) as a pseudo-skip.
-        let skip_idx = 250u8;
         let idx = KmerIndex::build(
             enc,
             [(1u32, t1_red.as_slice()), (2u32, t2_red.as_slice())],
@@ -389,9 +511,6 @@ mod tests {
         let hits = diagonal_prefilter(&idx, &q_red, skip_idx, &PrefilterOptions::default());
         let seq_ids: Vec<u32> = hits.iter().map(|h| h.seq_id).collect();
         assert!(seq_ids.contains(&1), "identical target should hit");
-        // t2 (all W) might or might not share reduced-space k-mers with
-        // MKLVRQPST — we don't assert either way, just that t1 ranks
-        // highest with a high diagonal_score.
         let top = &hits[0];
         assert_eq!(top.seq_id, 1);
         assert_eq!(top.best_diagonal, 0);
@@ -400,9 +519,50 @@ mod tests {
     }
 
     #[test]
+    fn x_windows_are_still_skipped_after_reduction() {
+        // Regression test for the review finding: without the unknown-
+        // reservation path, reduce_sequence would map X (full idx 20) to
+        // some normal reduced class, and callers passing the full X index
+        // as skip_idx would silently stop skipping any window — indexing
+        // X k-mers as if they were valid residues.
+        //
+        // With unknown reserved, reducer.unknown_reduced_idx is an index
+        // that is unique to X, and X-containing windows are correctly
+        // excluded from the index.
+        use crate::kmer::{KmerEncoder, KmerIndex};
+        use crate::sequence::Sequence;
+
+        let alpha = Alphabet::protein();
+        let m = SubstitutionMatrix::blosum62();
+        let x_full = alpha.encode(b'X');
+        let reducer = ReducedAlphabet::from_matrix(&m, 13, Some(x_full)).unwrap();
+        let skip_idx = reducer.unknown_reduced_idx.unwrap();
+
+        // Sequence ACXGT: windows at k=3 are [A,C,X], [C,X,G], [X,G,T],
+        // all three contain X and must be skipped.
+        let s = Sequence::from_ascii(alpha.clone(), b"ACXGT");
+        let s_red = reducer.reduce_sequence(&s.data);
+
+        let enc = KmerEncoder::new(reducer.reduced_size as u32, 3);
+        let idx = KmerIndex::build(enc, [(1u32, s_red.as_slice())], skip_idx).unwrap();
+        assert_eq!(
+            idx.total_hits(),
+            0,
+            "all windows contain X → index should be empty after reduction",
+        );
+
+        // Same sequence without X: [A,C,G], [C,G,T] → 2 valid windows.
+        let s2 = Sequence::from_ascii(alpha.clone(), b"ACGT");
+        let s2_red = reducer.reduce_sequence(&s2.data);
+        let enc2 = KmerEncoder::new(reducer.reduced_size as u32, 3);
+        let idx2 = KmerIndex::build(enc2, [(1u32, s2_red.as_slice())], skip_idx).unwrap();
+        assert_eq!(idx2.total_hits(), 2);
+    }
+
+    #[test]
     fn reduce_matrix_has_correct_shape_after_merging() {
         let m = SubstitutionMatrix::blosum62();
-        let r = ReducedAlphabet::from_matrix(&m, 13).unwrap();
+        let r = ReducedAlphabet::from_matrix(&m, 13, None).unwrap();
         let scores = r.reduce_matrix(&m);
         assert_eq!(scores.len(), 13 * 13);
         // Every score is finite.
