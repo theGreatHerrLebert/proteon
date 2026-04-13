@@ -5,6 +5,7 @@ members = [
     "ferritin-io",
     "ferritin-bin",
     "ferritin-connector",
+    "ferritin-search",
 ]
 exclude = ["gpu-poc"]
 resolver = "2"
