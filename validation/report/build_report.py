@@ -485,16 +485,45 @@ amortized throughput when each tool is run batch-parallel across the full
 
 {img_tag(FIG_DIR / "05_throughput.png", "Throughput scaling")}
 
+<p>
+The <strong>left panel</strong> is per-structure wall time vs residue count
+on log-log axes. Power-law fits (<code>y = a · N<sup>b</sup></code>, solid
+lines) expose the empirical algorithmic complexity of each tool:
+</p>
+<ul>
+  <li><strong>OpenMM CHARMM36+OBC2</strong> scales as <code>N<sup>0.95</sup></code> — effectively linear, thanks to the NonbondedForce neighbor list and the absence of per-structure context reconstruction costs.</li>
+  <li><strong>OpenMM AMBER96+OBC</strong> scales as <code>N<sup>1.41</sup></code> — the OBC Born-radius all-pair term pushes this toward O(N²) at large N.</li>
+  <li><strong>GROMACS AMBER96</strong> scales as <code>N<sup>1.47</sup></code> with a consistently lower prefactor, dominated here by per-structure pdb2gmx/grompp/mdrun startup.</li>
+</ul>
+<p>
+Faint grey guides mark pure O(N) and O(N²) for visual reference. No tool in this
+benchmark crosses O(N²) in its empirical fit — in practice, all three get close
+to linear behavior because short-range cutoffs keep the nonbonded cost
+bounded.
+</p>
+
+<p>
+The <strong>right panel</strong> is the production number: total wall time to
+process a 1000-PDB batch on each tool's native parallelism. Ferritin at
+14.9 min on CHARMM19+EEF1 is the fastest configuration — benefiting from
+(a) cheap polar-H united-atom evaluation, (b) rayon-parallel
+<code>batch_prepare</code> with zero Python overhead, and (c) GPU dispatch
+for structures ≥ 2000 atoms. Ferritin AMBER96 at 210 min pays the expected
+cost of all-atom evaluation with a 15 Å nonbonded cutoff (≈14× heavier per
+structure than CHARMM19+EEF1's 9 Å polar-H path). OpenMM on CHARMM36+OBC2
+sits at 449.7 min despite equivalent parallelism — the per-structure context
+setup cost is substantial, visible as the high prefactor of its fit line.
+GROMACS looks fastest on its aggregate bar, but only because
+<code>pdb2gmx</code> rejected 64% of inputs before they ever reached mdrun.
+</p>
+
 <div class="callout">
-<strong>Note:</strong> the amortized throughput comparison is not entirely
-apples-to-apples — ferritin ran with rayon-parallel batch_prepare feeding a
-single GPU; OpenMM ran 64 single-thread CPU workers via ProcessPoolExecutor;
-GROMACS ran 16 single-thread CPU workers on a 16-core machine. Ferritin's
-≈30× speedup over OpenMM reflects the combined value of (a) Rust + GPU
-acceleration, (b) zero-Python-overhead batch orchestration, and (c)
-CHARMM19+EEF1 being a cheaper force field per eval than CHARMM36+OBC2. The
-per-structure scatter (colored points) removes (c) by showing raw wall time
-versus system size — the order of the three tools is consistent.
+<strong>Platform notes:</strong> ferritin ran 64-way rayon with GPU
+auto-dispatch on monster3 (128 AMD cores, RTX 5090). OpenMM ran 64
+single-thread CPU workers via ProcessPoolExecutor on monster3. GROMACS ran
+16 single-thread CPU workers on a 16-core Ubuntu local box. The per-structure
+scatter removes platform-parallelism effects; the aggregate bars include
+them (and are what you'd get in production).
 </div>
 </section>
 

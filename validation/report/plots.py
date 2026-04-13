@@ -324,34 +324,101 @@ def plot_energy_oracle(out: pathlib.Path) -> None:
 # --- 05: Throughput -----------------------------------------------------------
 
 def plot_throughput(runs: list[Run], out: pathlib.Path) -> None:
-    """Wall-clock per structure vs atom count, where we have the data."""
-    fig, ax = plt.subplots(figsize=(8.5, 5.2))
+    """Two-panel throughput figure.
+
+    Left:  per-structure wall time vs residue count on log-log axes,
+           with a power-law fit per tool that has per-structure data.
+           Fit exponents tell us the empirical algorithmic complexity.
+           Faint O(N) and O(N²) reference lines give visual intuition.
+    Right: aggregate throughput bars — total wall time for a full
+           1000-PDB batch. This is the number that matters for archive-
+           scale pipelines.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.2),
+                              gridspec_kw={"width_ratios": [1.5, 1]})
+
+    # --- Left panel: per-structure scatter + fits ---
+    ax = axes[0]
+    fits = []   # (label, color, slope, prefactor, n)
     for r in runs:
-        # Only OpenMM (from our harness) records per-structure wall times.
         pts = [(rec.get("n_ca_pre") or rec.get("n_ca"), rec.get("wall_s"))
                for rec in r.records
                if rec.get("wall_s") and (rec.get("n_ca_pre") or rec.get("n_ca"))]
-        if not pts:
+        if len(pts) < 10:
             continue
-        xs, ys = zip(*pts)
-        ax.scatter(xs, ys, s=10, alpha=0.28, color=r.color, label=r.name,
-                   edgecolor="none")
+        xs = np.array([p[0] for p in pts], dtype=float)
+        ys = np.array([p[1] for p in pts], dtype=float)
+        # Fit y = a * x^b in log-log space (linear regression on logs).
+        mask = (xs > 0) & (ys > 0)
+        lx, ly = np.log(xs[mask]), np.log(ys[mask])
+        slope, intercept = np.polyfit(lx, ly, 1)
+        a = np.exp(intercept)
+        fits.append((r.name, r.color, slope, a, int(mask.sum())))
 
-    # Aggregate-throughput reference lines (annotated amortized wall time).
-    refs = [
-        ("Ferritin 64-way GPU: 0.94 s/struct", C["ferritin"], 14.9 * 60 / 949),
-        ("OpenMM 64-way CPU 1-thread: 29.1 s/struct", C["openmm"], 449.7 * 60 / 928),
-        ("GROMACS 16-way 1-thread: 2.0 s/struct (ok subset)", C["gromacs"], 20.3 * 60 / 363),
-    ]
-    for label, color, y in refs:
-        ax.axhline(y, color=color, ls="--", lw=1.4, alpha=0.75, label=label)
+        ax.scatter(xs, ys, s=10, alpha=0.22, color=r.color,
+                   edgecolor="none")
+        # Plot the fitted line over the observed x-range.
+        x_fit = np.logspace(np.log10(xs[mask].min()), np.log10(xs[mask].max()), 40)
+        y_fit = a * x_fit ** slope
+        ax.plot(x_fit, y_fit, color=r.color, lw=2.2,
+                label=f"{r.name} — fit ∝ N^{slope:.2f}")
+
+    # Complexity reference lines anchored at a mid-range data point so they
+    # visually pass near the fit, not at arbitrary intercepts.
+    if fits:
+        x_ref = 200.0
+        # Pick a midpoint y on the slowest tool's fit for anchoring.
+        slowest = max(fits, key=lambda f: f[3] * x_ref ** f[2])
+        y_ref = slowest[3] * x_ref ** slowest[2]
+        for expo, label, ls in [(1.0, "O(N)", "--"), (2.0, "O(N²)", ":")]:
+            ref_a = y_ref / (x_ref ** expo)
+            x_line = np.logspace(1, 4, 40)
+            ax.plot(x_line, ref_a * x_line ** expo, color="#aaa",
+                    ls=ls, lw=1.0, zorder=0)
+            ax.text(x_line[-8], ref_a * x_line[-8] ** expo,
+                    f"  {label}", color="#888", fontsize=9,
+                    va="center")
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    apply(ax, title="Throughput — end-to-end wall time per structure",
-          subtitle="Scatter points = per-structure wall; dashed lines = amortized batch throughput",
-          xlabel="Residue count N (log)", ylabel="Wall time (s, log)")
-    ax.legend(loc="lower right", fontsize=9)
+    apply(ax, title="Per-structure wall time vs system size",
+          subtitle="log-log scatter with empirical power-law fits; grey guides = O(N), O(N²)",
+          xlabel="Residue count N  (log)", ylabel="Wall time per structure (s, log)",
+          legend=True, legend_loc="upper left")
+
+    # --- Right panel: aggregate throughput bars ---
+    ax = axes[1]
+    # Aggregate totals from the benchmark runs (minutes of wall clock to
+    # process a 1000-PDB seed=42 sample at the parallelism configured
+    # for each tool on monster3 / local). See report for platform notes.
+    aggregates = [
+        ("Ferritin\nCHARMM19+EEF1",       14.9,  949,  C["ferritin"]),
+        ("Ferritin\nAMBER96",            210.0,  950,  C["ferritin"]),
+        ("OpenMM\nCHARMM36+OBC2",        449.7,  928,  C["openmm"]),
+        ("OpenMM\nAMBER96+OBC",           75.7,  904,  C["openmm"]),
+        ("GROMACS\nAMBER96",              20.3,  363,  C["gromacs"]),
+    ]
+    names = [a[0] for a in aggregates]
+    totals = [a[1] for a in aggregates]
+    colors = [a[3] for a in aggregates]
+    y = np.arange(len(names))[::-1]  # top-down by fastest first
+    order = np.argsort(totals)
+    bars = ax.barh(y, [totals[i] for i in order],
+                   color=[colors[i] for i in order],
+                   edgecolor="white", linewidth=0.6, alpha=0.9)
+    ax.set_yticks(y)
+    ax.set_yticklabels([names[i] for i in order], fontsize=9)
+    for i, idx in enumerate(order):
+        t = totals[idx]
+        ax.text(t + 5, y[i], f"{t:.1f} min",
+                va="center", fontsize=10, color="#222")
+    ax.set_xlim(0, max(totals) * 1.22)
+    apply(ax, title="Total wall time for 1000-PDB batch",
+          subtitle="smaller is better — amortized over parallelism",
+          xlabel="Wall time (minutes)", legend=False)
+
+    fig.suptitle("Throughput — per-structure scaling and aggregate batch time",
+                 fontsize=14, fontweight="bold", y=1.02)
     savefig(fig, out)
 
 
