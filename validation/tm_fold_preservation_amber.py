@@ -65,8 +65,15 @@ def process_chunk(paths_chunk, out_fh):
 
     work_structs = [work_by_idx[i] for i in both_idx]
     try:
+        # constrain_heavy=False: override AMBER96's H-only default so that
+        # heavy atoms are free to move. Needed for apples-to-apples fold
+        # preservation comparison with OpenMM/GROMACS (which minimize all
+        # atoms). The FF-aware default is True for AMBER96 because heavy-
+        # atom vacuum minimization is normally ill-posed; here we're
+        # explicitly asking for it in the benchmark.
         reports = ferritin.batch_prepare(
             work_structs, ff="amber96", minimize_steps=MINIMIZE_STEPS,
+            constrain_heavy=False,
         )
     except Exception as e:
         for i in both_idx:

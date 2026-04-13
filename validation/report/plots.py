@@ -196,7 +196,10 @@ def plot_rmsd_distribution(runs: list[Run], family: str, out: pathlib.Path) -> N
     ax.set_xlim(0, 1.5)
 
     ax = axes[1]
-    data = [r.rmsds for r in fam_runs]
+    # Clip extreme outliers (some GROMACS structures produce non-physical
+    # RMSDs from a bad minimization step); violin plot otherwise paints
+    # the whole [0, ∞] range and hides the real distribution shape.
+    data = [np.clip(r.rmsds, 0, 1.5) for r in fam_runs]
     positions = np.arange(len(fam_runs)) + 1
     vp = ax.violinplot(data, positions=positions, showmedians=True,
                        showextrema=False, widths=0.75)
