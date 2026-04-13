@@ -30,6 +30,8 @@ use std::sync::{Arc, OnceLock};
 
 use cudarc::driver::*;
 
+pub mod diagonal;
+
 /// Process-global GPU context. Holds the CUDA device + a stream pool
 /// + (in future phases) compiled kernel handles. Created on first
 /// `try_global()` call; `None` if no GPU is reachable.
