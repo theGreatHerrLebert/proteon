@@ -18,13 +18,19 @@ pub struct Sequence {
 }
 
 impl Sequence {
-    /// Encode an ASCII residue string. Unknown bytes fold per the alphabet
-    /// (typically to `X`). Whitespace and `*` are discarded up-front so FASTA
-    /// payloads can be passed in directly.
+    /// Encode an ASCII residue string. Unknown bytes (including `*`) fold
+    /// per the alphabet (typically to `X`). Whitespace is discarded so FASTA
+    /// payloads with embedded line breaks can be passed in directly.
+    ///
+    /// `*` is *not* dropped: in FASTA it commonly marks a terminal stop codon,
+    /// but silently deleting it would shift every downstream residue's
+    /// position and change k-mer / alignment coordinates. Callers that
+    /// genuinely want to strip terminal stops should do so explicitly before
+    /// calling this.
     pub fn from_ascii(alphabet: Alphabet, ascii: &[u8]) -> Self {
         let mut data = Vec::with_capacity(ascii.len());
         for &c in ascii {
-            if c.is_ascii_whitespace() || c == b'*' {
+            if c.is_ascii_whitespace() {
                 continue;
             }
             data.push(alphabet.encode(c));
@@ -75,12 +81,35 @@ mod tests {
     }
 
     #[test]
-    fn protein_discards_whitespace_and_stars() {
+    fn protein_discards_whitespace_only() {
         let alpha = Alphabet::protein();
-        let s = Sequence::from_ascii(alpha, b"A C\tG\nT*\n");
-        // Whitespace and * dropped; remaining residues folded through protein alphabet.
+        let s = Sequence::from_ascii(alpha, b"A C\tG\nT\n");
+        // Whitespace dropped; residues preserved.
         assert_eq!(s.len(), 4);
         assert_eq!(s.to_ascii(), b"ACGT");
+    }
+
+    #[test]
+    fn protein_star_folds_to_x_without_dropping() {
+        // `*` in FASTA is often a terminal stop codon. Dropping it would shift
+        // every downstream position — wrong for k-mer indexing and alignment.
+        // It must fold through the alphabet like any other unknown byte.
+        let alpha = Alphabet::protein();
+        let s = Sequence::from_ascii(alpha.clone(), b"ACGT*");
+        assert_eq!(s.len(), 5, "`*` must not shift positions");
+        assert_eq!(s.data[4], alpha.encode(b'X'));
+        assert_eq!(s.to_ascii(), b"ACGTX");
+    }
+
+    #[test]
+    fn protein_star_mid_sequence_preserves_positions() {
+        let alpha = Alphabet::protein();
+        let s = Sequence::from_ascii(alpha.clone(), b"AC*GT");
+        assert_eq!(s.len(), 5);
+        // Index 2 must be X (from *), not the G that would appear if * were dropped.
+        assert_eq!(s.data[2], alpha.encode(b'X'));
+        assert_eq!(s.data[3], alpha.encode(b'G'));
+        assert_eq!(s.to_ascii(), b"ACXGT");
     }
 
     #[test]

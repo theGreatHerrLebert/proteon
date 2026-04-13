@@ -47,6 +47,8 @@ pub enum MatrixError {
     BadScore { row: char, token: String },
     #[error("background frequency count {got} does not match alphabet size {expected}")]
     BackgroundMismatch { got: usize, expected: usize },
+    #[error("matrix header has {header_size} letters but the provided alphabet has {alphabet_size}")]
+    AlphabetSizeMismatch { header_size: usize, alphabet_size: usize },
 }
 
 pub type Result<T> = std::result::Result<T, MatrixError>;
@@ -174,11 +176,12 @@ impl SubstitutionMatrix {
         // Reorder rows+cols into the provided alphabet's index space, so
         // `scores[i*N + j]` looks up `score(alphabet.decode(i), alphabet.decode(j))`.
         let n = alphabet.size();
-        assert!(
-            header.len() == n,
-            "alphabet size mismatch: header has {}, alphabet has {n}",
-            header.len()
-        );
+        if header.len() != n {
+            return Err(MatrixError::AlphabetSizeMismatch {
+                header_size: header.len(),
+                alphabet_size: n,
+            });
+        }
         let mut header_idx = Vec::with_capacity(n);
         for &c in &header {
             header_idx.push(alphabet.encode(c));
@@ -414,6 +417,21 @@ mod tests {
         // Name derives from filename stem, not the hardcoded string.
         assert!(!m.name.is_empty());
         assert!((m.score_chars(b'A', b'A') - 3.9291).abs() < 1e-3);
+    }
+
+    #[test]
+    fn wrong_alphabet_returns_structured_error_not_panic() {
+        // Passing the 5-letter nucleotide alphabet to a 21-column protein matrix
+        // must surface as a recoverable parse error, not an assertion panic.
+        let err = SubstitutionMatrix::parse("blosum62", Alphabet::nucleotide(), BLOSUM62_OUT)
+            .expect_err("should fail with structured error");
+        match err {
+            MatrixError::AlphabetSizeMismatch { header_size, alphabet_size } => {
+                assert_eq!(header_size, 21);
+                assert_eq!(alphabet_size, 5);
+            }
+            other => panic!("expected AlphabetSizeMismatch, got {other:?}"),
+        }
     }
 
     #[test]
