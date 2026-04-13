@@ -27,6 +27,7 @@
 use std::collections::HashMap;
 
 use crate::kmer::KmerIndex;
+use crate::kmer_generator::{generate_similar_kmers, ScoreMatrix};
 
 /// One prefilter result: the target sequence, its best-scoring diagonal,
 /// and the k-mer count on that diagonal.
@@ -113,6 +114,95 @@ pub fn diagonal_prefilter(
         .collect();
 
     // Upstream's compareHitsByScoreAndId: score desc, seq_id asc.
+    hits.sort_by(|a, b| {
+        b.diagonal_score
+            .cmp(&a.diagonal_score)
+            .then_with(|| a.seq_id.cmp(&b.seq_id))
+    });
+
+    if let Some(limit) = opts.max_hits {
+        hits.truncate(limit);
+    }
+    hits
+}
+
+/// Configuration for sensitive (similar-k-mer-expanded) prefilter.
+#[derive(Debug, Clone)]
+pub struct SimilarityConfig<'a> {
+    /// Flattened `alphabet_size × alphabet_size` score matrix in row-major
+    /// i32, same layout [`crate::kmer_generator::generate_similar_kmers`]
+    /// expects. Produced via
+    /// [`crate::matrix::SubstitutionMatrix::to_integer_matrix`] +
+    /// [`crate::kmer_generator::widen_to_i32`].
+    pub scores: ScoreMatrix<'a>,
+    /// Minimum per-k-mer substitution score a neighbour must reach to be
+    /// expanded into the prefilter. Upstream default ≈ 90 for BLOSUM62 at
+    /// k=6 with bit_factor=2; tune per matrix.
+    pub threshold: i32,
+}
+
+/// Sensitive prefilter: each query k-mer is expanded into every similar
+/// k-mer scoring `>= similarity.threshold`, and each of those is looked up
+/// in the target index. Exact-match prefilter is [`diagonal_prefilter`].
+///
+/// All other semantics (diagonal voting, sort order, options) are
+/// identical to the exact-match path.
+pub fn diagonal_prefilter_sensitive(
+    index: &KmerIndex,
+    query: &[u8],
+    skip_idx: u8,
+    similarity: &SimilarityConfig<'_>,
+    opts: &PrefilterOptions,
+) -> Vec<PrefilterHit> {
+    let encoder = &index.encoder;
+    let k = encoder.kmer_size();
+
+    let mut counts: HashMap<(u32, i32), u32> = HashMap::new();
+
+    // Slide a k-mer window across the query by position (not via
+    // iter_kmers, because we need the raw window bytes for the generator).
+    for q_pos in 0..query.len().saturating_sub(k - 1) {
+        let window = &query[q_pos..q_pos + k];
+        // Skip X-containing windows just like the exact-match path.
+        if window.iter().any(|&b| b == skip_idx) {
+            continue;
+        }
+        for (sim_hash, _sim_score) in
+            generate_similar_kmers(encoder, window, similarity.scores, similarity.threshold)
+        {
+            for hit in index.lookup_hash(sim_hash) {
+                let diagonal = hit.pos as i32 - q_pos as i32;
+                *counts.entry((hit.seq_id, diagonal)).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Reduction + sort identical to diagonal_prefilter (kept as a separate
+    // copy rather than refactored into a helper to keep review diffs
+    // focused on the new pathway; collapse when/if we add a third variant).
+    let mut best: HashMap<u32, PrefilterHit> = HashMap::new();
+    for ((seq_id, diagonal), score) in counts {
+        let entry = best.entry(seq_id).or_insert(PrefilterHit {
+            seq_id,
+            diagonal_score: 0,
+            best_diagonal: diagonal,
+        });
+        if score > entry.diagonal_score
+            || (score == entry.diagonal_score && diagonal < entry.best_diagonal)
+        {
+            entry.diagonal_score = score;
+            entry.best_diagonal = diagonal;
+        }
+    }
+
+    let mut hits: Vec<PrefilterHit> = best
+        .into_values()
+        .filter(|h| {
+            h.diagonal_score >= opts.score_threshold
+                && opts.exclude_self != Some(h.seq_id)
+        })
+        .collect();
+
     hits.sort_by(|a, b| {
         b.diagonal_score
             .cmp(&a.diagonal_score)
@@ -266,6 +356,77 @@ mod tests {
         let query = vec![99u8, 99, 99, 99]; // every window contains skip_idx
         let hits = diagonal_prefilter(&idx, &query, 99, &PrefilterOptions::default());
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn sensitive_prefilter_catches_near_match_that_exact_misses() {
+        // Exact prefilter only finds shared k-mers; sensitive prefilter
+        // finds targets whose k-mers score above threshold against the query.
+        use crate::kmer_generator::widen_to_i32;
+
+        // Alphabet 4, k=2, identity +2/-1.
+        let enc = KmerEncoder::new(4, 2);
+        // Target 10: [0, 1] ("AC")
+        // Target 20: [0, 2] ("AG") — differs from query by one position
+        let t1 = vec![0u8, 1];
+        let t2 = vec![0u8, 2];
+        let idx = KmerIndex::build(
+            enc.clone(),
+            [(10u32, t1.as_slice()), (20u32, t2.as_slice())],
+            99,
+        )
+        .unwrap();
+
+        // Query [0, 1] = "AC" matches t1 exactly (score +2+2=4), t2 on one
+        // position only (0 matches, 1 vs 2 mismatches → +2-1=1).
+        let q = vec![0u8, 1];
+
+        // Exact prefilter: only t1.
+        let exact = diagonal_prefilter(&idx, &q, 99, &PrefilterOptions::default());
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].seq_id, 10);
+
+        // Sensitive prefilter with threshold=1: catches both (t2 has score 1).
+        let scores_i8: Vec<i8> = {
+            let mut m = vec![-1i8; 16];
+            for i in 0..4 {
+                m[i * 4 + i] = 2;
+            }
+            m
+        };
+        let scores = widen_to_i32(&scores_i8);
+        let sim = SimilarityConfig { scores: &scores, threshold: 1 };
+        let sensitive = diagonal_prefilter_sensitive(&idx, &q, 99, &sim, &PrefilterOptions::default());
+        let seq_ids: Vec<u32> = sensitive.iter().map(|h| h.seq_id).collect();
+        assert!(seq_ids.contains(&10), "expected t1 in sensitive results");
+        assert!(seq_ids.contains(&20), "expected t2 in sensitive results");
+    }
+
+    #[test]
+    fn sensitive_prefilter_with_high_threshold_matches_exact() {
+        // If the similarity threshold is set so only the identity k-mer
+        // survives expansion, sensitive prefilter must produce the same
+        // result set as exact prefilter.
+        use crate::kmer_generator::widen_to_i32;
+
+        let idx = build_small_index();
+        let query = vec![0u8, 1, 2, 3];
+
+        // Identity +2/-1 matrix; self-score at k=2 is 4, any one-mismatch is 1.
+        // threshold=4 → only identity passes.
+        let scores_i8: Vec<i8> = {
+            let mut m = vec![-1i8; 16];
+            for i in 0..4 {
+                m[i * 4 + i] = 2;
+            }
+            m
+        };
+        let scores = widen_to_i32(&scores_i8);
+        let sim = SimilarityConfig { scores: &scores, threshold: 4 };
+
+        let exact = diagonal_prefilter(&idx, &query, 99, &PrefilterOptions::default());
+        let sensitive = diagonal_prefilter_sensitive(&idx, &query, 99, &sim, &PrefilterOptions::default());
+        assert_eq!(exact, sensitive);
     }
 
     #[test]

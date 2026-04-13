@@ -7,6 +7,7 @@
 pub mod alphabet;
 pub mod db;
 pub mod kmer;
+pub mod kmer_generator;
 pub mod matrix;
 pub mod prefilter;
 pub mod sequence;
