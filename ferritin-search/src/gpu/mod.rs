@@ -31,6 +31,7 @@ use std::sync::{Arc, OnceLock};
 use cudarc::driver::*;
 
 pub mod diagonal;
+pub mod pssm_diagonal;
 pub mod sw;
 
 /// Process-global GPU context. Holds the CUDA device + a stream pool
