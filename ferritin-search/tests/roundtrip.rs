@@ -3,8 +3,11 @@
 //! By default skipped (with a visible warning) if the upstream `mmseqs` binary
 //! or the example FASTA isn't reachable. CI and anyone wanting hard enforcement
 //! should set `FERRITIN_SEARCH_REQUIRE_ORACLE=1` — in that mode missing oracle
-//! inputs panic the test instead of skipping. Optionally override the binary
-//! path via `FERRITIN_SEARCH_MMSEQS_BIN=/path/to/mmseqs`.
+//! inputs panic the test instead of skipping.
+//!
+//! Path overrides:
+//! - `FERRITIN_SEARCH_MMSEQS_BIN=/path/to/mmseqs` (or just a binary name on `$PATH`)
+//! - `FERRITIN_SEARCH_EXAMPLE_FASTA=/path/to/DB.fasta`
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -23,8 +26,13 @@ const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 fn find_mmseqs() -> Option<PathBuf> {
     if let Ok(explicit) = std::env::var("FERRITIN_SEARCH_MMSEQS_BIN") {
-        let p = PathBuf::from(explicit);
-        return if p.exists() { p.canonicalize().ok() } else { None };
+        let p = PathBuf::from(&explicit);
+        // A path-like value must exist; a bare name is trusted to `Command::new`
+        // which does `$PATH` lookup.
+        if explicit.contains('/') && !p.exists() {
+            return None;
+        }
+        return p.canonicalize().ok().or(Some(p));
     }
     // Crate is at /<repo>/ferritin/ferritin-search; MMseqs2 clone is at /<repo>/MMseqs2.
     let candidates = [
@@ -41,6 +49,10 @@ fn find_mmseqs() -> Option<PathBuf> {
 }
 
 fn find_example_fasta() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("FERRITIN_SEARCH_EXAMPLE_FASTA") {
+        let p = PathBuf::from(explicit);
+        return if p.exists() { p.canonicalize().ok() } else { None };
+    }
     let p = PathBuf::from(format!("{CRATE_ROOT}/../../MMseqs2/examples/DB.fasta"));
     if p.exists() { p.canonicalize().ok() } else { None }
 }

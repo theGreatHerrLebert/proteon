@@ -55,6 +55,37 @@ jobs:
           source .venv/bin/activate
           pytest tests/ -v --tb=short -k "not oracle"
 
+  # Enforces the byte-exact round-trip promise of the ferritin-search DB I/O
+  # layer by provisioning upstream MMseqs2 and running the oracle integration
+  # tests with FERRITIN_SEARCH_REQUIRE_ORACLE=1. Without this job, the oracle
+  # tests would silently skip when the upstream binary isn't on the runner.
+  mmseqs-oracle:
+    name: MMseqs2 byte-exact round-trip oracle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install upstream MMseqs2 static binary
+        run: |
+          cd "$RUNNER_TEMP"
+          wget -q https://mmseqs.com/latest/mmseqs-linux-avx2.tar.gz
+          tar xzf mmseqs-linux-avx2.tar.gz
+          echo "MMSEQS_BIN=$RUNNER_TEMP/mmseqs/bin/mmseqs" >> "$GITHUB_ENV"
+      - name: Fetch upstream examples/DB.fasta
+        run: |
+          cd "$RUNNER_TEMP"
+          wget -q -O DB.fasta https://raw.githubusercontent.com/soedinglab/MMseqs2/master/examples/DB.fasta
+          echo "MMSEQS_FASTA=$RUNNER_TEMP/DB.fasta" >> "$GITHUB_ENV"
+      - name: Smoke test MMseqs2 binary
+        run: "$MMSEQS_BIN" version
+      - name: Byte-exact round-trip oracle
+        env:
+          FERRITIN_SEARCH_REQUIRE_ORACLE: "1"
+          FERRITIN_SEARCH_MMSEQS_BIN: ${{ env.MMSEQS_BIN }}
+          FERRITIN_SEARCH_EXAMPLE_FASTA: ${{ env.MMSEQS_FASTA }}
+        run: cargo test -p ferritin-search --test roundtrip -- --nocapture
+
   # Smoke test: binaries build and run
   cli-smoke:
     name: CLI smoke (${{ matrix.os }})
