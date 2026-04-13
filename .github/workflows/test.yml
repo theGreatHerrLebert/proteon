@@ -56,34 +56,41 @@ jobs:
           pytest tests/ -v --tb=short -k "not oracle"
 
   # Enforces the byte-exact round-trip promise of the ferritin-search DB I/O
-  # layer by provisioning upstream MMseqs2 and running the oracle integration
-  # tests with FERRITIN_SEARCH_REQUIRE_ORACLE=1. Without this job, the oracle
-  # tests would silently skip when the upstream binary isn't on the runner.
+  # layer by provisioning a PINNED upstream MMseqs2 release and running the
+  # oracle integration tests with FERRITIN_SEARCH_REQUIRE_ORACLE=1.
+  #
+  # Inputs are pinned end-to-end so unrelated PRs can't fail when upstream
+  # changes its binary or corpus:
+  #   - Binary: GitHub release tag MMSEQS_VERSION (not mmseqs.com/latest)
+  #   - FASTA:  vendored in ferritin-search/tests/data/oracle_fixture.fasta
+  #             (50-seq subset of upstream examples/DB.fasta, committed)
+  #
+  # Bump MMSEQS_VERSION deliberately when tracking a new upstream release.
   mmseqs-oracle:
     name: MMseqs2 byte-exact round-trip oracle
     runs-on: ubuntu-latest
+    env:
+      MMSEQS_VERSION: "18-8cc5c"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install upstream MMseqs2 static binary
+      - name: Install pinned upstream MMseqs2 static binary
         run: |
           cd "$RUNNER_TEMP"
-          wget -q https://mmseqs.com/latest/mmseqs-linux-avx2.tar.gz
+          wget -q "https://github.com/soedinglab/MMseqs2/releases/download/${MMSEQS_VERSION}/mmseqs-linux-avx2.tar.gz"
           tar xzf mmseqs-linux-avx2.tar.gz
           echo "MMSEQS_BIN=$RUNNER_TEMP/mmseqs/bin/mmseqs" >> "$GITHUB_ENV"
-      - name: Fetch upstream examples/DB.fasta
-        run: |
-          cd "$RUNNER_TEMP"
-          wget -q -O DB.fasta https://raw.githubusercontent.com/soedinglab/MMseqs2/master/examples/DB.fasta
-          echo "MMSEQS_FASTA=$RUNNER_TEMP/DB.fasta" >> "$GITHUB_ENV"
       - name: Smoke test MMseqs2 binary
-        run: "$MMSEQS_BIN" version
-      - name: Byte-exact round-trip oracle
+        run: |
+          "$MMSEQS_BIN" version
+          echo "Pinned MMseqs2 release: $MMSEQS_VERSION"
+      - name: Byte-exact round-trip oracle (vendored fixture)
         env:
           FERRITIN_SEARCH_REQUIRE_ORACLE: "1"
           FERRITIN_SEARCH_MMSEQS_BIN: ${{ env.MMSEQS_BIN }}
-          FERRITIN_SEARCH_EXAMPLE_FASTA: ${{ env.MMSEQS_FASTA }}
+          # FASTA defaults to tests/data/oracle_fixture.fasta (vendored);
+          # no env override needed.
         run: cargo test -p ferritin-search --test roundtrip -- --nocapture
 
   # Smoke test: binaries build and run
