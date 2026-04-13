@@ -4,10 +4,13 @@ use super::{DbError, Result};
 
 /// 4-byte little-endian int32 stored in `<prefix>.dbtype`.
 ///
-/// Bit layout:
-/// - bit 31: compression flag (1 = zstd-compressed payloads)
-/// - bits 30..17: extended flags (masked 0x7FFE, see [`ExtendedDbtype`])
-/// - bits 16..0: base dbtype (see constants on [`Dbtype`])
+/// Bit layout (matches upstream `Parameters::DBTYPE_MASK = 0x0000FFFF` and
+/// `DBReader::getExtendedDbtype`):
+/// - bit 31:      compression flag (1 = zstd-compressed payloads)
+/// - bits 30..17: extended flags (14 bits; see [`ExtendedDbtype`]). Upstream
+///                accesses these via `(u32 >> 16) & 0x7FFE`.
+/// - bit 16:      reserved (cleared by upstream's `0x7FFE` extended mask)
+/// - bits 15..0:  base dbtype (16 bits; see constants on [`Dbtype`])
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Dbtype(pub i32);
 

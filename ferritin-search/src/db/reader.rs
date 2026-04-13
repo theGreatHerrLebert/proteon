@@ -29,6 +29,9 @@ impl DBReader {
         let source_path = with_suffix(&prefix, ".source");
 
         let dbtype = Dbtype::read_from_file(&dbtype_path)?;
+        if dbtype.is_compressed() {
+            return Err(DbError::CompressedNotSupported);
+        }
         let index = index::read_all(&index_path)?;
         let data = std::fs::read(&data_path)?;
 
@@ -96,4 +99,28 @@ fn with_suffix(prefix: &Path, suffix: &str) -> PathBuf {
     let mut p = prefix.as_os_str().to_owned();
     p.push(suffix);
     PathBuf::from(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::DBWriter;
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn rejects_compressed_dbtype_with_clear_error() {
+        let dir = tempdir().unwrap();
+        let prefix = dir.path().join("db");
+
+        let dbtype = Dbtype::AMINO_ACIDS.with_compressed(true);
+        let mut w = DBWriter::create(&prefix, dbtype).unwrap();
+        w.write_raw(0, b"compressed-gibberish-not-real\0").unwrap();
+        w.finish().unwrap();
+
+        match DBReader::open(&prefix) {
+            Err(DbError::CompressedNotSupported) => {}
+            Err(e) => panic!("expected CompressedNotSupported, got other error: {e}"),
+            Ok(_) => panic!("expected CompressedNotSupported, got Ok(_)"),
+        }
+    }
 }

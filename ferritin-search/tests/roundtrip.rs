@@ -1,8 +1,10 @@
 //! Byte-exact round-trip oracle test against upstream `mmseqs createdb`.
 //!
-//! Skipped (with a `println!`) if the upstream `mmseqs` binary is not found
-//! at `../MMseqs2/build/src/mmseqs` or `../MMseqs2/oracle-bin/mmseqs/bin/mmseqs`,
-//! and the input FASTA at `../MMseqs2/examples/DB.fasta`.
+//! By default skipped (with a visible warning) if the upstream `mmseqs` binary
+//! or the example FASTA isn't reachable. CI and anyone wanting hard enforcement
+//! should set `FERRITIN_SEARCH_REQUIRE_ORACLE=1` — in that mode missing oracle
+//! inputs panic the test instead of skipping. Optionally override the binary
+//! path via `FERRITIN_SEARCH_MMSEQS_BIN=/path/to/mmseqs`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -10,33 +12,66 @@ use std::process::Command;
 use ferritin_search::db::{DBReader, DBWriter};
 use tempfile::tempdir;
 
+fn require_oracle() -> bool {
+    std::env::var("FERRITIN_SEARCH_REQUIRE_ORACLE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Crate root, used to build absolute fallback paths so tests don't depend on cwd.
+const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
+
 fn find_mmseqs() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("FERRITIN_SEARCH_MMSEQS_BIN") {
+        let p = PathBuf::from(explicit);
+        return if p.exists() { p.canonicalize().ok() } else { None };
+    }
+    // Crate is at /<repo>/ferritin/ferritin-search; MMseqs2 clone is at /<repo>/MMseqs2.
     let candidates = [
-        "../MMseqs2/build/src/mmseqs",
-        "../MMseqs2/oracle-bin/mmseqs/bin/mmseqs",
+        format!("{CRATE_ROOT}/../../MMseqs2/build/src/mmseqs"),
+        format!("{CRATE_ROOT}/../../MMseqs2/oracle-bin/mmseqs/bin/mmseqs"),
     ];
     for c in candidates {
         let p = PathBuf::from(c);
         if p.exists() {
-            return Some(p.canonicalize().ok()?);
+            return p.canonicalize().ok();
         }
     }
     None
 }
 
 fn find_example_fasta() -> Option<PathBuf> {
-    let p = PathBuf::from("../MMseqs2/examples/DB.fasta");
-    if p.exists() { Some(p.canonicalize().ok()?) } else { None }
+    let p = PathBuf::from(format!("{CRATE_ROOT}/../../MMseqs2/examples/DB.fasta"));
+    if p.exists() { p.canonicalize().ok() } else { None }
+}
+
+/// Resolve oracle inputs or exit. Returns `None` if not required and not found
+/// (test should `return` in that case); panics if required and not found.
+fn oracle_inputs_or_skip(test_name: &str) -> Option<(PathBuf, PathBuf)> {
+    match (find_mmseqs(), find_example_fasta()) {
+        (Some(m), Some(f)) => Some((m, f)),
+        (mmseqs, fasta) => {
+            let msg = format!(
+                "{test_name}: oracle inputs missing (mmseqs={:?}, fasta={:?}). \
+                 Set FERRITIN_SEARCH_MMSEQS_BIN to an mmseqs binary path, \
+                 or run with FERRITIN_SEARCH_REQUIRE_ORACLE=1 to make this a hard failure.",
+                mmseqs, fasta,
+            );
+            if require_oracle() {
+                panic!("{msg}");
+            } else {
+                eprintln!("SKIP (oracle not enforced): {msg}");
+                None
+            }
+        }
+    }
 }
 
 #[test]
 fn rust_reader_matches_upstream_createdb_output() {
-    let Some(mmseqs) = find_mmseqs() else {
-        eprintln!("skipping: upstream mmseqs binary not found");
-        return;
-    };
-    let Some(fasta) = find_example_fasta() else {
-        eprintln!("skipping: examples/DB.fasta not found");
+    let Some((mmseqs, fasta)) =
+        oracle_inputs_or_skip("rust_reader_matches_upstream_createdb_output")
+    else {
         return;
     };
 
@@ -77,12 +112,9 @@ fn rust_reader_matches_upstream_createdb_output() {
 
 #[test]
 fn rust_writer_roundtrips_upstream_db_byte_exact() {
-    let Some(mmseqs) = find_mmseqs() else {
-        eprintln!("skipping: upstream mmseqs binary not found");
-        return;
-    };
-    let Some(fasta) = find_example_fasta() else {
-        eprintln!("skipping: examples/DB.fasta not found");
+    let Some((mmseqs, fasta)) =
+        oracle_inputs_or_skip("rust_writer_roundtrips_upstream_db_byte_exact")
+    else {
         return;
     };
 

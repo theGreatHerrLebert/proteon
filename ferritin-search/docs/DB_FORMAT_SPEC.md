@@ -29,12 +29,14 @@ Bit layout:
 
 ```
 bit 31     : compression flag (1 = zstd-compressed payloads in data blob)
-bits 30..17: extended flags (mask 0x7FFE when shifted; see below)
-bits 16..0 : base dbtype (see enum below)
+bits 30..17: extended flags (14 bits; upstream accesses via (u32 >> 16) & 0x7FFE)
+bit 16     : reserved (cleared by upstream's 0x7FFE extended mask)
+bits 15..0 : base dbtype (16 bits, matching upstream DBTYPE_MASK = 0x0000FFFF)
 ```
 
 Read helpers: `DBReader::getExtendedDbtype(dbtype) = ((uint32_t)dbtype >> 16) & 0x7FFE`.
 Write helpers: `setExtendedDbtype(dbtype, ext) = dbtype | ((ext & 0x7FFE) << 16)`.
+Base comparison: `isEqualDbtype(a, b) = (a & DBTYPE_MASK) == (b & DBTYPE_MASK)` where `DBTYPE_MASK = 0x0000FFFF` (`Parameters.h:1321`).
 
 ### Base dbtype enum (`Parameters.h:69–89`)
 
