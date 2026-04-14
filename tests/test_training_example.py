@@ -1,7 +1,11 @@
 """Tests for joined training example artifacts."""
 
+import hashlib
 import json
 from types import SimpleNamespace
+
+import numpy as np
+import pytest
 
 import ferritin
 
@@ -74,3 +78,98 @@ class TestTrainingExample:
         assert row["crop_start"] == 0
         assert row["crop_stop"] == 2
         assert row["weight"] == 0.5
+
+    def test_training_release_writes_denormalized_tensors_npz(self, tmp_path):
+        """build_training_release with export_tensors=True (default) must
+        produce a tensors.npz, checksum it into the manifest, and
+        roundtrip cleanly via load_training_examples."""
+        structures = [_fake_structure("A"), _fake_structure("B")]
+        seq_release = ferritin.build_sequence_dataset(
+            structures,
+            tmp_path / "seq",
+            release_id="seq-v0",
+            record_ids=["fake:A", "fake:B"],
+        )
+        preps = [ferritin.PrepReport(hydrogens_added=0, converged=True) for _ in structures]
+        struc_root = ferritin.build_structure_supervision_dataset_from_prepared(
+            structures,
+            preps,
+            tmp_path / "struc_root",
+            release_id="struc-v0",
+            record_ids=["fake:A", "fake:B"],
+        )
+        train = ferritin.build_training_release(
+            seq_release,
+            struc_root / "supervision_release",
+            tmp_path / "train",
+            release_id="train-v0",
+            split_assignments={"fake:A": "train", "fake:B": "val"},
+            weights={"fake:A": 1.0, "fake:B": 0.5},
+        )
+
+        # 1. tensors.npz exists + manifest carries a real SHA-256.
+        tensor_path = train / "tensors.npz"
+        assert tensor_path.exists(), "training release should emit tensors.npz"
+        manifest = json.loads((train / "release_manifest.json").read_text(encoding="utf-8"))
+        expected = hashlib.sha256(tensor_path.read_bytes()).hexdigest()
+        assert manifest["tensor_sha256"] == expected
+        assert len(manifest["tensor_fields"]) > 0
+
+        # 2. NPZ carries the concatenated tensors with correct shapes.
+        # Synthetic residues: A has 2 (GLY, SER), B has 2. Max length 2.
+        payload = np.load(tensor_path, allow_pickle=False)
+        assert payload["aatype"].shape == (2, 2)
+        assert payload["all_atom_positions"].shape == (2, 2, 37, 3)
+        assert payload["rigidgroups_gt_frames"].shape == (2, 2, 8, 4, 4)
+        # Per-example bookkeeping lets downstream slice correctly.
+        np.testing.assert_array_equal(payload["length"], np.asarray([2, 2], dtype=np.int32))
+        np.testing.assert_array_equal(payload["weight"], np.asarray([1.0, 0.5], dtype=np.float32))
+
+        # 3. load_training_examples round-trips via the NPZ path.
+        reloaded = ferritin.load_training_examples(train)
+        assert len(reloaded) == 2
+        by_id = {ex.record_id: ex for ex in reloaded}
+        assert set(by_id) == {"fake:A", "fake:B"}
+        assert by_id["fake:A"].split == "train"
+        assert by_id["fake:B"].split == "val"
+        assert by_id["fake:A"].weight == pytest.approx(1.0)
+        assert by_id["fake:B"].weight == pytest.approx(0.5)
+        # Tensors populated on both sides of the join.
+        assert by_id["fake:A"].sequence is not None
+        assert by_id["fake:A"].structure is not None
+        assert by_id["fake:A"].sequence.aatype.shape == (2,)
+        assert by_id["fake:A"].structure.all_atom_positions.shape == (2, 37, 3)
+
+        # 4. Tamper the NPZ and assert load rejects by default.
+        tensor_path.write_bytes(b"corrupt")
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            ferritin.load_training_examples(train)
+
+    def test_export_tensors_false_leaves_pointer_only_release(self, tmp_path):
+        """Backwards-compat: `export_tensors=False` keeps the legacy
+        pointer-only behavior. Manifest has no tensor_file; loading
+        falls back to re-joining via the child releases."""
+        structures = [_fake_structure("A")]
+        seq_release = ferritin.build_sequence_dataset(
+            structures, tmp_path / "seq", release_id="seq-v0", record_ids=["fake:A"]
+        )
+        preps = [ferritin.PrepReport(hydrogens_added=0, converged=True)]
+        struc_root = ferritin.build_structure_supervision_dataset_from_prepared(
+            structures, preps, tmp_path / "struc_root",
+            release_id="struc-v0", record_ids=["fake:A"],
+        )
+        train = ferritin.build_training_release(
+            seq_release,
+            struc_root / "supervision_release",
+            tmp_path / "train",
+            release_id="train-v0",
+            split_assignments={"fake:A": "train"},
+            export_tensors=False,
+        )
+        assert not (train / "tensors.npz").exists()
+        manifest = json.loads((train / "release_manifest.json").read_text(encoding="utf-8"))
+        assert manifest["tensor_file"] is None
+
+        reloaded = ferritin.load_training_examples(train)
+        assert len(reloaded) == 1
+        assert reloaded[0].sequence is not None

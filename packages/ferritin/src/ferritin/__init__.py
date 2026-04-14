@@ -140,6 +140,10 @@ from .templates import (
     TemplateFeatures,
     build_template_features,
 )
+from .training_example import (
+    TRAINING_EXPORT_FORMAT,
+    load_training_examples,
+)
 from .sequence_example import (
     SequenceExample,
     batch_build_sequence_examples,
