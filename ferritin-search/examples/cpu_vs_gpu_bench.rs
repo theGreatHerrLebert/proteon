@@ -24,6 +24,13 @@ fn parse_arg<T: std::str::FromStr>(args: &[String], i: usize, default: T) -> T {
         .unwrap_or(default)
 }
 
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let n_targets: usize = parse_arg(&args, 1, 5000);
@@ -73,16 +80,23 @@ fn main() {
     let alpha = Alphabet::protein();
     let matrix = SubstitutionMatrix::blosum62();
 
+    let prefilter_cap = env_usize("BENCH_PREFILTER_CAP", 1000);
+    let result_cap = env_usize("BENCH_RESULT_CAP", 50);
+    let min_score = env_usize("BENCH_MIN_SCORE", 0) as i32;
+    eprintln!(
+        "[bench] prefilter_cap={prefilter_cap}, result_cap={result_cap}, min_score={min_score}"
+    );
+
     let make_opts = |use_gpu: bool| SearchOptions {
         k: 6,
         reduce_to: Some(13),
         bit_factor: 2.0,
         diagonal_score_threshold: 0,
-        max_prefilter_hits: Some(1000),
+        max_prefilter_hits: Some(prefilter_cap),
         gap_open: -11,
         gap_extend: -1,
-        min_score: 0,
-        max_results: Some(50),
+        min_score,
+        max_results: Some(result_cap),
         use_gpu,
     };
 
