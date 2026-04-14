@@ -9,7 +9,10 @@ name = "ferritin_connector"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-cuda = ["cudarc"]
+# Propagates to ferritin-search so its GPU search kernels are compiled in;
+# without that forward, `maturin build --features cuda` would only pull
+# cudarc into the connector crate and leave ferritin-search CPU-only.
+cuda = ["cudarc", "ferritin-search/cuda"]
 
 [dependencies]
 ferritin-align = { path = "../ferritin-align" }

@@ -130,7 +130,11 @@ pub fn smith_waterman_score_batch_gpu(
         targets_flat.push(0);
     }
 
-    let d_query = stream.clone_htod(query)?;
+    // Sentinel for empty query (same reason as the targets_flat guard:
+    // cudarc rejects zero-byte uploads). Kernel reads zero columns when
+    // q_len=0 so the byte is never dereferenced.
+    let query_for_gpu: &[u8] = if query.is_empty() { &[0u8] } else { query };
+    let d_query = stream.clone_htod(query_for_gpu)?;
     let d_targets = stream.clone_htod(&targets_flat)?;
     let d_offsets = stream.clone_htod(&target_offsets)?;
     let d_lens = stream.clone_htod(&target_lens)?;
@@ -274,6 +278,30 @@ mod tests {
                     "pair {i}: target_end mismatch"
                 );
             }
+        }
+    }
+
+    /// Empty query with non-empty targets must survive cudarc's zero-
+    /// byte upload rejection and return a zero score per pair (kernel
+    /// sees q_len=0 so no DP cell is ever activated).
+    #[test]
+    fn empty_query_with_nonempty_targets_returns_zeros() {
+        if super::SwKernel::try_global().is_none() {
+            eprintln!("SKIP empty-query guard: no GPU available");
+            return;
+        }
+        let alphabet_size = 4;
+        let scores = identity_matrix(alphabet_size, 3, -2);
+        let t1: Vec<u8> = vec![0, 1, 2, 3];
+        let t2: Vec<u8> = vec![3, 2, 1, 0];
+        let targets: Vec<&[u8]> = vec![&t1, &t2];
+        let out = smith_waterman_score_batch_gpu(
+            &[], &targets, &scores, alphabet_size, -5, -1,
+        )
+        .expect("empty query must not be an infrastructure error");
+        assert_eq!(out.len(), 2);
+        for ge in &out {
+            assert_eq!(ge.score, 0);
         }
     }
 

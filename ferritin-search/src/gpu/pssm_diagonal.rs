@@ -156,7 +156,10 @@ pub fn ungapped_alignment_pssm_batch_gpu(
         targets_flat.push(0);
     }
 
-    let d_pssm = stream.clone_htod(&pssm.data)?;
+    // PSSM data should never be empty once the shared-mem check above
+    // passes, but guard for cudarc's zero-byte rejection anyway.
+    let pssm_for_gpu: &[i32] = if pssm.data.is_empty() { &[0i32] } else { &pssm.data };
+    let d_pssm = stream.clone_htod(pssm_for_gpu)?;
     let d_targets = stream.clone_htod(&targets_flat)?;
     let d_offsets = stream.clone_htod(&target_offsets)?;
     let d_lens = stream.clone_htod(&target_lens)?;

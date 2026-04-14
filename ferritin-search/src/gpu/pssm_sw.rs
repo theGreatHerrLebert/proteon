@@ -161,7 +161,11 @@ pub fn pssm_sw_padded_batch_gpu(
         .collect();
     let max_padded_len = *padded_db.bucket_padded_lens.iter().max().unwrap_or(&0);
 
-    let d_pssm = stream.clone_htod(&pssm.data)?;
+    // Guard for empty PSSM even though the shared-mem check above
+    // rejects only oversized PSSMs — an empty one would slip through
+    // into cudarc's zero-byte-alloc rejection.
+    let pssm_for_gpu: &[i32] = if pssm.data.is_empty() { &[0i32] } else { &pssm.data };
+    let d_pssm = stream.clone_htod(pssm_for_gpu)?;
     // `clone_htod` rejects zero-byte allocations.
     let padded_data_slice = if padded_db.data.is_empty() {
         vec![0u8]

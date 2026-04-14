@@ -24,7 +24,7 @@ use crate::gapped::{smith_waterman, GappedAlignment};
 use crate::kmer::{KmerEncoder, KmerIndex, KmerIndexError};
 use crate::kmer_generator::widen_to_i32;
 use crate::matrix::SubstitutionMatrix;
-use crate::prefilter::{diagonal_prefilter, PrefilterOptions};
+use crate::prefilter::{diagonal_prefilter, PrefilterHit, PrefilterOptions};
 use crate::reduced_alphabet::ReducedAlphabet;
 use crate::sequence::Sequence;
 use crate::ungapped::ungapped_alignment;
@@ -63,6 +63,12 @@ pub struct SearchOptions {
     pub min_score: i32,
     /// Cap the number of hits returned per query.
     pub max_results: Option<usize>,
+    /// Use the GPU-batched dispatch path when the `cuda` feature is
+    /// compiled in and a device is detected at runtime. `false` forces
+    /// the CPU path even on GPU hosts — useful for debugging or
+    /// reproducing exact upstream ordering. Ignored when the feature
+    /// is not compiled.
+    pub use_gpu: bool,
 }
 
 impl Default for SearchOptions {
@@ -77,6 +83,7 @@ impl Default for SearchOptions {
             gap_extend: -1,
             min_score: 0,
             max_results: None,
+            use_gpu: true,
         }
     }
 }
@@ -183,9 +190,11 @@ impl SearchEngine {
     /// Run a single query against the indexed corpus.
     ///
     /// Returns hits sorted by gapped alignment score descending.
+    ///
+    /// Dispatches to [`SearchEngine::search_gpu`] when the `cuda` feature
+    /// is compiled in, `opts.use_gpu` is `true`, and a device is
+    /// detected at runtime. Silent CPU fallback otherwise.
     pub fn search(&self, query: &Sequence) -> Vec<SearchHit> {
-        // Prefilter operates on the reduced (or full) alphabet matching
-        // the index; ungapped + gapped use the full-alphabet matrix.
         let query_for_prefilter = match &self.reducer {
             Some(r) => r.reduce_sequence(&query.data),
             None => query.data.clone(),
@@ -202,15 +211,29 @@ impl SearchEngine {
             },
         );
 
+        #[cfg(feature = "cuda")]
+        {
+            if self.opts.use_gpu && crate::gpu::is_available() {
+                return self.search_gpu(&query.data, &prefilter_hits);
+            }
+        }
+
+        self.search_cpu(&query.data, &prefilter_hits)
+    }
+
+    /// CPU reference path. Also the fallback when GPU dispatch errors
+    /// mid-flight. Parity target for the GPU path — same inputs must
+    /// produce the same `SearchHit` ordering.
+    fn search_cpu(&self, query: &[u8], prefilter_hits: &[PrefilterHit]) -> Vec<SearchHit> {
         let mut results: Vec<SearchHit> = Vec::new();
-        for ph in &prefilter_hits {
+        for ph in prefilter_hits {
             let target = match self.targets_full.get(&ph.seq_id) {
                 Some(t) => t,
                 None => continue,
             };
 
             let ungapped = match ungapped_alignment(
-                &query.data,
+                query,
                 target,
                 ph.best_diagonal,
                 &self.matrix_int,
@@ -221,7 +244,7 @@ impl SearchEngine {
             };
 
             let gapped = match smith_waterman(
-                &query.data,
+                query,
                 target,
                 &self.matrix_int,
                 self.full_alphabet_size,
@@ -244,6 +267,135 @@ impl SearchEngine {
         results.sort_by(|a, b| b.alignment.score.cmp(&a.alignment.score));
         if let Some(limit) = self.opts.max_results {
             results.truncate(limit);
+        }
+        results
+    }
+
+    /// GPU-batched path: dispatch ungapped + Smith-Waterman scoring
+    /// across all prefilter candidates in two batched GPU calls, then
+    /// run CPU `smith_waterman` only on the surviving top-K to recover
+    /// CIGAR traceback (the GPU score-batch kernel deliberately skips
+    /// traceback — see [`crate::gpu::sw`]).
+    ///
+    /// On any GPU infrastructure error, falls back to the full CPU
+    /// path for this query so correctness is never at risk.
+    #[cfg(feature = "cuda")]
+    fn search_gpu(&self, query: &[u8], prefilter_hits: &[PrefilterHit]) -> Vec<SearchHit> {
+        use crate::gpu::{diagonal, sw};
+
+        struct Candidate<'a> {
+            target: &'a [u8],
+            seq_id: u32,
+            prefilter_score: u32,
+            best_diagonal: i32,
+        }
+
+        let mut candidates: Vec<Candidate<'_>> = Vec::with_capacity(prefilter_hits.len());
+        for ph in prefilter_hits {
+            if let Some(target) = self.targets_full.get(&ph.seq_id) {
+                candidates.push(Candidate {
+                    target: target.as_slice(),
+                    seq_id: ph.seq_id,
+                    prefilter_score: ph.diagonal_score,
+                    best_diagonal: ph.best_diagonal,
+                });
+            }
+        }
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
+        let pairs: Vec<(&[u8], i32)> = candidates
+            .iter()
+            .map(|c| (c.target, c.best_diagonal))
+            .collect();
+
+        // Batched ungapped extension. Err → full CPU fallback.
+        let ungapped = match diagonal::ungapped_alignment_batch_gpu(
+            query,
+            &pairs,
+            &self.matrix_int,
+            self.full_alphabet_size,
+        ) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!(
+                    "[ferritin-search] GPU ungapped batch failed; CPU fallback: {e:#}"
+                );
+                return self.search_cpu(query, prefilter_hits);
+            }
+        };
+
+        // Keep only ungapped survivors (CPU path's "skip on None" semantic).
+        let mut surviving: Vec<(usize, i32)> = Vec::with_capacity(candidates.len());
+        for (i, u) in ungapped.iter().enumerate() {
+            if let Some(hit) = u {
+                surviving.push((i, hit.score));
+            }
+        }
+        if surviving.is_empty() {
+            return Vec::new();
+        }
+
+        let surviving_targets: Vec<&[u8]> = surviving.iter().map(|(i, _)| candidates[*i].target).collect();
+
+        // Batched SW score+endpoint. Err → CPU fallback for just the survivors.
+        let sw_scores = match sw::smith_waterman_score_batch_gpu(
+            query,
+            &surviving_targets,
+            &self.matrix_int,
+            self.full_alphabet_size,
+            self.opts.gap_open,
+            self.opts.gap_extend,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "[ferritin-search] GPU SW batch failed; CPU fallback: {e:#}"
+                );
+                return self.search_cpu(query, prefilter_hits);
+            }
+        };
+
+        // Threshold + rank on GPU scores so the expensive CPU traceback
+        // only runs on the final top-K. This is the whole point of the
+        // GPU path: one cheap batched score sweep, then targeted CPU
+        // work — mirrors how upstream MMseqs2 hands off to CPU for output.
+        let mut ranked: Vec<(usize, i32, i32)> = Vec::with_capacity(surviving.len()); // (idx_in_surviving, sw_score, ungapped_score)
+        for (pos, (_, ungapped_score)) in surviving.iter().enumerate() {
+            let sw_score = sw_scores[pos].score;
+            if sw_score >= self.opts.min_score {
+                ranked.push((pos, sw_score, *ungapped_score));
+            }
+        }
+        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        if let Some(limit) = self.opts.max_results {
+            ranked.truncate(limit);
+        }
+
+        // CPU traceback only on the retained hits.
+        let mut results: Vec<SearchHit> = Vec::with_capacity(ranked.len());
+        for (pos, _, ungapped_score) in ranked {
+            let (cand_idx, _) = surviving[pos];
+            let c = &candidates[cand_idx];
+            let gapped = match smith_waterman(
+                query,
+                c.target,
+                &self.matrix_int,
+                self.full_alphabet_size,
+                self.opts.gap_open,
+                self.opts.gap_extend,
+            ) {
+                Some(a) if a.score >= self.opts.min_score => a,
+                _ => continue,
+            };
+            results.push(SearchHit {
+                target_id: c.seq_id,
+                prefilter_score: c.prefilter_score,
+                best_diagonal: c.best_diagonal,
+                ungapped_score,
+                alignment: gapped,
+            });
         }
         results
     }
@@ -414,6 +566,73 @@ mod tests {
         let hits = engine.search(&q);
         assert!(!hits.is_empty());
         assert_eq!(hits[0].target_id, 1);
+    }
+
+    /// End-to-end parity: GPU dispatch path returns the same hits in
+    /// the same order as the CPU path. Skips when no GPU is present.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gpu_search_matches_cpu_search() {
+        if !crate::gpu::is_available() {
+            eprintln!("SKIP gpu_search_matches_cpu_search: no GPU available");
+            return;
+        }
+        let (alpha, m) = alpha_and_matrix();
+        let seqs = [
+            (1u32, b"MNALVVKFGGTSVANAERFLRVADILESNARQGQ".as_slice()),
+            (2u32, b"WVLSAADKTNVKAAWGKVGAHAGEYGAEALERMFLSFP".as_slice()),
+            (3u32, b"MEAFRKQLPCFRSGAQQVKEHFKQVAEKHHGFLEEFCAR".as_slice()),
+            (4u32, b"MKLVRQPSTNLKACDFGHIYMKLVRQPSTNLKACDFGHIY".as_slice()),
+            (5u32, b"WWWWWWWWWWWWWWWWWWWW".as_slice()),
+        ];
+        let targets: Vec<(u32, Sequence)> = seqs
+            .iter()
+            .map(|(id, s)| (*id, Sequence::from_ascii(alpha.clone(), s)))
+            .collect();
+
+        let opts_cpu = SearchOptions {
+            k: 3,
+            reduce_to: Some(13),
+            use_gpu: false,
+            ..Default::default()
+        };
+        let opts_gpu = SearchOptions {
+            k: 3,
+            reduce_to: Some(13),
+            use_gpu: true,
+            ..Default::default()
+        };
+        let engine_cpu =
+            SearchEngine::build(targets.clone(), &m, alpha.clone(), opts_cpu).unwrap();
+        let engine_gpu =
+            SearchEngine::build(targets.clone(), &m, alpha.clone(), opts_gpu).unwrap();
+
+        for (qid, seq) in &targets {
+            let cpu = engine_cpu.search(seq);
+            let gpu = engine_gpu.search(seq);
+            assert_eq!(
+                cpu.len(),
+                gpu.len(),
+                "query {qid}: CPU returned {} hits, GPU returned {}",
+                cpu.len(),
+                gpu.len(),
+            );
+            for (i, (c, g)) in cpu.iter().zip(gpu.iter()).enumerate() {
+                assert_eq!(
+                    c.target_id, g.target_id,
+                    "query {qid} pos {i}: target_id CPU={} GPU={}",
+                    c.target_id, g.target_id,
+                );
+                assert_eq!(
+                    c.alignment.score, g.alignment.score,
+                    "query {qid} pos {i}: score CPU={} GPU={}",
+                    c.alignment.score, g.alignment.score,
+                );
+                assert_eq!(c.ungapped_score, g.ungapped_score);
+                assert_eq!(c.alignment.query_end, g.alignment.query_end);
+                assert_eq!(c.alignment.target_end, g.alignment.target_end);
+            }
+        }
     }
 
     #[test]

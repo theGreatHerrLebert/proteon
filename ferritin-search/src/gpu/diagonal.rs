@@ -125,8 +125,12 @@ pub fn ungapped_alignment_batch_gpu(
         targets_flat.push(0); // cudarc rejects zero-byte allocations
     }
 
-    // Upload inputs.
-    let d_query = stream.clone_htod(query)?;
+    // Upload inputs. Same sentinel-byte dance for the query: an empty
+    // query means zero pairwise scores would be computed anyway, but
+    // cudarc's `clone_htod` refuses the zero-byte alloc, so we hand it
+    // a 1-byte buffer that the kernel never reads (q_len=0).
+    let query_for_gpu: &[u8] = if query.is_empty() { &[0u8] } else { query };
+    let d_query = stream.clone_htod(query_for_gpu)?;
     let d_targets = stream.clone_htod(&targets_flat)?;
     let d_offsets = stream.clone_htod(&target_offsets)?;
     let d_lens = stream.clone_htod(&target_lens)?;
@@ -253,6 +257,26 @@ mod tests {
                 "pair {i}: CPU vs GPU disagree for diagonal {diagonal}",
             );
         }
+    }
+
+    /// Empty query with non-empty targets must not explode on cudarc's
+    /// zero-byte-alloc rejection. Kernel should run with q_len=0 and
+    /// report no hit for every pair.
+    #[test]
+    fn empty_query_with_nonempty_targets_returns_nones() {
+        if super::DiagonalKernel::try_global().is_none() {
+            eprintln!("SKIP empty-query guard: no GPU available");
+            return;
+        }
+        let alphabet_size = 4;
+        let scores = identity_matrix(alphabet_size, 3, -2);
+        let t1: Vec<u8> = vec![0, 1, 2, 3];
+        let t2: Vec<u8> = vec![3, 2, 1, 0];
+        let pairs: Vec<(&[u8], i32)> = vec![(&t1, 0), (&t2, 1)];
+        let result = ungapped_alignment_batch_gpu(&[], &pairs, &scores, alphabet_size)
+            .expect("empty query must not be an infrastructure error");
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|r| r.is_none()));
     }
 
     #[test]

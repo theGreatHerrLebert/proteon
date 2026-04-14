@@ -73,6 +73,7 @@ impl PySearchEngine {
             gap_extend,
             min_score,
             max_results,
+            use_gpu: true,
         };
         let target_seqs: Vec<(u32, Sequence)> = targets
             .into_iter()
