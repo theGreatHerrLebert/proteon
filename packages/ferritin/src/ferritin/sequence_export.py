@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List
 
 import numpy as np
 
+from ._artifact_checksum import sha256_file, verify_sha256
 from .sequence_example import SequenceExample
 
 SEQUENCE_EXPORT_FORMAT = "ferritin.sequence_example.v0"
@@ -28,26 +29,43 @@ def export_sequence_examples(
         raise FileExistsError(f"{root} already exists")
     root.mkdir(parents=True, exist_ok=True)
 
+    with (root / "examples.jsonl").open("w", encoding="utf-8") as handle:
+        for ex in examples:
+            handle.write(json.dumps(_example_metadata(ex), separators=(",", ":")))
+            handle.write("\n")
+
+    # Tensors first so the manifest can carry a digest that actually
+    # corresponds to the on-disk payload (same ordering as the
+    # supervision exporter).
+    tensor_path = root / "tensors.npz"
+    np.savez_compressed(tensor_path, **_stack_tensor_payload(examples))
+
     manifest = {
         "format": SEQUENCE_EXPORT_FORMAT,
         "count": len(examples),
         "examples_file": "examples.jsonl",
         "tensor_file": "tensors.npz",
+        "tensor_sha256": sha256_file(tensor_path),
     }
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    with (root / "examples.jsonl").open("w", encoding="utf-8") as handle:
-        for ex in examples:
-            handle.write(json.dumps(_example_metadata(ex), separators=(",", ":")))
-            handle.write("\n")
-    np.savez_compressed(root / "tensors.npz", **_stack_tensor_payload(examples))
     return root
 
 
-def load_sequence_examples(path: str | Path) -> List[SequenceExample]:
+def load_sequence_examples(
+    path: str | Path,
+    *,
+    verify_checksum: bool = True,
+) -> List[SequenceExample]:
+    """Load sequence examples. See `load_structure_supervision_examples`
+    for the `verify_checksum` flag semantics."""
     root = Path(path)
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("format") != SEQUENCE_EXPORT_FORMAT:
         raise ValueError(f"unsupported sequence export format: {manifest.get('format')!r}")
+    if verify_checksum:
+        expected = manifest.get("tensor_sha256")
+        if expected:
+            verify_sha256(root / manifest["tensor_file"], expected)
     rows = [
         json.loads(line)
         for line in (root / manifest["examples_file"]).read_text(encoding="utf-8").splitlines()

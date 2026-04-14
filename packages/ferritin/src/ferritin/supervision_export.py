@@ -18,6 +18,8 @@ from typing import Dict, Iterable, List
 
 import numpy as np
 
+from ._artifact_checksum import sha256_file, verify_sha256
+
 from .supervision import StructureQualityMetadata, StructureSupervisionExample
 
 SUPERVISION_EXPORT_FORMAT = "ferritin.structure_supervision.v0"
@@ -69,30 +71,51 @@ def export_structure_supervision_examples(
     out_path.mkdir(parents=True, exist_ok=True)
 
     tensor_payload = _stack_tensor_payload(examples)
-    manifest = {
-        "format": SUPERVISION_EXPORT_FORMAT,
-        "count": len(examples),
-        "tensor_file": "tensors.npz",
-        "examples_file": "examples.jsonl",
-        "tensor_fields": list(tensor_payload.keys()),
-    }
-    (out_path / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     with (out_path / "examples.jsonl").open("w", encoding="utf-8") as handle:
         for ex in examples:
             handle.write(json.dumps(_example_metadata(ex), separators=(",", ":")))
             handle.write("\n")
 
-    np.savez_compressed(out_path / "tensors.npz", **tensor_payload)
+    # Write tensors.npz first so we can hash it into the manifest.
+    # Keeps integrity check ordered: if the write fails we don't leave
+    # a manifest claiming a checksum that no file on disk matches.
+    tensor_path = out_path / "tensors.npz"
+    np.savez_compressed(tensor_path, **tensor_payload)
+
+    manifest = {
+        "format": SUPERVISION_EXPORT_FORMAT,
+        "count": len(examples),
+        "tensor_file": "tensors.npz",
+        "examples_file": "examples.jsonl",
+        "tensor_fields": list(tensor_payload.keys()),
+        "tensor_sha256": sha256_file(tensor_path),
+    }
+    (out_path / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return out_path
 
 
-def load_structure_supervision_examples(path: str | Path) -> List[StructureSupervisionExample]:
-    """Load supervision examples previously written by `export_structure_supervision_examples()`."""
+def load_structure_supervision_examples(
+    path: str | Path,
+    *,
+    verify_checksum: bool = True,
+) -> List[StructureSupervisionExample]:
+    """Load supervision examples previously written by `export_structure_supervision_examples()`.
+
+    `verify_checksum` defaults to `True`: if the manifest carries a
+    `tensor_sha256`, the tensor file is rehashed and compared. Pass
+    `False` to skip — useful when pointing at very large releases
+    during iteration. The hash is still written on export so downstream
+    release-validation passes can check it on their own cadence.
+    """
     root = Path(path)
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("format") != SUPERVISION_EXPORT_FORMAT:
         raise ValueError(f"unsupported supervision export format: {manifest.get('format')!r}")
+    if verify_checksum:
+        expected = manifest.get("tensor_sha256")
+        if expected:
+            verify_sha256(root / manifest["tensor_file"], expected)
 
     rows = [
         json.loads(line)

@@ -65,6 +65,22 @@ class TestSequenceExample:
         assert loaded[1].msa is None
         np.testing.assert_array_equal(loaded[0].aatype, examples[0].aatype)
 
+    def test_sequence_export_writes_tensor_sha256_and_load_verifies(self, tmp_path):
+        """Checksum parity with the structure-supervision exporter."""
+        import hashlib
+        import pytest
+
+        examples = ferritin.batch_build_sequence_examples([_fake_structure("A")])
+        out_dir = ferritin.export_sequence_examples(examples, tmp_path / "sequence")
+        manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+        expected = hashlib.sha256((out_dir / "tensors.npz").read_bytes()).hexdigest()
+        assert manifest["tensor_sha256"] == expected
+
+        ferritin.load_sequence_examples(out_dir)  # verifies and succeeds
+        (out_dir / "tensors.npz").write_bytes(b"x")
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            ferritin.load_sequence_examples(out_dir)
+
     def test_sequence_release_builder_captures_failures(self, tmp_path):
         root = ferritin.build_sequence_dataset(
             [_fake_structure("A"), _bad_structure()],

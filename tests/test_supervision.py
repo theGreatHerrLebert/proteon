@@ -4,6 +4,8 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
+
 import ferritin
 
 
@@ -198,6 +200,37 @@ class TestStructureSupervisionExample:
         np.testing.assert_array_equal(loaded[1].residue_index, examples[1].residue_index)
         np.testing.assert_allclose(loaded[0].rigidgroups_gt_frames, examples[0].rigidgroups_gt_frames)
         np.testing.assert_allclose(loaded[1].chi_angles, examples[1].chi_angles)
+
+    def test_export_writes_tensor_sha256_and_load_verifies(self, tmp_path):
+        """Per roadmap Section 6 — every artifact carries a checksum.
+
+        Export must write the hex SHA-256 of tensors.npz into the
+        manifest, and load must reject a tampered payload.
+        """
+        import hashlib
+        import json
+
+        examples = ferritin.batch_build_structure_supervision_examples(
+            [_fake_structure("A")]
+        )
+        out_dir = ferritin.export_structure_supervision_examples(
+            examples, tmp_path / "supervision"
+        )
+        manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+        expected_hash = hashlib.sha256((out_dir / "tensors.npz").read_bytes()).hexdigest()
+        assert manifest["tensor_sha256"] == expected_hash
+
+        # Good path: default load verifies and succeeds.
+        ferritin.load_structure_supervision_examples(out_dir)
+
+        # Tamper the tensor file; default load must raise with a
+        # checksum-mismatch error (not an obscure np.load error later).
+        # With verify_checksum=False the hash check is skipped; what
+        # happens after is whatever np.load does — we only guarantee
+        # the checksum gate here.
+        (out_dir / "tensors.npz").write_bytes(b"corrupt")
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            ferritin.load_structure_supervision_examples(out_dir)
 
     def test_release_builder_writes_manifest_and_failures(self, tmp_path):
         examples = ferritin.batch_build_structure_supervision_examples([_fake_structure("A")])
