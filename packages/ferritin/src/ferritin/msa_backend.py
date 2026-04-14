@@ -110,10 +110,77 @@ def search_and_build_msa(
     - `deletion_matrix` — `(N, L)` `uint8` (AF2 deletion convention)
     - `msa_mask` — `(N, L)` `float32`
     - `n_seqs`, `query_len`, `gap_idx` — scalar metadata
+
+    Duck-types on the engine object so callers can pass either the
+    Python `MsaSearch` wrapper (exposes `.build_msa`) or the raw
+    `ferritin_connector.py_msa.SearchEngine` (exposes
+    `.search_and_build_msa`). Lets the release builder accept either
+    without forcing callers to unwrap.
     """
+    if hasattr(engine, "build_msa"):
+        return engine.build_msa(query, max_seqs=max_seqs, gap_idx=gap_idx)
     return engine.search_and_build_msa(
         query, max_seqs=max_seqs, gap_idx=gap_idx
     )
+
+
+def batch_build_sequence_examples_with_msa(
+    structures: Sequence,
+    engine,
+    *,
+    record_ids: Optional[Sequence[Optional[str]]] = None,
+    source_ids: Optional[Sequence[Optional[str]]] = None,
+    chain_ids: Optional[Sequence[Optional[str]]] = None,
+    code_rev: Optional[str] = None,
+    config_rev: Optional[str] = None,
+    template_masks: Optional[Sequence[Optional[Sequence[float]]]] = None,
+    max_seqs: int = 256,
+    gap_idx: int = 21,
+) -> List:
+    """Batch variant of `build_sequence_example_with_msa`.
+
+    For each structure: derive the chain sequence, run the search
+    engine to get an MSA tensor bundle, and emit a
+    `SequenceExample` with the MSA-side fields populated. Equivalent
+    to calling `build_sequence_example_with_msa` in a loop, but
+    packaged so release-layer callers don't have to hand-roll the
+    loop + per-structure arg expansion themselves.
+
+    `engine` is a `MsaSearch` / `ferritin_connector.py_msa.SearchEngine`
+    (whichever the caller has); both expose the
+    `search_and_build_msa` method via duck typing. The engine is
+    shared across all queries so the k-mer index is built once.
+    """
+    n = len(structures)
+
+    def _expand(values):
+        if values is None:
+            return [None] * n
+        values = list(values)
+        if len(values) != n:
+            raise ValueError(f"expected {n} items, got {len(values)}")
+        return values
+
+    record_ids = _expand(record_ids)
+    source_ids = _expand(source_ids)
+    chain_ids = _expand(chain_ids)
+    template_masks = _expand(template_masks)
+
+    return [
+        build_sequence_example_with_msa(
+            structure,
+            engine,
+            record_id=record_ids[i],
+            source_id=source_ids[i],
+            chain_id=chain_ids[i],
+            code_rev=code_rev,
+            config_rev=config_rev,
+            template_mask=template_masks[i],
+            max_seqs=max_seqs,
+            gap_idx=gap_idx,
+        )
+        for i, structure in enumerate(structures)
+    ]
 
 
 def build_sequence_example_with_msa(

@@ -81,9 +81,28 @@ def build_sequence_dataset(
     msas: Optional[Sequence[Optional[Sequence[str]]]] = None,
     deletion_matrices: Optional[Sequence[Optional[Sequence[Sequence[float]]]]] = None,
     template_masks: Optional[Sequence[Optional[Sequence[float]]]] = None,
+    msa_engine: Optional[object] = None,
+    msa_max_seqs: int = 256,
+    msa_gap_idx: int = 21,
     provenance: Optional[Dict[str, object]] = None,
     overwrite: bool = False,
 ) -> Path:
+    """Build a sequence-dataset release.
+
+    `msa_engine` wires the GPU MSA search into the release: when
+    provided (typically a `MsaSearch` / connector engine), each
+    structure's MSA is computed on the fly from the engine's target
+    corpus and baked into the `SequenceExample`. Overrides any
+    explicit `msas` / `deletion_matrices` for structures where the
+    engine returns a result; explicit inputs still win if the engine
+    raises on a particular query (documented as an escape hatch for
+    oddball queries that the search doesn't handle gracefully).
+
+    `msa_max_seqs` / `msa_gap_idx` flow through to
+    `engine.search_and_build_msa`. Defaults match the upstream
+    MSA-assembly conventions (256 rows, gap_idx=21 matches the
+    `X`-aware 21-letter protein alphabet).
+    """
     n = len(structures)
     record_ids = _expand_optional(record_ids, n)
     source_ids = _expand_optional(source_ids, n)
@@ -97,6 +116,25 @@ def build_sequence_dataset(
     for i, structure in enumerate(structures):
         record_id = record_ids[i] or _default_record_id(structure, chain_ids[i])
         try:
+            if msa_engine is not None and msas[i] is None and deletion_matrices[i] is None:
+                # Defer the import so this module doesn't require the
+                # Rust backend just to parse.
+                from .msa_backend import build_sequence_example_with_msa
+                examples.append(
+                    build_sequence_example_with_msa(
+                        structure,
+                        msa_engine,
+                        record_id=record_id,
+                        source_id=source_ids[i],
+                        chain_id=chain_ids[i],
+                        code_rev=code_rev,
+                        config_rev=config_rev,
+                        template_mask=template_masks[i],
+                        max_seqs=msa_max_seqs,
+                        gap_idx=msa_gap_idx,
+                    )
+                )
+                continue
             examples.append(
                 build_sequence_example(
                     structure,
