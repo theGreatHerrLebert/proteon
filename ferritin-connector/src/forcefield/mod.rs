@@ -11,6 +11,7 @@
 pub mod params;
 pub mod topology;
 pub mod energy;
+pub mod gb_obc;
 pub mod neighbor_list;
 pub mod minimize;
 pub mod md;

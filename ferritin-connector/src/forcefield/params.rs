@@ -41,6 +41,12 @@ pub trait ForceField: Send + Sync {
     /// Whether this force field has EEF1 solvation enabled.
     fn has_eef1(&self) -> bool { false }
 
+    /// OBC GB per-atom parameters (None for force fields without OBC).
+    /// Phase A scaffolding — Phase B will populate AmberParams.
+    fn get_obc_gb(&self, _atype: &str) -> Option<&crate::forcefield::gb_obc::ObcAtomParams> { None }
+    /// Whether this force field has OBC GB solvation enabled.
+    fn has_obc_gb(&self) -> bool { false }
+
     /// Nonbonded interaction cutoff (Å). Pairs beyond this distance are
     /// ignored in the LJ + Coulomb loops and the NBL builder.
     ///
