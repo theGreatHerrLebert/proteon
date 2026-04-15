@@ -1508,6 +1508,101 @@ mod gradient_tests {
     }
 
     #[test]
+    fn nbl_energy_matches_exact_energy_amber96_obc() {
+        // Parity guard for the OBC GB implicit-solvent dispatch. Today
+        // both paths invoke the same all-pair `gb_obc_energy_and_forces`,
+        // so this is trivially identical — but the test protects a
+        // future NBL specialization (cutoff-aware HCT integral or GPU
+        // port) from silently drifting from the exact reference.
+        assert_nbl_matches_exact(&amber96_obc(), "amber96_obc");
+    }
+
+    /// Forces-path analogue of [`assert_nbl_matches_exact`]:
+    /// `compute_energy_and_forces_impl` vs `compute_energy_and_forces_nbl`
+    /// must return identical per-atom forces AND identical energy
+    /// components. Parametrized over the force field so any accelerated
+    /// code path (NBL, eventual GPU, SIMD) that specializes only the
+    /// forces branch can't silently drift from the exact reference.
+    fn assert_nbl_matches_exact_forces<F: ForceField>(ff: &F, ff_name: &str) {
+        let pdb = crambin_with_h();
+        let topo = build_topology(pdb, ff);
+        let coords = collect_coords(pdb);
+        let nbl = NeighborList::build(
+            &coords,
+            ff.nonbonded_cutoff(),
+            &topo.excluded_pairs,
+            &topo.pairs_14,
+        );
+
+        let (e_exact, f_exact) = compute_energy_and_forces_impl(&coords, &topo, ff, false);
+        let (e_nbl, f_nbl) = compute_energy_and_forces_nbl(&coords, &topo, ff, &nbl);
+
+        // Energy components first (same scaffolding as the energy-only guard).
+        let tol_e = 1e-6;
+        for (name, exact, nbl) in [
+            ("bond_stretch", e_exact.bond_stretch, e_nbl.bond_stretch),
+            ("angle_bend", e_exact.angle_bend, e_nbl.angle_bend),
+            ("torsion", e_exact.torsion, e_nbl.torsion),
+            ("improper_torsion", e_exact.improper_torsion, e_nbl.improper_torsion),
+            ("vdw", e_exact.vdw, e_nbl.vdw),
+            ("electrostatic", e_exact.electrostatic, e_nbl.electrostatic),
+            ("solvation", e_exact.solvation, e_nbl.solvation),
+            ("total", e_exact.total, e_nbl.total),
+        ] {
+            assert!(
+                (exact - nbl).abs() < tol_e,
+                "[{ff_name}] forces-path energy {name}: exact={exact:.9} nbl={nbl:.9} diff={:.2e}",
+                (exact - nbl).abs()
+            );
+        }
+
+        // Per-atom force parity. The nonbonded+solvation contributions are
+        // the ones that actually differ between paths — if an NBL
+        // specialization misses a pair or applies an inconsistent cutoff,
+        // this surfaces it immediately.
+        assert_eq!(f_exact.len(), f_nbl.len(), "force vector length mismatch");
+        let tol_f = 1e-6;
+        let mut max_diff = 0.0_f64;
+        let mut worst: (usize, usize) = (0, 0);
+        for i in 0..f_exact.len() {
+            for k in 0..3 {
+                let d = (f_exact[i][k] - f_nbl[i][k]).abs();
+                if d > max_diff {
+                    max_diff = d;
+                    worst = (i, k);
+                }
+            }
+        }
+        assert!(
+            max_diff < tol_f,
+            "[{ff_name}] max force mismatch {:.2e} > {:.0e} at atom {} axis {} \
+             (exact={:.6} nbl={:.6})",
+            max_diff,
+            tol_f,
+            worst.0,
+            worst.1,
+            f_exact[worst.0][worst.1],
+            f_nbl[worst.0][worst.1]
+        );
+    }
+
+    #[test]
+    fn nbl_forces_match_exact_forces_amber96() {
+        assert_nbl_matches_exact_forces(&amber96(), "amber96");
+    }
+
+    #[test]
+    fn nbl_forces_match_exact_forces_charmm19_eef1() {
+        use crate::forcefield::params::charmm19_eef1;
+        assert_nbl_matches_exact_forces(&charmm19_eef1(), "charmm19_eef1");
+    }
+
+    #[test]
+    fn nbl_forces_match_exact_forces_amber96_obc() {
+        assert_nbl_matches_exact_forces(&amber96_obc(), "amber96_obc");
+    }
+
+    #[test]
     fn cubic_switch_derivative_matches_numerical() {
         // The derivative of the cubic switching function must match a numerical
         // finite-difference — this is where the factor-of-2 bug lived.
