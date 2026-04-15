@@ -131,6 +131,11 @@ pub struct AmberParams {
     /// If `cutoff_override` is set but this is not, switching is disabled
     /// by setting the on-distance to `cutoff_override - 1e-9`.
     pub switching_on_override: Option<f64>,
+    /// OBC GB per-atom parameters keyed by AMBER class name (e.g. "CT",
+    /// "N", "HO"). Empty unless populated via [`AmberParams::with_obc_ini`]
+    /// or [`amber96_obc`]; when empty, `has_obc_gb()` returns false and
+    /// the GB solvation term is skipped.
+    pub obc_gb: HashMap<String, crate::forcefield::gb_obc::ObcAtomParams>,
 }
 
 fn sorted_pair(a: &str, b: &str) -> (String, String) {
@@ -165,6 +170,7 @@ impl AmberParams {
             scnb: 2.0,
             cutoff_override: None,
             switching_on_override: None,
+            obc_gb: HashMap::new(),
         };
 
         let mut section = String::new();
@@ -468,6 +474,47 @@ impl AmberParams {
     }
 }
 
+impl AmberParams {
+    /// Layer OBC GB per-atom parameters onto an existing parameter set by
+    /// parsing the `[OBCSolvation]` section of the supplied INI content.
+    ///
+    /// Each data row is `ver class radius scale` with radius in Å. Rows
+    /// with a class that is already present overwrite the prior entry.
+    /// Lines outside `[OBCSolvation]` and metadata lines (starting with
+    /// `@`, `ver:`, `key:`, `value:`, `;`) are ignored.
+    #[must_use]
+    pub fn with_obc_ini(mut self, content: &str) -> Self {
+        use crate::forcefield::gb_obc::ObcAtomParams;
+        let mut section = String::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(';') || line.starts_with('@')
+                || line.starts_with("ver:") || line.starts_with("key:") || line.starts_with("value:")
+            {
+                continue;
+            }
+            if line.starts_with('[') {
+                section = line.trim_start_matches('[').trim_end_matches(']').to_string();
+                continue;
+            }
+            if section != "OBCSolvation" {
+                continue;
+            }
+            // Strip trailing "; comment" before splitting.
+            let payload = line.split(';').next().unwrap_or(line).trim();
+            let fields: Vec<&str> = payload.split_whitespace().collect();
+            if fields.len() < 4 {
+                continue;
+            }
+            let class = fields[1].to_string();
+            if let (Ok(radius), Ok(scale)) = (fields[2].parse::<f64>(), fields[3].parse::<f64>()) {
+                self.obc_gb.insert(class, ObcAtomParams { radius, scale });
+            }
+        }
+        self
+    }
+}
+
 impl ForceField for AmberParams {
     fn get_atom_type(&self, residue: &str, atom: &str) -> Option<&AtomTypeEntry> {
         self.get_atom_type(residue, atom)
@@ -500,11 +547,23 @@ impl ForceField for AmberParams {
             .or_else(|| self.cutoff_override.map(|c| c - 1e-9))
             .unwrap_or(13.0)
     }
+    fn get_obc_gb(&self, atype: &str) -> Option<&crate::forcefield::gb_obc::ObcAtomParams> {
+        self.obc_gb.get(atype)
+    }
+    fn has_obc_gb(&self) -> bool {
+        !self.obc_gb.is_empty()
+    }
 }
 
 /// Load the embedded AMBER96 parameter set.
 pub fn amber96() -> AmberParams {
     AmberParams::from_ini(include_str!("../../data/amber96.ini"))
+}
+
+/// Load AMBER96 with OBC GB per-atom parameters layered on — i.e. the
+/// equivalent of OpenMM's `ForceField("amber96.xml", "amber96_obc.xml")`.
+pub fn amber96_obc() -> AmberParams {
+    amber96().with_obc_ini(include_str!("../../data/amber96_obc.ini"))
 }
 
 // ---------------------------------------------------------------------------
@@ -664,6 +723,48 @@ mod tests {
         assert!(!p.lj.is_empty());
         assert!(!p.atom_types.is_empty());
         assert!((p.scee - 1.2).abs() < 1e-6);
+        // amber96 alone must not carry OBC params.
+        assert!(p.obc_gb.is_empty());
+        assert!(!p.has_obc_gb());
+    }
+
+    #[test]
+    fn test_load_amber96_obc() {
+        let p = amber96_obc();
+        assert!(p.has_obc_gb());
+        // 36 AMBER classes were extracted from OpenMM amber96.xml + amber96_obc.xml.
+        assert_eq!(p.obc_gb.len(), 36, "expected 36 OBC classes, got {}", p.obc_gb.len());
+
+        // Spot-check four classes against the OpenMM XML (nm -> A):
+        // CT (sp3 C): radius=0.19 nm=1.9 A, scale=0.72
+        let ct = p.get_obc_gb("CT").expect("CT missing");
+        assert!((ct.radius - 1.9).abs() < 1e-9, "CT radius = {}", ct.radius);
+        assert!((ct.scale - 0.72).abs() < 1e-9);
+        // N (sp2 N): radius=0.1706 nm=1.706 A, scale=0.79
+        let n = p.get_obc_gb("N").expect("N missing");
+        assert!((n.radius - 1.706).abs() < 1e-9);
+        assert!((n.scale - 0.79).abs() < 1e-9);
+        // HO (hydroxyl H): radius=0.105 nm=1.05 A, scale=0.85
+        let ho = p.get_obc_gb("HO").expect("HO missing");
+        assert!((ho.radius - 1.05).abs() < 1e-9);
+        assert!((ho.scale - 0.85).abs() < 1e-9);
+        // S (sulfur): radius=0.1775 nm=1.775 A, scale=0.96
+        let s = p.get_obc_gb("S").expect("S missing");
+        assert!((s.radius - 1.775).abs() < 1e-9);
+        assert!((s.scale - 0.96).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_amber96_obc_preserves_base_params() {
+        // Layering OBC must not disturb bonded / LJ / atom-type tables.
+        let base = amber96();
+        let obc = amber96_obc();
+        assert_eq!(obc.bonds.len(), base.bonds.len());
+        assert_eq!(obc.angles.len(), base.angles.len());
+        assert_eq!(obc.torsions.len(), base.torsions.len());
+        assert_eq!(obc.lj.len(), base.lj.len());
+        assert_eq!(obc.atom_types.len(), base.atom_types.len());
+        assert!((obc.scee - base.scee).abs() < 1e-12);
     }
 
     #[test]
