@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ferritin"
 version = "0.1.0"
-description = "Structural bioinformatics toolkit powered by Rust — load, align, analyze protein structures"
+description = "Rust-first structural bioinformatics toolkit for loading, aligning, analyzing, and preparing structures"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 keywords = ["bioinformatics", "protein", "pdb", "structural-biology", "tmalign", "sasa", "dssp"]

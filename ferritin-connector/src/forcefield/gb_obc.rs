@@ -123,22 +123,118 @@ impl ObcGbParams {
 
 /// Compute effective Born radii for every atom.
 ///
-/// Phase B will populate: per-atom HCT pair integral → ψ = I · ρ' → OBC tanh
-/// rescaling → R_eff.
+/// Port of OpenMM's `ReferenceObc::computeBornRadii`
+/// (`platforms/reference/src/SimTKReference/ReferenceObc.cpp`).
+/// Variable names preserved (`offset_radius_i`, `radius_i_inverse`,
+/// `scaled_radius_j`, `l_ij`, `u_ij`) so the port is line-traceable.
 ///
-/// Current stub returns `vec![1.0; coords.len()]` so downstream code has a
-/// stable-shape placeholder to exercise interfaces against; it does NOT
-/// produce correct physics.
-#[allow(dead_code)]
+/// Steps, per OBC:
+///   1. For each atom `i`, sum the HCT pair integral `I_i` over all `j != i`,
+///      where each term is a piecewise function of r_ij, `offsetRadiusI`,
+///      and `scaledRadiusJ = S_j * (ρ_j - offset)`.
+///   2. Rescale: `ψ = 0.5 · offsetRadiusI · I_i`; then
+///      `R_eff_i = 1 / (1/offsetRadiusI − tanh(α·ψ − β·ψ² + γ·ψ³) / ρ_i)`.
+///
+/// Notes that differ from a naive reading of the OBC paper:
+/// - `scaledRadiusJ` uses the dielectric-**offset** radius of j, not the
+///   intrinsic radius (OpenMM convention; follow it so the oracle matches).
+/// - The "i inside j's scaled sphere" branch adds a `2·(radiusIInverse − l_ij)`
+///   correction where `radiusIInverse = 1/offsetRadiusI`.
+///
+/// # Panics
+/// Panics if any atom's AMBER class is missing from the OBC parameter table
+/// (indicates a mis-configured parameter set — an invariant violation we want
+/// to surface loudly rather than silently mis-score).
 pub(crate) fn compute_born_radii(
     coords: &[[f64; 3]],
     topo: &Topology,
     params: &impl ForceField,
     obc: &ObcGbParams,
 ) -> Vec<f64> {
-    let _ = (coords, topo, params, obc);
-    // TODO(Phase B): HCT integral + OBC1/2 tanh rescaling.
-    vec![1.0; coords.len()]
+    let n = coords.len();
+    assert_eq!(
+        n,
+        topo.atoms.len(),
+        "compute_born_radii: coords/topology length mismatch ({} vs {})",
+        n,
+        topo.atoms.len()
+    );
+
+    // Preload per-atom (intrinsic radius, HCT scale) so the inner loop is
+    // table-free. Missing params are a hard invariant violation.
+    let per_atom: Vec<(f64, f64)> = topo
+        .atoms
+        .iter()
+        .map(|a| {
+            let p = params.get_obc_gb(&a.amber_type).unwrap_or_else(|| {
+                panic!(
+                    "compute_born_radii: no OBC params for AMBER class '{}' \
+                     (atom index {}); is amber96_obc.ini loaded?",
+                    a.amber_type, 0
+                )
+            });
+            (p.radius, p.scale)
+        })
+        .collect();
+
+    let mut born_radii = vec![0.0_f64; n];
+
+    for i in 0..n {
+        let (radius_i, _) = per_atom[i];
+        let offset_radius_i = radius_i - obc.offset;
+        let radius_i_inverse = 1.0 / offset_radius_i;
+
+        let mut sum = 0.0_f64;
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let (radius_j, scale_j) = per_atom[j];
+            let offset_radius_j = radius_j - obc.offset;
+            let scaled_radius_j = scale_j * offset_radius_j;
+
+            let dx = coords[i][0] - coords[j][0];
+            let dy = coords[i][1] - coords[j][1];
+            let dz = coords[i][2] - coords[j][2];
+            let r = (dx * dx + dy * dy + dz * dz).sqrt();
+            let r_scaled_radius_j = r + scaled_radius_j;
+
+            // Atom j's scaled sphere doesn't reach i's offset sphere.
+            if offset_radius_i >= r_scaled_radius_j {
+                continue;
+            }
+
+            let r_inverse = 1.0 / r;
+            let diff = (r - scaled_radius_j).abs();
+            let l_ij_denom = if offset_radius_i > diff { offset_radius_i } else { diff };
+            let l_ij = 1.0 / l_ij_denom;
+            let u_ij = 1.0 / r_scaled_radius_j;
+
+            let l_ij2 = l_ij * l_ij;
+            let u_ij2 = u_ij * u_ij;
+            let ratio = (u_ij / l_ij).ln();
+            let mut term = l_ij - u_ij
+                + 0.25 * r * (u_ij2 - l_ij2)
+                + 0.5 * r_inverse * ratio
+                + 0.25 * scaled_radius_j * scaled_radius_j * r_inverse * (l_ij2 - u_ij2);
+
+            // Atom i lies entirely inside atom j's scaled sphere.
+            if offset_radius_i < (scaled_radius_j - r) {
+                term += 2.0 * (radius_i_inverse - l_ij);
+            }
+
+            sum += term;
+        }
+
+        sum *= 0.5 * offset_radius_i;
+        let sum2 = sum * sum;
+        let sum3 = sum * sum2;
+        let tanh_arg = obc.alpha * sum - obc.beta * sum2 + obc.gamma * sum3;
+        let tanh_sum = tanh_arg.tanh();
+        born_radii[i] = 1.0 / (1.0 / offset_radius_i - tanh_sum / radius_i);
+    }
+
+    born_radii
 }
 
 /// OBC GB solvation energy (energy only, no forces).
@@ -197,6 +293,117 @@ pub(crate) fn gb_obc_energy_and_forces_nbl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::forcefield::params::amber96_obc;
+    use crate::forcefield::topology::{FFAtom, Topology};
+    use std::collections::HashSet;
+
+    /// Minimal Topology carrying only the fields `compute_born_radii` reads
+    /// (the atoms vec). Everything bonded/nonbonded-related is empty.
+    fn topo_of(atoms: Vec<FFAtom>) -> Topology {
+        Topology {
+            atoms,
+            bonds: vec![],
+            angles: vec![],
+            torsions: vec![],
+            improper_torsions: vec![],
+            excluded_pairs: HashSet::new(),
+            pairs_14: HashSet::new(),
+            unassigned_atoms: vec![],
+        }
+    }
+
+    fn ff_atom(amber_type: &str, element: &str, pos: [f64; 3]) -> FFAtom {
+        FFAtom {
+            pos,
+            amber_type: amber_type.to_string(),
+            charge: 0.0,
+            residue_name: "XXX".into(),
+            atom_name: "X".into(),
+            element: element.into(),
+            residue_idx: 0,
+            is_hydrogen: element == "H",
+        }
+    }
+
+    #[test]
+    fn isolated_atom_born_radius_equals_offset_radius() {
+        // Single atom -> sum == 0 -> tanh(0) == 0 -> R_eff = offsetRadius = rho - offset.
+        let params = amber96_obc();
+        let obc = ObcGbParams::obc1();
+        let coords = vec![[0.0, 0.0, 0.0]];
+        let topo = topo_of(vec![ff_atom("CT", "C", coords[0])]);
+        let br = compute_born_radii(&coords, &topo, &params, &obc);
+        let ct = params.get_obc_gb("CT").unwrap();
+        let expected = ct.radius - obc.offset; // 1.9 - 0.09 = 1.81
+        assert_eq!(br.len(), 1);
+        assert!(
+            (br[0] - expected).abs() < 1e-12,
+            "isolated CT: got {}, expected {}",
+            br[0],
+            expected
+        );
+    }
+
+    #[test]
+    fn far_separation_recovers_isolated_radii() {
+        // Two CT atoms 100 Å apart should each be within 1% of the
+        // offset-radius limit (sum ~ 0 at long range).
+        let params = amber96_obc();
+        let obc = ObcGbParams::obc1();
+        let coords = vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]];
+        let topo = topo_of(vec![
+            ff_atom("CT", "C", coords[0]),
+            ff_atom("CT", "C", coords[1]),
+        ]);
+        let br = compute_born_radii(&coords, &topo, &params, &obc);
+        let expected = params.get_obc_gb("CT").unwrap().radius - obc.offset;
+        for r in &br {
+            let rel = (r - expected).abs() / expected;
+            assert!(rel < 0.01, "far CT: R_eff = {}, expected ~ {}", r, expected);
+        }
+    }
+
+    #[test]
+    fn close_pair_descreens_both_atoms() {
+        // Two CT atoms at 2 Å (van-der-Waals-ish contact): each atom's
+        // effective Born radius must be meaningfully larger than the
+        // isolated-atom limit (offsetRadius), i.e. the pair integral is
+        // generating nonzero descreening. Also: symmetric.
+        let params = amber96_obc();
+        let obc = ObcGbParams::obc1();
+        let coords = vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+        let topo = topo_of(vec![
+            ff_atom("CT", "C", coords[0]),
+            ff_atom("CT", "C", coords[1]),
+        ]);
+        let br = compute_born_radii(&coords, &topo, &params, &obc);
+        let offset_r = params.get_obc_gb("CT").unwrap().radius - obc.offset; // 1.81
+        // Symmetric (same species + same distance both directions).
+        assert!((br[0] - br[1]).abs() < 1e-12, "asymmetric: {:?}", br);
+        // Meaningful descreening -> R_eff strictly larger than offset radius.
+        assert!(
+            br[0] > offset_r + 0.01,
+            "expected descreening, got R_eff={} vs offset={}",
+            br[0],
+            offset_r
+        );
+        // Sanity upper bound: R_eff should stay finite and reasonable
+        // (<< 100 Å). The OBC tanh cap keeps it bounded.
+        assert!(br[0].is_finite() && br[0] < 100.0, "R_eff out of range: {}", br[0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "no OBC params for AMBER class")]
+    fn panics_on_missing_amber_class() {
+        // amber96_obc knows standard AMBER classes; a bogus type must
+        // trip the invariant-violation panic rather than silently
+        // producing nonsense radii.
+        let params = amber96_obc();
+        let obc = ObcGbParams::obc1();
+        let coords = vec![[0.0, 0.0, 0.0]];
+        let topo = topo_of(vec![ff_atom("BOGUS", "C", coords[0])]);
+        let _ = compute_born_radii(&coords, &topo, &params, &obc);
+    }
 
     #[test]
     fn obc1_matches_amber96_obc_xml_defaults() {

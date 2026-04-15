@@ -1,6 +1,6 @@
-"""Ferritin — Structural bioinformatics toolkit powered by Rust.
+"""Ferritin — Rust-first structural bioinformatics toolkit.
 
-Fast structure loading, alignment, and analysis with a clean Python API.
+Fast structure loading, alignment, analysis, search, and preparation from Python.
 
     >>> import ferritin
     >>> s = ferritin.load("1crn.pdb")
