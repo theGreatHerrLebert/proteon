@@ -235,6 +235,19 @@ fn compute_energy_impl(
         eef1_energy(coords, topo, params, &mut result.solvation);
     }
 
+    // --- OBC GB implicit solvent (if enabled) ---
+    // IMPORTANT: OpenMM's GBSAOBCForce is hardcoded to `ObcTypeII` in
+    // ReferenceCalcGBSAOBCForceKernel::initialize — i.e. regardless of
+    // whether the XML is named `amber96_obc.xml` or `charmm36_obc2.xml`,
+    // the α/β/γ applied are OBC2 (α=1.0, β=0.8, γ=4.85). The XML only
+    // carries per-atom (radius, scale) pairs. So for oracle parity we
+    // always use OBC2 here. OBC1 is kept on `ObcGbParams` as a
+    // programmatic option but is NOT the AMBER default.
+    if params.has_obc_gb() {
+        let obc = super::gb_obc::ObcGbParams::obc2();
+        super::gb_obc::gb_obc_energy(coords, topo, params, &obc, &mut result.solvation);
+    }
+
     result.total = result.bond_stretch
         + result.angle_bend
         + result.torsion

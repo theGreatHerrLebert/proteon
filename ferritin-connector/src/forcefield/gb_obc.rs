@@ -291,16 +291,18 @@ pub(crate) fn gb_obc_energy(
     let mut sum = 0.0_f64;
 
     // Self terms (i==j): f_GB(0, R, R) = R.
+    let mut sum_self = 0.0_f64;
     if obc.include_self_term {
         for i in 0..n {
             let r_eff = born[i];
             if r_eff > 0.0 {
-                sum += charges[i] * charges[i] / r_eff;
+                sum_self += charges[i] * charges[i] / r_eff;
             }
         }
     }
 
     // Off-diagonal terms (i < j), multiplied by 2 to cover both (i,j) and (j,i).
+    let mut sum_pair = 0.0_f64;
     for i in 0..n {
         for j in (i + 1)..n {
             let dx = coords[i][0] - coords[j][0];
@@ -313,11 +315,31 @@ pub(crate) fn gb_obc_energy(
             }
             let d_ij = r2 / (4.0 * alpha2);
             let f_gb = (r2 + alpha2 * (-d_ij).exp()).sqrt();
-            sum += 2.0 * charges[i] * charges[j] / f_gb;
+            sum_pair += 2.0 * charges[i] * charges[j] / f_gb;
         }
     }
 
-    *solvation += -0.5 * tau * K_COULOMB_KCAL * sum;
+    sum += sum_self + sum_pair;
+    let contribution = -0.5 * tau * K_COULOMB_KCAL * sum;
+    if std::env::var("FERRITIN_OBC_DEBUG").is_ok() {
+        let br_min = born.iter().cloned().fold(f64::INFINITY, f64::min);
+        let br_max = born.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let br_mean: f64 = born.iter().sum::<f64>() / born.len() as f64;
+        eprintln!(
+            "[obc] n={} self_sum={:.4} pair_sum={:.4} (e²/Å)  \
+             G_self={:.3} G_pair={:.3} kcal/mol  \
+             R_eff min/mean/max = {:.3}/{:.3}/{:.3} Å",
+            n,
+            sum_self,
+            sum_pair,
+            -0.5 * tau * K_COULOMB_KCAL * sum_self,
+            -0.5 * tau * K_COULOMB_KCAL * sum_pair,
+            br_min,
+            br_mean,
+            br_max,
+        );
+    }
+    *solvation += contribution;
 }
 
 /// OBC GB solvation energy + forces (all-pair).

@@ -106,14 +106,20 @@ def openmm_amber96_obc_total(topology, positions) -> dict:
 
 
 def ferritin_amber96_obc_total(prepped_pdb: Path) -> dict:
-    """Single-point AMBER96 (+ OBC GB once Phase B/C land) via ferritin,
-    on the same H-placed PDB OpenMM was given."""
+    """Single-point AMBER96+OBC1 via ferritin, on the same H-placed PDB
+    OpenMM was given. Uses ff="amber96_obc" so the GB term is added to
+    the solvation component."""
     import ferritin
 
     s = ferritin.load(str(prepped_pdb))
     # nbl_threshold huge → forces exact O(N²) path to match OpenMM NoCutoff.
+    # nonbonded_cutoff=1e6 disables the 15 Å cutoff policy for oracle parity.
     result = ferritin.compute_energy(
-        s, ff="amber96", units="kJ/mol", nbl_threshold=10**9
+        s,
+        ff="amber96_obc",
+        units="kJ/mol",
+        nbl_threshold=10**9,
+        nonbonded_cutoff=1e6,
     )
     return {
         "total_kj": float(result["total"]),

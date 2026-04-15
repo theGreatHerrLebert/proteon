@@ -113,9 +113,28 @@ pub fn compute_energy(
             });
             (topo, result)
         }
+        "amber96_obc" | "amber96+obc" | "amber96_obc1" => {
+            // AMBER96 with OBC1 implicit solvent (matches OpenMM's
+            // ForceField("amber96.xml", "amber96_obc.xml")). Energy path
+            // only — forces through OBC are deferred to Phase B step 5.
+            let mut amber = params::amber96_obc();
+            if let Some(c) = nonbonded_cutoff {
+                amber.cutoff_override = Some(c);
+            }
+            let topo = topology::build_topology(&pdb.inner, &amber);
+            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+            let result = py.allow_threads(|| match nbl_threshold {
+                Some(t) => energy::compute_energy_auto(&coords, &topo, &amber, t),
+                None => energy::compute_energy(&coords, &topo, &amber),
+            });
+            (topo, result)
+        }
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                format!("Unknown force field '{}'. Use 'amber96' or 'charmm19_eef1'.", ff)
+                format!(
+                    "Unknown force field '{}'. Use 'amber96', 'amber96_obc', or 'charmm19_eef1'.",
+                    ff
+                )
             ));
         }
     };
