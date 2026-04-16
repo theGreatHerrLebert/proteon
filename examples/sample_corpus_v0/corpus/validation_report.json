@@ -2,7 +2,7 @@
   "release_id": "sample-v0",
   "artifact_type": "validation_report",
   "format": "ferritin.corpus_validation.v0",
-  "created_at": "2026-04-16T16:05:59.811635+00:00",
+  "created_at": "2026-04-16T16:56:18.273272+00:00",
   "ok": true,
   "counts": {
     "prepared": 33,
@@ -17,9 +17,9 @@
   },
   "failure_breakdown": {},
   "completeness": {
-    "pseudo_beta_fraction": 0.9672471880912781,
-    "rigidgroup_frame_fraction": 0.45027706027030945,
-    "chi_angle_fraction": 0.41693052649497986
+    "pseudo_beta_fraction": 0.9672471798931328,
+    "rigidgroup_frame_fraction": 0.4502770631308134,
+    "chi_angle_fraction": 0.4169305363150604
   },
   "issues": []
 }

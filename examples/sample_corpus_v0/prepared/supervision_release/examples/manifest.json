@@ -1,8 +1,21 @@
 {
-  "format": "ferritin.structure_supervision.v0",
+  "format": "ferritin.structure_supervision.parquet.v0",
+  "schema_version": 1,
   "count": 33,
   "examples_file": "examples.jsonl",
+  "row_group_size": 512,
+  "tensor_file": "tensors.parquet",
+  "tensor_sha256": "b4425e2403b595f8eab676614668ddeb53529abcbe3579ed97dc8fbb4e48887b",
   "tensor_fields": [
+    "record_id",
+    "source_id",
+    "prep_run_id",
+    "chain_id",
+    "sequence",
+    "length",
+    "code_rev",
+    "config_rev",
+    "quality_json",
     "aatype",
     "residue_index",
     "seq_mask",
@@ -12,9 +25,9 @@
     "atom14_gt_positions",
     "atom14_gt_exists",
     "atom14_atom_exists",
+    "atom14_atom_is_ambiguous",
     "residx_atom14_to_atom37",
     "residx_atom37_to_atom14",
-    "atom14_atom_is_ambiguous",
     "pseudo_beta",
     "pseudo_beta_mask",
     "phi",
@@ -28,9 +41,6 @@
     "rigidgroups_gt_frames",
     "rigidgroups_gt_exists",
     "rigidgroups_group_exists",
-    "rigidgroups_group_is_ambiguous",
-    "length"
-  ],
-  "tensor_file": "tensors.npz",
-  "tensor_sha256": "faf268e8d2cc00432f5d4de8dd0a90d1b0042eb4f188de6dac0ca38de8f7114b"
+    "rigidgroups_group_is_ambiguous"
+  ]
 }

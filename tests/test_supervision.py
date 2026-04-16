@@ -204,8 +204,8 @@ class TestStructureSupervisionExample:
     def test_export_writes_tensor_sha256_and_load_verifies(self, tmp_path):
         """Per roadmap Section 6 — every artifact carries a checksum.
 
-        Export must write the hex SHA-256 of tensors.npz into the
-        manifest, and load must reject a tampered payload.
+        Export must write the hex SHA-256 of the Parquet payload into
+        the manifest, and load must reject a tampered payload.
         """
         import hashlib
         import json
@@ -217,18 +217,18 @@ class TestStructureSupervisionExample:
             examples, tmp_path / "supervision"
         )
         manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
-        expected_hash = hashlib.sha256((out_dir / "tensors.npz").read_bytes()).hexdigest()
+        parquet_path = out_dir / "tensors.parquet"
+        assert parquet_path.exists()
+        expected_hash = hashlib.sha256(parquet_path.read_bytes()).hexdigest()
         assert manifest["tensor_sha256"] == expected_hash
+        assert manifest["tensor_file"] == "tensors.parquet"
 
         # Good path: default load verifies and succeeds.
         ferritin.load_structure_supervision_examples(out_dir)
 
         # Tamper the tensor file; default load must raise with a
-        # checksum-mismatch error (not an obscure np.load error later).
-        # With verify_checksum=False the hash check is skipped; what
-        # happens after is whatever np.load does — we only guarantee
-        # the checksum gate here.
-        (out_dir / "tensors.npz").write_bytes(b"corrupt")
+        # checksum-mismatch error before any parquet parsing attempts.
+        parquet_path.write_bytes(b"corrupt")
         with pytest.raises(ValueError, match="checksum mismatch"):
             ferritin.load_structure_supervision_examples(out_dir)
 

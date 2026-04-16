@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 import ferritin
 import ferritin.corpus_smoke as corpus_smoke
 
@@ -15,6 +17,70 @@ def _fake_structure(name: str):
     ]
     chain = SimpleNamespace(id="A", residues=residues)
     return SimpleNamespace(identifier=name, chain_count=1, chains=[chain], residue_count=2, atom_count=10)
+
+
+def _write_fake_supervision_parquet(path: Path, n: int = 2, length: int = 2) -> None:
+    """Emit a minimal supervision Parquet file matching the real schema.
+
+    Only the columns the corpus validator reads are populated with ones
+    (seq_mask, pseudo_beta_mask, rigidgroups_gt_exists, chi_mask); the
+    rest are populated with zeros at the right shape so the file still
+    type-checks against the schema.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from ferritin.supervision_export import (
+        TENSOR_FIELDS,
+        build_supervision_schema,
+        _make_ragged_column,
+    )
+
+    schema = build_supervision_schema()
+    columns = [
+        pa.array([f"r{i}" for i in range(n)], type=pa.string()),
+        pa.array([None] * n, type=pa.string()),  # source_id
+        pa.array([None] * n, type=pa.string()),  # prep_run_id
+        pa.array(["A"] * n, type=pa.string()),   # chain_id
+        pa.array(["A" * length] * n, type=pa.string()),  # sequence
+        pa.array([length] * n, type=pa.int32()),  # length
+        pa.array([None] * n, type=pa.string()),  # code_rev
+        pa.array([None] * n, type=pa.string()),  # config_rev
+        pa.array([None] * n, type=pa.string()),  # quality_json
+    ]
+    for name, inner_shape, dtype, _attr in TENSOR_FIELDS:
+        fill = np.ones if name in {"seq_mask", "pseudo_beta_mask", "rigidgroups_gt_exists", "chi_mask"} else np.zeros
+        per_row = [fill((length,) + inner_shape, dtype=dtype) for _ in range(n)]
+        columns.append(_make_ragged_column(per_row, inner_shape, dtype))
+    batch = pa.RecordBatch.from_arrays(columns, schema=schema)
+    with pq.ParquetWriter(path, schema, compression="zstd", compression_level=3) as w:
+        w.write_batch(batch)
+
+
+def _write_fake_supervision_tree(sup: Path, n: int = 2, length: int = 2) -> None:
+    """Write a supervision_release/ directory tree the validator will accept."""
+    sup.mkdir(parents=True, exist_ok=True)
+    (sup / "release_manifest.json").write_text(
+        json.dumps({"count_examples": n, "lengths": {"mean": float(length)}}),
+        encoding="utf-8",
+    )
+    (sup / "failures.jsonl").write_text("", encoding="utf-8")
+    (sup / "examples").mkdir(exist_ok=True)
+    _write_fake_supervision_parquet(sup / "examples" / "tensors.parquet", n=n, length=length)
+    (sup / "examples" / "manifest.json").write_text(
+        json.dumps({
+            "format": "ferritin.structure_supervision.parquet.v0",
+            "schema_version": 1,
+            "count": n,
+            "examples_file": "examples.jsonl",
+            "row_group_size": 512,
+            "tensor_file": "tensors.parquet",
+        }),
+        encoding="utf-8",
+    )
+    (sup / "examples" / "examples.jsonl").write_text(
+        "\n".join(json.dumps({"record_id": f"r{i}", "chain_id": "A", "length": length, "sequence": "A" * length}) for i in range(n)) + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_build_local_corpus_smoke_release_orchestrates_pipeline(tmp_path, monkeypatch):
@@ -30,19 +96,7 @@ def test_build_local_corpus_smoke_release_orchestrates_pipeline(tmp_path, monkey
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
         (out / "prepared_structures.jsonl").write_text('{"record_id":"one"}\n{"record_id":"two"}\n', encoding="utf-8")
-        sup = out / "supervision_release"
-        sup.mkdir(parents=True, exist_ok=True)
-        (sup / "release_manifest.json").write_text(json.dumps({"count_examples": 2, "lengths": {"mean": 2.0}}), encoding="utf-8")
-        (sup / "failures.jsonl").write_text("", encoding="utf-8")
-        (sup / "examples").mkdir(exist_ok=True)
-        import numpy as np
-        np.savez_compressed(
-            sup / "examples" / "tensors.npz",
-            seq_mask=np.ones((2, 2), dtype=np.float32),
-            rigidgroups_gt_exists=np.ones((2, 2, 8), dtype=np.float32),
-            pseudo_beta_mask=np.ones((2, 2), dtype=np.float32),
-            chi_mask=np.ones((2, 2, 4), dtype=np.float32),
-        )
+        _write_fake_supervision_tree(out / "supervision_release", n=2, length=2)
         return out
 
     def fake_build_sequence_dataset(structures, out_dir, **kwargs):

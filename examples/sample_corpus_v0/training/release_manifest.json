@@ -2,7 +2,7 @@
   "release_id": "sample-v0-training",
   "artifact_type": "release_manifest",
   "format": "ferritin.training_example.parquet.v0",
-  "created_at": "2026-04-16T16:05:59.710127+00:00",
+  "created_at": "2026-04-16T16:56:18.268858+00:00",
   "code_rev": null,
   "config_rev": null,
   "sequence_release": "examples/sample_corpus_v0/sequence",
@@ -15,7 +15,7 @@
   },
   "examples_file": "training_examples.jsonl",
   "parquet_file": "training.parquet",
-  "parquet_sha256": "1a6b70f7ce760b14647953cb7181c29c4393ef3d821f92991c09ad6eabbb0c20",
+  "parquet_sha256": "cc8a7ee890bb5cb52caa2c514bfbda75a4b85d7ba2b2c9f848f802035dbc491f",
   "parquet_schema_version": 1,
   "parquet_fields": [
     "record_id",

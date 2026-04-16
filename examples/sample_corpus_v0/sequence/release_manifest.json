@@ -2,7 +2,7 @@
   "release_id": "sample-v0-sequence",
   "artifact_type": "release_manifest",
   "format": "ferritin.sequence_example.v0",
-  "created_at": "2026-04-16T16:05:54.793032+00:00",
+  "created_at": "2026-04-16T16:56:14.738002+00:00",
   "code_rev": null,
   "config_rev": null,
   "count_examples": 33,

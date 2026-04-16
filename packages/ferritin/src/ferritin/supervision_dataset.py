@@ -43,14 +43,18 @@ def build_structure_supervision_dataset(
     prep_run_ids = _expand_optional(prep_run_ids, n)
     chain_ids = _expand_optional(chain_ids, n)
 
-    examples: list[StructureSupervisionExample] = []
+    # Streaming: a generator that yields one example per structure and
+    # appends to `failures` out-of-band when build_*_example fails. The
+    # caller (`build_structure_supervision_release`) consumes the
+    # iterator and writes each example to the Parquet row-group buffer
+    # without ever materializing the full example list.
     failures: list[FailureRecord] = []
 
-    for i, structure in enumerate(structures):
-        record_id = record_ids[i] or _default_record_id(structure, chain_ids[i])
-        try:
-            examples.append(
-                build_structure_supervision_example(
+    def _iter_examples():
+        for i, structure in enumerate(structures):
+            record_id = record_ids[i] or _default_record_id(structure, chain_ids[i])
+            try:
+                yield build_structure_supervision_example(
                     structure,
                     prep_report=prep_reports[i],
                     record_id=record_id,
@@ -60,23 +64,22 @@ def build_structure_supervision_dataset(
                     code_rev=code_rev,
                     config_rev=config_rev,
                 )
-            )
-        except Exception as exc:
-            failures.append(
-                FailureRecord(
-                    record_id=record_id,
-                    failure_class=_classify_failure(exc),
-                    message=str(exc),
-                    source_id=source_ids[i],
-                    prep_run_id=prep_run_ids[i],
-                    code_rev=code_rev,
-                    config_rev=config_rev,
-                    provenance={"exception_type": type(exc).__name__},
+            except Exception as exc:
+                failures.append(
+                    FailureRecord(
+                        record_id=record_id,
+                        failure_class=_classify_failure(exc),
+                        message=str(exc),
+                        source_id=source_ids[i],
+                        prep_run_id=prep_run_ids[i],
+                        code_rev=code_rev,
+                        config_rev=config_rev,
+                        provenance={"exception_type": type(exc).__name__},
+                    )
                 )
-            )
 
     return build_structure_supervision_release(
-        examples,
+        _iter_examples(),
         out_dir,
         release_id=release_id,
         failures=failures,

@@ -38,7 +38,13 @@ from ._artifact_checksum import sha256_file, verify_sha256
 from .sequence_example import SequenceExample
 from .sequence_export import load_sequence_examples
 from .supervision import StructureSupervisionExample
-from .supervision_export import load_structure_supervision_examples
+from .supervision_export import (
+    SEQUENCE_FIELDS as _SEQUENCE_FIELDS,
+    STRUCTURE_FIELDS as _STRUCTURE_FIELDS,
+    TENSOR_FIELDS as _TENSOR_FIELDS,
+    iter_structure_supervision_examples,
+    load_structure_supervision_examples,
+)
 
 TRAINING_EXPORT_FORMAT = "ferritin.training_example.parquet.v0"
 TRAINING_PARQUET_SCHEMA_VERSION = 1
@@ -88,44 +94,6 @@ class TrainingReleaseManifest:
     parquet_fields: List[str] = field(default_factory=list)
     row_group_size: int = 512
     provenance: Dict[str, object] = field(default_factory=dict)
-
-
-# Field descriptors: (column_name, inner_shape, numpy_dtype, source_attr_path)
-# source_attr_path is a tuple ("sequence"|"structure", attr_name).
-# inner_shape = () means 1D ragged (L,); (37,) means L x 37; (37, 3) means L x 37 x 3; etc.
-_SEQUENCE_FIELDS: Tuple[Tuple[str, Tuple[int, ...], type, str], ...] = (
-    ("aatype", (), np.int32, "aatype"),
-    ("residue_index", (), np.int32, "residue_index"),
-    ("seq_mask", (), np.float32, "seq_mask"),
-)
-
-_STRUCTURE_FIELDS: Tuple[Tuple[str, Tuple[int, ...], type, str], ...] = (
-    ("all_atom_positions", (37, 3), np.float32, "all_atom_positions"),
-    ("all_atom_mask", (37,), np.float32, "all_atom_mask"),
-    ("atom37_atom_exists", (37,), np.float32, "atom37_atom_exists"),
-    ("atom14_gt_positions", (14, 3), np.float32, "atom14_gt_positions"),
-    ("atom14_gt_exists", (14,), np.float32, "atom14_gt_exists"),
-    ("atom14_atom_exists", (14,), np.float32, "atom14_atom_exists"),
-    ("atom14_atom_is_ambiguous", (14,), np.float32, "atom14_atom_is_ambiguous"),
-    ("residx_atom14_to_atom37", (14,), np.int32, "residx_atom14_to_atom37"),
-    ("residx_atom37_to_atom14", (37,), np.int32, "residx_atom37_to_atom14"),
-    ("pseudo_beta", (3,), np.float32, "pseudo_beta"),
-    ("pseudo_beta_mask", (), np.float32, "pseudo_beta_mask"),
-    ("phi", (), np.float32, "phi"),
-    ("psi", (), np.float32, "psi"),
-    ("omega", (), np.float32, "omega"),
-    ("phi_mask", (), np.float32, "phi_mask"),
-    ("psi_mask", (), np.float32, "psi_mask"),
-    ("omega_mask", (), np.float32, "omega_mask"),
-    ("chi_angles", (4,), np.float32, "chi_angles"),
-    ("chi_mask", (4,), np.float32, "chi_mask"),
-    ("rigidgroups_gt_frames", (8, 4, 4), np.float32, "rigidgroups_gt_frames"),
-    ("rigidgroups_gt_exists", (8,), np.float32, "rigidgroups_gt_exists"),
-    ("rigidgroups_group_exists", (8,), np.float32, "rigidgroups_group_exists"),
-    ("rigidgroups_group_is_ambiguous", (8,), np.float32, "rigidgroups_group_is_ambiguous"),
-)
-
-_TENSOR_FIELDS = _SEQUENCE_FIELDS + _STRUCTURE_FIELDS
 
 
 def _require_pyarrow() -> None:
@@ -290,61 +258,101 @@ def build_training_release(
     False to keep the release pointer-only (manifest + JSONL index
     only, no tensor artifact).
     """
+    # Sequence side is narrow (aatype + residue_index + seq_mask per
+    # chain) and small enough to keep in memory; structure side streams
+    # from its Parquet artifact so peak memory stays O(row_group_size)
+    # regardless of corpus size.
     sequence_examples = load_sequence_examples(Path(sequence_release_dir) / "examples")
-    structure_examples = load_structure_supervision_examples(Path(structure_release_dir) / "examples")
-    training_examples = join_training_examples(
-        sequence_examples,
-        structure_examples,
-        split_assignments=split_assignments,
-        crop_metadata=crop_metadata,
-        weights=weights,
-    )
+    seq_by_id = {ex.record_id: ex for ex in sequence_examples}
 
     root = Path(out_dir)
     if root.exists() and not overwrite:
         raise FileExistsError(f"{root} already exists")
     root.mkdir(parents=True, exist_ok=True)
 
-    rows = []
     split_counts: Dict[str, int] = {}
-    for ex in training_examples:
-        rows.append(
-            {
-                "record_id": ex.record_id,
-                "source_id": ex.source_id,
-                "chain_id": ex.chain_id,
-                "split": ex.split,
-                "crop_start": ex.crop_start,
-                "crop_stop": ex.crop_stop,
-                "weight": ex.weight,
-            }
-        )
-        split_counts[ex.split] = split_counts.get(ex.split, 0) + 1
-
-    with (root / "training_examples.jsonl").open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, separators=(",", ":")))
-            handle.write("\n")
-
+    count_examples = 0
     parquet_file: Optional[str] = None
     parquet_sha256: Optional[str] = None
     parquet_fields: List[str] = []
     row_group_size_used = row_group_size
-    if export_tensors and training_examples:
-        parquet_path = root / "training.parquet"
-        schema = _build_training_schema()
-        # Stream in row-group chunks so peak memory is bounded by the
-        # chunk size, not the corpus size. Writer closes via `with`.
-        with pq.ParquetWriter(
-            parquet_path,
-            schema,
-            compression="zstd",
-            compression_level=3,
-        ) as writer:
-            for start in range(0, len(training_examples), row_group_size):
-                chunk = training_examples[start : start + row_group_size]
-                batch = _training_examples_to_record_batch(chunk, schema)
-                writer.write_batch(batch, row_group_size=len(chunk))
+
+    jsonl_path = root / "training_examples.jsonl"
+    parquet_path = root / "training.parquet"
+    schema = _build_training_schema() if export_tensors else None
+
+    writer: Optional["pq.ParquetWriter"] = None
+    chunk_buffer: List[TrainingExample] = []
+    any_structure = False
+
+    def _flush_chunk():
+        nonlocal writer
+        if not chunk_buffer:
+            return
+        if export_tensors:
+            if writer is None:
+                # Lazy-open so zero-example releases stay pointer-only
+                # (no training.parquet file written if nothing joined).
+                writer = pq.ParquetWriter(
+                    parquet_path,
+                    schema,
+                    compression="zstd",
+                    compression_level=3,
+                )
+            batch = _training_examples_to_record_batch(chunk_buffer, schema)
+            writer.write_batch(batch, row_group_size=len(chunk_buffer))
+        chunk_buffer.clear()
+
+    try:
+        with jsonl_path.open("w", encoding="utf-8") as jsonl_handle:
+            for struc in iter_structure_supervision_examples(
+                Path(structure_release_dir) / "examples"
+            ):
+                seq = seq_by_id.get(struc.record_id)
+                if seq is None:
+                    # Structure with no sequence counterpart — skip. Same
+                    # semantics as the prior intersection-by-record_id
+                    # join inside `join_training_examples`.
+                    continue
+                any_structure = True
+                split = (split_assignments or {}).get(struc.record_id, "train")
+                crop = (crop_metadata or {}).get(struc.record_id)
+                weight = float((weights or {}).get(struc.record_id, 1.0))
+                tex = TrainingExample(
+                    record_id=struc.record_id,
+                    source_id=seq.source_id or struc.source_id,
+                    chain_id=seq.chain_id,
+                    split=split,
+                    crop_start=None if crop is None else int(crop[0]),
+                    crop_stop=None if crop is None else int(crop[1]),
+                    weight=weight,
+                    sequence=seq,
+                    structure=struc,
+                )
+                jsonl_handle.write(json.dumps(
+                    {
+                        "record_id": tex.record_id,
+                        "source_id": tex.source_id,
+                        "chain_id": tex.chain_id,
+                        "split": tex.split,
+                        "crop_start": tex.crop_start,
+                        "crop_stop": tex.crop_stop,
+                        "weight": tex.weight,
+                    },
+                    separators=(",", ":"),
+                ))
+                jsonl_handle.write("\n")
+                split_counts[tex.split] = split_counts.get(tex.split, 0) + 1
+                count_examples += 1
+                chunk_buffer.append(tex)
+                if len(chunk_buffer) >= row_group_size:
+                    _flush_chunk()
+            _flush_chunk()
+    finally:
+        if writer is not None:
+            writer.close()
+
+    if export_tensors and any_structure:
         parquet_file = "training.parquet"
         parquet_sha256 = sha256_file(parquet_path)
         parquet_fields = [f.name for f in schema]
@@ -355,7 +363,7 @@ def build_training_release(
         config_rev=config_rev,
         sequence_release=str(Path(sequence_release_dir)),
         structure_release=str(Path(structure_release_dir)),
-        count_examples=len(training_examples),
+        count_examples=count_examples,
         split_counts=split_counts,
         parquet_file=parquet_file,
         parquet_sha256=parquet_sha256,

@@ -61,7 +61,7 @@ class StructureSupervisionReleaseManifest:
     count_failures: int = 0
     example_export_dir: str = "examples"
     examples_file: str = "examples/examples.jsonl"
-    tensor_file: str = "examples/tensors.npz"
+    tensor_file: str = "examples/tensors.parquet"
     failure_file: str = "failures.jsonl"
     lengths: Dict[str, float] = field(default_factory=dict)
     sequence_lengths: List[int] = field(default_factory=list)
@@ -78,18 +78,36 @@ def build_structure_supervision_release(
     config_rev: Optional[str] = None,
     provenance: Optional[Dict[str, object]] = None,
     overwrite: bool = False,
+    row_group_size: int = 512,
 ) -> Path:
-    """Write a supervision release directory with examples, failures, and manifest."""
-    example_list = list(examples)
-    failure_list = list(failures or [])
+    """Write a supervision release directory with examples, failures, and manifest.
 
+    `examples` may be an iterator; it is consumed once without
+    materializing the full list. Peak memory is `O(row_group_size)`,
+    set by the Parquet writer's buffer.
+    """
     root = Path(out_dir)
     if root.exists() and not overwrite:
         raise FileExistsError(f"{root} already exists")
     root.mkdir(parents=True, exist_ok=True)
 
+    # Stream examples through the Parquet writer. We track lengths on
+    # the side so the outer release manifest can summarize without
+    # re-reading the artifact.
     example_dir = root / "examples"
-    export_structure_supervision_examples(example_list, example_dir, overwrite=True)
+    from .supervision_export import SupervisionParquetWriter
+    lengths: List[int] = []
+    with SupervisionParquetWriter(example_dir, row_group_size=row_group_size) as writer:
+        for ex in examples:
+            writer.append(ex)
+            lengths.append(int(ex.length))
+    count_examples = writer.count
+
+    # IMPORTANT: read the failures collection *after* examples have
+    # been fully iterated — callers commonly pass the same list they
+    # append to while the example generator runs (e.g. the dataset
+    # builder). Snapshotting earlier would capture an empty list.
+    failure_list = list(failures or [])
 
     failure_path = root / "failures.jsonl"
     with failure_path.open("w", encoding="utf-8") as handle:
@@ -97,12 +115,11 @@ def build_structure_supervision_release(
             handle.write(json.dumps(asdict(failure), separators=(",", ":")))
             handle.write("\n")
 
-    lengths = [ex.length for ex in example_list]
     manifest = StructureSupervisionReleaseManifest(
         release_id=release_id,
         code_rev=code_rev,
         config_rev=config_rev,
-        count_examples=len(example_list),
+        count_examples=count_examples,
         count_failures=len(failure_list),
         lengths=_length_summary(lengths),
         sequence_lengths=lengths,

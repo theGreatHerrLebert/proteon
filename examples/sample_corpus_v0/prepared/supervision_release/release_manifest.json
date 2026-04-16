@@ -1,15 +1,15 @@
 {
   "release_id": "sample-v0-structure",
   "artifact_type": "release_manifest",
-  "format": "ferritin.structure_supervision.v0",
-  "created_at": "2026-04-16T16:05:53.786491+00:00",
+  "format": "ferritin.structure_supervision.parquet.v0",
+  "created_at": "2026-04-16T16:56:13.981574+00:00",
   "code_rev": null,
   "config_rev": null,
   "count_examples": 33,
   "count_failures": 0,
   "example_export_dir": "examples",
   "examples_file": "examples/examples.jsonl",
-  "tensor_file": "examples/tensors.npz",
+  "tensor_file": "examples/tensors.parquet",
   "failure_file": "failures.jsonl",
   "lengths": {
     "min": 46.0,

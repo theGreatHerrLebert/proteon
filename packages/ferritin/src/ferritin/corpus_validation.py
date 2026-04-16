@@ -12,6 +12,18 @@ import numpy as np
 
 from .corpus_release import CorpusReleaseManifest, load_corpus_release_manifest
 
+try:
+    import pyarrow as pa
+    _HAS_PYARROW = True
+
+    def pa_types_is_nested(t) -> bool:
+        return pa.types.is_list(t) or pa.types.is_large_list(t) or pa.types.is_fixed_size_list(t)
+except ImportError:  # pragma: no cover
+    _HAS_PYARROW = False
+
+    def pa_types_is_nested(t) -> bool:  # type: ignore
+        return False
+
 
 @dataclass
 class ValidationIssue:
@@ -125,23 +137,44 @@ def _check_structure_tensor_completeness(manifest: CorpusReleaseManifest, report
             ValidationIssue("warning", "no_structure_examples", "structure release contains no supervision examples")
         )
         return
-    tensor_path = Path(manifest.structure_release) / "examples" / "tensors.npz"
+    tensor_path = Path(manifest.structure_release) / "examples" / "tensors.parquet"
     if not tensor_path.exists():
-        report.issues.append(ValidationIssue("error", "missing_structure_tensors", "structure tensors.npz is missing"))
+        report.issues.append(ValidationIssue("error", "missing_structure_tensors", "structure tensors.parquet is missing"))
         return
-    payload = np.load(tensor_path, allow_pickle=False)
-    seq_mask = np.asarray(payload["seq_mask"], dtype=np.float32)
-    rigid_exists = np.asarray(payload["rigidgroups_gt_exists"], dtype=np.float32)
-    pseudo_mask = np.asarray(payload["pseudo_beta_mask"], dtype=np.float32)
-    chi_mask = np.asarray(payload["chi_mask"], dtype=np.float32)
+    # Stream per-row-group so peak memory is bounded even on archive-
+    # scale releases; accumulate only scalar sums we need for fractions.
+    import pyarrow.parquet as pq
+    import pyarrow.compute as pc
 
-    valid_residues = float(seq_mask.sum())
+    pf = pq.ParquetFile(tensor_path)
+    valid_residues = 0.0
+    pseudo_sum = 0.0
+    rigid_sum = 0.0
+    chi_sum = 0.0
+    for rg_idx in range(pf.metadata.num_row_groups):
+        rg = pf.read_row_group(
+            rg_idx,
+            columns=["seq_mask", "pseudo_beta_mask", "rigidgroups_gt_exists", "chi_mask"],
+        )
+        # Each column is list<...>; list_flatten drops the outer list
+        # dimension but preserves inner FixedSizeList dims, and subsequent
+        # flattens unwrap those. Summing after the full flatten gives the
+        # scalar total across all rows in the row-group.
+        def _flat_sum(arr):
+            while pa_types_is_nested(arr.type):
+                arr = pc.list_flatten(arr)
+            return float(pc.sum(arr).as_py() or 0.0)
+        valid_residues += _flat_sum(rg.column("seq_mask"))
+        pseudo_sum += _flat_sum(rg.column("pseudo_beta_mask"))
+        rigid_sum += _flat_sum(rg.column("rigidgroups_gt_exists"))
+        chi_sum += _flat_sum(rg.column("chi_mask"))
+
     if valid_residues <= 0:
         report.issues.append(ValidationIssue("error", "no_valid_structure_residues", "structure seq_mask has no valid residues"))
         return
-    report.completeness["pseudo_beta_fraction"] = float(pseudo_mask.sum() / valid_residues)
-    report.completeness["rigidgroup_frame_fraction"] = float(rigid_exists.sum() / max(valid_residues * 8.0, 1.0))
-    report.completeness["chi_angle_fraction"] = float(chi_mask.sum() / max(valid_residues * 4.0, 1.0))
+    report.completeness["pseudo_beta_fraction"] = pseudo_sum / valid_residues
+    report.completeness["rigidgroup_frame_fraction"] = rigid_sum / max(valid_residues * 8.0, 1.0)
+    report.completeness["chi_angle_fraction"] = chi_sum / max(valid_residues * 4.0, 1.0)
 
     if report.completeness["pseudo_beta_fraction"] < 0.95:
         report.issues.append(
