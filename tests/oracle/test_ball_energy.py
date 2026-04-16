@@ -5,19 +5,25 @@ validating the energy computation, topology building, and charge assignment.
 
 Both ferritin and BALL output in kJ/mol.
 
-Results (2026-04-09):
-- Bond stretch: 0.00% match
-- Angle bend: 0.00% match
-- Torsion: 0.00% match
-- VdW: 0.00% match
-- Electrostatic: 0.02% match
-- Improper: +6.5% (ferritin has 15 impropers, BALL has 10)
+Bonded + nonbonded components match BALL to <0.1% (2026-04-13 onwards).
+The improper term is the one meaningful divergence.
 
-The improper difference is from 5 extra physically-correct impropers that
-ferritin assigns (carboxylate planarity for ASP/GLU/ASN-C, hydroxyl planarity
-for TYR:CZ). BALL misses these due to its permutation iteration order not
-placing atom types in positions that match the *-O2-C-O2 parameter. The
-absolute energy difference is 0.13 kJ/mol — negligible.
+Improper (post 2026-04-13 double-wildcard fix):
+- BALL: 10 impropers, 2.077 kJ/mol
+- Ferritin: 125 impropers, ~8.1 kJ/mol
+- OpenMM amber96 agrees with ferritin within 0.5%, so ferritin's number
+  is the AMBER-canonical value.
+
+Root cause of the gap: BALL's improper-torsion matcher supports only
+single-wildcard atom-type patterns, while the AMBER spec requires
+double-wildcard (e.g. `* * N H` for the amide-plane improper). BALL
+therefore misses ~100 amide-plane impropers on crambin — one at every
+peptide N-H — and scales linearly with chain length. See
+`params.rs::get_improper_torsion` for ferritin's AMBER-spec matcher.
+
+The test below asserts ferritin >= BALL as a regression guard, so
+the double-wildcard matcher stays in place until BALL gains the
+same capability.
 """
 
 import os

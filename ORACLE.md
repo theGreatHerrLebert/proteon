@@ -18,7 +18,8 @@ The reason this works as a *velocity* strategy, not just a correctness one:
 1. **We never ship a component without an oracle behind it.** Every
    scientific claim in the codebase — "ferritin CHARMM19+EEF1 preserves
    folds with median TM=0.9945", "AMBER96 matches OpenMM to 0.2% at
-   NoCutoff", "improper partitioning differs by ≤0.13 kJ/mol on crambin" —
+   NoCutoff", "GPU matches CPU to 1e-11 on crambin for OBC GB",
+   "50K-PDB battle test passed at 99.1% correct in 3.5h on RTX 5090" —
    points at a reproducible oracle script that anyone can rerun.
 2. **When an oracle disagrees, the oracle is right until proven otherwise.**
    The default hypothesis is that the bug is in ferritin. Only after a
@@ -119,7 +120,7 @@ electrostatic, solvation (EEF1 for CHARMM, OBC for AMBER).
 | Torsion | < 0.1% | Same |
 | VdW | < 0.1% at NoCutoff | Cutoff adds ~1.4% at 15 Å — that's policy, not bug |
 | Electrostatic | < 0.1% at NoCutoff | Same cutoff caveat |
-| Improper | < 10% acceptable | Partitioning ambiguity: ferritin assigns 15 impropers on crambin (carboxylate + hydroxyl planarity), BALL assigns 10. Absolute delta 0.13 kJ/mol. Documented in the test. |
+| Improper | ferritin ≥ BALL, OpenMM ≤ 0.5% | BALL uses single-wildcard improper matching; AMBER spec requires double-wildcard (e.g. `* * N H` for amide-plane). BALL therefore misses ~100 amide-plane impropers on crambin. Ferritin: 125 / 8.1 kJ/mol; BALL: 10 / 2.08 kJ/mol; OpenMM amber96 matches ferritin. Test asserts ferritin ≥ BALL as regression guard. |
 | Total energy | < 1% at NoCutoff | Tightest contract — everything else rolls up here |
 | GB solvation | < 5% | OBC is an analytical approximation; ferritin matches OpenMM to ≤5% GB / ≤1% total on crambin (Phase B) |
 
@@ -287,10 +288,18 @@ unit tests.
 
 Oracles are not infallible. Three cases we've hit:
 
-1. **Convention difference** — BALL and ferritin disagree on improper
-   assignment for carboxylate/hydroxyl planarity (ferritin has 5
-   extras; absolute delta 0.13 kJ/mol). Both are physically correct.
-   Documented in `test_ball_energy.py` rather than "fixed".
+1. **Oracle spec divergence — BALL single-wildcard impropers.** BALL's
+   improper-torsion matcher supports only single-wildcard atom-type
+   patterns; the AMBER spec requires double-wildcard (e.g. `* * N H`
+   for amide-plane impropers). On crambin BALL reports 10 impropers
+   / 2.08 kJ/mol; ferritin reports 125 / 8.1 kJ/mol, matching OpenMM
+   amber96 to 0.5%. This is a BALL gap against the AMBER spec, not a
+   ferritin/BALL convention difference. Documented in
+   `test_ball_energy.py`; the test asserts ferritin ≥ BALL as a
+   regression guard and stays live until BALL gains double-wildcard
+   support. Worth reporting upstream to the BALL maintainers — the
+   impact scales linearly with chain length (one missed improper
+   per peptide N-H).
 2. **Oracle bug** — BALL's Python (SIP) bindings don't build cleanly
    on current Python; for CHARMM oracle work we use `libBALL.so` via
    standalone C++ (`reference_ball_python_dead.md`). The oracle
