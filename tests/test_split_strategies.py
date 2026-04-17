@@ -70,10 +70,20 @@ def test_hash_split_rejects_empty_or_negative():
         _hash_split_assignments(["a"], {"train": 1.0, "val": -0.1})
 
 
-def test_default_split_puts_last_record_in_val():
-    rids = ["a", "b", "c"]
+def test_default_split_is_hash_80_10_10():
+    # Default split must produce all three buckets at roughly 80/10/10.
+    # Regression for the Apr 17 1K rerun where the old default put
+    # everything in train + exactly one record in val, silently killing
+    # the test split and making downstream evaluation bogus.
+    rids = [f"rec_{i:05d}" for i in range(10_000)]
     out = _default_split_assignments(rids)
-    assert out == {"a": "train", "b": "train", "c": "val"}
+    assert set(out.values()) == {"train", "val", "test"}
+    counts = Counter(out.values())
+    assert 7_500 <= counts["train"] <= 8_500
+    assert 800 <= counts["val"] <= 1_200
+    assert 800 <= counts["test"] <= 1_200
+    # Determinism: same input must yield the same assignment.
+    assert _default_split_assignments(rids) == out
 
 
 def test_expand_chains_passes_through_single_chain():

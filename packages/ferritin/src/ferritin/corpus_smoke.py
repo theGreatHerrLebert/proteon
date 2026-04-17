@@ -130,7 +130,6 @@ def build_local_corpus_smoke_release(
     )
     # Splits are assigned at the expanded (chain-level) record granularity
     # so multi-chain structures can have per-chain split decisions.
-    split_strategy = "default_last_record_val"
     if split_assignments is not None:
         missing = [rid for rid in expanded_record_ids if rid not in split_assignments]
         if missing:
@@ -145,6 +144,7 @@ def build_local_corpus_smoke_release(
         split_strategy = f"hash_split:{_format_ratios(split_ratios)}"
     else:
         split_assignments = _default_split_assignments(expanded_record_ids)
+        split_strategy = f"default_hash_split:{_format_ratios(DEFAULT_SPLIT_RATIOS)}"
     training_root = build_training_release(
         sequence_root,
         prepared_root / "supervision_release",
@@ -256,15 +256,19 @@ def _write_rescued_inputs(
     return rescued_path
 
 
+DEFAULT_SPLIT_RATIOS: Mapping[str, float] = {"train": 0.8, "val": 0.1, "test": 0.1}
+
+
 def _default_split_assignments(record_ids: Iterable[str]) -> dict[str, str]:
-    ordered = list(record_ids)
-    if not ordered:
-        return {}
-    if len(ordered) == 1:
-        return {ordered[0]: "train"}
-    assignments = {record_id: "train" for record_id in ordered}
-    assignments[ordered[-1]] = "val"
-    return assignments
+    """Hash-split at DEFAULT_SPLIT_RATIOS (80/10/10).
+
+    The prior behavior ("everything train except the last record, which
+    goes to val") produced artifacts with no test split and train≈100%,
+    which silently broke downstream evaluation. The default is now an
+    80/10/10 deterministic hash-split — same record_id gives the same
+    bucket regardless of input order or corpus size.
+    """
+    return _hash_split_assignments(record_ids, DEFAULT_SPLIT_RATIOS)
 
 
 def _expand_chains(
