@@ -40,6 +40,7 @@ def build_local_corpus_smoke_release(
     msa_dir: Optional[str | Path] = None,
     msa_suffix: str = ".a3m",
     msa_strict: bool = False,
+    chunk_size: Optional[int] = None,
     overwrite: bool = False,
 ) -> Path:
     """Build a small end-to-end corpus release from local structure files.
@@ -59,7 +60,38 @@ def build_local_corpus_smoke_release(
     When both are None (the default), sequence examples carry null MSA
     fields and downstream AF2-style pipelines either fall back to
     single-sequence input or supply MSAs some other way.
+
+    `chunk_size` — when set (and >0), runs load + prep + expand + emit
+    in chunks of that many **input paths**, keeping only one chunk's
+    pdbtbx Structure objects resident at a time. Peak RSS stays ~flat
+    regardless of corpus size (bounded by `chunk_size × avg_chains`
+    rather than `total_paths × avg_chains`). Use for archive-scale
+    runs where the single-shot path would OOM.
     """
+    if chunk_size is not None and chunk_size > 0:
+        return _build_local_corpus_smoke_release_chunked(
+            paths,
+            out_dir,
+            release_id=release_id,
+            code_rev=code_rev,
+            config_rev=config_rev,
+            prep_policy_version=prep_policy_version,
+            split_policy_version=split_policy_version,
+            n_threads=n_threads,
+            rescue_load=rescue_load,
+            rescue_allow=rescue_allow,
+            split_assignments=split_assignments,
+            split_ratios=split_ratios,
+            msa_engine=msa_engine,
+            msa_max_seqs=msa_max_seqs,
+            msa_gap_idx=msa_gap_idx,
+            msa_dir=msa_dir,
+            msa_suffix=msa_suffix,
+            msa_strict=msa_strict,
+            chunk_size=chunk_size,
+            overwrite=overwrite,
+        )
+
     root = Path(out_dir)
     if root.exists() and not overwrite:
         raise FileExistsError(f"{root} already exists")
@@ -296,6 +328,380 @@ def _write_rescued_inputs(
             handle.write(json.dumps(row, separators=(",", ":")))
             handle.write("\n")
     return rescued_path
+
+
+def _build_local_corpus_smoke_release_chunked(
+    paths: Sequence[str | Path],
+    out_dir: str | Path,
+    *,
+    release_id: str,
+    code_rev: Optional[str],
+    config_rev: Optional[str],
+    prep_policy_version: Optional[str],
+    split_policy_version: Optional[str],
+    n_threads: Optional[int],
+    rescue_load: bool,
+    rescue_allow: Optional[Sequence[str]],
+    split_assignments: Optional[Mapping[str, str]],
+    split_ratios: Optional[Mapping[str, float]],
+    msa_engine: Optional[object],
+    msa_max_seqs: int,
+    msa_gap_idx: int,
+    msa_dir: Optional[str | Path],
+    msa_suffix: str,
+    msa_strict: bool,
+    chunk_size: int,
+    overwrite: bool,
+) -> Path:
+    """Chunked intake path: load+prep+expand+emit per chunk, drop, repeat.
+
+    The single-shot path holds every pdbtbx Structure object in RAM
+    between `batch_load_tolerant` and the supervision+sequence write
+    — that's the ~20 GB floor we measured on the 1K rerun. The chunked
+    path keeps ≤ chunk_size structures resident at once.
+
+    Both paths use the same `SupervisionParquetWriter` and
+    `SequenceParquetWriter` kept open across chunks, so the on-disk
+    artifact is byte-identical regardless of chunk boundaries.
+    """
+    from .prepared_manifest import (
+        build_prepared_structure_records,
+        write_prepared_structure_manifest,
+    )
+    from .sequence_example import build_sequence_example
+    from .sequence_export import SequenceParquetWriter
+    from .sequence_release import SequenceReleaseManifest, _length_summary as _seq_len_summary
+    from .supervision import build_structure_supervision_example
+    from .supervision_export import SupervisionParquetWriter
+    from .supervision_release import StructureSupervisionReleaseManifest
+
+    root = Path(out_dir)
+    if root.exists() and not overwrite:
+        raise FileExistsError(f"{root} already exists")
+    root.mkdir(parents=True, exist_ok=True)
+
+    path_list = [Path(p) for p in paths]
+    n_total = len(path_list)
+
+    # Outer accumulators — these stay small (strings/ints, one per chain).
+    ordered_loaded_indices: List[int] = []
+    rescued_results: List[tuple[int, "LoadRescueResult"]] = []
+
+    expanded_record_ids: List[str] = []
+    expanded_parent_record_ids: List[str] = []
+    expanded_source_ids: List[str] = []
+    expanded_chain_ids: List[Optional[str]] = []
+    expanded_paths: List[Path] = []
+    prepared_rows: List[dict] = []
+
+    sup_failures: List[FailureRecord] = []
+    seq_failures: List[FailureRecord] = []
+    sup_lengths: List[int] = []
+    seq_lengths: List[int] = []
+
+    prepared_root = root / "prepared"
+    sup_release_root = prepared_root / "supervision_release"
+    seq_release_root = root / "sequence"
+    sup_release_root.mkdir(parents=True, exist_ok=True)
+    seq_release_root.mkdir(parents=True, exist_ok=True)
+    prepared_root.mkdir(parents=True, exist_ok=True)
+
+    sup_example_dir = sup_release_root / "examples"
+    seq_example_dir = seq_release_root / "examples"
+
+    with SupervisionParquetWriter(sup_example_dir, row_group_size=512) as sup_writer, \
+         SequenceParquetWriter(seq_example_dir, row_group_size=64) as seq_writer:
+        for chunk_start in range(0, n_total, chunk_size):
+            chunk_paths = path_list[chunk_start : chunk_start + chunk_size]
+
+            # --- load ---
+            if rescue_load:
+                loaded_pairs = batch_load_tolerant_with_rescue(
+                    chunk_paths, n_threads=n_threads, allow=rescue_allow,
+                )
+                local_indices = [idx for idx, _ in loaded_pairs]
+                chunk_structures = [r.structure for _, r in loaded_pairs]
+                for idx, r in loaded_pairs:
+                    if r.rescued:
+                        rescued_results.append((chunk_start + idx, r))
+            else:
+                raw_pairs = batch_load_tolerant(chunk_paths, n_threads=n_threads)
+                local_indices = [idx for idx, _ in raw_pairs]
+                chunk_structures = [s for _, s in raw_pairs]
+
+            ordered_loaded_indices.extend(chunk_start + i for i in local_indices)
+
+            chunk_loaded_paths = [chunk_paths[i] for i in local_indices]
+            chunk_record_ids = [p.stem for p in chunk_loaded_paths]
+            chunk_source_ids = [str(p) for p in chunk_loaded_paths]
+
+            # --- prep ---
+            chunk_prep_reports = batch_prepare(chunk_structures, n_threads=n_threads)
+
+            # --- expand chains (with multi-model dedup) ---
+            (
+                e_structs,
+                e_preps,
+                e_rids,
+                e_srcs,
+                e_cids,
+                e_paths,
+                e_parents,
+            ) = _expand_chains(
+                chunk_structures,
+                chunk_prep_reports,
+                chunk_record_ids,
+                chunk_source_ids,
+                chunk_loaded_paths,
+            )
+
+            # Prepared-structure rows are one per loaded STRUCTURE (not per
+            # chain); matches the single-shot pipeline's manifest contract.
+            chunk_prepared_rows = build_prepared_structure_records(
+                chunk_structures,
+                chunk_prep_reports,
+                record_ids=chunk_record_ids,
+                source_ids=chunk_source_ids,
+                prep_run_ids=None,
+                code_rev=code_rev,
+                config_rev=config_rev,
+                provenance={"input_paths": [str(p) for p in chunk_loaded_paths]},
+            )
+            prepared_rows.extend(chunk_prepared_rows)
+
+            # --- per-record emission ---
+            if msa_dir is not None:
+                chunk_msas, chunk_deletions = load_msas_from_dir(
+                    msa_dir, e_rids, suffix=msa_suffix, strict=msa_strict,
+                )
+            else:
+                chunk_msas = [None] * len(e_rids)
+                chunk_deletions = [None] * len(e_rids)
+
+            for j in range(len(e_rids)):
+                struct = e_structs[j]
+                prep = e_preps[j]
+                rid = e_rids[j]
+                src = e_srcs[j]
+                cid = e_cids[j]
+                path = e_paths[j]
+                parent = e_parents[j]
+
+                # Supervision side first — sequence side joins against the
+                # same record_id and we want to skip it if supervision
+                # fails (the join would drop it anyway).
+                try:
+                    sup_ex = build_structure_supervision_example(
+                        struct,
+                        prep_report=prep,
+                        record_id=rid,
+                        source_id=src,
+                        chain_id=cid,
+                        code_rev=code_rev,
+                        config_rev=config_rev,
+                    )
+                except Exception as exc:
+                    from .failure_taxonomy import classify_exception
+                    sup_failures.append(
+                        FailureRecord(
+                            record_id=rid,
+                            stage="structure_supervision_example",
+                            failure_class=classify_exception(exc),
+                            message=str(exc),
+                            source_id=src,
+                            code_rev=code_rev,
+                            config_rev=config_rev,
+                            provenance={"exception_type": type(exc).__name__},
+                        )
+                    )
+                    continue
+
+                sup_writer.append(sup_ex)
+                sup_lengths.append(int(sup_ex.length))
+
+                try:
+                    if msa_engine is not None and chunk_msas[j] is None and chunk_deletions[j] is None:
+                        from .msa_backend import build_sequence_example_with_msa
+                        seq_ex = build_sequence_example_with_msa(
+                            struct,
+                            msa_engine,
+                            record_id=rid,
+                            source_id=src,
+                            chain_id=cid,
+                            code_rev=code_rev,
+                            config_rev=config_rev,
+                            max_seqs=msa_max_seqs,
+                            gap_idx=msa_gap_idx,
+                        )
+                    else:
+                        seq_ex = build_sequence_example(
+                            struct,
+                            record_id=rid,
+                            source_id=src,
+                            chain_id=cid,
+                            code_rev=code_rev,
+                            config_rev=config_rev,
+                            msa=chunk_msas[j],
+                            deletion_matrix=chunk_deletions[j],
+                        )
+                    seq_writer.append(seq_ex)
+                    seq_lengths.append(int(seq_ex.length))
+                    expanded_record_ids.append(rid)
+                    expanded_parent_record_ids.append(parent)
+                    expanded_source_ids.append(src)
+                    expanded_chain_ids.append(cid)
+                    expanded_paths.append(path)
+                except Exception as exc:
+                    from .failure_taxonomy import classify_exception
+                    seq_failures.append(
+                        FailureRecord(
+                            record_id=rid,
+                            stage="sequence_example",
+                            failure_class=classify_exception(exc),
+                            message=str(exc),
+                            source_id=src,
+                            code_rev=code_rev,
+                            config_rev=config_rev,
+                            provenance={"exception_type": type(exc).__name__},
+                        )
+                    )
+
+            # --- drop chunk refs — the critical memory step ---
+            del chunk_structures
+            del chunk_prep_reports
+            del e_structs, e_preps
+            if rescue_load:
+                del loaded_pairs
+            else:
+                del raw_pairs
+
+    # ---- writers closed; finalize release directories ----
+    loaded_paths = [path_list[i] for i in ordered_loaded_indices]
+    loaded_set = set(ordered_loaded_indices)
+    dropped_indices = [i for i in range(n_total) if i not in loaded_set]
+
+    ingestion_failures_path = _write_ingestion_failures(
+        root,
+        [path_list[i] for i in dropped_indices],
+        code_rev=code_rev,
+        config_rev=config_rev,
+    )
+    rescued_inputs_path = _write_rescued_inputs(
+        root,
+        path_list,
+        rescued_results,
+        code_rev=code_rev,
+        config_rev=config_rev,
+    )
+
+    # Prepared-structure manifest (one row per loaded structure).
+    write_prepared_structure_manifest(prepared_rows, prepared_root / "prepared_structures.jsonl")
+
+    # Supervision release manifest.
+    sup_failure_file = sup_release_root / "failures.jsonl"
+    with sup_failure_file.open("w", encoding="utf-8") as handle:
+        for failure in sup_failures:
+            handle.write(json.dumps(asdict(failure), separators=(",", ":")))
+            handle.write("\n")
+    sup_count = len(sup_lengths)
+    sup_manifest = StructureSupervisionReleaseManifest(
+        release_id=f"{release_id}-structure",
+        code_rev=code_rev,
+        config_rev=config_rev,
+        count_examples=sup_count,
+        count_failures=len(sup_failures),
+        tensor_file="examples/tensors.parquet" if sup_count > 0 else None,
+        lengths=_seq_len_summary(sup_lengths),
+        sequence_lengths=sup_lengths,
+        provenance={"input_paths": [str(p) for p in expanded_paths]},
+    )
+    (sup_release_root / "release_manifest.json").write_text(
+        json.dumps(asdict(sup_manifest), indent=2), encoding="utf-8",
+    )
+
+    # Sequence release manifest.
+    seq_failure_file = seq_release_root / "failures.jsonl"
+    with seq_failure_file.open("w", encoding="utf-8") as handle:
+        for failure in seq_failures:
+            handle.write(json.dumps(asdict(failure), separators=(",", ":")))
+            handle.write("\n")
+    seq_count = len(seq_lengths)
+    seq_manifest = SequenceReleaseManifest(
+        release_id=f"{release_id}-sequence",
+        code_rev=code_rev,
+        config_rev=config_rev,
+        count_examples=seq_count,
+        count_failures=len(seq_failures),
+        tensor_file="examples/tensors.parquet" if seq_count > 0 else None,
+        lengths=_seq_len_summary(seq_lengths),
+        provenance={"input_paths": [str(p) for p in expanded_paths]},
+    )
+    (seq_release_root / "release_manifest.json").write_text(
+        json.dumps(asdict(seq_manifest), indent=2), encoding="utf-8",
+    )
+
+    # Split assignment (same logic as the single-shot path).
+    if split_assignments is not None:
+        missing = [rid for rid in expanded_record_ids if rid not in split_assignments]
+        if missing:
+            raise ValueError(
+                f"split_assignments missing {len(missing)} record_ids "
+                f"(first few: {missing[:3]})"
+            )
+        split_assignments = {rid: split_assignments[rid] for rid in expanded_record_ids}
+        split_strategy = "explicit"
+    elif split_ratios is not None:
+        split_assignments = _hash_split_assignments(
+            expanded_record_ids, split_ratios, grouping_keys=expanded_parent_record_ids,
+        )
+        split_strategy = f"hash_split:{_format_ratios(split_ratios)}"
+    else:
+        split_assignments = _default_split_assignments(
+            expanded_record_ids, grouping_keys=expanded_parent_record_ids,
+        )
+        split_strategy = f"default_hash_split:{_format_ratios(DEFAULT_SPLIT_RATIOS)}"
+
+    training_root = build_training_release(
+        seq_release_root,
+        sup_release_root,
+        root / "training",
+        release_id=f"{release_id}-training",
+        split_assignments=split_assignments,
+        code_rev=code_rev,
+        config_rev=config_rev,
+        provenance={"input_paths": [str(p) for p in loaded_paths]},
+        overwrite=True,
+    )
+    corpus_root = build_corpus_release_manifest(
+        root / "corpus",
+        release_id=release_id,
+        prepared_manifest=prepared_root / "prepared_structures.jsonl",
+        sequence_release=seq_release_root,
+        structure_release=sup_release_root,
+        training_release=training_root,
+        ingestion_failures=ingestion_failures_path,
+        rescued_inputs_manifest=rescued_inputs_path,
+        code_rev=code_rev,
+        config_rev=config_rev,
+        prep_policy_version=prep_policy_version,
+        split_policy_version=split_policy_version,
+        provenance={
+            "input_paths": [str(p) for p in path_list],
+            "loaded_paths": [str(p) for p in loaded_paths],
+            "dropped_paths": [str(path_list[i]) for i in dropped_indices],
+            "rescue_load": rescue_load,
+            "rescued_paths": [str(path_list[i]) for i, _ in rescued_results],
+            "rescue_allow": list(rescue_allow) if rescue_allow is not None else None,
+            "split_strategy": split_strategy,
+            "chunk_size": chunk_size,
+        },
+        overwrite=True,
+    )
+    validate_corpus_release(
+        corpus_root / "corpus_release_manifest.json",
+        out_path=corpus_root / "validation_report.json",
+    )
+    return root
 
 
 DEFAULT_SPLIT_RATIOS: Mapping[str, float] = {"train": 0.8, "val": 0.1, "test": 0.1}
