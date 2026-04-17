@@ -16,10 +16,12 @@
 //! queries) and matches upstream's `createindex` + `search` split.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use thiserror::Error;
 
 use crate::alphabet::Alphabet;
+use crate::db::{DBReader, DbError};
 use crate::gapped::{smith_waterman, GappedAlignment};
 use crate::kmer::{KmerEncoder, KmerIndex, KmerIndexError};
 use crate::kmer_generator::widen_to_i32;
@@ -35,6 +37,19 @@ pub enum SearchError {
     IndexBuild(#[from] KmerIndexError),
     #[error("reduced-alphabet construction failed: invalid reduce_to or unknown index")]
     BadReduction,
+}
+
+/// Error type for [`SearchEngine::build_from_mmseqs_db`].
+///
+/// Distinct from [`SearchError`] because opening the DB and building the
+/// engine are independently fallible and callers may want to handle them
+/// separately (e.g. "missing DB" vs "bad k value").
+#[derive(Debug, Error)]
+pub enum BuildFromDbError {
+    #[error("mmseqs DB open failed: {0}")]
+    DbOpen(#[from] DbError),
+    #[error("search engine build failed: {0}")]
+    Build(#[from] SearchError),
 }
 
 /// Tuning knobs for [`SearchEngine`].
@@ -185,6 +200,45 @@ impl SearchEngine {
             skip_idx,
             opts,
         })
+    }
+
+    /// Build the engine from an on-disk MMseqs2-compatible DB.
+    ///
+    /// Opens the DB at `prefix` (anything [`crate::db::DBReader`] accepts
+    /// — e.g. output of `mmseqs createdb` or ferritin-search's own
+    /// [`crate::db::DBWriter`]) and streams its sequences into
+    /// [`SearchEngine::build`]. Sequence ids are taken straight from the
+    /// DB's index keys so lookups round-trip against the DB's
+    /// `.lookup` file if present.
+    ///
+    /// Payloads are ASCII and may carry a trailing `\n` before the
+    /// `\0` terminator. [`crate::db::DBReader::get_payload`] strips the
+    /// `\0`; [`Sequence::from_ascii`] strips whitespace including the
+    /// `\n`, so each entry is passed through exactly once without any
+    /// intermediate Python `List[(id, str)]` materialization.
+    pub fn build_from_mmseqs_db(
+        prefix: impl AsRef<Path>,
+        matrix: &SubstitutionMatrix,
+        alphabet: Alphabet,
+        opts: SearchOptions,
+    ) -> Result<Self, BuildFromDbError> {
+        let reader = DBReader::open(prefix)?;
+        // Encode all payloads up-front, then drop the reader — releases
+        // the DB's bulk `data: Vec<u8>` buffer before `build` allocates
+        // its own encoded targets map. Peak memory is raw-DB + encoded
+        // sequences briefly; once `reader` drops it's just the encoded
+        // copies that `build` retains. No Python `List[(id, str)]`
+        // intermediate either way.
+        let targets: Vec<(u32, Sequence)> = reader
+            .index
+            .iter()
+            .map(|entry| {
+                let payload = reader.get_payload(entry);
+                (entry.key, Sequence::from_ascii(alphabet.clone(), payload))
+            })
+            .collect();
+        drop(reader);
+        Ok(Self::build(targets, matrix, alphabet, opts)?)
     }
 
     /// Run a single query against the indexed corpus.
@@ -677,6 +731,88 @@ mod tests {
                 assert_eq!(c.alignment.query_end, g.alignment.query_end);
                 assert_eq!(c.alignment.target_end, g.alignment.target_end);
             }
+        }
+    }
+
+    #[test]
+    fn build_from_mmseqs_db_round_trips_against_in_memory_build() {
+        use crate::db::{DBWriter, Dbtype};
+        use tempfile::tempdir;
+
+        // Canonical DB payload format: bytes + trailing `\n\0` that
+        // `DBWriter::write_entry` appends. `build_from_mmseqs_db` must
+        // strip the `\0` (via `get_payload`) and let `Sequence::from_ascii`
+        // drop the `\n`, producing the same encoded sequences as an
+        // in-memory `SearchEngine::build` over identical inputs.
+        let dir = tempdir().unwrap();
+        let prefix = dir.path().join("targets");
+        let mut w = DBWriter::create(&prefix, Dbtype::AMINO_ACIDS).unwrap();
+        let entries = [
+            (1u32, b"MNALVVKFGGTSVANAERFLRVADILESNARQGQ".as_slice()),
+            (2u32, b"WVLSAADKTNVKAAWGKVGAHAGEYGAEALERMFLSFP".as_slice()),
+            (3u32, b"MEAFRKQLPCFRSGAQQVKEHFKQVAEKHHGFLEEFCAR".as_slice()),
+        ];
+        for (key, payload) in &entries {
+            w.write_entry(*key, payload).unwrap();
+        }
+        w.finish().unwrap();
+
+        let (alpha, m) = alpha_and_matrix();
+        let opts = SearchOptions { k: 3, reduce_to: Some(13), ..Default::default() };
+
+        let from_db = SearchEngine::build_from_mmseqs_db(
+            &prefix,
+            &m,
+            alpha.clone(),
+            opts.clone(),
+        )
+        .expect("build_from_mmseqs_db");
+
+        let in_mem_targets: Vec<(u32, Sequence)> = entries
+            .iter()
+            .map(|(id, s)| (*id, Sequence::from_ascii(alpha.clone(), s)))
+            .collect();
+        let in_mem = SearchEngine::build(in_mem_targets.clone(), &m, alpha.clone(), opts)
+            .expect("SearchEngine::build");
+
+        // Per-query parity: same top-hit target_id + gapped score for every input.
+        for (qid, qseq) in &entries {
+            let query = Sequence::from_ascii(alpha.clone(), qseq);
+            let db_hits = from_db.search(&query);
+            let mem_hits = in_mem.search(&query);
+            assert_eq!(
+                db_hits.len(),
+                mem_hits.len(),
+                "hit count mismatch for query {qid}",
+            );
+            if !db_hits.is_empty() {
+                assert_eq!(db_hits[0].target_id, mem_hits[0].target_id);
+                assert_eq!(db_hits[0].alignment.score, mem_hits[0].alignment.score);
+            }
+        }
+
+        // Self-hit sanity: every DB-built query finds itself at rank 0.
+        for (qid, qseq) in &entries {
+            let q = Sequence::from_ascii(alpha.clone(), qseq);
+            let hits = from_db.search(&q);
+            assert!(!hits.is_empty(), "DB-built engine: query {qid} had no hits");
+            assert_eq!(hits[0].target_id, *qid);
+        }
+    }
+
+    #[test]
+    fn build_from_mmseqs_db_surfaces_missing_db_as_db_open_error() {
+        let (alpha, m) = alpha_and_matrix();
+        let result = SearchEngine::build_from_mmseqs_db(
+            "/nonexistent/path/to/mmseqs-db",
+            &m,
+            alpha,
+            SearchOptions::default(),
+        );
+        match result {
+            Err(BuildFromDbError::DbOpen(_)) => {}
+            Err(e) => panic!("expected DbOpen error, got {e}"),
+            Ok(_) => panic!("expected error for missing DB, got Ok"),
         }
     }
 

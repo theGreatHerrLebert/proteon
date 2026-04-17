@@ -38,6 +38,46 @@ def rust_msa_available() -> bool:
     return _msa is not None
 
 
+def build_search_engine_from_mmseqs_db(
+    prefix: "str | 'os.PathLike[str]'",
+    *,
+    k: int = 6,
+    reduce_to: Optional[int] = 13,
+    bit_factor: float = 2.0,
+    gap_open: int = -11,
+    gap_extend: int = -1,
+    min_score: int = 0,
+    max_prefilter_hits: Optional[int] = 1000,
+    max_results: Optional[int] = None,
+    use_gpu: bool = True,
+):
+    """Construct a Rust SearchEngine from an on-disk MMseqs2-compatible DB.
+
+    `prefix` is the path passed to `mmseqs createdb` (or any byte-compatible
+    writer such as `ferritin_search::db::DBWriter`). The DB sequences are
+    streamed into the Rust engine without a Python `list[(id, str)]`
+    materialize — required when target corpora don't fit as Python
+    objects (UniRef30 ≈ 30 M seqs, BFD ≈ 65 M).
+
+    All other kwargs mirror `build_search_engine` so the two paths are
+    interchangeable once the engine is built.
+    """
+    if _msa is None:
+        raise RuntimeError("Rust MSA backend is not available")
+    return _msa.SearchEngine.from_mmseqs_db(
+        str(prefix),
+        k=k,
+        reduce_to=reduce_to,
+        bit_factor=bit_factor,
+        gap_open=gap_open,
+        gap_extend=gap_extend,
+        min_score=min_score,
+        max_prefilter_hits=max_prefilter_hits,
+        max_results=max_results,
+        use_gpu=use_gpu,
+    )
+
+
 def build_search_engine(
     targets: List[Tuple[int, str]],
     *,

@@ -86,6 +86,61 @@ impl PySearchEngine {
         Ok(Self { inner, alphabet })
     }
 
+    /// Build a search engine from an on-disk MMseqs2-compatible DB.
+    ///
+    /// `prefix` is the path passed to `mmseqs createdb` (the DB's data
+    /// blob sits at `prefix` itself; `prefix.index`, `prefix.dbtype`
+    /// etc. sit alongside). Sequences are encoded straight from the
+    /// DB without a Python `List[(id, str)]` intermediate — required
+    /// for target corpora too large to fit as Python objects (e.g.
+    /// UniRef30, BFD).
+    ///
+    /// Options mirror `__new__`.
+    #[classmethod]
+    #[pyo3(signature = (
+        prefix,
+        k = 6,
+        reduce_to = Some(13),
+        bit_factor = 2.0,
+        gap_open = -11,
+        gap_extend = -1,
+        min_score = 0,
+        max_prefilter_hits = Some(1000),
+        max_results = None,
+        use_gpu = true,
+    ))]
+    fn from_mmseqs_db(
+        _cls: &Bound<'_, pyo3::types::PyType>,
+        prefix: &str,
+        k: usize,
+        reduce_to: Option<usize>,
+        bit_factor: f32,
+        gap_open: i32,
+        gap_extend: i32,
+        min_score: i32,
+        max_prefilter_hits: Option<usize>,
+        max_results: Option<usize>,
+        use_gpu: bool,
+    ) -> PyResult<Self> {
+        let alphabet = Alphabet::protein();
+        let matrix = SubstitutionMatrix::blosum62();
+        let opts = SearchOptions {
+            k,
+            reduce_to,
+            bit_factor,
+            diagonal_score_threshold: 0,
+            max_prefilter_hits,
+            gap_open,
+            gap_extend,
+            min_score,
+            max_results,
+            use_gpu,
+        };
+        let inner = CoreSearchEngine::build_from_mmseqs_db(prefix, &matrix, alphabet.clone(), opts)
+            .map_err(|e| PyValueError::new_err(format!("mmseqs DB build failed: {e}")))?;
+        Ok(Self { inner, alphabet })
+    }
+
     /// Number of targets indexed.
     fn target_count(&self) -> usize {
         self.inner.target_count()

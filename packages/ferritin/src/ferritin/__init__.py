@@ -132,8 +132,11 @@ from .search import (
 from .msa import MsaSearch
 from .msa_backend import (
     batch_build_sequence_examples_with_msa,
+    build_search_engine,
+    build_search_engine_from_mmseqs_db,
     build_sequence_example_with_msa,
     rust_msa_available,
+    search_and_build_msa,
 )
 from .templates import (
     TEMPLATE_GAP_INDEX,
