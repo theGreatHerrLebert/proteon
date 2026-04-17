@@ -115,10 +115,11 @@ fn rust_reader_matches_upstream_createdb_output() {
     assert!(r.lookup.is_some(), "lookup file should be present for createdb output");
 
     // Every index entry fits within the data blob and is null-terminated.
+    let data = r.data();
     for e in &r.index {
         let end = e.offset + e.length;
-        assert!(end as usize <= r.data.len(), "entry {} overflows blob", e.key);
-        assert_eq!(r.data[end as usize - 1], 0, "missing \\0 at end of entry {}", e.key);
+        assert!(end as usize <= data.len(), "entry {} overflows blob", e.key);
+        assert_eq!(data[end as usize - 1], 0, "missing \\0 at end of entry {}", e.key);
     }
 
     // First entry starts at offset 0.

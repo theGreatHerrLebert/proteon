@@ -16,6 +16,7 @@ cuda = ["dep:cudarc"]
 [dependencies]
 anyhow = "1"
 thiserror = "1"
+memmap2 = "0.9"
 cudarc = { version = "0.19", features = ["std", "driver", "nvrtc", "cuda-12050"], optional = true }
 
 [dev-dependencies]
