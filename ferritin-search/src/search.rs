@@ -157,24 +157,46 @@ pub struct SearchHit {
 enum TargetSource {
     Db {
         db: DBReader,
-        /// `seq_id` → index into `db.index`. Built once at construction
-        /// so per-query lookups are O(1) rather than the linear scan
-        /// `DBReader::get_by_key` does.
-        key_to_entry_idx: HashMap<u32, usize>,
+        /// Keys from `db.index`, sorted ascending. Binary search on
+        /// this at query time yields the lookup position.
+        sorted_keys: Vec<u32>,
+        /// Parallel to `sorted_keys`: `sorted_to_db_pos[i]` is the
+        /// position in `db.index` whose entry has key `sorted_keys[i]`.
+        /// u32 because we cap at ~4G entries (UniRef50 ≈ 50M) — saves
+        /// half the memory vs a usize index.
+        sorted_to_db_pos: Vec<u32>,
     },
     InMemory(HashMap<u32, Vec<u8>>),
 }
 
 impl TargetSource {
+    /// Build the `Db` variant, sorting keys so the engine can use
+    /// binary search instead of a `HashMap<u32, usize>`. At UniRef50
+    /// scale this drops ~1 GB of resident RAM relative to the hashmap
+    /// (400 MB for two parallel `Vec<u32>`s vs ~1.7 GB for a
+    /// hashmap's bucket + entry + metadata overhead).
+    fn new_db(db: DBReader) -> Self {
+        let n = db.index.len();
+        let mut positions: Vec<u32> = (0..n as u32).collect();
+        positions.sort_unstable_by_key(|&i| db.index[i as usize].key);
+        let sorted_keys: Vec<u32> = positions.iter().map(|&i| db.index[i as usize].key).collect();
+        Self::Db { db, sorted_keys, sorted_to_db_pos: positions }
+    }
+
     /// Encoded target bytes for `seq_id`, or `None` if the seq_id isn't
     /// in the corpus. InMemory yields a borrowed slice; Db yields an
     /// owned `Vec<u8>` because the encoded form doesn't live in the
     /// engine — `Sequence::from_ascii` runs per call.
     fn fetch(&self, seq_id: u32, alphabet: &Alphabet) -> Option<Cow<'_, [u8]>> {
         match self {
-            Self::Db { db, key_to_entry_idx } => {
-                let idx = *key_to_entry_idx.get(&seq_id)?;
-                let entry = &db.index[idx];
+            Self::Db { db, sorted_keys, sorted_to_db_pos } => {
+                // Binary search for `seq_id` in the sorted keys array;
+                // fall back to None for absent keys. Duplicate keys in
+                // a DB are pathological but would simply resolve to
+                // whichever the binary search lands on.
+                let sorted_idx = sorted_keys.binary_search(&seq_id).ok()?;
+                let db_pos = sorted_to_db_pos[sorted_idx] as usize;
+                let entry = &db.index[db_pos];
                 let payload = db.get_payload(entry);
                 Some(Cow::Owned(Sequence::from_ascii(alphabet.clone(), payload).data))
             }
@@ -364,18 +386,6 @@ impl SearchEngine {
         let full_alphabet_size = alphabet.size();
         let x_full = alphabet.encode(b'X');
 
-        // Build the key → index-entry-index map so query-time lookups are
-        // O(1) instead of walking `reader.index` linearly. One u32 + one
-        // usize per entry; ~12 bytes on 64-bit, so ~600 MB for 50M-target
-        // UniRef50. That's a real cost but tractable, and Phase 3 will
-        // replace it with a sorted-key array for smaller overhead.
-        let key_to_entry_idx: HashMap<u32, usize> = reader
-            .index
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (e.key, i))
-            .collect();
-
         // Transient: encode every payload once for the k-mer build. Drops
         // at the end of this fn so the HashMap<u32, Vec<u8>>-equivalent
         // peak cost is bounded to construction time only.
@@ -404,7 +414,7 @@ impl SearchEngine {
         let matrix_int = widen_to_i32(&matrix.to_integer_matrix(opts.bit_factor, 0.0));
 
         Ok(Self {
-            targets: TargetSource::Db { db: reader, key_to_entry_idx },
+            targets: TargetSource::new_db(reader),
             index: KmerIndexStorage::InMemory(index),
             matrix_int,
             full_alphabet_size,
@@ -502,17 +512,10 @@ impl SearchEngine {
             return Err(BuildFromDbError::KmiReducerMismatch);
         }
 
-        let key_to_entry_idx: HashMap<u32, usize> = reader
-            .index
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (e.key, i))
-            .collect();
-
         let matrix_int = widen_to_i32(&matrix.to_integer_matrix(opts.bit_factor, 0.0));
 
         Ok(Self {
-            targets: TargetSource::Db { db: reader, key_to_entry_idx },
+            targets: TargetSource::new_db(reader),
             index: KmerIndexStorage::OnDisk(kmi),
             matrix_int,
             full_alphabet_size,
@@ -1159,6 +1162,66 @@ mod tests {
                 assert_eq!(m_h.alignment.query_end, d_h.alignment.query_end);
                 assert_eq!(m_h.alignment.target_end, d_h.alignment.target_end);
             }
+        }
+    }
+
+    #[test]
+    fn db_target_lookup_handles_out_of_order_keys() {
+        // Phase 3c swapped HashMap<u32, usize> for a sorted-keys
+        // binary search. If the sort or parallel-array wiring is
+        // wrong, a DB whose keys weren't inserted in ascending order
+        // would mis-resolve lookups. Build such a DB and assert every
+        // original (key, payload) can be round-tripped via the engine.
+        use crate::db::{DBWriter, Dbtype};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let prefix = dir.path().join("db");
+        let mut w = DBWriter::create(&prefix, Dbtype::AMINO_ACIDS).unwrap();
+        // Intentionally not sorted: 42, 7, 19, 3. Also a zero-value
+        // key which older HashMap-based code quietly handled but new
+        // sorted-array code must handle too.
+        let entries: &[(u32, &[u8])] = &[
+            (42, b"MKLVRQPSTNLKACDFGHIY"),
+            (7, b"MNALVVKFGGTSVANAERFLR"),
+            (19, b"WWWWWWWWWWWWWWWWWWWW"),
+            (3, b"MEAFRKQLPCFRSGAQQVKEH"),
+            (0, b"ACDEFGHIKLMNPQRSTVWY"),
+        ];
+        for (k, s) in entries {
+            w.write_entry(*k, s).unwrap();
+        }
+        w.finish().unwrap();
+
+        let (alpha, m) = alpha_and_matrix();
+        let opts = SearchOptions { k: 3, reduce_to: Some(13), ..Default::default() };
+        let engine = SearchEngine::build_from_mmseqs_db(&prefix, &m, alpha.clone(), opts)
+            .expect("build_from_mmseqs_db");
+        assert_eq!(engine.target_count(), entries.len());
+
+        // Each (key, payload) must self-hit via search — a correct
+        // binary-search lookup is the only way this passes on an
+        // out-of-order DB.
+        for (key, payload) in entries {
+            let q = Sequence::from_ascii(alpha.clone(), payload);
+            let hits = engine.search(&q);
+            assert!(!hits.is_empty(), "query {key} returned no hits");
+            assert_eq!(
+                hits[0].target_id, *key,
+                "query for key {key}: top hit was {} (expected self)",
+                hits[0].target_id,
+            );
+        }
+
+        // Absent keys must resolve to None (Vec::new hits).
+        let missing = Sequence::from_ascii(alpha, b"CCCCCCCCCCCCCCCCCCCCCC");
+        let hits = engine.search(&missing);
+        for h in &hits {
+            assert!(
+                entries.iter().any(|(k, _)| *k == h.target_id),
+                "search returned a hit for a key not in the DB: {}",
+                h.target_id,
+            );
         }
     }
 
