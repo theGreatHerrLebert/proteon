@@ -152,7 +152,10 @@ from .sequence_example import (
 )
 from .sequence_export import (
     SEQUENCE_EXPORT_FORMAT,
+    SEQUENCE_PARQUET_SCHEMA_VERSION,
+    SequenceParquetWriter,
     export_sequence_examples,
+    iter_sequence_examples,
     load_sequence_examples,
 )
 from .sequence_release import (

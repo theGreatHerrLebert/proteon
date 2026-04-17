@@ -10,7 +10,11 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 from .failure_taxonomy import classify_exception
 from .sequence_example import SequenceExample, build_sequence_example
-from .sequence_export import SEQUENCE_EXPORT_FORMAT, export_sequence_examples
+from .sequence_export import (
+    SEQUENCE_EXPORT_FORMAT,
+    SEQUENCE_PARQUET_SCHEMA_VERSION,
+    export_sequence_examples,
+)
 from .supervision_release import FailureRecord
 
 
@@ -26,7 +30,8 @@ class SequenceReleaseManifest:
     count_failures: int = 0
     example_export_dir: str = "examples"
     examples_file: str = "examples/examples.jsonl"
-    tensor_file: str = "examples/tensors.npz"
+    tensor_file: str = "examples/tensors.parquet"
+    tensor_schema_version: int = SEQUENCE_PARQUET_SCHEMA_VERSION
     failure_file: str = "failures.jsonl"
     lengths: Dict[str, float] = field(default_factory=dict)
     provenance: Dict[str, object] = field(default_factory=dict)

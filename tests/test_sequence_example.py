@@ -73,11 +73,13 @@ class TestSequenceExample:
         examples = ferritin.batch_build_sequence_examples([_fake_structure("A")])
         out_dir = ferritin.export_sequence_examples(examples, tmp_path / "sequence")
         manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
-        expected = hashlib.sha256((out_dir / "tensors.npz").read_bytes()).hexdigest()
+        tensor_path = out_dir / manifest["tensor_file"]
+        assert tensor_path.name == "tensors.parquet"
+        expected = hashlib.sha256(tensor_path.read_bytes()).hexdigest()
         assert manifest["tensor_sha256"] == expected
 
         ferritin.load_sequence_examples(out_dir)  # verifies and succeeds
-        (out_dir / "tensors.npz").write_bytes(b"x")
+        tensor_path.write_bytes(b"x")
         with pytest.raises(ValueError, match="checksum mismatch"):
             ferritin.load_sequence_examples(out_dir)
 
