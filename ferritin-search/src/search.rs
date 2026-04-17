@@ -15,6 +15,7 @@
 //! many queries — that's the production usage pattern (one DB, many
 //! queries) and matches upstream's `createindex` + `search` split.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -50,6 +51,16 @@ pub enum BuildFromDbError {
     DbOpen(#[from] DbError),
     #[error("search engine build failed: {0}")]
     Build(#[from] SearchError),
+}
+
+// Route KmerIndexError (raised by the in-place kmer build inside
+// `build_from_mmseqs_db`) through the `Build` variant via `SearchError`'s
+// existing `#[from] KmerIndexError` arm. Lets us use `?` directly on the
+// kmer build without a manual map_err dance.
+impl From<KmerIndexError> for BuildFromDbError {
+    fn from(e: KmerIndexError) -> Self {
+        BuildFromDbError::Build(SearchError::from(e))
+    }
 }
 
 /// Tuning knobs for [`SearchEngine`].
@@ -114,14 +125,58 @@ pub struct SearchHit {
     pub alignment: GappedAlignment,
 }
 
+/// Where the engine looks up target sequences at query time.
+///
+/// The `Db` variant keeps the DB memory-mapped (via [`DBReader`]) and
+/// encodes payloads on demand, so a full UniRef50 doesn't require the
+/// ~12 GB of resident in-memory target bytes that `InMemory` would.
+/// The `InMemory` variant is the traditional back-compat path for
+/// `SearchEngine::build(targets, ...)` — small corpora, tests, and
+/// callers that already have `Sequence` objects in hand.
+enum TargetSource {
+    Db {
+        db: DBReader,
+        /// `seq_id` → index into `db.index`. Built once at construction
+        /// so per-query lookups are O(1) rather than the linear scan
+        /// `DBReader::get_by_key` does.
+        key_to_entry_idx: HashMap<u32, usize>,
+    },
+    InMemory(HashMap<u32, Vec<u8>>),
+}
+
+impl TargetSource {
+    /// Encoded target bytes for `seq_id`, or `None` if the seq_id isn't
+    /// in the corpus. InMemory yields a borrowed slice; Db yields an
+    /// owned `Vec<u8>` because the encoded form doesn't live in the
+    /// engine — `Sequence::from_ascii` runs per call.
+    fn fetch(&self, seq_id: u32, alphabet: &Alphabet) -> Option<Cow<'_, [u8]>> {
+        match self {
+            Self::Db { db, key_to_entry_idx } => {
+                let idx = *key_to_entry_idx.get(&seq_id)?;
+                let entry = &db.index[idx];
+                let payload = db.get_payload(entry);
+                Some(Cow::Owned(Sequence::from_ascii(alphabet.clone(), payload).data))
+            }
+            Self::InMemory(map) => map.get(&seq_id).map(|v| Cow::Borrowed(v.as_slice())),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Db { db, .. } => db.len(),
+            Self::InMemory(map) => map.len(),
+        }
+    }
+}
+
 /// Pre-built search engine over a fixed target corpus.
 ///
 /// Construction does the expensive work once: alphabet reduction,
-/// k-mer index build, integer score matrix conversion, hashmap from
-/// `seq_id → target sequence bytes` for fast lookup during query.
+/// k-mer index build, integer score matrix conversion, and (for the
+/// in-memory path) a `seq_id → encoded bytes` map.
 pub struct SearchEngine {
-    /// Target sequences in full-alphabet encoding, indexed by seq_id.
-    targets_full: HashMap<u32, Vec<u8>>,
+    /// Source of target bytes at query time. See [`TargetSource`].
+    targets: TargetSource,
     /// K-mer index over reduced-alphabet (or full if no reduction) targets.
     index: KmerIndex,
     /// Flat alphabet_size² i32 score matrix for ungapped + gapped.
@@ -133,14 +188,19 @@ pub struct SearchEngine {
     /// Skip index passed to k-mer iteration (X in reduced or full space).
     skip_idx: u8,
     opts: SearchOptions,
+    /// Retained for on-demand encoding of DB-backed targets at query
+    /// time. For InMemory-backed engines the field is unused but kept
+    /// so the API is storage-agnostic.
+    alphabet: Alphabet,
 }
 
 impl SearchEngine {
-    /// Build the engine over a target corpus.
+    /// Build the engine over a target corpus held in memory.
     ///
-    /// `targets` is consumed; the engine retains only the encoded byte
-    /// vectors. `alphabet` must match the encoding used when constructing
-    /// the `Sequence` values (typically `Alphabet::protein()`).
+    /// `targets` is consumed and materialized into an owned
+    /// `HashMap<u32, Vec<u8>>`. For archive-scale corpora prefer
+    /// [`SearchEngine::build_from_mmseqs_db`], which holds target bytes
+    /// in a memory-mapped DB and encodes them on demand at query time.
     pub fn build(
         targets: impl IntoIterator<Item = (u32, Sequence)>,
         matrix: &SubstitutionMatrix,
@@ -158,29 +218,8 @@ impl SearchEngine {
             order.push((id, seq.data));
         }
 
-        // Optional alphabet reduction. When reducing, we keep X as a
-        // singleton class (so the skip semantic survives — the
-        // unknown_reduced_idx is what we pass to k-mer iter as skip_idx).
-        let reducer = match opts.reduce_to {
-            Some(r) => Some(
-                ReducedAlphabet::from_matrix(matrix, r, Some(x_full))
-                    .ok_or(SearchError::BadReduction)?,
-            ),
-            None => None,
-        };
-
-        let (kmer_alphabet_size, skip_idx, indexed_targets): (usize, u8, Vec<(u32, Vec<u8>)>) =
-            match &reducer {
-                Some(r) => {
-                    let skip = r.unknown_reduced_idx.ok_or(SearchError::BadReduction)?;
-                    let reduced = order
-                        .iter()
-                        .map(|(id, s)| (*id, r.reduce_sequence(s)))
-                        .collect();
-                    (r.reduced_size, skip, reduced)
-                }
-                None => (full_alphabet_size, x_full, order),
-            };
+        let (reducer, kmer_alphabet_size, skip_idx, indexed_targets) =
+            Self::prepare_index_inputs(matrix, &opts, full_alphabet_size, x_full, order)?;
 
         let encoder = KmerEncoder::new(kmer_alphabet_size as u32, opts.k);
         let pairs: Vec<(u32, &[u8])> = indexed_targets
@@ -192,30 +231,80 @@ impl SearchEngine {
         let matrix_int = widen_to_i32(&matrix.to_integer_matrix(opts.bit_factor, 0.0));
 
         Ok(Self {
-            targets_full,
+            targets: TargetSource::InMemory(targets_full),
             index,
             matrix_int,
             full_alphabet_size,
             reducer,
             skip_idx,
             opts,
+            alphabet,
         })
+    }
+
+    /// Shared prep between `build` and `build_from_mmseqs_db`: resolves
+    /// the optional reduced alphabet and produces the `(seq_id, encoded
+    /// bytes)` pairs the k-mer index consumes. Extracted to keep the
+    /// two constructors in lock-step on reducer semantics.
+    fn prepare_index_inputs(
+        matrix: &SubstitutionMatrix,
+        opts: &SearchOptions,
+        full_alphabet_size: usize,
+        x_full: u8,
+        encoded_full: Vec<(u32, Vec<u8>)>,
+    ) -> Result<
+        (
+            Option<ReducedAlphabet>,
+            usize,
+            u8,
+            Vec<(u32, Vec<u8>)>,
+        ),
+        SearchError,
+    > {
+        let reducer_opt = match opts.reduce_to {
+            Some(r) => Some(
+                ReducedAlphabet::from_matrix(matrix, r, Some(x_full))
+                    .ok_or(SearchError::BadReduction)?,
+            ),
+            None => None,
+        };
+        // Move `reducer` into the match by value so the borrow-for-reduce
+        // ends before we re-wrap and return it. The equivalent `match
+        // &reducer_opt { Some(r) => ... Ok((reducer_opt, ...)) }`
+        // doesn't type-check: the `r` borrow is live when we try to move
+        // reducer_opt into the tuple.
+        match reducer_opt {
+            Some(r) => {
+                let skip = r.unknown_reduced_idx.ok_or(SearchError::BadReduction)?;
+                let reduced_size = r.reduced_size;
+                let reduced: Vec<(u32, Vec<u8>)> = encoded_full
+                    .iter()
+                    .map(|(id, s)| (*id, r.reduce_sequence(s)))
+                    .collect();
+                Ok((Some(r), reduced_size, skip, reduced))
+            }
+            None => Ok((None, full_alphabet_size, x_full, encoded_full)),
+        }
     }
 
     /// Build the engine from an on-disk MMseqs2-compatible DB.
     ///
     /// Opens the DB at `prefix` (anything [`crate::db::DBReader`] accepts
     /// — e.g. output of `mmseqs createdb` or ferritin-search's own
-    /// [`crate::db::DBWriter`]) and streams its sequences into
-    /// [`SearchEngine::build`]. Sequence ids are taken straight from the
-    /// DB's index keys so lookups round-trip against the DB's
-    /// `.lookup` file if present.
+    /// [`crate::db::DBWriter`]) and builds the k-mer index against it.
+    /// The DB is kept memory-mapped for the engine's lifetime; target
+    /// bytes are encoded on demand at query time rather than duplicated
+    /// into an in-memory `HashMap<u32, Vec<u8>>`.
     ///
-    /// Payloads are ASCII and may carry a trailing `\n` before the
-    /// `\0` terminator. [`crate::db::DBReader::get_payload`] strips the
-    /// `\0`; [`Sequence::from_ascii`] strips whitespace including the
-    /// `\n`, so each entry is passed through exactly once without any
-    /// intermediate Python `List[(id, str)]` materialization.
+    /// Peak resident memory during build:
+    ///  - DB mmap (paged in lazily)
+    ///  - Transient encoded-payloads buffer (dropped after k-mer index build)
+    ///  - K-mer index (retained for the engine's lifetime — Phase 3 will
+    ///    move this to an on-disk mmap'd format)
+    ///
+    /// Peak resident memory during search:
+    ///  - DB mmap + k-mer index, plus a per-hit encoded buffer that's
+    ///    freed at the end of each loop iteration.
     pub fn build_from_mmseqs_db(
         prefix: impl AsRef<Path>,
         matrix: &SubstitutionMatrix,
@@ -223,22 +312,59 @@ impl SearchEngine {
         opts: SearchOptions,
     ) -> Result<Self, BuildFromDbError> {
         let reader = DBReader::open(prefix)?;
-        // Encode all payloads up-front, then drop the reader — releases
-        // the DB's bulk `data: Vec<u8>` buffer before `build` allocates
-        // its own encoded targets map. Peak memory is raw-DB + encoded
-        // sequences briefly; once `reader` drops it's just the encoded
-        // copies that `build` retains. No Python `List[(id, str)]`
-        // intermediate either way.
-        let targets: Vec<(u32, Sequence)> = reader
+
+        let full_alphabet_size = alphabet.size();
+        let x_full = alphabet.encode(b'X');
+
+        // Build the key → index-entry-index map so query-time lookups are
+        // O(1) instead of walking `reader.index` linearly. One u32 + one
+        // usize per entry; ~12 bytes on 64-bit, so ~600 MB for 50M-target
+        // UniRef50. That's a real cost but tractable, and Phase 3 will
+        // replace it with a sorted-key array for smaller overhead.
+        let key_to_entry_idx: HashMap<u32, usize> = reader
+            .index
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.key, i))
+            .collect();
+
+        // Transient: encode every payload once for the k-mer build. Drops
+        // at the end of this fn so the HashMap<u32, Vec<u8>>-equivalent
+        // peak cost is bounded to construction time only.
+        let encoded_full: Vec<(u32, Vec<u8>)> = reader
             .index
             .iter()
             .map(|entry| {
                 let payload = reader.get_payload(entry);
-                (entry.key, Sequence::from_ascii(alphabet.clone(), payload))
+                (entry.key, Sequence::from_ascii(alphabet.clone(), payload).data)
             })
             .collect();
-        drop(reader);
-        Ok(Self::build(targets, matrix, alphabet, opts)?)
+
+        let (reducer, kmer_alphabet_size, skip_idx, indexed_targets) =
+            Self::prepare_index_inputs(matrix, &opts, full_alphabet_size, x_full, encoded_full)?;
+
+        let encoder = KmerEncoder::new(kmer_alphabet_size as u32, opts.k);
+        let pairs: Vec<(u32, &[u8])> = indexed_targets
+            .iter()
+            .map(|(id, s)| (*id, s.as_slice()))
+            .collect();
+        let index = KmerIndex::build(encoder, pairs, skip_idx)?;
+
+        // Drop the encoded buffer — reclaimed before the engine returns.
+        drop(indexed_targets);
+
+        let matrix_int = widen_to_i32(&matrix.to_integer_matrix(opts.bit_factor, 0.0));
+
+        Ok(Self {
+            targets: TargetSource::Db { db: reader, key_to_entry_idx },
+            index,
+            matrix_int,
+            full_alphabet_size,
+            reducer,
+            skip_idx,
+            opts,
+            alphabet,
+        })
     }
 
     /// Run a single query against the indexed corpus.
@@ -281,10 +407,11 @@ impl SearchEngine {
     fn search_cpu(&self, query: &[u8], prefilter_hits: &[PrefilterHit]) -> Vec<SearchHit> {
         let mut results: Vec<SearchHit> = Vec::new();
         for ph in prefilter_hits {
-            let target = match self.targets_full.get(&ph.seq_id) {
+            let target_cow = match self.targets.fetch(ph.seq_id, &self.alphabet) {
                 Some(t) => t,
                 None => continue,
             };
+            let target: &[u8] = &target_cow;
 
             let ungapped = match ungapped_alignment(
                 query,
@@ -338,7 +465,10 @@ impl SearchEngine {
         use crate::gpu::{diagonal, sw};
 
         struct Candidate<'a> {
-            target: &'a [u8],
+            /// Owned for DB-backed targets (encoded on-demand), borrowed
+            /// for InMemory-backed targets. Either way, `&*c.target`
+            /// yields `&[u8]` for the GPU kernel.
+            target: Cow<'a, [u8]>,
             seq_id: u32,
             prefilter_score: u32,
             best_diagonal: i32,
@@ -346,9 +476,9 @@ impl SearchEngine {
 
         let mut candidates: Vec<Candidate<'_>> = Vec::with_capacity(prefilter_hits.len());
         for ph in prefilter_hits {
-            if let Some(target) = self.targets_full.get(&ph.seq_id) {
+            if let Some(target) = self.targets.fetch(ph.seq_id, &self.alphabet) {
                 candidates.push(Candidate {
-                    target: target.as_slice(),
+                    target,
                     seq_id: ph.seq_id,
                     prefilter_score: ph.diagonal_score,
                     best_diagonal: ph.best_diagonal,
@@ -361,7 +491,7 @@ impl SearchEngine {
 
         let pairs: Vec<(&[u8], i32)> = candidates
             .iter()
-            .map(|c| (c.target, c.best_diagonal))
+            .map(|c| (&*c.target, c.best_diagonal))
             .collect();
 
         // Batched ungapped extension. Err → full CPU fallback.
@@ -391,7 +521,7 @@ impl SearchEngine {
             return Vec::new();
         }
 
-        let surviving_targets: Vec<&[u8]> = surviving.iter().map(|(i, _)| candidates[*i].target).collect();
+        let surviving_targets: Vec<&[u8]> = surviving.iter().map(|(i, _)| &*candidates[*i].target).collect();
 
         // Batched SW score+endpoint. Dispatch by query length:
         //   query_len ≤ 256              → warp singletile (4.5a), fastest
@@ -479,7 +609,7 @@ impl SearchEngine {
             let c = &candidates[cand_idx];
             let gapped = match smith_waterman(
                 query,
-                c.target,
+                &c.target,
                 &self.matrix_int,
                 self.full_alphabet_size,
                 self.opts.gap_open,
@@ -501,31 +631,38 @@ impl SearchEngine {
 
     /// Number of targets indexed.
     pub fn target_count(&self) -> usize {
-        self.targets_full.len()
-    }
-
-    /// Look up an indexed target's full-alphabet bytes by `seq_id`.
-    /// Used by [`crate::msa::assemble_msa`] to project hits into the
-    /// query coordinate frame.
-    pub fn target_bytes(&self, seq_id: u32) -> Option<&[u8]> {
-        self.targets_full.get(&seq_id).map(Vec::as_slice)
+        self.targets.len()
     }
 
     /// Convenience: run [`SearchEngine::search`] for the given query and
     /// pipe the hits straight into [`crate::msa::assemble_msa`], returning
-    /// an AF2-style MSA tensor bundle. Equivalent to:
+    /// an AF2-style MSA tensor bundle.
     ///
-    /// ```ignore
-    /// let hits = engine.search(&query);
-    /// assemble_msa(&query, &hits, |id| engine.target_bytes(id), opts)
-    /// ```
+    /// Pre-materializes each hit's encoded target bytes into a local
+    /// map so [`assemble_msa`]'s closure can borrow `&[u8]` for its
+    /// lifetime. For DB-backed engines this is the only place that
+    /// fetch()es once per hit; for InMemory engines it's a borrow.
     pub fn search_and_build_msa(
         &self,
         query: &Sequence,
         msa_opts: crate::msa::MsaOptions,
     ) -> crate::msa::MsaAssembly {
         let hits = self.search(query);
-        crate::msa::assemble_msa(query, &hits, |id| self.target_bytes(id), msa_opts)
+        let encoded: HashMap<u32, Vec<u8>> = hits
+            .iter()
+            .take(msa_opts.max_seqs)
+            .filter_map(|h| {
+                self.targets
+                    .fetch(h.target_id, &self.alphabet)
+                    .map(|c| (h.target_id, c.into_owned()))
+            })
+            .collect();
+        crate::msa::assemble_msa(
+            query,
+            &hits,
+            |id| encoded.get(&id).map(Vec::as_slice),
+            msa_opts,
+        )
     }
 }
 
