@@ -1,15 +1,15 @@
 {
   "components": {
-    "angle_bend": 522.0205171433428,
-    "bond_stretch": 2434.149007461498,
-    "electrostatic": -338.0266421703576,
+    "angle_bend": 532.7358202944487,
+    "bond_stretch": 4271.794065112141,
+    "electrostatic": -5759.663143872457,
     "improper_torsion": 0.0,
     "solvation": -3239.07048632243,
-    "torsion": 1111.1096510010261,
-    "vdw": 916.3876586581845
+    "torsion": 1183.3978793547458,
+    "vdw": 879.3865333654791
   },
   "ff": "charmm19_eef1",
   "pdb": "1ubq",
-  "total": 1406.5697057712632,
+  "total": -2131.4193320680743,
   "units": "kJ/mol"
 }
