@@ -21,6 +21,26 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace
 
+  # Informational lint pass: surfaces fmt/clippy drift without gating.
+  # Flip both steps to gating (cargo fmt --check, cargo clippy -- -D warnings)
+  # after a dedicated cleanup PR addresses the existing 88 clippy::all sites
+  # and the unformatted files.
+  lint:
+    name: Lint (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt (informational)
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+      - name: cargo clippy (informational)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets
+
   python-tests:
     name: Python ${{ matrix.python-version }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
