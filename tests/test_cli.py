@@ -21,6 +21,8 @@ BIN = os.path.join(REPO, "target", "release")
 TMALIGN = os.path.join(BIN, "tmalign")
 USALIGN = os.path.join(BIN, "usalign")
 INGEST = os.path.join(BIN, "ingest")
+FASTA_TO_MMSEQS_DB = os.path.join(BIN, "fasta_to_mmseqs_db")
+BUILD_KMI = os.path.join(BIN, "build_kmi")
 TEST_PDBS = os.path.join(REPO, "test-pdbs")
 CRAMBIN = os.path.join(TEST_PDBS, "1crn.pdb")
 UBIQ = os.path.join(TEST_PDBS, "1ubq.pdb")
@@ -248,3 +250,154 @@ class TestIngest:
             table = pq.read_table(outpath)
             assert table.num_rows > 0
             assert "x" in table.column_names or "coords_x" in table.column_names or len(table.column_names) > 3
+
+
+# =========================================================================
+# fasta_to_mmseqs_db — FASTA → MMseqs2-compatible DB
+# =========================================================================
+
+
+# Three short amino-acid sequences. The two build_kmi tests below consume
+# this DB, so keep the alphabet in the standard 20 + no gaps / stops.
+_TINY_FASTA = """\
+>seq1
+MKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYNIVATPRGYVLAGG
+>seq2
+MTSESATKHNSTNSLQATETTIRKSFISTASLLSKALKNVLNSLKAALELPVFYIR
+>seq3
+MKAIFVLNAQHDEAVDTHLAGKAALVENVTLKFDAAPLTDPTIAQLYKHRLVSFGDNKY
+"""
+
+
+def _write_tiny_fasta(tmpdir: str) -> str:
+    path = os.path.join(tmpdir, "tiny.fasta")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(_TINY_FASTA)
+    return path
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(FASTA_TO_MMSEQS_DB),
+    reason="fasta_to_mmseqs_db binary not built",
+)
+class TestFastaToMmseqsDb:
+    def test_help(self):
+        rc, out, err = run([FASTA_TO_MMSEQS_DB, "--help"])
+        assert rc == 0
+        combined = out + err
+        assert "fasta" in combined.lower() or "MMseqs" in combined or "Usage" in combined
+
+    def test_writes_three_db_files(self):
+        """Happy path: FASTA in, three mmseqs-compatible files out.
+        The three-file layout (prefix, prefix.index, prefix.dbtype) is
+        what `DBReader` expects — asserting all three exist catches any
+        regression that would silently break search DB consumption."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fasta = _write_tiny_fasta(tmpdir)
+            out_prefix = os.path.join(tmpdir, "tinydb")
+            rc, out, err = run([FASTA_TO_MMSEQS_DB, fasta, out_prefix])
+            assert rc == 0, f"stderr: {err}"
+            # Three files, byte-compatible with `mmseqs createdb`.
+            assert os.path.isfile(out_prefix)
+            assert os.path.isfile(out_prefix + ".index")
+            assert os.path.isfile(out_prefix + ".dbtype")
+            # Log line reports record count on stderr; loose contains
+            # check to tolerate format tweaks.
+            combined = out + err
+            assert "3" in combined and "record" in combined.lower()
+
+    def test_max_records_truncates(self):
+        """`--max-records N` stops after N sequences; the DB record
+        count should match the truncation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fasta = _write_tiny_fasta(tmpdir)
+            out_prefix = os.path.join(tmpdir, "db_trunc")
+            rc, out, err = run([
+                FASTA_TO_MMSEQS_DB, fasta, out_prefix, "--max-records", "2",
+            ])
+            assert rc == 0, f"stderr: {err}"
+            # Two records instead of three. The mmseqs .index file has
+            # one line per record, so its line count is the record
+            # count.
+            with open(out_prefix + ".index", "r", encoding="utf-8") as f:
+                n_records = sum(1 for line in f if line.strip())
+            assert n_records == 2
+
+    def test_missing_fasta_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = os.path.join(tmpdir, "does_not_exist.fasta")
+            out_prefix = os.path.join(tmpdir, "out")
+            rc, out, err = run([FASTA_TO_MMSEQS_DB, missing, out_prefix])
+            assert rc != 0
+            # Neither prefix nor index should have been created on error.
+            assert not os.path.isfile(out_prefix)
+            assert not os.path.isfile(out_prefix + ".index")
+
+
+# =========================================================================
+# build_kmi — MMseqs2 DB → .kmi external-memory k-mer index
+# =========================================================================
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(BUILD_KMI) or not os.path.isfile(FASTA_TO_MMSEQS_DB),
+    reason="build_kmi / fasta_to_mmseqs_db binary not built",
+)
+class TestBuildKmi:
+    def test_help(self):
+        rc, out, err = run([BUILD_KMI, "--help"])
+        assert rc == 0
+        combined = out + err
+        assert "kmi" in combined.lower() or "k-mer" in combined.lower() or "Usage" in combined
+
+    def test_fasta_to_db_to_kmi_end_to_end(self):
+        """Realistic flow: FASTA → DB (via fasta_to_mmseqs_db) → .kmi
+        (via build_kmi). Exercises both CLIs as a single pipeline,
+        mirroring how users consume them."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fasta = _write_tiny_fasta(tmpdir)
+            db_prefix = os.path.join(tmpdir, "db")
+            kmi_path = os.path.join(tmpdir, "db.kmi")
+
+            rc, out, err = run([FASTA_TO_MMSEQS_DB, fasta, db_prefix])
+            assert rc == 0, f"fasta_to_mmseqs_db stderr: {err}"
+
+            # Small k + small reduced alphabet keeps the offsets table
+            # tiny on the smoke input.
+            rc, out, err = run([
+                BUILD_KMI, db_prefix, kmi_path, "--k", "3", "--reduce-to", "13",
+            ])
+            assert rc == 0, f"build_kmi stderr: {err}"
+            assert os.path.isfile(kmi_path)
+            assert os.path.getsize(kmi_path) > 0
+
+    def test_no_reduce_uses_full_alphabet(self):
+        """`--no-reduce` switches to the full 21-letter alphabet.
+        The produced .kmi is larger than the reduced-alphabet version
+        because the offsets table is 21^k instead of 13^k entries."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fasta = _write_tiny_fasta(tmpdir)
+            db_prefix = os.path.join(tmpdir, "db")
+            rc, _, err = run([FASTA_TO_MMSEQS_DB, fasta, db_prefix])
+            assert rc == 0, f"fasta_to_mmseqs_db stderr: {err}"
+
+            kmi_reduced = os.path.join(tmpdir, "reduced.kmi")
+            rc, _, _ = run([BUILD_KMI, db_prefix, kmi_reduced, "--k", "3"])
+            assert rc == 0
+
+            kmi_full = os.path.join(tmpdir, "full.kmi")
+            rc, _, err = run([BUILD_KMI, db_prefix, kmi_full, "--k", "3", "--no-reduce"])
+            assert rc == 0, f"build_kmi --no-reduce stderr: {err}"
+            assert os.path.isfile(kmi_full)
+            # Full alphabet is a larger offsets table; the .kmi file
+            # grows accordingly. Assert strictly > so any future change
+            # that silently makes --no-reduce a no-op would fail.
+            assert os.path.getsize(kmi_full) > os.path.getsize(kmi_reduced)
+
+    def test_missing_db_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = os.path.join(tmpdir, "nonexistent_db")
+            kmi_path = os.path.join(tmpdir, "out.kmi")
+            rc, out, err = run([BUILD_KMI, missing, kmi_path])
+            assert rc != 0
+            assert not os.path.isfile(kmi_path)
