@@ -173,7 +173,9 @@ Ferritin is not just unit-tested on toy inputs.
 - End-to-end validation on **45,100 real PDB structures** completed in **17.9 minutes** on **120 cores** after size filtering from a 50k corpus.
 - TM-align behavior is checked against **USAlign** on **4,656 pairs** with **0.003 median TM-score drift**.
 - SASA is checked against **Biopython** with **0.17% median deviation** on a 1,000-PDB sample.
-- AMBER96 components are checked against **BALL** on a crambin oracle set.
+- AMBER96 components are checked against **OpenMM** to **<0.5% on every component at NoCutoff** across a 1,000-PDB benchmark (primary force-field oracle). **BALL** serves as a secondary cross-check on crambin with wider, component-specific tolerances — BALL has documented convention deviations from the OpenMM-canonical AMBER96 (improper-torsion matching, partial-charge dictionary), so tight BALL parity is not the right bar.
+- DSSP secondary-structure assignment is checked against **pydssp** (independent Kabsch-Sander reimplementation) at **≥95% per-residue agreement** on 1crn / 1ubq / 1enh / 1ake / 4hhb.
+- Hydrogen placement is checked against **reduce** (Richardson Lab): every geometrically-determined H atom (backbone N-H, Cα, methylene, aromatic C-H, sp3 methine) agrees within **0.1 Å** after optimal matching, across 724 atoms on 1crn + 1ubq in both CHARMM19 polar-only and AMBER96 full-H modes.
 - Large-scale runs already surfaced and fixed multiple real correctness bugs that smaller tests missed.
 
 Each of those numbers is produced by an **oracle test**: ferritin's output compared against an independent, externally-implemented tool (OpenMM, BALL, MMseqs2, USAlign, Biopython, Gemmi, FreeSASA) at a documented tolerance. Every new numerical claim in the codebase lands with an oracle test next to it. The pattern and the index of current oracles live in [`tests/oracle/README.md`](tests/oracle/README.md); the full philosophy — why oracles over unit tests, how to pick tolerances, what to do when the oracle is also wrong — is in [`devdocs/ORACLE.md`](devdocs/ORACLE.md).

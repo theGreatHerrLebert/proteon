@@ -90,6 +90,18 @@ pytest                              # unit + integration (skips oracle)
 pytest tests/oracle                 # oracle parity (slow; needs OpenMM/BALL/MMseqs2 fixtures)
 ```
 
+### Python venv
+
+A ready-to-use venv lives at `/scratch/TMAlign/ferritin/.venv` with
+`ferritin` already installed (Python 3.10). Activate it before running
+Python / pytest / pip commands:
+
+```bash
+source /scratch/TMAlign/ferritin/.venv/bin/activate
+```
+
+Install oracle dependencies into this venv (not conda, not a fresh one).
+
 ## Architecture
 
 ### ferritin-align
