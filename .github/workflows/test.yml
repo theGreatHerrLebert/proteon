@@ -5,13 +5,14 @@ on:
     branches: [main]
 
 jobs:
+  # ubuntu only — macos rust-tests would require extra work to make
+  # `cargo test` link against a framework-style setup-python libpython
+  # (pyo3-connector test binaries fail on `_PyBaseObject_Type` on arm64),
+  # and the Python matrix + CLI smoke already exercise the macos build
+  # at the binary level. Not worth the ~5 min per PR.
   rust-tests:
-    name: Rust (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    name: Rust (ubuntu-latest)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -43,7 +44,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

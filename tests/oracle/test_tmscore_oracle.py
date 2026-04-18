@@ -12,7 +12,9 @@ import pytest
 
 from ferritin_connector import py_align_funcs, py_io
 
-USALIGN_BIN = "/scratch/TMAlign/USAlign/USalign"
+# Path to the C++ USAlign binary used as oracle. Override via the
+# USALIGN_BIN env var; defaults to whatever is on $PATH.
+USALIGN_BIN = os.environ.get("USALIGN_BIN", "USalign")
 PDBTBX_EXAMPLES = os.path.join(
     os.path.dirname(__file__), "..", "..", "test-pdbs"
 )

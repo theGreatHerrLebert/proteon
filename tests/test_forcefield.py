@@ -96,7 +96,12 @@ class TestMinimizeHydrogens:
         r = ferritin.minimize_hydrogens(s)
         assert r["coords"].ndim == 2
         assert r["coords"].shape[1] == 3
-        assert r["coords"].shape[0] == s.atom_count
+        # minimize_hydrogens operates on the AMBER96-typable subset (protein
+        # residues only — waters and other HETATMs are dropped by the
+        # topology builder), so the output row count matches the protein
+        # mask, not s.atom_count.
+        protein_mask = ferritin.select(s, "protein")
+        assert r["coords"].shape[0] == int(protein_mask.sum())
 
     def test_energy_decreases_or_stays(self):
         r = ferritin.minimize_hydrogens(load_ubiquitin())
@@ -126,12 +131,16 @@ class TestMinimizeHydrogens:
     def test_hydrogens_move_heavy_atoms_stay(self):
         """H atoms should move; heavy atoms must remain fixed."""
         s = load_ubiquitin()
-        orig_coords = s.coords.copy()
-        names = s.atom_names
+        # minimize_hydrogens operates on the protein subset (waters dropped),
+        # so compare against protein-masked originals to keep shapes aligned.
+        protein_mask = ferritin.select(s, "protein")
+        orig_coords = s.coords[protein_mask].copy()
+        names = [n for n, keep in zip(s.atom_names, protein_mask) if keep]
         h_mask = np.array([n.strip().startswith("H") for n in names])
         assert h_mask.sum() > 0, "ubiquitin should have H atoms"
 
         r = ferritin.minimize_hydrogens(s)
+        assert r["coords"].shape == orig_coords.shape
         displacements = np.linalg.norm(r["coords"] - orig_coords, axis=1)
 
         # Heavy atoms must not move

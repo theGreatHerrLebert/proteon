@@ -557,7 +557,7 @@ impl KmerIndexFile {
             let end = start + reducer_section_size as usize;
             if end as u64 > file_size {
                 return Err(KmiReaderError::BadReducerSection {
-                    detail: format!("reducer section end={end} exceeds file size {file_size}",),
+                    detail: format!("reducer section end={end} exceeds file size {file_size}"),
                 });
             }
             let sec = &mmap[start..end];

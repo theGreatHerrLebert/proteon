@@ -649,7 +649,7 @@ impl SearchEngine {
             });
         }
 
-        results.sort_by(|a, b| b.alignment.score.cmp(&a.alignment.score));
+        results.sort_by_key(|r| std::cmp::Reverse(r.alignment.score));
         if let Some(limit) = self.opts.max_results {
             results.truncate(limit);
         }

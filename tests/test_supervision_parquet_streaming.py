@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import json
 import resource
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -132,8 +133,17 @@ def test_streaming_writer_memory_bounded(tmp_path):
     these numbers ≈ 1.2 GB at N=200, L=100. The streaming writer must
     stay well below that because row-group size bounds peak.
     """
+    # ru_maxrss units differ by platform: Linux reports KB, macOS reports
+    # bytes. Normalize to bytes once so the MB calculation below is correct
+    # on both. Without this, macOS inflates the delta by 1024× and the
+    # budget assertion fires on memory that is actually well within range.
+    _rss_scale = 1 if sys.platform == "darwin" else 1024
+
+    def _rss_bytes() -> int:
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _rss_scale
+
     gc.collect()
-    baseline = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # KB on Linux
+    baseline = _rss_bytes()
 
     N = 200
     L = 100
@@ -146,8 +156,8 @@ def test_streaming_writer_memory_bounded(tmp_path):
     export_structure_supervision_examples(gen(), out_dir, row_group_size=32)
 
     gc.collect()
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    growth_mb = (peak - baseline) / 1024
+    peak = _rss_bytes()
+    growth_mb = (peak - baseline) / (1024 * 1024)
 
     # Padded NPZ path baseline: ~1.2 GB just for the zero-init. Streaming
     # writer peak includes 32-example row-group buffers plus pyarrow

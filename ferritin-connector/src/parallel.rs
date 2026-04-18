@@ -136,9 +136,16 @@ mod tests {
 
     #[test]
     fn test_auto_threads_no_budget() {
-        // per_task_bytes = 0 means no memory constraint
-        let n = auto_threads(Some(8), 0);
-        assert_eq!(n, 8);
+        // per_task_bytes = 0 means no memory constraint; the request should
+        // be honored verbatim, modulo the CPU-count clamp. Cap the request
+        // at `cpus` so this test passes on small CI runners (4-core Azure
+        // ubuntu-latest) and beefy dev boxes alike.
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        let request = cpus.clamp(1, 8);
+        let n = auto_threads(Some(request as i32), 0);
+        assert_eq!(n, request);
     }
 
     #[test]
