@@ -5,23 +5,18 @@ on:
     branches: [main]
 
 jobs:
+  # ubuntu only — macos rust-tests would require extra work to make
+  # `cargo test` link against a framework-style setup-python libpython
+  # (pyo3-connector test binaries fail on `_PyBaseObject_Type` on arm64),
+  # and the Python matrix + CLI smoke already exercise the macos build
+  # at the binary level. Not worth the ~5 min per PR.
   rust-tests:
-    name: Rust (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    name: Rust (ubuntu-latest)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # pyo3 0.23.5 maxes out at Python 3.13; macos-latest now ships 3.14
-      # as the default python3, which breaks the pyo3-ffi build script.
-      # Pin a known-compatible interpreter for the workspace tests.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
       - name: Run Rust tests
         run: cargo test --workspace
 
