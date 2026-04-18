@@ -215,9 +215,10 @@ Force fields and implicit solvation:
 - Cornell et al. "A Second Generation Force Field for the Simulation of Proteins, Nucleic Acids, and Organic Molecules." *J Am Chem Soc* 117(19), 5179-5197 (1995). https://doi.org/10.1021/ja00124a002 — AMBER94 / AMBER96 parameters.
 - Onufriev, Bashford, & Case. "Exploring protein native states and large-scale conformational changes with a modified generalized Born model." *Proteins* 55(2), 383-394 (2004). https://doi.org/10.1002/prot.20033 — OBC Generalized Born implicit solvation.
 
-Sequence search:
+Sequence and structure search:
 
 - Steinegger & Söding. "MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets." *Nat Biotechnol* 35(11), 1026-1028 (2017). https://doi.org/10.1038/nbt.3988 — k-mer prefilter, ungapped/gapped Smith-Waterman, and PSSM/MSA pipeline that ferritin-search ports.
+- van Kempen et al. "Fast and accurate protein structure search with Foldseek." *Nat Biotechnol* 42(2), 243-246 (2024). https://doi.org/10.1038/s41587-023-01773-0 — the 3Di structural-alphabet idea that `ferritin-align/src/search/alphabet.rs` builds on. Ferritin ships an experimental, independently-trained 20-letter structural alphabet (no GPL-licensed code re-used); benchmarks under `validation/bench_foldseek_retrieval.py` are currently ~15% behind Foldseek at TM ≥ 0.5 and close to parity at TM ≥ 0.9.
 
 Infrastructure:
 
