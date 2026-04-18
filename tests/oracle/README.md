@@ -97,6 +97,24 @@ Tests that `pytest.importorskip` a missing oracle will **skip** rather than fail
 so you can run `pytest -m oracle` locally and just see results for the tools
 you have — CI runs the full set.
 
+## Candidate oracles (not yet wired up)
+
+These are tools that would extend oracle coverage into components currently
+validated only internally (or cross-checked against a single other tool).
+Listed here so the gap is visible; they're not in the install table above
+because no test actually uses them yet. Contributions welcome.
+
+| Tool | Would cover | Why it's the right oracle |
+|---|---|---|
+| [reduce](https://github.com/rlabduke/reduce) (Richardson Lab, Duke) | `add_hydrogens` / protonation placement | Canonical asymmetric hydrogen placer; mature, widely trusted, independent of any MD engine. Current hydrogen placement is only cross-checked against BALL + GROMACS (both also MD-linked), so reduce would give a third voice that doesn't share force-field assumptions. |
+| [DSSP](https://swift.cmbi.umcn.nl/gv/dssp/) (`mkdssp` binary) | Secondary structure assignment | The reference implementation Kabsch & Sander wrote the paper about. Ferritin ships its own DSSP port; agreement on H/E/G/I assignments per residue is a trivially checkable oracle. |
+| [MolProbity](http://molprobity.biochem.duke.edu) | Clash detection, rotamer outliers, Ramachandran quality | Community-standard structure-validation suite. Bundles reduce + probe. Useful once ferritin starts producing prepped structures at scale — sanity-check that ferritin-prepped PDBs pass MolProbity at the same rate as OpenMM- or BALL-prepped ones. |
+| [PDB2PQR](https://pdb2pqr.readthedocs.io) | Protonation states, pKa assignment, charge/radius parameters | Standard upstream for electrostatics prep. A natural oracle for anything ferritin does with charges at non-default pH or on titratable residues. |
+
+Each of these is a real gap — the component exists in ferritin, the oracle
+exists in the wild, nobody has wired them up. When one gets wired in, move
+the row up into the main install table and delete it from here.
+
 ## Adding a new oracle
 
 1. Install the oracle locally and get a known-good reference value for a
