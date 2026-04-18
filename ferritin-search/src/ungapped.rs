@@ -1,5 +1,8 @@
 //! Ungapped alignment extension along a single diagonal.
 //!
+//! Reference: Steinegger & Söding, *Nat. Biotechnol.* 35, 1026-1028
+//! (2017), §2.2 (ungapped alignment stage of the MMseqs2 pipeline).
+//!
 //! Given a query and target sequence and a diagonal (`target_pos -
 //! query_pos`), find the highest-scoring ungapped local segment along
 //! that diagonal under a substitution matrix. This is the final

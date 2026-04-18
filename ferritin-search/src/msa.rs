@@ -1,5 +1,12 @@
 //! MSA assembly: search results → AF2-style input tensors.
 //!
+//! References:
+//! - Steinegger & Söding, *Nat. Biotechnol.* 35, 1026-1028 (2017) — the
+//!   MMseqs2 search results this module consumes.
+//! - Jumper et al., "Highly accurate protein structure prediction with
+//!   AlphaFold", *Nature* 596, 583-589 (2021) — the MSA feature shapes
+//!   and semantics this module produces.
+//!
 //! Bridges [`SearchEngine`](crate::search::SearchEngine)'s output (a list
 //! of [`SearchHit`] with CIGAR alignments) to the four NumPy-shaped
 //! tensors AlphaFold-style training pipelines consume:

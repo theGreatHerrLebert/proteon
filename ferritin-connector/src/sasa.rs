@@ -3,6 +3,11 @@
 //! Algorithm: place test points on expanded van der Waals spheres,
 //! count how many are not buried by neighboring atoms.
 //! Uses cell list for O(N) neighbor lookup.
+//!
+//! Reference: Shrake & Rupley, "Environment and exposure to solvent of
+//! protein atoms. Lysozyme and insulin", *J. Mol. Biol.* 79(2), 351-371
+//! (1973). Max-SASA normalization values from Tien et al., *PLoS ONE*
+//! 8(11), e80635 (2013).
 
 use std::f64::consts::PI;
 

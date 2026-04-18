@@ -1,8 +1,18 @@
-//! Energy and gradient computation for the AMBER force field.
+//! Energy and gradient computation for the AMBER and CHARMM force fields.
 //!
 //! Computes total energy and per-atom forces (negative gradients)
 //! for bond stretching, angle bending, torsions, improper torsions,
 //! and nonbonded interactions with cubic switching functions.
+//!
+//! References (functional-form sources; parameter citations are in
+//! `params.rs`):
+//! - Cornell et al., *J. Am. Chem. Soc.* 117, 5179-5197 (1995) — AMBER
+//!   energy-function conventions.
+//! - Brooks et al., "CHARMM: A program for macromolecular energy,
+//!   minimization, and dynamics calculations", *J. Comput. Chem.* 4(2),
+//!   187-217 (1983) — CHARMM energy-function conventions.
+//! - Lazaridis & Karplus, *Proteins* 35, 133-152 (1999) — EEF1 solvation
+//!   Gaussian-integral form evaluated alongside the bonded terms.
 
 use super::neighbor_list::NeighborList;
 use super::params::ForceField;

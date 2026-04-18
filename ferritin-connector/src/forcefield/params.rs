@@ -2,6 +2,17 @@
 //!
 //! Provides a common interface for AMBER96 and CHARMM19+EEF1 force fields.
 //! All energy/topology/MD functions are generic over `impl ForceField`.
+//!
+//! References:
+//! - Neria, Fischer, & Karplus, "Simulation of activation free energies in
+//!   molecular systems", *J. Chem. Phys.* 105(5), 1902-1921 (1996) — the
+//!   CHARMM19 parameter set.
+//! - Lazaridis & Karplus, "Effective energy function for proteins in
+//!   solution", *Proteins* 35(2), 133-152 (1999) — the EEF1 implicit-
+//!   solvation model paired with CHARMM19 here.
+//! - Cornell et al., "A Second Generation Force Field for the Simulation
+//!   of Proteins, Nucleic Acids, and Organic Molecules", *J. Am. Chem.
+//!   Soc.* 117(19), 5179-5197 (1995) — the AMBER94/96 parameter family.
 
 use std::collections::{HashMap, HashSet};
 

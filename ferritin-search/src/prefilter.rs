@@ -1,5 +1,10 @@
 //! K-mer diagonal-voting prefilter.
 //!
+//! Reference: Steinegger & Söding, "MMseqs2 enables sensitive protein
+//! sequence searching for the analysis of massive data sets",
+//! *Nat. Biotechnol.* 35(11), 1026-1028 (2017). This module implements
+//! §2.1 (k-mer prefilter) of the MMseqs2 search pipeline.
+//!
 //! Phase 2.3a: given a query sequence and a [`KmerIndex`] over a target
 //! corpus, count k-mer matches per `(target_seq_id, diagonal)` and emit
 //! each target's best-scoring diagonal.

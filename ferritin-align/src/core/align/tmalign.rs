@@ -3,6 +3,11 @@
 //! Ported from C++ TMalign (lines 3923-4524).
 //! Orchestrates all initialization strategies, picks the best,
 //! computes final TM-scores, and builds the alignment strings.
+//!
+//! Reference: Zhang & Skolnick, "TM-align: a protein structure alignment
+//! algorithm based on the TM-score", *Nucleic Acids Res.* 33(7),
+//! 2302-2309 (2005). The original C++ reference implementation is the
+//! sole oracle for this port's output.
 
 use anyhow::{bail, Result};
 

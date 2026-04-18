@@ -3,6 +3,15 @@
 //! Ported from C++ USAlign `MMalign.h`.
 //! Aligns two protein/RNA complexes by determining optimal chain-to-chain
 //! correspondence, superposing concatenated chains, and iteratively refining.
+//!
+//! References:
+//! - Mukherjee & Zhang, "MM-align: a quick algorithm for aligning multiple-
+//!   chain protein complex structures using iterative dynamic programming",
+//!   *Nucleic Acids Res.* 37(11), e83 (2009) — the original MM-align method.
+//! - Zhang, Shine, Pyle & Zhang, "US-align: universal structure alignments
+//!   of proteins, nucleic acids, and macromolecular complexes",
+//!   *Nat. Methods* 19(9), 1109-1115 (2022) — the unified framework this
+//!   port follows.
 
 pub mod chain_assign;
 pub mod complex_score;

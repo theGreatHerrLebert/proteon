@@ -3,6 +3,9 @@
 //! Ported from the C++ TMalign implementation (lines 983-1303).
 //! Computes the optimal rotation matrix U and translation vector t
 //! that minimizes RMSD between two sets of 3D coordinates.
+//!
+//! Reference: Kabsch, "A solution for the best rotation to relate two sets
+//! of vectors", *Acta Crystallogr. A* 32, 922-923 (1976).
 
 use crate::core::types::{Coord3D, Transform};
 

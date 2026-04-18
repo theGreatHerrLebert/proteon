@@ -3,6 +3,10 @@
 //! Two methods:
 //! 1. Kabsch-Sander backbone H-bonds (electrostatic energy criterion)
 //! 2. Geometric H-bonds (distance + angle criteria, works for all atoms)
+//!
+//! Reference (method 1): Kabsch & Sander, "Dictionary of protein secondary
+//! structure: pattern recognition of hydrogen-bonded and geometrical
+//! features", *Biopolymers* 22(12), 2577-2637 (1983).
 
 use crate::dssp;
 

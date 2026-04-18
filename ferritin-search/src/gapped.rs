@@ -1,5 +1,14 @@
 //! Smith-Waterman local gapped alignment with affine gap penalties.
 //!
+//! References:
+//! - Smith & Waterman, "Identification of common molecular subsequences",
+//!   *J. Mol. Biol.* 147(1), 195-197 (1981) — the local-alignment DP.
+//! - Gotoh, "An improved algorithm for matching biological sequences",
+//!   *J. Mol. Biol.* 162(3), 705-708 (1982) — the three-matrix formulation
+//!   for affine gap penalties used here.
+//! - Steinegger & Söding, *Nat. Biotechnol.* 35, 1026-1028 (2017), §2.3
+//!   — gapped alignment stage of the MMseqs2 pipeline ferritin-search ports.
+//!
 //! Standard three-matrix Gotoh 1982 formulation:
 //!
 //! - `M[i,j]` — best score of an alignment ending with `query[i-1]`

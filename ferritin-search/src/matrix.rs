@@ -3,6 +3,15 @@
 //!
 //! Format reference: `MMseqs2/src/commons/SubstitutionMatrix.cpp:readProbMatrix`.
 //!
+//! Matrix-family references:
+//! - Henikoff & Henikoff, "Amino acid substitution matrices from protein
+//!   blocks", *PNAS* 89(22), 10915-10919 (1992) — BLOSUM.
+//! - Dayhoff, Schwartz, & Orcutt, "A Model of Evolutionary Change in
+//!   Proteins", *Atlas of Protein Sequence and Structure* 5(3), 345-352
+//!   (1978) — PAM.
+//! - Müller & Vingron, "Modeling amino acid replacement", *J. Comput.
+//!   Biol.* 7(6), 761-776 (2000) — VTML.
+//!
 //! ```text
 //! # optional comments starting with '#'
 //! # Background (precomputed optional): f1 f2 ... fN 0.00001

@@ -1,6 +1,14 @@
 //! TM-score computation functions.
 //!
 //! Ported from C++ TMalign (lines 1719-2340, 3787-3855).
+//!
+//! References:
+//! - Zhang & Skolnick, "Scoring function for automated assessment of protein
+//!   structure template quality", *Proteins* 57(4), 702-710 (2004) — the
+//!   TM-score definition.
+//! - Zhang & Skolnick, "TM-align: a protein structure alignment algorithm
+//!   based on the TM-score", *Nucleic Acids Res.* 33(7), 2302-2309 (2005)
+//!   — the iterative score-then-superpose procedure implemented here.
 
 use crate::core::kabsch::{kabsch, KabschMode};
 use crate::core::types::{dist_squared, Coord3D, MolType, TMParams, Transform};

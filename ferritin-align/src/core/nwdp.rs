@@ -6,6 +6,10 @@
 //! 2. Coordinate distance with rotation
 //! 3. Coordinate distance without rotation
 //! 4. Secondary structure matching
+//!
+//! Reference: Needleman & Wunsch, "A general method applicable to the search
+//! for similarities in the amino acid sequence of two proteins", *J. Mol.
+//! Biol.* 48(3), 443-453 (1970).
 
 use crate::core::types::{dist_squared, Coord3D, DPWorkspace, Transform};
 
