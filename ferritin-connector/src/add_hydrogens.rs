@@ -1398,14 +1398,15 @@ fn general_handle_atom(graph: &MolGraph, atom_idx: usize) -> Vec<(String, [f64; 
             results.push((format!("H{}", atom_nr_start + 1), h));
         }
         // 2 H, 0 neighbors (unlikely but handle)
-        (n, _) if n > 0 => {
+        (n, _)
+            if n > 0
             // Fallback: methyl-like arrangement
-            if n_heavy_neighbors >= 1 {
-                let anchor = heavy_nbrs[0];
-                let hs = place_methyl3h(atom.pos, anchor, bond_length);
-                for i in 0..(n as usize).min(3) {
-                    results.push((format!("H{}", atom_nr_start + i + 1), hs[i]));
-                }
+            && n_heavy_neighbors >= 1 =>
+        {
+            let anchor = heavy_nbrs[0];
+            let hs = place_methyl3h(atom.pos, anchor, bond_length);
+            for i in 0..(n as usize).min(3) {
+                results.push((format!("H{}", atom_nr_start + i + 1), hs[i]));
             }
         }
         _ => {}

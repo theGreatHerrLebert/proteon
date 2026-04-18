@@ -225,9 +225,9 @@ impl AmberParams {
             }
 
             match section.as_str() {
-                "QuadraticBondStretch" => {
+                "QuadraticBondStretch"
                     // ver I J k r0 comment
-                    if fields.len() >= 5 {
+                    if fields.len() >= 5 => {
                         let key = sorted_pair(fields[1], fields[2]);
                         if let (Ok(k), Ok(r0)) =
                             (fields[3].parse::<f64>(), fields[4].parse::<f64>())
@@ -235,10 +235,9 @@ impl AmberParams {
                             params.bonds.insert(key, BondParam { k, r0 });
                         }
                     }
-                }
-                "QuadraticAngleBend" => {
+                "QuadraticAngleBend"
                     // ver I J K k theta0 comment
-                    if fields.len() >= 6 {
+                    if fields.len() >= 6 => {
                         let key = sorted_triple(fields[1], fields[2], fields[3]);
                         if let (Ok(k), Ok(theta0_deg)) =
                             (fields[4].parse::<f64>(), fields[5].parse::<f64>())
@@ -252,10 +251,9 @@ impl AmberParams {
                             );
                         }
                     }
-                }
-                "Torsions" => {
+                "Torsions"
                     // ver I J K L N div V phi0 f comment
-                    if fields.len() >= 10 {
+                    if fields.len() >= 10 => {
                         let key = (
                             fields[1].to_string(),
                             fields[2].to_string(),
@@ -277,10 +275,9 @@ impl AmberParams {
                             params.torsions.entry(key).or_default().push(term);
                         }
                     }
-                }
-                "ImproperTorsions" => {
+                "ImproperTorsions"
                     // Same format as Torsions but stored separately
-                    if fields.len() >= 10 {
+                    if fields.len() >= 10 => {
                         let key = (
                             fields[1].to_string(),
                             fields[2].to_string(),
@@ -302,19 +299,17 @@ impl AmberParams {
                             params.improper_torsions.entry(key).or_default().push(term);
                         }
                     }
-                }
-                "ResidueImproperTorsions" => {
+                "ResidueImproperTorsions"
                     // Single column: residue:atom names
-                    if !fields.is_empty() {
+                    if !fields.is_empty() => {
                         let name = fields[0].trim().to_string();
                         if name.contains(':') {
                             params.residue_impropers.insert(name);
                         }
                     }
-                }
-                "LennardJones" => {
+                "LennardJones"
                     // ver I R epsilon comment
-                    if fields.len() >= 4 {
+                    if fields.len() >= 4 => {
                         if let (Ok(r), Ok(eps)) =
                             (fields[2].parse::<f64>(), fields[3].parse::<f64>())
                         {
@@ -323,10 +318,9 @@ impl AmberParams {
                                 .insert(fields[1].to_string(), LJParam { r, epsilon: eps });
                         }
                     }
-                }
-                "ChargesAndTypeNames" => {
+                "ChargesAndTypeNames"
                     // ver name q type
-                    if fields.len() >= 4 {
+                    if fields.len() >= 4 => {
                         let name = fields[1]; // e.g., "ALA:N"
                         if let Ok(q) = fields[2].parse::<f64>() {
                             let atype = fields[3].to_string();
@@ -341,7 +335,6 @@ impl AmberParams {
                             }
                         }
                     }
-                }
                 _ => {}
             }
         }

@@ -143,7 +143,7 @@ mod tests {
         let cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1);
-        let request = cpus.min(8).max(1);
+        let request = cpus.clamp(1, 8);
         let n = auto_threads(Some(request as i32), 0);
         assert_eq!(n, request);
     }
