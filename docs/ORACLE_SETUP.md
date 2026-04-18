@@ -11,19 +11,25 @@ mechanical — copy, paste, run.
 
 ## Scope
 
-Eight external oracles are covered here, split by install weight:
+Eight external oracles are covered here, split by what runs where:
 
-- **Fast slice** (pip-installable, ~2 minutes total to install): pydssp,
-  biopython, gemmi, OpenMM, FreeSASA. These run in CI on every PR; you
-  do not need them for release evaluation specifically, but you do need
-  them to run the full local oracle suite.
-- **Heavy slice** (source build or standalone binary): reduce, USAlign,
-  BALL Julia (BiochemicalAlgorithms.jl). These are not installed in CI;
-  they run on your own machine when you want to reproduce ferritin's
-  published numbers or regenerate a reference set.
+- **CI-gated slice** (pip-installable, small, fast — installed by
+  `.github/workflows/test.yml` and exercised on every PR): pydssp,
+  biopython, gemmi, FreeSASA. These are the library-parity checks
+  under `tests/oracle/` — ferritin's DSSP vs pydssp, I/O vs
+  biopython/gemmi, SASA vs FreeSASA.
+- **Release-quality slice** (pip-installable but heavier — OpenMM alone
+  is ~500 MB — or source-built): OpenMM, reduce, USAlign, BALL Julia
+  (BiochemicalAlgorithms.jl). These are **not** installed in CI. They
+  power the 1000-PDB parity benchmarks under `validation/` (OpenMM),
+  the hydrogen-placement parity tests (reduce), the TM-align pair
+  benchmark (USAlign), and the per-release crambin reference regen
+  (BALL Julia). Install them on your own machine to reproduce the
+  published numbers or regenerate a reference.
 
-MMseqs2 and GROMACS are used for benchmark runs under `validation/` but
-are not part of this setup recipe — see their dedicated docs.
+MMseqs2 and GROMACS are used for additional benchmark runs under
+`validation/` but are not part of this setup recipe — see their
+dedicated docs.
 
 ## Pinned versions
 
@@ -59,26 +65,27 @@ last section.
 All commands below assume the ferritin repo is checked out at
 `$FERRITIN` and the venv is activated.
 
-## Install — fast slice
+## Install — CI-gated slice
+
+These four are what `.github/workflows/test.yml` installs on every PR.
+Install them locally to reproduce CI exactly.
 
 ```bash
 source $FERRITIN/.venv/bin/activate
 pip install \
-    openmm==8.5.0 \
     biopython==1.87 \
     gemmi==0.7.5 \
     pydssp==0.9.1 \
     freesasa==2.2.1
 ```
 
-Smoke test (prints five lines, no errors — `freesasa` has no
+Smoke test (prints four lines, no errors — `freesasa` has no
 `__version__` attribute, so we instantiate a `Classifier` to confirm
 the native library loads):
 
 ```bash
 python -c "
-import openmm, Bio, gemmi, pydssp, freesasa
-print('openmm   ', openmm.__version__)
+import Bio, gemmi, pydssp, freesasa
 print('biopython', Bio.__version__)
 print('gemmi    ', gemmi.__version__)
 print('pydssp   ', pydssp.__file__)
@@ -86,9 +93,28 @@ print('freesasa ', 'ok' if freesasa.Classifier() else 'FAIL')
 "
 ```
 
-At this point `pytest -m oracle tests/oracle/` will exercise every
-oracle except reduce, USAlign, and BALL Julia (which skip cleanly when
-their binaries aren't available).
+At this point `pytest tests/oracle/` runs the library-parity slice —
+reduce, USAlign, BALL Julia, and OpenMM tests all skip cleanly
+because their binaries / env vars / modules aren't set up yet.
+
+## Install — OpenMM (force-field reference)
+
+OpenMM is the authoritative oracle for ferritin's AMBER96 + OBC GB
+claims (`validation/amber96_oracle.py` runs the 1000-PDB benchmark).
+It's pip-installable but heavy (~500 MB with its molecular-dynamics
+dependencies), which is why it's not in the CI install list.
+
+```bash
+source $FERRITIN/.venv/bin/activate
+pip install openmm==8.5.0
+```
+
+Smoke test:
+
+```bash
+python -c "import openmm; print('openmm   ', openmm.__version__)"
+# expect: openmm    8.5
+```
 
 ## Install — reduce (hydrogen placement)
 
@@ -170,10 +196,12 @@ below.
 
 ## Running the evaluations
 
-### Fast slice — `pytest tests/oracle/`
+### Library-parity slice — `pytest tests/oracle/`
 
-Runs everything under `tests/oracle/`. Heavy oracles self-skip when
-their binaries aren't set.
+Runs everything under `tests/oracle/`. Tests whose oracle isn't
+installed skip cleanly (reduce if `REDUCE_BIN` unset, USAlign if
+`USALIGN_BIN` unset, OpenMM / BALL Julia tests guard similarly). The
+four CI-installed oracles (biopython, gemmi, pydssp, freesasa) run.
 
 ```bash
 cd $FERRITIN
@@ -194,7 +222,7 @@ pytest tests/oracle/test_ball_energy.py       # BALL only
 pytest tests/oracle/ -k reduce                # reduce only
 ```
 
-### Heavy slice — `validation/`
+### Release-quality measurements — `validation/`
 
 These produce the reference numbers quoted in the README's "Evidence it
 works" section. They do not run in CI. Expected to take minutes to

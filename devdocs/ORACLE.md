@@ -271,10 +271,9 @@ open validation/report.html
 
 | Cadence | What runs | Where |
 |---------|-----------|-------|
-| Every commit (local) | `cargo test --workspace`, `pytest tests/ -k 'not oracle'` | `test.yml` |
-| Every push (CI) | Same plus `pytest tests/oracle/ -v` if enabled | `test.yml` |
-| Mon/Wed/Fri 3am UTC | Full oracle suite (BALL, OpenMM, TMalign) | `oracle.yml` |
-| Pre-release | 1K and 5K scale runs with report.html | Manual on monster3 |
+| Every PR / push (CI) | `cargo test --workspace`, full `pytest tests/` including the library-parity slice under `tests/oracle/` (biopython, gemmi, pydssp, freesasa); reduce, USAlign, BALL Julia, OpenMM skip cleanly when absent | `test.yml` |
+| Local dev loop | `pytest -m "not slow and not oracle"` for the fast inner loop (~10s), `pytest tests/oracle/` after installing the fast-slice deps to reproduce CI locally | — |
+| Pre-release | OpenMM 1000-PDB AMBER96 oracle, USAlign 4656-pair TM-align parity, fold-preservation 1K, report.html build | Manual on monster3; see `docs/ORACLE_SETUP.md` §Running the evaluations |
 | Major version | 50K battle test (3.5h on RTX 5090) | Manual, documented |
 
 Scale discipline: the 50K battle test (2026-04-12, `project_gpu_cuda_poc`)
@@ -382,7 +381,8 @@ Listed so new contributors see what "oracle testing paid off" looks like:
 - Oracle pytest suite: `tests/oracle/`
 - Report generator: `validation/report/build_report.py`
 - Rendered report: `validation/report.html`
-- CI workflow: `.github/workflows/oracle.yml` (Mon/Wed/Fri 3am UTC)
+- CI workflow: `.github/workflows/test.yml` (every PR / push; library-parity slice of `tests/oracle/` runs inline with unit tests)
+- Oracle setup / reproducibility recipe: `docs/ORACLE_SETUP.md`
 - Reliability philosophy (broader): `RELIABILITY_ROADMAP.md`
 - Cross-path parity testing: the principle is enforced per-PR on any
   accelerated code (NBL, SIMD, GPU, rayon).

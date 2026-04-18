@@ -64,7 +64,12 @@ for Python 3.12/3.13 on Linux + macOS-arm64 + Windows.
 1. **Compute kernel, not platform** — zero friction on any infrastructure.
 2. **Batch-first** — every feature has a `batch_*` / `load_and_*` variant.
 3. **Oracle-validated** — every numerical claim lands with an oracle test.
-   Oracle failures gate CI, not just log (see `.github/workflows/oracle.yml`).
+   Library-parity oracle failures gate CI (folded into
+   `.github/workflows/test.yml` — every PR runs the fast slice against
+   biopython / gemmi / pydssp / freesasa). Heavy oracle measurements
+   (OpenMM 1000-PDB, USAlign 4656 pairs, 50K battle test, GPU kernels)
+   live in `validation/` and are produced off-CI per release — see
+   `docs/ORACLE_SETUP.md`.
 4. **Pipeline-native** — Arrow/Parquet output, zero-GIL, composable.
 5. **No speculative abstractions** — build what's needed, test what's built.
 
