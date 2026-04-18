@@ -115,6 +115,25 @@ Each of these is a real gap — the component exists in ferritin, the oracle
 exists in the wild, nobody has wired them up. When one gets wired in, move
 the row up into the main install table and delete it from here.
 
+**Intent — reduce is the next one we plan to wire.** Open design questions
+to resolve before writing the test, so the first PR isn't a false-green:
+
+- Ferritin's `add_hydrogens` does polar-only H for CHARMM19 (united-atom
+  carbons absorb C–H) but a fuller set for AMBER96. reduce places the full
+  set by default. A naive "every H ferritin placed exists in reduce's
+  output" works both ways; "every H reduce placed exists in ferritin's
+  output" only works for AMBER96. Test needs to parametrize over FF.
+- Reduce resolves asymmetric ambiguities (e.g. Asn/Gln/His flips) that
+  ferritin currently doesn't. For an apples-to-apples comparison the test
+  should disable reduce's flip search (`-NOFLIP`) or compare only against
+  the set of H atoms whose placement isn't flip-dependent.
+- Tolerance: coordinate-level RMSD per H across a small curated set
+  (crambin + ubiquitin, no waters) vs. a looser "positional bucket" match.
+  RMSD is tighter and more diagnostic; start there.
+
+Once those three are answered, wiring is a ~100-line
+`test_reduce_hydrogen_oracle.py` + one table-row promotion.
+
 ## Adding a new oracle
 
 1. Install the oracle locally and get a known-good reference value for a
