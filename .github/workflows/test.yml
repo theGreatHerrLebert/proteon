@@ -44,7 +44,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -57,6 +57,13 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           pip install maturin numpy pytest pandas pyarrow
+          # Fast-slice oracle deps — pip-installable Python libraries used by
+          # the library-parity tests under tests/oracle/ (biopython + gemmi
+          # for I/O parity, pydssp for DSSP parity, freesasa for SASA parity).
+          # Heavier oracles (reduce binary, USAlign binary, BALL Julia,
+          # OpenMM) skip cleanly when their binaries / env vars aren't set.
+          # See docs/ORACLE_SETUP.md for the full setup recipe.
+          pip install biopython gemmi pydssp freesasa
       - name: Build connector
         run: |
           source .venv/bin/activate
@@ -69,7 +76,10 @@ jobs:
       - name: Run Python tests
         run: |
           source .venv/bin/activate
-          pytest tests/ -v --tb=short -k "not oracle"
+          # Every PR exercises unit tests + the fast-slice oracle
+          # (library-parity) tests together. Heavy oracle measurements live
+          # in validation/ and are run off-CI per release.
+          pytest tests/ -v --tb=short
 
   # Enforces the byte-exact round-trip promise of the ferritin-search DB I/O
   # layer by provisioning a PINNED upstream MMseqs2 release and running the
