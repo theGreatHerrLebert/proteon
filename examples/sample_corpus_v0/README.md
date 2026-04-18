@@ -51,7 +51,7 @@ record of what was produced.
 ```bash
 python examples/10_corpus_release_smoke.py \
     --out sample_corpus_v0_full \
-    /scratch/TMAlign/test-pdbs/1a*.pdb /scratch/TMAlign/test-pdbs/1b*.pdb
+    test-pdbs/1a*.pdb test-pdbs/1b*.pdb
 ```
 
 Re-running may not reproduce exact hashes — floating-point ordering and

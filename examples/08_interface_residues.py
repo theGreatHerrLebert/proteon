@@ -39,7 +39,7 @@ print("=" * 60)
 # --- Find multi-chain structures ---
 pdb_dir = "validation/pdbs/"
 if not os.path.exists(pdb_dir):
-    pdb_dir = "/scratch/TMAlign/test-pdbs/"
+    pdb_dir = "test-pdbs/"
 
 pdb_files = sorted(glob.glob(os.path.join(pdb_dir, "*.pdb")))[:300]
 

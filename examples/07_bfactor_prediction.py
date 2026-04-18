@@ -37,7 +37,7 @@ print("=" * 60)
 # --- Load structures ---
 pdb_dir = "validation/pdbs/"
 if not os.path.exists(pdb_dir):
-    pdb_dir = "/scratch/TMAlign/test-pdbs/"
+    pdb_dir = "test-pdbs/"
 
 pdb_files = sorted(glob.glob(os.path.join(pdb_dir, "*.pdb")))[:200]
 print(f"\n{len(pdb_files)} PDB files")

@@ -30,10 +30,11 @@ print("=" * 60)
 print("PDB → Features → GNN: The Ferritin Pipeline")
 print("=" * 60)
 
-# Grab some structures
+# Grab some structures: prefer the bigger validation/ corpus if present,
+# otherwise fall back to the small test-pdbs/ set bundled in the repo.
 pdb_dir = "validation/pdbs/"
 if not os.path.exists(pdb_dir):
-    pdb_dir = "/scratch/TMAlign/test-pdbs/"
+    pdb_dir = "test-pdbs/"
 
 pdb_files = sorted(glob.glob(os.path.join(pdb_dir, "*.pdb")))[:100]
 print(f"\n{len(pdb_files)} PDB files")

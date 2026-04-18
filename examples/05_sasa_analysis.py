@@ -79,7 +79,7 @@ print()
 # ---------------------------------------------------------------------------
 print("=== Load + SASA Pipeline ===")
 import os
-all_files = sorted(glob.glob("/scratch/TMAlign/test-pdbs/*.pdb"))[:10]
+all_files = sorted(glob.glob("test-pdbs/*.pdb"))[:10]
 results = ferritin.load_and_sasa(all_files, n_threads=-1)
 print(f"  {len(results)}/{len(all_files)} structures loaded + analyzed")
 for idx, total_sasa in results[:5]:
