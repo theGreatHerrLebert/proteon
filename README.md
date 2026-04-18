@@ -195,6 +195,24 @@ tests/              Python test suite
 validation/         benchmarks, reports, and oracle checks
 ```
 
+## Acknowledgements
+
+ferritin is only possible because of the work of the groups whose tools
+and papers it builds on. The structure-alignment core is a Rust port of
+Yang Zhang's TM-align and US-align. The search layer is a port of Martin
+Steinegger and Johannes Söding's MMseqs2, and the experimental structural
+alphabet is inspired by Michel van Kempen and Martin Steinegger's Foldseek
+(independently trained, no GPL-licensed code re-used). The force-field
+implementations follow Martin Karplus, Themis Lazaridis, Peter Kollman,
+David Case, and their collaborators (CHARMM19, EEF1, AMBER96, OBC GB).
+OpenMM (Peter Eastman and the Pande Lab), BALL (Andreas Hildebrandt and
+collaborators), Foldseek, MMseqs2, USAlign, Biopython, Gemmi, and FreeSASA
+serve as oracles — ferritin's correctness claims are only as strong as
+those reference implementations, and the tolerances in our test suite are
+where that dependency is made explicit. I/O rides on Douwe Schulte's
+pdbtbx. The citations below point at the original work behind each of
+these components — please cite them too when you cite ferritin.
+
 ## References
 
 Alignment:
