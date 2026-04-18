@@ -13,6 +13,14 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.75"
+authors = ["theGreatHerrLebert"]
+license = "MIT"
+repository = "https://github.com/theGreatHerrLebert/ferritin"
+homepage = "https://github.com/theGreatHerrLebert/ferritin"
+readme = "README.md"
+keywords = ["bioinformatics", "protein", "pdb", "structural-biology", "tmalign"]
+categories = ["science", "science::bioinformatics"]
 
 [profile.release]
 opt-level = 3

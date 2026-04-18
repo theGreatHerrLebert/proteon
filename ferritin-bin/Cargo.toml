@@ -2,6 +2,14 @@
 name = "ferritin-bin"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "CLI binaries for TM-align and US-align"
 
 [dependencies]
@@ -9,7 +17,7 @@ ferritin-align = { path = "../ferritin-align" }
 ferritin-arrow = { path = "../ferritin-arrow" }
 ferritin-io = { path = "../ferritin-io" }
 ferritin-search = { path = "../ferritin-search" }
-pdbtbx = { git = "https://github.com/douweschulte/pdbtbx", branch = "main" }
+pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
 clap = { version = "4", features = ["derive"] }
 parquet = "54"
 anyhow = "1"

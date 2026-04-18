@@ -2,6 +2,14 @@
 name = "ferritin-search"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "MMseqs2-compatible sequence search engine: DB I/O, k-mer prefilter, gapped alignment, MSA feature generation"
 
 [features]

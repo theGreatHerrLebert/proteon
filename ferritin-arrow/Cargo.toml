@@ -2,12 +2,20 @@
 name = "ferritin-arrow"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Arrow RecordBatch output for ferritin — zero-copy structural data export"
 
 [dependencies]
 ferritin-io = { path = "../ferritin-io" }
 ferritin-align = { path = "../ferritin-align" }
-pdbtbx = { git = "https://github.com/douweschulte/pdbtbx", branch = "main" }
+pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
 arrow = { version = "54", default-features = false }
 parquet = { version = "54", optional = true }
 anyhow = "1"
