@@ -74,6 +74,27 @@ round-trip oracle` in `.github/workflows/test.yml`) with a pinned upstream
 release, so PRs are gated on it. Other oracles run in the main Python matrix
 when the oracle tool is importable.
 
+## Getting the oracles
+
+Every oracle is a real, third-party tool. To run the matching tests locally
+you need the tool installed and (in a few cases) told where to find it.
+Python-wrapped oracles install with pip; the heavy ones ship via conda or
+upstream binaries.
+
+| Tool | Install | Invocation in tests |
+|---|---|---|
+| [Biopython](https://biopython.org) | `pip install biopython` | Imported directly; no config |
+| [Gemmi](https://gemmi.readthedocs.io) | `pip install gemmi` | Imported directly; no config |
+| [FreeSASA](https://freesasa.github.io) | `pip install freesasa` | Imported directly; no config |
+| [OpenMM](https://openmm.org) | `pip install openmm` (or `conda install -c conda-forge openmm`) | Imported via `pytest.importorskip("openmm")` |
+| [USAlign](https://github.com/pylelab/USalign) | `git clone && make`, put `USalign` on `$PATH` | Set `USALIGN_BIN=/path/to/USalign` if not on `$PATH` |
+| [MMseqs2](https://github.com/soedinglab/MMseqs2) | `conda install -c bioconda mmseqs2`, or the pinned binary release (see `.github/workflows/test.yml` `MMSEQS_VERSION`) | Set `FERRITIN_SEARCH_MMSEQS_BIN=/path/to/mmseqs` and `FERRITIN_SEARCH_REQUIRE_ORACLE=1` to gate |
+| [BALL](https://github.com/hildebrandtlab/BiochemicalAlgorithms.jl) (Julia) | `julia --project=<path>` and `Pkg.add("BiochemicalAlgorithms")` | `ball_energy_raw.jl` / `ball_energy_oracle.jl` shell out; see the scripts in this directory |
+
+Tests that `pytest.importorskip` a missing oracle will **skip** rather than fail,
+so you can run `pytest -m oracle` locally and just see results for the tools
+you have — CI runs the full set.
+
 ## Adding a new oracle
 
 1. Install the oracle locally and get a known-good reference value for a
