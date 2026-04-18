@@ -56,7 +56,7 @@ jobs:
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install maturin numpy pytest pandas pyarrow
+          pip install maturin numpy pytest pytest-cov pandas pyarrow
           # Fast-slice oracle deps — pip-installable Python libraries used by
           # the library-parity tests under tests/oracle/ (biopython + gemmi
           # for I/O parity, pydssp for DSSP parity, freesasa for SASA parity).
@@ -79,7 +79,17 @@ jobs:
           # Every PR exercises unit tests + the fast-slice oracle
           # (library-parity) tests together. Heavy oracle measurements live
           # in validation/ and are run off-CI per release.
-          pytest tests/ -v --tb=short
+          #
+          # Coverage floor: 80%. Current baseline (2026-04-19) is 82% across
+          # 4,333 statements, 934 passing tests. The 2pp margin absorbs
+          # day-to-day churn (new modules, refactors) without tripping on
+          # minor churn; a PR that drops coverage below 80% is real signal
+          # — either raise the floor after adding tests, or the new code
+          # needs tests.
+          pytest tests/ -v --tb=short \
+            --cov=ferritin \
+            --cov-report=term \
+            --cov-fail-under=80
 
   # Enforces the byte-exact round-trip promise of the ferritin-search DB I/O
   # layer by provisioning a PINNED upstream MMseqs2 release and running the

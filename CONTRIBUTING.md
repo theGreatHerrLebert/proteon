@@ -88,6 +88,15 @@ seconds wall-clock (minimizer sweeps, corpus pipelines, large-PDB
 parity runs). Both markers are registered in `tests/conftest.py` and
 enforced with `--strict-markers`, so an unregistered marker fails CI.
 
+See [`tests/README.md`](tests/README.md) for the full marker/fixture
+reference and the test-suite registry pattern.
+
+CI enforces an **80% Python line-coverage floor** via `pytest-cov`
+(current baseline 82% across 4,333 statements). If your PR drops
+below, CI fails — either add tests or, if you intentionally raised
+the floor by landing well-tested code, bump `--cov-fail-under` in
+`.github/workflows/test.yml` as part of the PR.
+
 Minimum Python: **3.12**. Minimum Rust: **1.75**.
 
 ## Commit messages
