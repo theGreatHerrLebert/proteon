@@ -1214,6 +1214,8 @@ def compile_search_db(
     if db.entries is None:
         payload = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         version = int(payload["version"])
+        positional_postings = None
+        aa_positional_postings = None
         if version == 2:
             entries = _load_entries_eager(root, payload["entries_file"])
             postings, aa_postings = _load_postings_eager(root, payload["postings_file"])
@@ -1241,8 +1243,8 @@ def compile_search_db(
             entries=entries,
             postings=postings,
             aa_postings=aa_postings,
-            positional_postings=locals().get("positional_postings"),
-            aa_positional_postings=locals().get("aa_positional_postings"),
+            positional_postings=positional_postings,
+            aa_positional_postings=aa_positional_postings,
             k_values=list(db.k_values),
             posting_keys_include_k=db.posting_keys_include_k,
             root_path=str(root),
