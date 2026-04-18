@@ -178,7 +178,11 @@ Ferritin is not just unit-tested on toy inputs.
 - Hydrogen placement is checked against **reduce** (Richardson Lab): every geometrically-determined H atom (backbone N-H, Cα, methylene, aromatic C-H, sp3 methine) agrees within **0.1 Å** after optimal matching, across 724 atoms on 1crn + 1ubq in both CHARMM19 polar-only and AMBER96 full-H modes.
 - Large-scale runs already surfaced and fixed multiple real correctness bugs that smaller tests missed.
 
-Each of those numbers is produced by an **oracle test**: ferritin's output compared against an independent, externally-implemented tool (OpenMM, BALL, MMseqs2, USAlign, Biopython, Gemmi, FreeSASA) at a documented tolerance. Every new numerical claim in the codebase lands with an oracle test next to it. The pattern and the index of current oracles live in [`tests/oracle/README.md`](tests/oracle/README.md); the full philosophy — why oracles over unit tests, how to pick tolerances, what to do when the oracle is also wrong — is in [`devdocs/ORACLE.md`](devdocs/ORACLE.md).
+Each of those numbers is produced by an **oracle test**: ferritin's output compared against an independent, externally-implemented tool (OpenMM, BALL, MMseqs2, USAlign, Biopython, Gemmi, FreeSASA) at a documented tolerance. Every new numerical claim in the codebase lands with an oracle test next to it.
+
+- [`docs/ORACLE_SETUP.md`](docs/ORACLE_SETUP.md) — reproducibility recipe: pinned versions + install commands + run invocations. Copy-paste your way from a clean machine to the published numbers.
+- [`tests/oracle/README.md`](tests/oracle/README.md) — per-test coverage table and the oracle-authoring pattern.
+- [`devdocs/ORACLE.md`](devdocs/ORACLE.md) — the tolerance philosophy: why oracles, how to pick tolerances, what to do when the oracle itself is wrong.
 
 For more detail, see the validation and roadmap material under [`validation/`](validation/), [`devdocs/RELIABILITY_ROADMAP.md`](devdocs/RELIABILITY_ROADMAP.md), and related docs in [`devdocs/`](devdocs/).
 

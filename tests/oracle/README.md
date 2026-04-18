@@ -9,6 +9,12 @@ tolerance. That is the single discipline that makes the validation claims in
 If a new numerical claim is going into the codebase, it lands **with an oracle
 test**, not just a unit test.
 
+To actually install the oracle tools and run the evals end-to-end (pinned
+versions, copy-pasteable commands, smoke tests, regeneration workflow),
+see [`docs/ORACLE_SETUP.md`](../../docs/ORACLE_SETUP.md). This file is
+the per-test coverage table; `ORACLE_SETUP.md` is the reproducibility
+recipe.
+
 ## Current oracles
 
 | File | Oracle | What it pins |
