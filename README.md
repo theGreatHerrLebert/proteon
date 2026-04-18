@@ -208,6 +208,17 @@ Structural analysis:
 - Shrake & Rupley. "Environment and exposure to solvent of protein atoms." *J Mol Biol* 79(2), 351-371 (1973). https://doi.org/10.1016/0022-2836(73)90011-9
 - Tien et al. "Maximum allowed solvent accessibilities of residues in proteins." *PLoS ONE* 8(11), e80635 (2013). https://doi.org/10.1371/journal.pone.0080635
 
+Force fields and implicit solvation:
+
+- Neria, Fischer, & Karplus. "Simulation of activation free energies in molecular systems." *J Chem Phys* 105(5), 1902-1921 (1996). https://doi.org/10.1063/1.472061 — CHARMM19 parameter set used by ferritin.
+- Lazaridis & Karplus. "Effective energy function for proteins in solution." *Proteins* 35(2), 133-152 (1999). https://doi.org/10.1002/(SICI)1097-0134(19990501)35:2%3C133::AID-PROT1%3E3.0.CO;2-N — EEF1 implicit solvation.
+- Cornell et al. "A Second Generation Force Field for the Simulation of Proteins, Nucleic Acids, and Organic Molecules." *J Am Chem Soc* 117(19), 5179-5197 (1995). https://doi.org/10.1021/ja00124a002 — AMBER94 / AMBER96 parameters.
+- Onufriev, Bashford, & Case. "Exploring protein native states and large-scale conformational changes with a modified generalized Born model." *Proteins* 55(2), 383-394 (2004). https://doi.org/10.1002/prot.20033 — OBC Generalized Born implicit solvation.
+
+Sequence search:
+
+- Steinegger & Söding. "MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets." *Nat Biotechnol* 35(11), 1026-1028 (2017). https://doi.org/10.1038/nbt.3988 — k-mer prefilter, ungapped/gapped Smith-Waterman, and PSSM/MSA pipeline that ferritin-search ports.
+
 Infrastructure:
 
 - Hildebrandt et al. "BALL - Biochemical Algorithms Library 1.3." *BMC Bioinformatics* 11, 531 (2010). https://doi.org/10.1186/1471-2105-11-531
