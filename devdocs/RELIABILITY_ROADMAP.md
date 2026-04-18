@@ -1,13 +1,22 @@
 # Ferritin Reliability Roadmap
 
-**Last updated: 2026-04-09**
+**Last updated: 2026-04-19**
 
-Ferritin already has a strong compute core, but the reliability story is uneven:
+Ferritin has a strong compute core and a maturing reliability layer. What
+remains is mostly depth, not basic coverage:
 
 - Core I/O, alignment, Arrow, and Python API tests are in good shape.
-- Oracle checks exist and pass locally, but are not part of default CI.
-- Structure preparation is partly implemented in Rust internals, but not yet surfaced as a coherent public workflow.
-- Validation artifacts exist, but too much of the reliability story still lives in scripts and notes instead of enforced gates.
+- Library-parity oracle tests (pydssp, biopython, gemmi, freesasa) run
+  on every PR via `.github/workflows/test.yml`. Heavy oracle
+  measurements (OpenMM 1000-PDB parity, USAlign pair benchmarks, 50K
+  battle test, GPU kernels) live in `validation/` and run off-CI per
+  release — see `docs/ORACLE_SETUP.md` for the reproducibility recipe.
+- Structure preparation is a shipped public surface (`prepare()`,
+  `batch_prepare()`, `load_and_prepare()` in v0.1.0).
+- Validation artifacts exist and are reproducible end-to-end; the
+  remaining gap is scale and depth (longer MD drift studies, broader
+  structure-prep oracle coverage) rather than "are there any gates at
+  all."
 
 This document focuses on one goal:
 
@@ -31,27 +40,47 @@ Observed locally on 2026-04-19:
 
 Current strengths:
 
-- Pure Rust kernels with thin Python wrappers
-- Real oracle tests for I/O and TM-align
-- Batch-first API design
-- Arrow/Parquet path for scalable feature/data workflows
-- ForceField trait with two implementations (AMBER96, CHARMM19+EEF1)
-- Full MD pipeline (Verlet, SHAKE, EEF1 solvation, trajectory output)
-- Three minimizers (SD, CG, L-BFGS)
-- 5K structure validation (run 2: 0 failures, all edge cases triaged)
+- Pure Rust kernels with thin Python wrappers.
+- Library-parity oracle tests under `tests/oracle/` run on every PR
+  (ferritin vs pydssp / biopython / gemmi / freesasa / BALL-on-crambin).
+- Heavier oracle measurements reproducible end-to-end via
+  `docs/ORACLE_SETUP.md` (OpenMM 1000-PDB parity, USAlign pair
+  benchmark, BALL Julia regen).
+- Batch-first API design; every feature has `batch_*` + `load_and_*`
+  variants.
+- Arrow/Parquet path for scalable feature/data workflows.
+- ForceField trait with AMBER96, CHARMM19+EEF1, and OBC GB implementations
+  (CPU + CUDA); cell-list neighbor list wired into the default energy path.
+- Full MD pipeline (Verlet, SHAKE/RATTLE, EEF1 solvation, trajectory output).
+- Three minimizers (SD, CG, L-BFGS).
+- Shipped structure-preparation surface: `prepare()`,
+  `batch_prepare()`, `load_and_prepare()` with FF-aware defaults.
+- 50K random-PDB battle test passed at 99.1% correct in 3.5h on
+  RTX 5090 (`project_gpu_cuda_poc` memory).
+- CI matrix: Ubuntu + macOS × Python 3.11 / 3.12 / 3.13 in `test.yml`,
+  plus the MMseqs2 byte-exact round-trip + recall@10 oracle gated on
+  every PR.
 
 Current weaknesses:
 
-- CI only runs Ubuntu + Python 3.12
-- Default CI excludes oracle tests
-- No reliability matrix across OS / Python versions
-- No scheduled validation job
-- No coverage thresholds
-- No end-to-end `prepare()` API for real-world structure cleanup
-- No strong regression corpus for ugly archive cases
-- CLI/data-engine paths are lightly guarded compared with the Python API
-- Force field energy not yet oracle-validated against BALL Julia systematically
-- Neighbor list not yet wired into default MD/minimizer paths
+- Coverage: Python line-coverage thresholds are not yet enforced in
+  CI; crate-level Rust test counts are visible via `cargo test` but
+  not reported.
+- Reduce oracle (H placement) has three documented convention gaps
+  the tight parity does not assert: methyl rotamers, sp2 amide NH2,
+  rotatable OH/SH/NH3+. Closing them would require rotamer optimization
+  in `place_all_hydrogens` (see `tests/oracle/test_reduce_hydrogen_oracle.py`
+  §Known convention gaps).
+- MD energy-conservation study (longer NVE drift analysis) not yet
+  run at scale; short-run invariants pass.
+- CLI / data-engine paths are less thoroughly guarded than the Python
+  API — CLI smoke tests exist but unit-level coverage is thinner.
+- Scientific depth gaps flagged by the structure-preparation oracle
+  comparison: Asn/Gln/His flip optimization, protonation-state
+  assignment, nucleotide / non-standard residue templates (see
+  `devdocs/ROADMAP.md §In flight`).
+- Foldseek structural-alphabet recall still ~15% below upstream at
+  TM ≥ 0.5 (near-parity at TM ≥ 0.9).
 
 ---
 
@@ -193,23 +222,13 @@ Success criteria:
 
 These are the highest-priority changes.
 
-### 1. Expand CI Matrix
+### 1. Expand CI Matrix (shipped)
 
-Add:
-
-- Linux + macOS CI
-- Python 3.10, 3.11, 3.12, 3.13 for the Python package
-- at least one release-like wheel build smoke test
-
-Why:
-
-- current CI only checks Ubuntu + Python 3.12
-- packaging and PyO3 regressions often hide in version/platform gaps
-
-Definition of done:
-
-- `.github/workflows/test.yml` runs a matrix
-- failures are visible per environment
+Target was Linux + macOS × Python 3.10–3.13, plus a release-like wheel
+build. Current state: `test.yml` runs Ubuntu + macOS × Python 3.11 /
+3.12 / 3.13 (3.10 intentionally dropped with v0.1.1), and `release.yml`
+produces wheels for the same matrix + sdist on tag. The wheel-build
+smoke is implicit in the release workflow running on every tag.
 
 ### 2. Oracle enforcement (shipped 2026-04-19, reshaped from original plan)
 
