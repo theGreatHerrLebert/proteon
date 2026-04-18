@@ -200,12 +200,12 @@ ENERGY_COMPONENTS = (
 
 
 # ---------------------------------------------------------------------------
-# Oracle marker
+# Custom markers
 # ---------------------------------------------------------------------------
 #
-# Every externally-anchored test ("does ferritin agree with OpenMM / BALL /
-# Biopython / MMseqs2 / …?") is tagged with @pytest.mark.oracle("<tool>"),
-# so you can run just the oracle layer with:
+# `oracle(tool)`: every externally-anchored test ("does ferritin agree with
+# OpenMM / BALL / Biopython / MMseqs2 / …?") is tagged with
+# @pytest.mark.oracle("<tool>"), so you can run just the oracle layer with:
 #
 #     pytest -m oracle                       # all oracles
 #     pytest -m oracle -k usalign            # tool filter via test-id keyword
@@ -214,7 +214,13 @@ ENERGY_COMPONENTS = (
 #
 #     pytest --collect-only -m oracle -q
 #
-# See `tests/oracle/README.md` for the conventions and `devdocs/ORACLE.md`
+# `slow`: tests that take >10s wall-clock (corpus downloads, full-suite
+# parity sweeps, large PDB pipelines). Skip them in the dev inner loop with:
+#
+#     pytest -m "not slow and not oracle"    # fast feedback cycle
+#     pytest -m slow                         # run only the slow ones
+#
+# See `tests/oracle/README.md` for oracle conventions and `devdocs/ORACLE.md`
 # for the full philosophy.
 def pytest_configure(config):
     config.addinivalue_line(
@@ -223,4 +229,10 @@ def pytest_configure(config):
         "external implementation (BALL, OpenMM, Biopython, Gemmi, "
         "FreeSASA, DSSP, MMseqs2, USAlign, …). Slow and may require "
         "installing the oracle. Filter with `pytest -m oracle`.",
+    )
+    config.addinivalue_line(
+        "markers",
+        "slow: test takes >10s wall-clock (corpus downloads, full-suite "
+        "parity sweeps, large PDB pipelines). Skip in dev loop with "
+        "`pytest -m 'not slow'`.",
     )

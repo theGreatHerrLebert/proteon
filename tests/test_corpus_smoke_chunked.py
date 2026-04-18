@@ -47,6 +47,7 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.slow
 def test_chunked_matches_single_shot_contract(tmp_path: Path):
     """Contract: same paths → same records, same splits, same shapes, same
     integer/mask content. Float coord tensors may differ because
@@ -100,6 +101,7 @@ def test_chunked_matches_single_shot_contract(tmp_path: Path):
         assert (rel / "sequence" / seq_m["tensor_file"]).exists()
 
 
+@pytest.mark.slow
 def test_chunked_records_chunk_size_in_corpus_manifest(tmp_path: Path):
     root = _build(tmp_path, chunk_size=2)
     corpus = json.loads(
@@ -120,6 +122,7 @@ def test_chunk_size_none_is_single_shot_path(tmp_path: Path):
     assert corpus["provenance"].get("chunk_size") is None
 
 
+@pytest.mark.slow
 def test_chunked_provenance_covers_supervision_only_successes(tmp_path: Path, monkeypatch):
     """Regression: a record that succeeds on supervision but fails on
     sequence must still appear in the supervision manifest provenance.

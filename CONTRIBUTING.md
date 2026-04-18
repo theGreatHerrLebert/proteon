@@ -79,7 +79,14 @@ cd ferritin-connector && maturin develop --release && cd ..
 pip install -e packages/ferritin/
 pytest                              # skips oracle tests that need heavy installs
 pytest -m oracle                    # runs every oracle you have installed
+pytest -m "not slow and not oracle" # fast dev loop (skips >10s tests)
+pytest -m slow                      # run only the slow tests
 ```
+
+Mark tests you add with `@pytest.mark.slow` if they take more than 10
+seconds wall-clock (minimizer sweeps, corpus pipelines, large-PDB
+parity runs). Both markers are registered in `tests/conftest.py` and
+enforced with `--strict-markers`, so an unregistered marker fails CI.
 
 Minimum Python: **3.12**. Minimum Rust: **1.75**.
 

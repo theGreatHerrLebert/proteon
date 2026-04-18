@@ -83,8 +83,13 @@ class TestComputeEnergy:
 # ===========================================================================
 
 
+@pytest.mark.slow
 class TestMinimizeHydrogens:
-    """Use ubiquitin (1ubq) which has 629 H atoms; crambin has none."""
+    """Use ubiquitin (1ubq) which has 629 H atoms; crambin has none.
+
+    Slow: each test runs the full L-BFGS H-only minimizer on ubiquitin;
+    individual methods take 30-70s.
+    """
 
     def test_returns_expected_keys(self):
         r = ferritin.minimize_hydrogens(load_ubiquitin())
@@ -197,7 +202,10 @@ class TestMinimizeStructure:
 # ===========================================================================
 
 
+@pytest.mark.slow
 class TestBatchMinimizeHydrogens:
+    """Slow: batch minimization over crambin + ubiquitin; 60-120s per test."""
+
     def test_returns_list(self):
         structures = [load_crambin(), load_ubiquitin()]
         results = ferritin.batch_minimize_hydrogens(structures, n_threads=-1)
@@ -223,7 +231,10 @@ class TestBatchMinimizeHydrogens:
 # ===========================================================================
 
 
+@pytest.mark.slow
 class TestLoadAndMinimizeHydrogens:
+    """Slow: parallel load+minimize pipeline; multi-file variant ~60s."""
+
     def test_loads_and_minimizes(self):
         paths = [os.path.join(TEST_PDBS_DIR, "1crn.pdb")]
         results = ferritin.load_and_minimize_hydrogens(paths, n_threads=-1)
