@@ -21,6 +21,12 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           pip install maturin numpy pytest pandas pyarrow
+          # Oracle dependencies — installed here so the gated job actually
+          # exercises test_io_oracle.py (biopython + gemmi) and
+          # test_dssp_oracle.py (pydssp). Tests that need heavier oracles
+          # (USAlign binary, reduce binary, BALL Julia) skip cleanly when
+          # the binary isn't on $PATH / REDUCE_BIN isn't set.
+          pip install biopython gemmi pydssp
       - name: Build connector
         run: |
           source .venv/bin/activate
@@ -33,7 +39,7 @@ jobs:
       - name: Run oracle tests
         run: |
           source .venv/bin/activate
-          pytest tests/oracle/ -v --tb=short || true
+          pytest tests/oracle/ -v --tb=short
       - name: Upload oracle results
         uses: actions/upload-artifact@v4
         if: always()
