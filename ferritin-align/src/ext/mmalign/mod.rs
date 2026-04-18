@@ -152,6 +152,8 @@ pub fn concatenate_assigned_chains(
 
 use anyhow::{bail, Result};
 
+use crate::core::align::tmalign::tmalign;
+use crate::core::types::AlignOptions;
 use crate::ext::se::{se_main, SeOptions};
 
 use chain_assign::{check_heterooligomer, enhanced_greedy_search, homo_refined_greedy_search};
@@ -175,43 +177,71 @@ pub fn mmalign_complex(x_chains: &[ChainData], y_chains: &[ChainData]) -> Result
         bail!("Both complexes must have at least one chain");
     }
 
-    let se_opts = SeOptions::default();
-
-    // Step 1: Pairwise per-chain alignment → TM matrix + alignment strings
+    // Step 1: Pairwise per-chain alignment → TM matrix + alignment strings + transforms.
+    //
+    // C++ USalign.cpp:874-919 runs full TMalign_main per pair (the default path)
+    // and stores the resulting u/t in ut_mat. Only the explicit `-se` flag
+    // shortcuts to se_main with identity matrices. We follow the default path
+    // here; downstream `homo_refined_greedy_search` uses the transforms to
+    // superpose centroids when refining homo-oligomer chain assignments —
+    // without them it can't see internal symmetries and picks bad pairings.
     let mut tm_mat = vec![vec![0.0f64; chain2_num]; chain1_num];
     let mut seqx_a_mat = vec![vec![String::new(); chain2_num]; chain1_num];
     let mut seqy_a_mat = vec![vec![String::new(); chain2_num]; chain1_num];
     let mut ut_mat: Vec<Vec<f64>> = vec![vec![0.0; 12]; chain1_num * chain2_num];
 
+    let pair_align_opts = AlignOptions {
+        i_opt: 0,
+        a_opt: 0,
+        u_opt: false,
+        lnorm_ass: 0.0,
+        d_opt: false,
+        d0_scale: 0.0,
+        fast_opt: true,
+        mol_type: x_chains[0].mol_type,
+        tm_cut: -1.0,
+        user_alignment: None,
+    };
+
     for i in 0..chain1_num {
         for j in 0..chain2_num {
             let xc = &x_chains[i];
             let yc = &y_chains[j];
-            if xc.is_empty() || yc.is_empty() {
+            if xc.is_empty() || yc.is_empty() || xc.len() < 3 || yc.len() < 3 {
+                // Identity for chains too short for TM-align (matches C++ early-out).
+                ut_mat[i * chain2_num + j] =
+                    vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
                 continue;
             }
 
-            let result = se_main(
+            let seqx_chars: Vec<char> = xc.sequence.iter().map(|&b| b as char).collect();
+            let seqy_chars: Vec<char> = yc.sequence.iter().map(|&b| b as char).collect();
+            let secx_chars: Vec<char> = xc.sec_structure.iter().map(|&b| b as char).collect();
+            let secy_chars: Vec<char> = yc.sec_structure.iter().map(|&b| b as char).collect();
+
+            let result = tmalign(
                 &xc.coords,
                 &yc.coords,
-                &xc.sequence,
-                &yc.sequence,
-                xc.len(),
-                yc.len(),
-                &se_opts,
-                None,
-                0,
-            );
+                &seqx_chars,
+                &seqy_chars,
+                &secx_chars,
+                &secy_chars,
+                &pair_align_opts,
+            )?;
 
-            tm_mat[i][j] = result.tm1;
-            seqx_a_mat[i][j] = result.seq_x_aligned.clone();
-            seqy_a_mat[i][j] = result.seq_y_aligned.clone();
+            tm_mat[i][j] = result.tm_score_chain1;
+            seqx_a_mat[i][j] = result.aligned_seq_x.clone();
+            seqy_a_mat[i][j] = result.aligned_seq_y.clone();
 
-            // Identity placeholder for homo search transform matrix
-            ut_mat[i * chain2_num + j] =
-                vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+            let u = result.transform.u;
+            let t = result.transform.t;
+            ut_mat[i * chain2_num + j] = vec![
+                u[0][0], u[0][1], u[0][2], u[1][0], u[1][1], u[1][2], u[2][0], u[2][1], u[2][2],
+                t[0], t[1], t[2],
+            ];
         }
     }
+    let se_opts = SeOptions::default();
 
     // Step 2: Calculate centroids
     let x_coords_vec: Vec<Vec<Coord3D>> = x_chains.iter().map(|c| c.coords.clone()).collect();
