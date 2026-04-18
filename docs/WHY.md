@@ -85,12 +85,11 @@ repositories, ideas from blog posts and papers, design patterns that someone wor
 and shared openly. By the time any of it reaches your codebase, the original authors are not
 visible. There is no import statement to follow, no citation to add.
 
-Legally, this is fine, and that question has been examined at length by people better qualified
-than me to answer it. But the scientific community also runs on something less formal: a shared
-understanding that ideas have origins and that people deserve credit for their contributions. We are
-a somewhat strange family of largely unrelated people, held together more by norms than by
-contracts (that are non-permanent for most of us anyways). Those norms are worth respecting even
-when nothing formally requires it.
+The scientific community runs on something less formal than licenses: a shared understanding that
+ideas have origins and that people deserve credit for their contributions. We are a somewhat
+strange family of largely unrelated people, held together more by norms than by contracts (that
+are non-permanent for most of us anyways). Those norms are worth respecting even when nothing
+formally requires it.
 
 The practical response is not complicated. Credit what you can trace, be transparent about how the
 work was done, and treat the Acknowledgements as a genuine attempt at accounting rather than a
