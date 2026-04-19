@@ -43,3 +43,6 @@ foldseek.tar.gz
 foldseek-src/
 gpu-poc/target/
 .codex
+
+# Session handoff notes — local working doc, not a repo artifact.
+NEXT_STEPS.md
