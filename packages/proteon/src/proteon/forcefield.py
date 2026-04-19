@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover
 
 
 @functools.lru_cache(maxsize=1)
-def _warn_amber96_experimental() -> None:
+def _warn_amber96_cutoff_policy() -> None:
     """Warn once per process about the proteon-vs-OpenMM AMBER96 policy
     difference in the nonbonded cutoff.
 
@@ -66,7 +66,7 @@ def _warn_amber96_experimental() -> None:
 
 def _maybe_warn_ff(ff: Optional[str]) -> None:
     if ff is not None and ff.lower() == "amber96":
-        _warn_amber96_experimental()
+        _warn_amber96_cutoff_policy()
 
 # ---------------------------------------------------------------------------
 # Unit conversion
@@ -182,8 +182,9 @@ def compute_energy(
 
     Args:
         structure: Proteon Structure object.
-        ff: Force field — "amber96" (experimental) or "charmm19_eef1"
-            (validated, recommended).
+        ff: Force field — "amber96" (oracle-validated for single-point
+            energy evaluation; CHARMM remains the recommended prep /
+            minimization path) or "charmm19_eef1" (validated, recommended).
         units: Energy units — "kJ/mol" (default) or "kcal/mol".
         nbl_threshold: Optional override for the neighbor-list atom-count
             threshold. None (default) uses the library default of 2000.
@@ -214,9 +215,11 @@ def minimize_hydrogens(
     Freezes all heavy atoms and optimizes only H positions.
 
     Note:
-        Uses AMBER96, which is experimental in proteon — energies do not
-        match OpenMM AMBER96 on identical inputs. Positions are self-consistent
-        but not reference-quality. See ``compute_energy`` docstring.
+        Uses proteon's AMBER96 machinery. The single-point AMBER96 energy
+        components are oracle-validated against OpenMM at NoCutoff; this
+        helper runs under proteon's default production cutoff policy, so its
+        trajectories are not the canonical cross-tool oracle path. See
+        ``compute_energy`` for the exact cutoff-policy caveat.
 
     Args:
         structure: A proteon Structure.
@@ -248,10 +251,13 @@ def minimize_structure(
     All atoms are free to move.
 
     Note:
-        Uses AMBER96, which is experimental in proteon — energies do not
-        match OpenMM AMBER96 on identical inputs. See ``compute_energy``
-        docstring. For validated production use, prepare structures with
-        ``batch_prepare(ff="charmm19_eef1")`` (the default).
+        Uses proteon's AMBER96 machinery. The single-point AMBER96 energy
+        components are oracle-validated against OpenMM at NoCutoff; this
+        helper runs under proteon's default production cutoff policy, so it
+        is not the canonical cross-tool oracle path. See ``compute_energy``
+        for the exact cutoff-policy caveat. For validated production use,
+        prepare structures with ``batch_prepare(ff="charmm19_eef1")`` (the
+        default).
 
     Args:
         structure: A proteon Structure.

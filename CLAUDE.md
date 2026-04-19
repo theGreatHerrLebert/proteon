@@ -93,7 +93,7 @@ pytest tests/oracle                 # oracle parity (slow; needs OpenMM/BALL/MMs
 ### Python venv
 
 A ready-to-use venv lives at `/scratch/TMAlign/ferritin/.venv` with
-`proteon` already installed (Python 3.10). Activate it before running
+`proteon` already installed (Python 3.12). Activate it before running
 Python / pytest / pip commands:
 
 ```bash

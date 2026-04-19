@@ -178,10 +178,10 @@ def prepare(
         ff: Force field used by the topology builder and the minimizer.
             ``"charmm19_eef1"`` (default) is the **validated production
             path** — used by the 50K battle test and the fold-preservation
-            benchmark. ``"amber96"`` is **experimental**; proteon's AMBER96
-            energies do NOT match OpenMM AMBER96 on identical inputs
-            (diagnosed 2026-04-13). Emits a UserWarning once per process.
-            Do not use for cross-tool oracle comparison; see task #46.
+            benchmark. ``"amber96"`` has oracle-validated single-point
+            energy parity against OpenMM at NoCutoff, but the preparation
+            path uses proteon's default cutoff policy and is still the
+            secondary workflow. Emits a UserWarning once per process.
 
     Returns:
         PrepReport with preparation statistics.
@@ -330,10 +330,10 @@ def batch_prepare(
         ff: Force field used by the topology builder and the minimizer.
             ``"charmm19_eef1"`` (default) is the **validated production
             path** — used by the 50K battle test and the fold-preservation
-            benchmark. ``"amber96"`` is **experimental**; proteon's AMBER96
-            energies do NOT match OpenMM AMBER96 on identical inputs
-            (diagnosed 2026-04-13). Emits a UserWarning once per process.
-            Do not use for cross-tool oracle comparison; see task #46.
+            benchmark. ``"amber96"`` has oracle-validated single-point
+            energy parity against OpenMM at NoCutoff, but the preparation
+            path uses proteon's default cutoff policy and is still the
+            secondary workflow. Emits a UserWarning once per process.
         constrain_heavy: Whether to freeze heavy atoms during minimization.
             ``None`` (default) uses the FF-aware default: True for AMBER96
             (H-only minimization is the intended pattern — all-atom AMBER

@@ -172,10 +172,22 @@ import proteon
 ```
 
 The Python package is the main user-facing surface and exposes the Rust-backed APIs directly.
+The curated top-level namespace is the default contract for normal use.
 
 Short structured Agent Notes exist on selected public boundary functions where
 misuse is easy or scaling/cost tradeoffs matter; they are not intended to
 annotate the full public API uniformly.
+
+API tiers:
+
+- Top-level `proteon.*`: curated convenience surface for common loading, alignment, analysis, search, and preparation workflows. `proteon.__all__` defines this surface explicitly.
+- Advanced submodules: use direct submodule imports like `proteon.sequence_export`, `proteon.supervision_export`, `proteon.corpus_validation`, or `proteon.msa_backend` when you need format-specific or pipeline-builder control.
+- Internal surfaces: underscore-prefixed names and non-exported helpers are not stable API.
+
+Release versioning is also single-sourced now: the repo-root [`VERSION`](VERSION)
+file is authoritative, `python tools/set_version.py <x.y.z>` updates the build
+metadata, and CI enforces that the Rust workspace and both Python packages stay
+in sync.
 
 **CLI**
 

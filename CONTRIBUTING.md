@@ -103,6 +103,15 @@ in CI and can't be meaningfully faked.
 
 Minimum Python: **3.12**. Minimum Rust: **1.75**.
 
+## Release versioning
+
+The repo-root [`VERSION`](VERSION) file is the release-version source of truth.
+
+- To cut the next release version, run `python tools/set_version.py 0.1.2`.
+- CI runs `python tools/check_versions.py` and fails if `Cargo.toml`,
+  `packages/proteon/pyproject.toml`, `proteon-connector/pyproject.toml`, or
+  the `proteon-connector==...` runtime dependency drift from `VERSION`.
+
 ## Commit messages
 
 - Present tense, imperative: "fix", "add", "strip", not "fixed" / "adds".

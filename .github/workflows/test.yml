@@ -3,8 +3,21 @@ name: Tests
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 jobs:
+  version-sync:
+    name: Version Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check release versions stay synchronized
+        run: python tools/check_versions.py
+
   # ubuntu only — macos rust-tests would require extra work to make
   # `cargo test` link against a framework-style setup-python libpython
   # (pyo3-connector test binaries fail on `_PyBaseObject_Type` on arm64),
