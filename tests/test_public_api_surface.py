@@ -33,6 +33,6 @@ class TestTopLevelExports:
 
     def test_advanced_release_alias_warns_and_is_not_in___all__(self):
         assert "build_sequence_dataset" not in proteon.__all__
-        with pytest.deprecated_call(match="proteon.build_sequence_dataset"):
+        with pytest.deprecated_call(match=r"proteon\.build_sequence_dataset.*0\.2\.0"):
             alias = proteon.build_sequence_dataset
         assert alias is sequence_release.build_sequence_dataset

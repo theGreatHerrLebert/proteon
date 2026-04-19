@@ -395,6 +395,8 @@ __all__ = (
     *_FAILURE_API,
 )
 
+_ADVANCED_ALIAS_REMOVAL_VERSION = "0.2.0"
+
 _ADVANCED_DATASET_ALIASES = {
     "PreparedStructureRecord": (".prepared_manifest", "PreparedStructureRecord"),
     "build_prepared_structure_records": (
@@ -494,7 +496,8 @@ def __getattr__(name):
     warnings.warn(
         f"`proteon.{name}` is an advanced dataset/release API and is no longer "
         f"part of the curated top-level surface; import it from "
-        f"`proteon{module_name}` instead.",
+        f"`proteon{module_name}` instead. The top-level alias is scheduled "
+        f"for removal in proteon {_ADVANCED_ALIAS_REMOVAL_VERSION}.",
         DeprecationWarning,
         stacklevel=2,
     )

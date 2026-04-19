@@ -182,7 +182,7 @@ API tiers:
 
 - Top-level `proteon.*`: curated convenience surface for common loading, alignment, analysis, search, and preparation workflows. `proteon.__all__` defines this surface explicitly.
 - Advanced submodules: use direct submodule imports like `proteon.sequence_export`, `proteon.sequence_release`, `proteon.supervision_export`, `proteon.supervision_dataset`, `proteon.corpus_release`, `proteon.corpus_validation`, or `proteon.msa_backend` when you need format-specific or pipeline-builder control.
-- Migration note: advanced dataset/release helpers still resolve from `proteon.*` for now, but they warn and are no longer part of `proteon.__all__`.
+- Migration note: advanced dataset/release helpers still resolve from `proteon.*` for now, but they warn, are no longer part of `proteon.__all__`, and are scheduled for removal from the top-level namespace in `0.2.0`.
 - Internal surfaces: underscore-prefixed names and non-exported helpers are not stable API.
 
 Release versioning is also single-sourced now: the repo-root [`VERSION`](VERSION)

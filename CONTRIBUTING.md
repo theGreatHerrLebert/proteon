@@ -112,6 +112,20 @@ The repo-root [`VERSION`](VERSION) file is the release-version source of truth.
   `packages/proteon/pyproject.toml`, `proteon-connector/pyproject.toml`, or
   the `proteon-connector==...` runtime dependency drift from `VERSION`.
 
+## Python API boundary
+
+The curated top-level Python surface is defined by `proteon.__all__`.
+
+- Common loading/alignment/analysis/search/prep helpers belong at `proteon.*`.
+- Dataset/release plumbing belongs in submodules like
+  `proteon.sequence_release`, `proteon.sequence_export`,
+  `proteon.training_example`, `proteon.supervision_export`,
+  `proteon.supervision_dataset`, `proteon.corpus_release`, and
+  `proteon.corpus_validation`.
+- Do not add new advanced dataset/release helpers to the top-level namespace.
+- Existing advanced top-level aliases are deprecated now and scheduled for
+  removal in `0.2.0`.
+
 ## Commit messages
 
 - Present tense, imperative: "fix", "add", "strip", not "fixed" / "adds".
