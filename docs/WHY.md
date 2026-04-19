@@ -1,4 +1,4 @@
-# Why Ferritin Exists
+# Why Proteon Exists
 
 ## A Personal Starting Point
 
@@ -55,7 +55,7 @@ The question changes from "does this function behave as expected?" to "does this
 something we already trust?" Internal consistency is necessary but not sufficient. Correctness has
 to be established relative to something external.
 
-In practice, for ferritin, this means numbers like these: the AMBER96 implementation matches
+In practice, for proteon, this means numbers like these: the AMBER96 implementation matches
 OpenMM to within 0.2% on every energy component at NoCutoff (218/218 invariants). The TM-align
 port sits within a 0.003 median TM-score drift of the reference C++ USalign across 4,656 pairs.
 The SASA implementation agrees with Biopython to 0.17% median deviation on 1,000 structures.
@@ -63,14 +63,14 @@ And the end-to-end CHARMM19+EEF1 pipeline processed a 50,000 random-PDB battle t
 success in 3.5 hours on a single RTX 5090. Without external oracles, none of these numbers mean
 anything. With them, every regression has somewhere concrete to be caught.
 
-## Why This Is Hard, and What Ferritin Does About It
+## Why This Is Hard, and What Proteon Does About It
 
 In structural bioinformatics, building a consistently testable system is surprisingly difficult. The
 functionality needed to construct pipelines is fragmented: structure parsing in one library,
 alignment in another, geometry in a third, preparation somewhere else. Each comes with different
 interfaces, assumptions, and formats. Even if all components are individually correct, combining them into a coherent, testable system is non-trivial. And testing the system as a whole against a consistent reference becomes difficult to do systematically.
 
-Ferritin's response is to consolidate the parts that are widely used, conceptually stable, and already well understood, and bring them into a single framework where they can be composed easily, executed at scale, and validated against strong external references as a core requirement rather than an afterthought. The goal is not
+Proteon's response is to consolidate the parts that are widely used, conceptually stable, and already well understood, and bring them into a single framework where they can be composed easily, executed at scale, and validated against strong external references as a core requirement rather than an afterthought. The goal is not
 to recreate functionality. It is to make that functionality reliably usable under rapid iteration.
 
 ## On Credit and Invisible Debt
@@ -117,18 +117,18 @@ validated.
 
 That is the gap this project is concerned with.
 
-Ferritin is one attempt to close that gap, by making validation explicit, reproducible, and central to the design.
+Proteon is one attempt to close that gap, by making validation explicit, reproducible, and central to the design.
 
 ## On AI-Assisted Development, and Why This Project Exists
 
-Ferritin was developed with the help of AI-assisted coding. Some components, like the performance-critical CUDA kernels, would have been significantly more difficult to implement alone. This is not an exception. It reflects how software is increasingly built.
+Proteon was developed with the help of AI-assisted coding. Some components, like the performance-critical CUDA kernels, would have been significantly more difficult to implement alone. This is not an exception. It reflects how software is increasingly built.
 
 The relevant question is not whether the code was written entirely by hand. It is whether the
 resulting system has been validated. In this project, trust is not derived from authorship. It is
 derived from validation against established tools, large-scale testing on real data, and consistent
 behavior under defined conditions.
 
-Ferritin exists for two reasons. First, it is the tool I wanted to have: fast, composable
+Proteon exists for two reasons. First, it is the tool I wanted to have: fast, composable
 structural computation with consistent interfaces and validated building blocks, without forcing a
 platform or workflow. Second, it is a testbed, a place to explore what responsible software development looks like in a world where code can be generated rapidly, systems grow faster than they can be inspected line by line, and complexity is no longer limited by implementation effort.
 

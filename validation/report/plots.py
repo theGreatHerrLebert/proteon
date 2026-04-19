@@ -1,4 +1,4 @@
-"""Production plots for the ferritin validation report.
+"""Production plots for the proteon validation report.
 
 Generates:
   01_tm_distribution.png           — 3-tool histogram + ECDF
@@ -27,8 +27,8 @@ from style import C, apply, savefig
 
 
 HERE = pathlib.Path(__file__).parent
-DATA = pathlib.Path("/scratch/TMAlign/ferritin/validation/tm_fold_plots")
-GMX_DATA = pathlib.Path("/scratch/TMAlign/ferritin/validation/gmx_fold_preservation")
+DATA = pathlib.Path("/scratch/TMAlign/proteon/validation/tm_fold_plots")
+GMX_DATA = pathlib.Path("/scratch/TMAlign/proteon/validation/gmx_fold_preservation")
 OUT = HERE / "figures"
 OUT.mkdir(parents=True, exist_ok=True)
 
@@ -37,11 +37,11 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 @dataclass
 class Run:
-    name: str                     # label, e.g. "Ferritin CHARMM19+EEF1"
-    short: str                    # column tag, e.g. "ferritin-charmm"
+    name: str                     # label, e.g. "Proteon CHARMM19+EEF1"
+    short: str                    # column tag, e.g. "proteon-charmm"
     color: str
     ff_family: str                # "charmm" | "amber"
-    tool: str                     # "ferritin" | "openmm" | "gromacs"
+    tool: str                     # "proteon" | "openmm" | "gromacs"
     records: list[dict]
 
     @property
@@ -114,16 +114,16 @@ def load_jsonl(path: pathlib.Path) -> list[dict]:
 def collect_runs() -> list[Run]:
     runs = []
     candidates = [
-        Run("Ferritin CHARMM19+EEF1", "ferritin-charmm", C["ferritin"],
-            "charmm", "ferritin", load_jsonl(DATA / "ferritin.jsonl")),
+        Run("Proteon CHARMM19+EEF1", "proteon-charmm", C["proteon"],
+            "charmm", "proteon", load_jsonl(DATA / "proteon.jsonl")),
         Run("OpenMM CHARMM36+OBC2", "openmm-charmm", C["openmm"],
             "charmm", "openmm", load_jsonl(DATA / "openmm.jsonl")),
-        Run("Ferritin AMBER96", "ferritin-amber", C["ferritin"],
-            "amber", "ferritin",
-            load_jsonl(pathlib.Path("/scratch/TMAlign/ferritin/validation/tm_fold_plots/ferritin_amber.jsonl"))),
+        Run("Proteon AMBER96", "proteon-amber", C["proteon"],
+            "amber", "proteon",
+            load_jsonl(pathlib.Path("/scratch/TMAlign/proteon/validation/tm_fold_plots/proteon_amber.jsonl"))),
         Run("OpenMM AMBER96+OBC", "openmm-amber", C["openmm"],
             "amber", "openmm",
-            load_jsonl(pathlib.Path("/scratch/TMAlign/ferritin/validation/tm_fold_plots/openmm_amber.jsonl"))),
+            load_jsonl(pathlib.Path("/scratch/TMAlign/proteon/validation/tm_fold_plots/openmm_amber.jsonl"))),
         Run("GROMACS AMBER96", "gromacs-amber", C["gromacs"],
             "amber", "gromacs",
             load_jsonl(GMX_DATA / "tm_fold_gromacs.jsonl")),
@@ -257,7 +257,7 @@ def plot_tm_vs_size(runs: list[Run], family: str, out: pathlib.Path) -> None:
 def plot_energy_oracle(out: pathlib.Path) -> None:
     """Crambin AMBER96 triangulation — three tools, component breakdown.
 
-    Left panel: PDBFixer prep, ferritin vs OpenMM (per-component agreement).
+    Left panel: PDBFixer prep, proteon vs OpenMM (per-component agreement).
     Right panel: GROMACS pdb2gmx prep, OpenMM vs GROMACS (reference check).
     The two preps give different totals because H placement differs;
     within each prep, the tools converge to each other.
@@ -265,7 +265,7 @@ def plot_energy_oracle(out: pathlib.Path) -> None:
     components = ["Bond", "Angle", "Torsion\n+Improper", "Non-\nbonded"]
     pdbfixer = {
         "openmm":   [8736.5, 3470.9, 2098.5, -5492.5],
-        "ferritin": [8735.1, 3478.5, 2089.3, -5506.9],
+        "proteon": [8735.1, 3478.5, 2089.3, -5506.9],
     }
     gromacs_prep = {
         "openmm":  [3223.3, 469.0, 926.2, -5553.8],
@@ -274,8 +274,8 @@ def plot_energy_oracle(out: pathlib.Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(13.5, 5.0))
 
     for ax, data, tools, title, subtitle in (
-        (axes[0], pdbfixer, ("openmm", "ferritin"),
-         "PDBFixer prep — ferritin vs OpenMM (AMBER96)",
+        (axes[0], pdbfixer, ("openmm", "proteon"),
+         "PDBFixer prep — proteon vs OpenMM (AMBER96)",
          "per-component agreement; labels show |Δ|/|ref|"),
         (axes[1], gromacs_prep, ("openmm", "gromacs"),
          "pdb2gmx prep — OpenMM vs GROMACS (AMBER96)",
@@ -283,7 +283,7 @@ def plot_energy_oracle(out: pathlib.Path) -> None:
     ):
         x = np.arange(len(components))
         w = 0.38
-        labels = {"openmm": "OpenMM", "ferritin": "Ferritin", "gromacs": "GROMACS"}
+        labels = {"openmm": "OpenMM", "proteon": "Proteon", "gromacs": "GROMACS"}
         ax.bar(x - w / 2, data[tools[0]], w, color=C[tools[0]],
                label=f"{labels[tools[0]]} AMBER96",
                edgecolor="white", linewidth=0.6)
@@ -315,7 +315,7 @@ def plot_energy_oracle(out: pathlib.Path) -> None:
         ax.set_ylim(ylim[0] * 1.15, ylim[1] * 1.18)
 
     fig.suptitle(
-        "AMBER96 energy oracle — ferritin triangulated against OpenMM and GROMACS on crambin",
+        "AMBER96 energy oracle — proteon triangulated against OpenMM and GROMACS on crambin",
         fontsize=14, fontweight="bold", y=1.02,
     )
     savefig(fig, out)
@@ -392,8 +392,8 @@ def plot_throughput(runs: list[Run], out: pathlib.Path) -> None:
     # process a 1000-PDB seed=42 sample at the parallelism configured
     # for each tool on monster3 / local). See report for platform notes.
     aggregates = [
-        ("Ferritin\nCHARMM19+EEF1",       14.9,  949,  C["ferritin"]),
-        ("Ferritin\nAMBER96",            210.0,  950,  C["ferritin"]),
+        ("Proteon\nCHARMM19+EEF1",       14.9,  949,  C["proteon"]),
+        ("Proteon\nAMBER96",            210.0,  950,  C["proteon"]),
         ("OpenMM\nCHARMM36+OBC2",        449.7,  928,  C["openmm"]),
         ("OpenMM\nAMBER96+OBC",           75.7,  904,  C["openmm"]),
         ("GROMACS\nAMBER96",              20.3,  363,  C["gromacs"]),

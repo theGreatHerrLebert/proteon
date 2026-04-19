@@ -27,20 +27,20 @@ def _structural_data():
                 "query": "shape.pdb",
                 "best_truth_nonself": {"source_path": "truth.pdb", "tm_score": 0.8},
                 "foldseek_top_nonself": {"source_path": "truth.pdb"},
-                "ferritin_top_nonself": {"source_path": "truth.pdb"},
-                "thresholds": {"0.7": {"recall_at_k": 1.0, "ferritin_recall_at_k": 1.0}},
+                "proteon_top_nonself": {"source_path": "truth.pdb"},
+                "thresholds": {"0.7": {"recall_at_k": 1.0, "proteon_recall_at_k": 1.0}},
             },
             {
                 "query": "seq.pdb",
                 "best_truth_nonself": {"source_path": "seq_truth.pdb", "tm_score": 0.9},
                 "foldseek_top_nonself": {"source_path": "other.pdb"},
-                "ferritin_top_nonself": {"source_path": "other.pdb"},
-                "thresholds": {"0.7": {"recall_at_k": 0.0, "ferritin_recall_at_k": 0.0}},
+                "proteon_top_nonself": {"source_path": "other.pdb"},
+                "thresholds": {"0.7": {"recall_at_k": 0.0, "proteon_recall_at_k": 0.0}},
             },
             {
                 "query": "notruth.pdb",
                 "best_truth_nonself": None,
-                "thresholds": {"0.7": {"recall_at_k": 1.0, "ferritin_recall_at_k": 1.0}},
+                "thresholds": {"0.7": {"recall_at_k": 1.0, "proteon_recall_at_k": 1.0}},
             },
         ]
     }
@@ -74,11 +74,11 @@ def test_summarize_buckets_shape_and_sequence_only():
     summary = report.summarize(_structural_data(), _sequence_data(), threshold="0.7")
 
     assert summary["counts"] == {
-        "ferritin_only_vs_sequence": 1,
-        "sequence_only_vs_ferritin": 1,
+        "proteon_only_vs_sequence": 1,
+        "sequence_only_vs_proteon": 1,
         "no_truth": 1,
     }
-    assert summary["mean_recall"] == {"foldseek": 0.6667, "ferritin": 0.6667, "sequence": 0.6667}
+    assert summary["mean_recall"] == {"foldseek": 0.6667, "proteon": 0.6667, "sequence": 0.6667}
 
 
 def test_cli_writes_outputs(tmp_path: Path):

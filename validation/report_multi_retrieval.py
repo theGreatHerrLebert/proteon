@@ -51,21 +51,21 @@ def _truth(row: dict[str, Any] | None) -> tuple[str | None, float | None]:
 
 def classify_query(struct_row: dict[str, Any] | None, seq_row: dict[str, Any] | None, threshold: str) -> dict[str, Any]:
     foldseek = _recall(struct_row, threshold, "recall_at_k")
-    ferritin = _recall(struct_row, threshold, "ferritin_recall_at_k")
+    proteon = _recall(struct_row, threshold, "proteon_recall_at_k")
     sequence = _recall(seq_row, threshold, "sequence_recall_at_k")
     foldseek_hit = _hit(foldseek)
-    ferritin_hit = _hit(ferritin)
+    proteon_hit = _hit(proteon)
     sequence_hit = _hit(sequence)
 
     truth_source, truth_tm = _truth(struct_row or seq_row)
     if truth_source is None:
         bucket = "no_truth"
-    elif ferritin_hit and sequence_hit:
-        bucket = "ferritin_and_sequence"
-    elif ferritin_hit:
-        bucket = "ferritin_only_vs_sequence"
+    elif proteon_hit and sequence_hit:
+        bucket = "proteon_and_sequence"
+    elif proteon_hit:
+        bucket = "proteon_only_vs_sequence"
     elif sequence_hit:
-        bucket = "sequence_only_vs_ferritin"
+        bucket = "sequence_only_vs_proteon"
     elif foldseek_hit:
         bucket = "foldseek_only"
     else:
@@ -77,10 +77,10 @@ def classify_query(struct_row: dict[str, Any] | None, seq_row: dict[str, Any] | 
         "truth": truth_source,
         "truth_tm_score": truth_tm,
         "foldseek_recall": foldseek,
-        "ferritin_recall": ferritin,
+        "proteon_recall": proteon,
         "sequence_recall": sequence,
         "foldseek_top": _source(struct_row, "foldseek_top_nonself"),
-        "ferritin_top": _source(struct_row, "ferritin_top_nonself"),
+        "proteon_top": _source(struct_row, "proteon_top_nonself"),
         "sequence_top": _source(seq_row, "sequence_top_nonself"),
     }
 
@@ -109,16 +109,16 @@ def summarize(
         "counts": dict(counts),
         "mean_recall": {
             "foldseek": round(mean(values("foldseek_recall")), 4) if values("foldseek_recall") else None,
-            "ferritin": round(mean(values("ferritin_recall")), 4) if values("ferritin_recall") else None,
+            "proteon": round(mean(values("proteon_recall")), 4) if values("proteon_recall") else None,
             "sequence": round(mean(values("sequence_recall")), 4) if values("sequence_recall") else None,
         },
         "per_query": per_query,
         "by_bucket": {
             bucket: [row for row in per_query if row["bucket"] == bucket]
             for bucket in [
-                "ferritin_and_sequence",
-                "ferritin_only_vs_sequence",
-                "sequence_only_vs_ferritin",
+                "proteon_and_sequence",
+                "proteon_only_vs_sequence",
+                "sequence_only_vs_proteon",
                 "foldseek_only",
                 "all_miss",
                 "no_truth",
@@ -136,16 +136,16 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"- Queries: {summary['n_queries']}",
         f"- Primary threshold: TM >= {summary['threshold']}",
         f"- Mean Foldseek recall: {summary['mean_recall']['foldseek']}",
-        f"- Mean ferritin recall: {summary['mean_recall']['ferritin']}",
+        f"- Mean proteon recall: {summary['mean_recall']['proteon']}",
         f"- Mean sequence recall: {summary['mean_recall']['sequence']}",
         "",
         "## Buckets",
         "",
     ]
     for bucket in [
-        "ferritin_and_sequence",
-        "ferritin_only_vs_sequence",
-        "sequence_only_vs_ferritin",
+        "proteon_and_sequence",
+        "proteon_only_vs_sequence",
+        "sequence_only_vs_proteon",
         "foldseek_only",
         "all_miss",
         "no_truth",
@@ -153,8 +153,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
         lines.append(f"- {bucket}: {summary['counts'].get(bucket, 0)}")
 
     for bucket in [
-        "ferritin_only_vs_sequence",
-        "sequence_only_vs_ferritin",
+        "proteon_only_vs_sequence",
+        "sequence_only_vs_proteon",
         "foldseek_only",
         "all_miss",
     ]:
@@ -162,12 +162,12 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "",
             f"## {bucket}",
             "",
-            "| Query | Truth | TM | Foldseek | ferritin | sequence | Foldseek top | ferritin top | sequence top |",
+            "| Query | Truth | TM | Foldseek | proteon | sequence | Foldseek top | proteon top | sequence top |",
             "|---|---|---:|---:|---:|---:|---|---|---|",
         ])
         for row in summary["by_bucket"][bucket]:
             lines.append(
-                "| {query} | {truth} | {truth_tm_score} | {foldseek_recall} | {ferritin_recall} | {sequence_recall} | {foldseek_top} | {ferritin_top} | {sequence_top} |".format(
+                "| {query} | {truth} | {truth_tm_score} | {foldseek_recall} | {proteon_recall} | {sequence_recall} | {foldseek_top} | {proteon_top} | {sequence_top} |".format(
                     **{key: "" if value is None else value for key, value in row.items()}
                 )
             )
@@ -176,7 +176,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--structural", required=True, type=Path, help="Foldseek/ferritin benchmark JSON")
+    parser.add_argument("--structural", required=True, type=Path, help="Foldseek/proteon benchmark JSON")
     parser.add_argument("--sequence", required=True, type=Path, help="Sequence benchmark JSON")
     parser.add_argument("--threshold", default="0.7")
     parser.add_argument("--json-output", type=Path, default=None)

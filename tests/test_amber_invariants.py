@@ -2,7 +2,7 @@
 
 Why this file exists
 --------------------
-AMBER96 is ferritin's well-oracled force field (test_ball_energy.py
+AMBER96 is proteon's well-oracled force field (test_ball_energy.py
 validates to ~0.02% against BALL Julia on heavy-atom crambin), but
 it was never run through the cross-path × invariant suite that
 test_charmm_invariants.py applies to CHARMM19+EEF1. That's the
@@ -32,7 +32,7 @@ import math
 
 import pytest
 
-import ferritin
+import proteon
 
 from conftest import (
     ENERGY_COMPONENTS,
@@ -68,8 +68,8 @@ _STRUCT_PATH_PARAMS = [
 def amber_energy(request):
     """(name, energy_dict) parametrized over (STRUCTURE × PATH), AMBER96."""
     structure_spec, (_path_id, nbl_threshold) = request.param
-    s = ferritin.load(structure_spec.absolute_path)
-    e = ferritin.compute_energy(
+    s = proteon.load(structure_spec.absolute_path)
+    e = proteon.compute_energy(
         s, ff=AMBER, units="kJ/mol", nbl_threshold=nbl_threshold
     )
     return structure_spec.name, e
@@ -203,9 +203,9 @@ class TestAmberDistinctFromCharmm:
         ids=[s.name for s in STRUCTURES],
     )
     def test_amber_total_differs_from_charmm(self, spec):
-        s = ferritin.load(spec.absolute_path)
-        e_amber = ferritin.compute_energy(s, ff=AMBER)
-        e_charmm = ferritin.compute_energy(s, ff="charmm19_eef1")
+        s = proteon.load(spec.absolute_path)
+        e_amber = proteon.compute_energy(s, ff=AMBER)
+        e_charmm = proteon.compute_energy(s, ff="charmm19_eef1")
         assert e_amber["total"] != e_charmm["total"], (
             f"{spec.name}: AMBER and CHARMM returned identical totals — "
             "one force field is silently falling back to the other"

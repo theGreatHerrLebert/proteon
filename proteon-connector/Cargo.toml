@@ -1,0 +1,39 @@
+[package]
+name = "proteon-connector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+description = "PyO3 Python bindings for proteon structural bioinformatics tools"
+
+[lib]
+name = "proteon_connector"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+# Propagates to proteon-search so its GPU search kernels are compiled in;
+# without that forward, `maturin build --features cuda` would only pull
+# cudarc into the connector crate and leave proteon-search CPU-only.
+cuda = ["cudarc", "proteon-search/cuda"]
+
+[dependencies]
+proteon-align = { path = "../proteon-align" }
+proteon-arrow = { path = "../proteon-arrow" }
+proteon-io = { path = "../proteon-io" }
+proteon-search = { path = "../proteon-search" }
+pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
+arrow = { version = "54", features = ["ipc"] }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
+rayon = "1"
+anyhow = "1"
+cudarc = { version = "0.19", features = ["std", "driver", "nvrtc", "cuda-12050"], optional = true }

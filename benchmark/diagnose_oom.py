@@ -2,7 +2,7 @@
 """Diagnose which structures / operations cause OOM in the 50K benchmark.
 
 Run on monster3:
-    cd /globalscratch/dateschn/ferritin-benchmark/ferritin
+    cd /globalscratch/dateschn/proteon-benchmark/proteon
     source ../venv/bin/activate
     python benchmark/diagnose_oom.py --pdb-dir ../pdbs_50k --n 5000
 """
@@ -24,7 +24,7 @@ def main():
     parser.add_argument("--n", type=int, default=5000, help="Number of files (first chunk)")
     args = parser.parse_args()
 
-    import ferritin
+    import proteon
 
     # 1. Collect files (same logic as run_benchmark.py chunk 1)
     files = sorted(Path(args.pdb_dir).glob("*.pdb")) + sorted(Path(args.pdb_dir).glob("*.cif"))
@@ -34,7 +34,7 @@ def main():
 
     # 2. Load
     log("Loading...")
-    loaded = ferritin.batch_load_tolerant(files, n_threads=0)
+    loaded = proteon.batch_load_tolerant(files, n_threads=0)
     structures = [s for _, s in loaded]
     log(f"Loaded: {len(structures)}")
 
@@ -92,7 +92,7 @@ def main():
             log(f"  [{i}] models={nm} atom_count={ac} effective={effective} — testing SASA...")
             try:
                 t0 = time.perf_counter()
-                ferritin.batch_total_sasa([s], n_threads=1, radii="protor")
+                proteon.batch_total_sasa([s], n_threads=1, radii="protor")
                 dt = time.perf_counter() - t0
                 log(f"       OK in {dt:.2f}s")
             except Exception as e:
@@ -106,7 +106,7 @@ def main():
         log(f"  batch={len(batch)} effective_atoms={effective:,} ... ", end="")
         try:
             t0 = time.perf_counter()
-            ferritin.batch_total_sasa(batch, n_threads=0, radii="protor")
+            proteon.batch_total_sasa(batch, n_threads=0, radii="protor")
             dt = time.perf_counter() - t0
             log(f"OK in {dt:.1f}s")
         except Exception as e:
@@ -116,10 +116,10 @@ def main():
     # 7. Quick test of other operations on full filtered set
     log("\n=== OTHER OPERATIONS TEST ===")
     ops = [
-        ("batch_dssp", lambda: ferritin.batch_dssp(structures_filtered, n_threads=0)),
-        ("batch_dihedrals", lambda: ferritin.batch_dihedrals(structures_filtered, n_threads=0)),
-        ("batch_backbone_hbonds", lambda: ferritin.batch_backbone_hbonds(structures_filtered, n_threads=0)),
-        ("batch_place_peptide_hydrogens", lambda: ferritin.batch_place_peptide_hydrogens(structures_filtered[:500], n_threads=0)),
+        ("batch_dssp", lambda: proteon.batch_dssp(structures_filtered, n_threads=0)),
+        ("batch_dihedrals", lambda: proteon.batch_dihedrals(structures_filtered, n_threads=0)),
+        ("batch_backbone_hbonds", lambda: proteon.batch_backbone_hbonds(structures_filtered, n_threads=0)),
+        ("batch_place_peptide_hydrogens", lambda: proteon.batch_place_peptide_hydrogens(structures_filtered[:500], n_threads=0)),
     ]
     for name, fn in ops:
         log(f"  {name}... ", end="")

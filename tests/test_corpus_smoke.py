@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-import ferritin
-import ferritin.corpus_smoke as corpus_smoke
+import proteon
+import proteon.corpus_smoke as corpus_smoke
 
 
 def _fake_structure(name: str):
@@ -29,7 +29,7 @@ def _write_fake_supervision_parquet(path: Path, n: int = 2, length: int = 2) -> 
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
-    from ferritin.supervision_export import (
+    from proteon.supervision_export import (
         TENSOR_FIELDS,
         build_supervision_schema,
         _make_ragged_column,
@@ -68,7 +68,7 @@ def _write_fake_supervision_tree(sup: Path, n: int = 2, length: int = 2) -> None
     _write_fake_supervision_parquet(sup / "examples" / "tensors.parquet", n=n, length=length)
     (sup / "examples" / "manifest.json").write_text(
         json.dumps({
-            "format": "ferritin.structure_supervision.parquet.v0",
+            "format": "proteon.structure_supervision.parquet.v0",
             "schema_version": 1,
             "count": n,
             "examples_file": "examples.jsonl",
@@ -90,7 +90,7 @@ def test_build_local_corpus_smoke_release_orchestrates_pipeline(tmp_path, monkey
         return loaded
 
     def fake_batch_prepare(structures, n_threads=None):
-        return [ferritin.PrepReport(hydrogens_added=1, converged=True) for _ in structures]
+        return [proteon.PrepReport(hydrogens_added=1, converged=True) for _ in structures]
 
     def fake_build_structure_supervision_dataset_from_prepared(structures, prep_reports, out_dir, **kwargs):
         out = Path(out_dir)
@@ -123,7 +123,7 @@ def test_build_local_corpus_smoke_release_orchestrates_pipeline(tmp_path, monkey
     monkeypatch.setattr(corpus_smoke, "build_sequence_dataset", fake_build_sequence_dataset)
     monkeypatch.setattr(corpus_smoke, "build_training_release", fake_build_training_release)
 
-    root = ferritin.build_local_corpus_smoke_release(
+    root = proteon.build_local_corpus_smoke_release(
         [tmp_path / "one.pdb", tmp_path / "two.pdb"],
         tmp_path / "smoke",
         release_id="smoke-v0",
@@ -150,7 +150,7 @@ def test_partial_ingestion_emits_failure_records(tmp_path, monkeypatch):
         return loaded
 
     def fake_batch_prepare(structures, n_threads=None):
-        return [ferritin.PrepReport(hydrogens_added=1, converged=True) for _ in structures]
+        return [proteon.PrepReport(hydrogens_added=1, converged=True) for _ in structures]
 
     def fake_supervision(structures, prep_reports, out_dir, **kwargs):
         out = Path(out_dir)
@@ -204,7 +204,7 @@ def test_partial_ingestion_emits_failure_records(tmp_path, monkeypatch):
     monkeypatch.setattr(corpus_smoke, "build_sequence_dataset", fake_sequence)
     monkeypatch.setattr(corpus_smoke, "build_training_release", fake_training)
 
-    root = ferritin.build_local_corpus_smoke_release(
+    root = proteon.build_local_corpus_smoke_release(
         [tmp_path / "one.pdb", tmp_path / "two.pdb", tmp_path / "three.pdb"],
         tmp_path / "partial_smoke",
         release_id="smoke-partial-v0",
@@ -228,11 +228,11 @@ def test_partial_ingestion_emits_failure_records(tmp_path, monkeypatch):
 
 
 def test_rescue_load_writes_rescued_input_manifest(tmp_path, monkeypatch):
-    rescued = ferritin.LoadRescueResult(
+    rescued = proteon.LoadRescueResult(
         structure=_fake_structure("one"),
         path=tmp_path / "one.pdb",
         rescued=True,
-        rescue_bucket=ferritin.LoaderFailureBucket(
+        rescue_bucket=proteon.LoaderFailureBucket(
             code="seqadv_invalid_field",
             rescueable=True,
             summary="bad seqadv",
@@ -247,7 +247,7 @@ def test_rescue_load_writes_rescued_input_manifest(tmp_path, monkeypatch):
         return [(0, rescued)]
 
     def fake_batch_prepare(structures, n_threads=None):
-        return [ferritin.PrepReport(hydrogens_added=1, converged=True) for _ in structures]
+        return [proteon.PrepReport(hydrogens_added=1, converged=True) for _ in structures]
 
     def fake_supervision(structures, prep_reports, out_dir, **kwargs):
         out = Path(out_dir)
@@ -299,7 +299,7 @@ def test_rescue_load_writes_rescued_input_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr(corpus_smoke, "build_sequence_dataset", fake_sequence)
     monkeypatch.setattr(corpus_smoke, "build_training_release", fake_training)
 
-    root = ferritin.build_local_corpus_smoke_release(
+    root = proteon.build_local_corpus_smoke_release(
         [tmp_path / "one.pdb"],
         tmp_path / "rescued_smoke",
         release_id="smoke-rescue-v0",

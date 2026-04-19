@@ -4,7 +4,7 @@ from pathlib import Path
 
 def _load_build_report_module():
     path = Path(__file__).resolve().parent.parent / "validation" / "report" / "build_report.py"
-    spec = spec_from_file_location("ferritin_validation_build_report", path)
+    spec = spec_from_file_location("proteon_validation_build_report", path)
     module = module_from_spec(spec)
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)

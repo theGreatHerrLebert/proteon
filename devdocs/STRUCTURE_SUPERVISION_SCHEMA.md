@@ -1,4 +1,4 @@
-# Ferritin Structure Supervision Schema
+# Proteon Structure Supervision Schema
 
 **Status:** draft v0  
 **Last updated:** 2026-04-13
@@ -11,12 +11,12 @@ The purpose of this artifact is:
 - provide canonical structural supervision derived from a prepared protein
   structure
 - remain independent of any concrete DL framework
-- serve as the stable boundary between ferritin and downstream JAX / PyTorch /
+- serve as the stable boundary between proteon and downstream JAX / PyTorch /
   NumPy consumers
 
 This schema is intentionally **NumPy-first** and **framework-neutral**.
 
-Ferritin should export plain Python metadata plus `numpy.ndarray` tensors.
+Proteon should export plain Python metadata plus `numpy.ndarray` tensors.
 
 It should **not** depend on:
 
@@ -28,7 +28,7 @@ It should **not** depend on:
 Those adapters can be built later on top of this contract.
 
 The corresponding Rust/PyO3 batch implementation target is defined in
-[RUST_BATCH_SUPERVISION_CONTRACT.md](/scratch/TMAlign/ferritin/RUST_BATCH_SUPERVISION_CONTRACT.md).
+[RUST_BATCH_SUPERVISION_CONTRACT.md](/scratch/TMAlign/proteon/RUST_BATCH_SUPERVISION_CONTRACT.md).
 
 ---
 
@@ -112,7 +112,7 @@ The Python-side object should be a plain dataclass-like container.
 Recommended public API shape:
 
 ```python
-example = ferritin.build_structure_supervision_example(
+example = proteon.build_structure_supervision_example(
     structure,
     prep_report=prep_report,
     record_id="...",
@@ -379,7 +379,7 @@ Recommended release wrapper on top of the raw example export:
 Recommended high-level builder:
 
 ```python
-ferritin.build_structure_supervision_dataset(
+proteon.build_structure_supervision_dataset(
     structures,
     out_dir,
     release_id="...",
@@ -443,20 +443,20 @@ structure-level record.
 
 ## 8. NumPy Boundary Rule
 
-Ferritin should expose:
+Proteon should expose:
 
 - Python dataclasses or plain objects
 - `numpy.ndarray`
 - plain Python metadata
 
-Ferritin should not expose in-core:
+Proteon should not expose in-core:
 
 - `torch.Tensor`
 - `jax.Array`
 - `tf.Tensor`
 - framework-native dataset abstractions
 
-Downstream adapters are explicitly out of scope for the ferritin core.
+Downstream adapters are explicitly out of scope for the proteon core.
 
 ---
 
@@ -482,8 +482,8 @@ should remain stable.
 
 Recommended first public API:
 
-- `ferritin.build_structure_supervision_example(structure, *, prep_report=None, record_id=None, source_id=None, chain_id=None)`
-- `ferritin.batch_build_structure_supervision_examples(structures, *, prep_reports=None, ...)`
+- `proteon.build_structure_supervision_example(structure, *, prep_report=None, record_id=None, source_id=None, chain_id=None)`
+- `proteon.batch_build_structure_supervision_examples(structures, *, prep_reports=None, ...)`
 
 Design intent:
 
@@ -494,7 +494,7 @@ Design intent:
 
 Possible later export API:
 
-- `ferritin.export_structure_supervision_examples(examples, out_dir, format=...)`
+- `proteon.export_structure_supervision_examples(examples, out_dir, format=...)`
 
 The first milestone is the in-memory contract, not the final storage engine.
 
@@ -527,5 +527,5 @@ The v0 `structure_supervision_example` should be:
 - provenance-aware
 - quality-aware
 
-This is the correct stable boundary between ferritin and any future
+This is the correct stable boundary between proteon and any future
 JAX/PyTorch training layer.

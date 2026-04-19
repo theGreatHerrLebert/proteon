@@ -93,13 +93,13 @@ def load_sequences(
     min_length: int,
     max_length: int | None,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    import ferritin
+    import proteon
 
     sequences: dict[str, str] = {}
     skipped: dict[str, str] = {}
     for path in paths:
         try:
-            sequence = sanitize_sequence_for_hmmer(extract_sequence(ferritin.load(path)))
+            sequence = sanitize_sequence_for_hmmer(extract_sequence(proteon.load(path)))
         except Exception as exc:
             skipped[str(path)] = f"load_failed: {exc}"
             continue
@@ -385,14 +385,14 @@ def run_phmmer_hits(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pdb-dir", default="/scratch/TMAlign/ferritin/validation/pdbs_10k")
+    parser.add_argument("--pdb-dir", default="/scratch/TMAlign/proteon/validation/pdbs_10k")
     parser.add_argument("--n-targets", type=int, default=500)
     parser.add_argument("--n-queries", type=int, default=20)
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--truth-cache", required=True)
     parser.add_argument("--method", choices=["kmer-sw", "phmmer"], default="kmer-sw")
-    parser.add_argument("--phmmer", default="/globalscratch/dateschn/ferritin-benchmark/bin/phmmer")
+    parser.add_argument("--phmmer", default="/globalscratch/dateschn/proteon-benchmark/bin/phmmer")
     parser.add_argument("--hmmer-evalue", type=float, default=10.0)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--kmer-size", type=int, default=3)
@@ -461,7 +461,7 @@ def main() -> None:
     t0 = time.time()
     if args.method == "phmmer":
         if args.work_dir is None:
-            work_context = tempfile.TemporaryDirectory(prefix="ferritin_phmmer_")
+            work_context = tempfile.TemporaryDirectory(prefix="proteon_phmmer_")
             work_root = Path(work_context.name)
         else:
             work_context = None

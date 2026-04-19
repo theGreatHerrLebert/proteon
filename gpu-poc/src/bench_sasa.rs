@@ -1,13 +1,13 @@
 //! GPU SASA benchmark: Shrake-Rupley on real crambin.
-//! Compares GPU kernel to ferritin's CPU implementation.
+//! Compares GPU kernel to proteon's CPU implementation.
 
 use cudarc::driver::*;
 use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 use std::time::Instant;
 
-use ferritin_connector::forcefield::params::{charmm19_eef1, ForceField};
-use ferritin_connector::forcefield::topology::build_topology;
-use ferritin_connector::sasa;
+use proteon_connector::forcefield::params::{charmm19_eef1, ForceField};
+use proteon_connector::forcefield::topology::build_topology;
+use proteon_connector::sasa;
 
 mod batch; // for Arc import
 
@@ -26,14 +26,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_points = 960;
     let probe = 1.4;
 
-    // Get coords and radii from ferritin's SASA module
+    // Get coords and radii from proteon's SASA module
     // (need to replicate the atom extraction since sasa_from_pdb is high-level)
     let mut coords = Vec::new();
     let mut radii = Vec::new();
     let first_model = pdb.models().next().unwrap();
     for chain in first_model.chains() {
         for residue in chain.residues() {
-            for atom in ferritin_connector::altloc::residue_atoms_primary(residue) {
+            for atom in proteon_connector::altloc::residue_atoms_primary(residue) {
                 let (x, y, z) = atom.pos();
                 coords.push([x, y, z]);
                 let elem = atom.element()
@@ -168,7 +168,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Golden spiral points on unit sphere — EXACT copy of ferritin's sasa.rs
+/// Golden spiral points on unit sphere — EXACT copy of proteon's sasa.rs
 fn golden_spiral(n: usize) -> Vec<[f64; 3]> {
     let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
     let dz = 2.0 / n as f64;

@@ -1,36 +1,36 @@
-"""Oracle test: ferritin AMBER96 energy vs BALL Julia (BiochemicalAlgorithms.jl).
+"""Oracle test: proteon AMBER96 energy vs BALL Julia (BiochemicalAlgorithms.jl).
 
 Compares energy components on crambin (1crn) without reconstruction,
 validating the energy computation, topology building, and charge assignment.
-Both ferritin and BALL output in kJ/mol.
+Both proteon and BALL output in kJ/mol.
 
-The **authoritative** AMBER96 reference for ferritin is OpenMM (see
+The **authoritative** AMBER96 reference for proteon is OpenMM (see
 `validation/amber96_oracle.py` — 1000-PDB benchmark, <0.5% parity on all
 components at NoCutoff). BALL is a second, independent AMBER96
 implementation whose behavior has known, documented deviations from the
 OpenMM reference; this test pins the pieces where BALL and OpenMM agree
-(so a regression in ferritin would show up against either), and
+(so a regression in proteon would show up against either), and
 documents-but-tolerates the pieces where BALL intrinsically diverges.
 
-Tolerances are component-specific and reflect measured BALL-vs-ferritin
+Tolerances are component-specific and reflect measured BALL-vs-proteon
 agreement on 1crn at NoCutoff, not an aspirational 0.1%. The number
-next to each assertion is the band inside which ferritin must stay; a
-violation means either a ferritin regression or a newer BALL that moved
+next to each assertion is the band inside which proteon must stay; a
+violation means either a proteon regression or a newer BALL that moved
 the reference (re-run `ball_energy_raw.jl` to distinguish).
 
 Known BALL-specific divergences, asserted loosely or one-sided:
 
 - **Impropers** — BALL's matcher supports only single-wildcard patterns;
   the AMBER spec requires double-wildcard (e.g. `* * N H` for the amide
-  plane). BALL misses ~100 amide-plane impropers on crambin. Ferritin
-  matches OpenMM within 0.5%, so ferritin is the AMBER-canonical value.
-  One-sided: ferritin >= BALL, within a small absolute magnitude.
+  plane). BALL misses ~100 amide-plane impropers on crambin. Proteon
+  matches OpenMM within 0.5%, so proteon is the AMBER-canonical value.
+  One-sided: proteon >= BALL, within a small absolute magnitude.
 
-- **Electrostatic** — BALL diverges from ferritin by ~20% at NoCutoff on
+- **Electrostatic** — BALL diverges from proteon by ~20% at NoCutoff on
   crambin (77998 vs 93874 kJ/mol, 2026-04-18). Most likely cause is a
   different partial-charge dictionary or 1-4 scaling convention in
-  BALL's AmberFF build vs the OpenMM-canonical AMBER96 values ferritin
-  uses. Since the OpenMM oracle already pins ferritin's charges, we
+  BALL's AmberFF build vs the OpenMM-canonical AMBER96 values proteon
+  uses. Since the OpenMM oracle already pins proteon's charges, we
   assert only a wide 25% band here — enough to catch a catastrophic
   charge-set regression, loose enough to not break on the known gap.
 
@@ -41,7 +41,7 @@ Known BALL-specific divergences, asserted loosely or one-sided:
 
 import os
 import pytest
-import ferritin
+import proteon
 
 pytestmark = pytest.mark.oracle("ball")
 
@@ -64,15 +64,15 @@ BALL_CRAMBIN_RAW = {
 
 
 class TestBallEnergyOracle:
-    """Compare ferritin AMBER96 energy against BALL Julia reference."""
+    """Compare proteon AMBER96 energy against BALL Julia reference."""
 
     @pytest.fixture
     def crambin_energy(self):
-        s = ferritin.load(CRAMBIN)
+        s = proteon.load(CRAMBIN)
         # NoCutoff matches the test's intent: pin the energy math against
-        # BALL's own no-cutoff reference, independent of ferritin's
+        # BALL's own no-cutoff reference, independent of proteon's
         # default 15 Å performance-vs-accuracy policy.
-        return ferritin.compute_energy(s, ff="amber96", nonbonded_cutoff=1e6)
+        return proteon.compute_energy(s, ff="amber96", nonbonded_cutoff=1e6)
 
     def test_bond_stretch_matches(self, crambin_energy):
         """Tolerance 1.0%: measured gap ~0.7% on 1crn; 1% buys margin for
@@ -108,7 +108,7 @@ class TestBallEnergyOracle:
     def test_electrostatic_in_reasonable_range(self, crambin_energy):
         """Tolerance 25%: measured gap ~20% on 1crn. See module docstring
         — BALL diverges from the OpenMM-canonical AMBER96 electrostatic,
-        and ferritin matches OpenMM (not BALL). The 25% band catches a
+        and proteon matches OpenMM (not BALL). The 25% band catches a
         catastrophic charge-set regression without breaking on the
         known BALL convention gap."""
         fe = crambin_energy["electrostatic"]
@@ -117,13 +117,13 @@ class TestBallEnergyOracle:
         assert pct < 25.0, f"Electrostatic: {fe:.2f} vs BALL {ball:.2f} ({pct:.4f}%)"
 
     def test_improper_on_same_order_as_ball(self, crambin_energy):
-        """Improper is a small term; ferritin's number is expected to exceed
-        BALL's because ferritin enforces AMBER's full double-wildcard
+        """Improper is a small term; proteon's number is expected to exceed
+        BALL's because proteon enforces AMBER's full double-wildcard
         improper lookup (see params.rs::get_improper_torsion) and thus
         catches the ~100 amide-plane impropers (`* * N H`) that BALL's
         single-wildcard implementation misses on every peptide bond.
 
-        Before the 2026-04-13 double-wildcard fix: ferritin had 15
+        Before the 2026-04-13 double-wildcard fix: proteon had 15
         impropers = 2.2 kJ/mol, close to BALL's 2.08 kJ/mol.
         After the fix: 125 impropers = 8.1 kJ/mol, which is the AMBER-
         canonical value (OpenMM's amber96 agrees within 0.5%).
@@ -133,8 +133,8 @@ class TestBallEnergyOracle:
         """
         fe = crambin_energy["improper_torsion"]
         ball = BALL_CRAMBIN_RAW["improper_torsion"]
-        # Ferritin expected > BALL but still small in magnitude.
-        assert 0 < fe < 20, f"Improper ferritin: {fe:.2f} kJ/mol (expected 2-15)"
+        # Proteon expected > BALL but still small in magnitude.
+        assert 0 < fe < 20, f"Improper proteon: {fe:.2f} kJ/mol (expected 2-15)"
         # Historical expectation: BALL was ~2 kJ/mol. We should be above that.
         assert fe >= ball, (
             f"Improper regressed below BALL: {fe:.2f} < BALL {ball:.2f}. "

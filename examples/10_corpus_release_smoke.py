@@ -1,9 +1,9 @@
 """Build a small end-to-end corpus release from local structure files.
 
-Requires the native ferritin connector to be installed.
+Requires the native proteon connector to be installed.
 
 Example:
-    PYTHONPATH=packages/ferritin/src python examples/10_corpus_release_smoke.py \
+    PYTHONPATH=packages/proteon/src python examples/10_corpus_release_smoke.py \
         --out smoke_release \
         test-pdbs/1crn.pdb test-pdbs/1ubq.pdb test-pdbs/1bpi.pdb
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import ferritin
+import proteon
 
 
 def main() -> None:
@@ -24,7 +24,7 @@ def main() -> None:
     ap.add_argument("--n-threads", type=int, default=None, help="Thread count")
     args = ap.parse_args()
 
-    out = ferritin.build_local_corpus_smoke_release(
+    out = proteon.build_local_corpus_smoke_release(
         [Path(p) for p in args.paths],
         Path(args.out),
         release_id=args.release_id,

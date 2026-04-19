@@ -2,8 +2,8 @@ import os
 
 import numpy as np
 
-import ferritin
-import ferritin_connector
+import proteon
+import proteon_connector
 
 
 REPO = os.path.dirname(os.path.dirname(__file__))
@@ -13,8 +13,8 @@ CORPUS_MISSING_CB = os.path.join(REPO, "tests", "corpus", "missing_atoms", "miss
 
 class TestAlphabetEncoding:
     def test_encode_alphabet_returns_expected_shapes(self):
-        s = ferritin.load(CRAMBIN)
-        result = ferritin.encode_alphabet(s)
+        s = proteon.load(CRAMBIN)
+        result = proteon.encode_alphabet(s)
 
         n = len(result["states"])
         assert n > 0
@@ -28,8 +28,8 @@ class TestAlphabetEncoding:
         assert len(result["insertion_codes"]) == n
 
     def test_encode_alphabet_has_valid_non_placeholder_states(self):
-        s = ferritin.load(CRAMBIN)
-        result = ferritin.encode_alphabet(s)
+        s = proteon.load(CRAMBIN)
+        result = proteon.encode_alphabet(s)
 
         valid_states = result["states"][result["valid_mask"]]
         assert len(valid_states) > 0
@@ -37,9 +37,9 @@ class TestAlphabetEncoding:
         assert np.any(valid_states != 2)
 
     def test_encode_alphabet_is_deterministic(self):
-        s = ferritin.load(CRAMBIN)
-        r1 = ferritin.encode_alphabet(s)
-        r2 = ferritin.encode_alphabet(s)
+        s = proteon.load(CRAMBIN)
+        r1 = proteon.encode_alphabet(s)
+        r2 = proteon.encode_alphabet(s)
 
         assert r1["alphabet"] == r2["alphabet"]
         np.testing.assert_array_equal(r1["states"], r2["states"])
@@ -48,8 +48,8 @@ class TestAlphabetEncoding:
         np.testing.assert_allclose(r1["features"], r2["features"])
 
     def test_encode_alphabet_handles_missing_cb(self):
-        s = ferritin.load(CORPUS_MISSING_CB)
-        result = ferritin.encode_alphabet(s)
+        s = proteon.load(CORPUS_MISSING_CB)
+        result = proteon.encode_alphabet(s)
 
         assert len(result["states"]) > 0
         assert len(result["alphabet"]) == len(result["states"])
@@ -57,12 +57,12 @@ class TestAlphabetEncoding:
         assert result["valid_mask"].shape == result["states"].shape
 
     def test_batch_encode_alphabet_matches_single_structure_api(self):
-        s1 = ferritin.load(CRAMBIN)
-        s2 = ferritin.load(CORPUS_MISSING_CB)
+        s1 = proteon.load(CRAMBIN)
+        s2 = proteon.load(CORPUS_MISSING_CB)
 
-        batch = ferritin.batch_encode_alphabet([s1, s2], n_threads=2)
-        single1 = ferritin.encode_alphabet(s1)
-        single2 = ferritin.encode_alphabet(s2)
+        batch = proteon.batch_encode_alphabet([s1, s2], n_threads=2)
+        single1 = proteon.encode_alphabet(s1)
+        single2 = proteon.encode_alphabet(s2)
 
         assert len(batch) == 2
         for batched, single in zip(batch, [single1, single2]):
@@ -77,7 +77,7 @@ class TestAlphabetEncoding:
             assert batched["insertion_codes"] == single["insertion_codes"]
 
     def test_diagonal_rescore_batch_scores_identical_strings_highest(self):
-        scores = ferritin_connector.py_search.diagonal_rescore_batch(
+        scores = proteon_connector.py_search.diagonal_rescore_batch(
             "AAAA",
             "AAAA",
             ["AAAA", "CCCC"],

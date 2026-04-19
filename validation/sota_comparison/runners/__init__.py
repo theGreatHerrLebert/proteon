@@ -1,7 +1,7 @@
 """Runner registry for the SOTA comparison harness.
 
 Each `runners/<op>.py` module exports one function per implementation
-(e.g. `def ferritin(path)`, `def freesasa(path)`). They register themselves
+(e.g. `def proteon(path)`, `def freesasa(path)`). They register themselves
 in the global `OPS` dict via the `register()` decorator from `_base`.
 
 Importing a runner module registers all of its implementations as a side

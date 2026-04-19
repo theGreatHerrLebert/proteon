@@ -10,11 +10,11 @@ import sys
 
 HERE = Path(__file__).parent
 ROOT = HERE.parent.parent
-PACKAGE_SRC = ROOT / "packages" / "ferritin" / "src"
+PACKAGE_SRC = ROOT / "packages" / "proteon" / "src"
 if str(PACKAGE_SRC) not in sys.path:
     sys.path.insert(0, str(PACKAGE_SRC))
 
-import ferritin
+import proteon
 
 
 STAGE2_FAILURES = ROOT / "validation" / "stage2_1k_postfix.jsonl"
@@ -47,7 +47,7 @@ def main() -> None:
     candidate_names = _candidate_failure_names(STAGE2_FAILURES)
     available_paths = _find_available_paths(candidate_names)
 
-    raw_results = ferritin.batch_load_tolerant_with_rescue(available_paths)
+    raw_results = proteon.batch_load_tolerant_with_rescue(available_paths)
     rescued_bucket_counts: dict[str, int] = {}
     rescued_paths: list[str] = []
     for index, result in raw_results:
@@ -62,7 +62,7 @@ def main() -> None:
     if TMP_SMOKE.exists():
         shutil.rmtree(TMP_SMOKE)
     try:
-        ferritin.build_local_corpus_smoke_release(
+        proteon.build_local_corpus_smoke_release(
             available_paths,
             TMP_SMOKE,
             release_id="rescue-benchmark-v0",

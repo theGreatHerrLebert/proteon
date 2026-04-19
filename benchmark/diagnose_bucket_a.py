@@ -70,7 +70,7 @@ def main():
                         help="Override sample list")
     args = parser.parse_args()
 
-    import ferritin
+    import proteon
 
     ids = args.ids if args.ids else SAMPLES
     results = []
@@ -92,7 +92,7 @@ def main():
 
         try:
             # Step 1: load as-is
-            s = ferritin.load(str(path))
+            s = proteon.load(str(path))
             n_atoms = s.atom_count
             print(f"  loaded: {n_atoms} atoms", flush=True)
             rec["atoms_loaded"] = n_atoms
@@ -127,7 +127,7 @@ def main():
 
             # Step 2: energy as-loaded
             try:
-                e_loaded = ferritin.compute_energy(s, ff="amber96", units="kJ/mol")
+                e_loaded = proteon.compute_energy(s, ff="amber96", units="kJ/mol")
                 rec["energy_loaded"] = dict(e_loaded)
                 print(f"  energy (loaded): total={e_loaded['total']:.2e} kJ/mol")
                 print(f"    bond={e_loaded.get('bond_stretch', 0):.2e}, "
@@ -139,8 +139,8 @@ def main():
                 print(f"  !! energy compute error (loaded): {e}")
 
             # Step 3: place peptide hydrogens
-            s2 = ferritin.load(str(path))  # fresh copy
-            added, skipped = ferritin.place_peptide_hydrogens(s2)
+            s2 = proteon.load(str(path))  # fresh copy
+            added, skipped = proteon.place_peptide_hydrogens(s2)
             print(f"  placed {added} H atoms ({skipped} skipped)")
             rec["h_added"] = added
             rec["h_skipped"] = skipped
@@ -160,7 +160,7 @@ def main():
 
             # Step 5: energy after H placement
             try:
-                e_h = ferritin.compute_energy(s2, ff="amber96", units="kJ/mol")
+                e_h = proteon.compute_energy(s2, ff="amber96", units="kJ/mol")
                 rec["energy_after_h"] = dict(e_h)
                 print(f"  energy (after H): total={e_h['total']:.2e} kJ/mol")
                 print(f"    bond={e_h.get('bond_stretch', 0):.2e}, "

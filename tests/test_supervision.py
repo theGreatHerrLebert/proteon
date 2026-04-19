@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import ferritin
+import proteon
 
 
 def _atom(name, xyz):
@@ -83,15 +83,15 @@ def _bad_structure():
 class TestStructureSupervisionExample:
     def test_builds_core_example(self):
         s = _fake_structure()
-        prep = ferritin.PrepReport(hydrogens_added=3, hydrogens_skipped=0)
-        ex = ferritin.build_structure_supervision_example(
+        prep = proteon.PrepReport(hydrogens_added=3, hydrogens_skipped=0)
+        ex = proteon.build_structure_supervision_example(
             s,
             prep_report=prep,
             record_id="fake:A",
             source_id="fake",
         )
 
-        assert isinstance(ex, ferritin.StructureSupervisionExample)
+        assert isinstance(ex, proteon.StructureSupervisionExample)
         assert ex.record_id == "fake:A"
         assert ex.chain_id == "A"
         assert ex.sequence == "GSF"
@@ -101,7 +101,7 @@ class TestStructureSupervisionExample:
         assert np.all(ex.seq_mask == 1.0)
 
     def test_atom37_and_atom14_shapes_are_present(self):
-        ex = ferritin.build_structure_supervision_example(_fake_structure())
+        ex = proteon.build_structure_supervision_example(_fake_structure())
 
         assert ex.all_atom_positions.shape == (3, 37, 3)
         assert ex.all_atom_mask.shape == (3, 37)
@@ -113,7 +113,7 @@ class TestStructureSupervisionExample:
         assert ex.residx_atom37_to_atom14.shape == (3, 37)
 
     def test_pseudo_beta_uses_ca_for_gly_and_cb_for_non_gly(self):
-        ex = ferritin.build_structure_supervision_example(_fake_structure())
+        ex = proteon.build_structure_supervision_example(_fake_structure())
 
         # GLY residue 0 should use CA
         np.testing.assert_allclose(ex.pseudo_beta[0], np.array([1.0, 0.0, 0.0], dtype=np.float32))
@@ -123,7 +123,7 @@ class TestStructureSupervisionExample:
         assert ex.pseudo_beta_mask[1] == 1.0
 
     def test_backbone_and_chi_masks_are_computed(self):
-        ex = ferritin.build_structure_supervision_example(_fake_structure())
+        ex = proteon.build_structure_supervision_example(_fake_structure())
 
         assert ex.phi.shape == (3,)
         assert ex.psi.shape == (3,)
@@ -138,7 +138,7 @@ class TestStructureSupervisionExample:
         assert ex.chi_mask[2].tolist() == [1.0, 1.0, 0.0, 0.0]
 
     def test_ambiguity_flags_mark_symmetric_sidechains(self):
-        ex = ferritin.build_structure_supervision_example(_fake_structure())
+        ex = proteon.build_structure_supervision_example(_fake_structure())
 
         # PHE residue is index 2 and should mark CD1/CD2 and CE1/CE2 ambiguous.
         assert ex.atom14_atom_is_ambiguous.shape == (3, 14)
@@ -147,22 +147,22 @@ class TestStructureSupervisionExample:
         assert np.count_nonzero(ex.atom14_atom_is_ambiguous[2]) == 4
 
     def test_quality_metadata_is_attached(self):
-        prep = ferritin.PrepReport(
+        prep = proteon.PrepReport(
             hydrogens_added=3,
             hydrogens_skipped=1,
             atoms_reconstructed=2,
             n_unassigned_atoms=4,
         )
-        ex = ferritin.build_structure_supervision_example(_fake_structure(), prep_report=prep)
+        ex = proteon.build_structure_supervision_example(_fake_structure(), prep_report=prep)
 
-        assert isinstance(ex.quality, ferritin.StructureQualityMetadata)
+        assert isinstance(ex.quality, proteon.StructureQualityMetadata)
         assert ex.quality.hydrogens_added == 3
         assert ex.quality.hydrogens_skipped == 1
         assert ex.quality.atoms_reconstructed == 2
         assert ex.quality.n_unassigned_atoms == 4
 
     def test_rigidgroups_are_materialized(self):
-        ex = ferritin.build_structure_supervision_example(_fake_structure())
+        ex = proteon.build_structure_supervision_example(_fake_structure())
         assert ex.rigidgroups_gt_frames.shape == (3, 8, 4, 4)
         assert ex.rigidgroups_gt_exists.shape == (3, 8)
         assert ex.rigidgroups_group_exists.shape == (3, 8)
@@ -175,24 +175,24 @@ class TestStructureSupervisionExample:
         np.testing.assert_allclose(ex.rigidgroups_gt_frames[1, 3, :3, 3], np.array([4.7, 0.9, 1.4], dtype=np.float32))
 
     def test_is_partial_is_false_once_rigid_groups_exist(self):
-        ex = ferritin.build_structure_supervision_example(_fake_structure())
+        ex = proteon.build_structure_supervision_example(_fake_structure())
         assert not ex.is_partial
 
     def test_batch_builder_matches_single_builder_metadata(self):
-        batch = ferritin.batch_build_structure_supervision_examples([_fake_structure(), _fake_structure()])
+        batch = proteon.batch_build_structure_supervision_examples([_fake_structure(), _fake_structure()])
         assert len(batch) == 2
         assert batch[0].sequence == batch[1].sequence == "GSF"
 
     def test_export_roundtrip_preserves_examples(self, tmp_path):
-        examples = ferritin.batch_build_structure_supervision_examples(
+        examples = proteon.batch_build_structure_supervision_examples(
             [_fake_structure("A"), _fake_structure("B")]
         )
-        out_dir = ferritin.export_structure_supervision_examples(examples, tmp_path / "supervision")
+        out_dir = proteon.export_structure_supervision_examples(examples, tmp_path / "supervision")
 
         manifest = (out_dir / "manifest.json").read_text(encoding="utf-8")
-        assert ferritin.SUPERVISION_EXPORT_FORMAT in manifest
+        assert proteon.SUPERVISION_EXPORT_FORMAT in manifest
 
-        loaded = ferritin.load_structure_supervision_examples(out_dir)
+        loaded = proteon.load_structure_supervision_examples(out_dir)
         assert len(loaded) == 2
         assert loaded[0].sequence == "GSF"
         assert loaded[1].sequence == "GSF"
@@ -210,10 +210,10 @@ class TestStructureSupervisionExample:
         import hashlib
         import json
 
-        examples = ferritin.batch_build_structure_supervision_examples(
+        examples = proteon.batch_build_structure_supervision_examples(
             [_fake_structure("A")]
         )
-        out_dir = ferritin.export_structure_supervision_examples(
+        out_dir = proteon.export_structure_supervision_examples(
             examples, tmp_path / "supervision"
         )
         manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -224,25 +224,25 @@ class TestStructureSupervisionExample:
         assert manifest["tensor_file"] == "tensors.parquet"
 
         # Good path: default load verifies and succeeds.
-        ferritin.load_structure_supervision_examples(out_dir)
+        proteon.load_structure_supervision_examples(out_dir)
 
         # Tamper the tensor file; default load must raise with a
         # checksum-mismatch error before any parquet parsing attempts.
         parquet_path.write_bytes(b"corrupt")
         with pytest.raises(ValueError, match="checksum mismatch"):
-            ferritin.load_structure_supervision_examples(out_dir)
+            proteon.load_structure_supervision_examples(out_dir)
 
     def test_release_builder_writes_manifest_and_failures(self, tmp_path):
-        examples = ferritin.batch_build_structure_supervision_examples([_fake_structure("A")])
+        examples = proteon.batch_build_structure_supervision_examples([_fake_structure("A")])
         failures = [
-            ferritin.FailureRecord(
+            proteon.FailureRecord(
                 record_id="bad:1",
                 failure_class="missing_required_atoms",
                 message="missing CA atom",
                 source_id="bad",
             )
         ]
-        release_dir = ferritin.build_structure_supervision_release(
+        release_dir = proteon.build_structure_supervision_release(
             examples,
             tmp_path / "release",
             release_id="demo-v0",
@@ -259,12 +259,12 @@ class TestStructureSupervisionExample:
         assert manifest["code_rev"] == "abc123"
         assert manifest["provenance"]["source_manifest"] == "raw-v1"
 
-        loaded_failures = ferritin.load_failure_records(release_dir / "failures.jsonl")
+        loaded_failures = proteon.load_failure_records(release_dir / "failures.jsonl")
         assert len(loaded_failures) == 1
         assert loaded_failures[0].failure_class == "missing_required_atoms"
 
     def test_dataset_builder_captures_failures_and_writes_release(self, tmp_path):
-        release_dir = ferritin.build_structure_supervision_dataset(
+        release_dir = proteon.build_structure_supervision_dataset(
             [_fake_structure("A"), _bad_structure()],
             tmp_path / "dataset_release",
             release_id="dataset-v0",
@@ -278,24 +278,24 @@ class TestStructureSupervisionExample:
         assert manifest["count_failures"] == 1
         assert manifest["release_id"] == "dataset-v0"
 
-        examples = ferritin.load_structure_supervision_examples(release_dir / "examples")
+        examples = proteon.load_structure_supervision_examples(release_dir / "examples")
         assert len(examples) == 1
         assert examples[0].record_id == "good:A"
 
-        failures = ferritin.load_failure_records(release_dir / "failures.jsonl")
+        failures = proteon.load_failure_records(release_dir / "failures.jsonl")
         assert len(failures) == 1
         assert failures[0].record_id == "bad:Z"
         assert failures[0].failure_class == "missing_required_atoms"
 
     def test_prepared_bridge_writes_manifest_and_supervision_release(self, tmp_path):
-        prep = ferritin.PrepReport(
+        prep = proteon.PrepReport(
             atoms_reconstructed=2,
             hydrogens_added=3,
             hydrogens_skipped=1,
             minimizer_steps=7,
             converged=True,
         )
-        root = ferritin.build_structure_supervision_dataset_from_prepared(
+        root = proteon.build_structure_supervision_dataset_from_prepared(
             [_fake_structure("A")],
             [prep],
             tmp_path / "prepared_bridge",
@@ -306,26 +306,26 @@ class TestStructureSupervisionExample:
             provenance={"source_manifest": "prepared-demo"},
         )
 
-        prepared_rows = ferritin.load_prepared_structure_manifest(root / "prepared_structures.jsonl")
+        prepared_rows = proteon.load_prepared_structure_manifest(root / "prepared_structures.jsonl")
         assert len(prepared_rows) == 1
         assert prepared_rows[0].record_id == "fake:A"
         assert prepared_rows[0].atoms_reconstructed == 2
         assert prepared_rows[0].hydrogens_added == 3
 
-        examples = ferritin.load_structure_supervision_examples(root / "supervision_release" / "examples")
+        examples = proteon.load_structure_supervision_examples(root / "supervision_release" / "examples")
         assert len(examples) == 1
         assert examples[0].record_id == "fake:A"
 
     def test_release_builder_allows_failure_only_release(self, tmp_path):
         failures = [
-            ferritin.FailureRecord(
+            proteon.FailureRecord(
                 record_id="bad:A",
                 failure_class="missing_required_atoms",
                 message="missing CA atom",
                 source_id="bad",
             )
         ]
-        release_dir = ferritin.build_structure_supervision_release(
+        release_dir = proteon.build_structure_supervision_release(
             [],
             tmp_path / "release_fail_only",
             release_id="fail-only-v0",
@@ -335,5 +335,5 @@ class TestStructureSupervisionExample:
         manifest = json.loads((release_dir / "release_manifest.json").read_text(encoding="utf-8"))
         assert manifest["count_examples"] == 0
         assert manifest["count_failures"] == 1
-        examples = ferritin.load_structure_supervision_examples(release_dir / "examples")
+        examples = proteon.load_structure_supervision_examples(release_dir / "examples")
         assert examples == []

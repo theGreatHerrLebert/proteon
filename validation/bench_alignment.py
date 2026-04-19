@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Alignment benchmark: ferritin (Rust) vs C++ USAlign.
+"""Alignment benchmark: proteon (Rust) vs C++ USAlign.
 
 Runs TM-align on all pairs from a set of PDB structures using both
-ferritin and the C++ USAlign binary, comparing TM-scores, RMSD,
+proteon and the C++ USAlign binary, comparing TM-scores, RMSD,
 aligned lengths, and timing.
 
 Usage:
@@ -24,7 +24,7 @@ from typing import NamedTuple, Optional
 
 import numpy as np
 
-from ferritin_connector import py_align_funcs, py_io
+from proteon_connector import py_align_funcs, py_io
 
 USALIGN_BIN = "/scratch/TMAlign/USAlign/USalign"
 
@@ -67,15 +67,15 @@ def run_cpp_usalign(path1: str, path2: str) -> Optional[CppResult]:
     return None
 
 
-def run_ferritin(pdb1, pdb2) -> dict:
-    """Run ferritin TM-align and return results + timing."""
+def run_proteon(pdb1, pdb2) -> dict:
+    """Run proteon TM-align and return results + timing."""
     t0 = time.time()
     r = py_align_funcs.tm_align_pair(pdb1, pdb2)
     elapsed = (time.time() - t0) * 1000
     return {
-        # ferritin convention: chain1 = norm by L2, chain2 = norm by L1
+        # proteon convention: chain1 = norm by L2, chain2 = norm by L1
         # C++ convention: tm1 = norm by L1, tm2 = norm by L2
-        # So: ferritin.chain1 <-> cpp.tm2, ferritin.chain2 <-> cpp.tm1
+        # So: proteon.chain1 <-> cpp.tm2, proteon.chain2 <-> cpp.tm1
         "tm_normL1": r.tm_score_chain2,
         "tm_normL2": r.tm_score_chain1,
         "rmsd": r.rmsd,
@@ -115,8 +115,8 @@ def main():
     print(f"C++ USAlign: {USALIGN_BIN}")
     print()
 
-    # Preload all structures for ferritin
-    print("Loading structures into ferritin...", end=" ", flush=True)
+    # Preload all structures for proteon
+    print("Loading structures into proteon...", end=" ", flush=True)
     t0 = time.time()
     loaded = {}
     load_failures = []
@@ -144,7 +144,7 @@ def main():
     tm_diffs_L2 = []
     rmsd_diffs = []
     nalign_diffs = []
-    ferritin_times = []
+    proteon_times = []
     cpp_times = []
     n_fail = 0
 
@@ -160,9 +160,9 @@ def main():
             n_fail += 1
             continue
 
-        # Ferritin
+        # Proteon
         try:
-            fe = run_ferritin(loaded[p1], loaded[p2])
+            fe = run_proteon(loaded[p1], loaded[p2])
         except Exception as e:
             n_fail += 1
             continue
@@ -177,7 +177,7 @@ def main():
         tm_diffs_L2.append(d_tm2)
         rmsd_diffs.append(d_rmsd)
         nalign_diffs.append(d_nalign)
-        ferritin_times.append(fe["time_ms"])
+        proteon_times.append(fe["time_ms"])
         cpp_times.append(cpp.time_ms)
 
         results.append({
@@ -202,14 +202,14 @@ def main():
     tm_diffs_L2 = np.array(tm_diffs_L2)
     rmsd_diffs = np.array(rmsd_diffs)
     nalign_diffs = np.array(nalign_diffs)
-    ferritin_times = np.array(ferritin_times)
+    proteon_times = np.array(proteon_times)
     cpp_times = np.array(cpp_times)
 
     print(f"\n{'='*65}")
     print(f"ALIGNMENT BENCHMARK ({len(results)} pairs, {elapsed:.1f}s, {n_fail} failures)")
     print(f"{'='*65}\n")
 
-    print("  TM-score agreement (ferritin vs C++ USAlign):")
+    print("  TM-score agreement (proteon vs C++ USAlign):")
     print(f"    TM (norm L1): median |diff| = {np.median(tm_diffs_L1):.5f}, "
           f"max = {np.max(tm_diffs_L1):.5f}, "
           f"within 1e-3: {np.sum(tm_diffs_L1 < 1e-3)}/{len(tm_diffs_L1)}")
@@ -228,12 +228,12 @@ def main():
           f"exact match: {np.sum(nalign_diffs == 0)}/{len(nalign_diffs)}")
 
     print(f"\n  Speed:")
-    print(f"    Ferritin: median {np.median(ferritin_times):.1f} ms, "
-          f"mean {np.mean(ferritin_times):.1f} ms")
+    print(f"    Proteon: median {np.median(proteon_times):.1f} ms, "
+          f"mean {np.mean(proteon_times):.1f} ms")
     print(f"    C++ USAlign: median {np.median(cpp_times):.1f} ms, "
           f"mean {np.mean(cpp_times):.1f} ms")
-    ratio = np.median(cpp_times) / np.median(ferritin_times) if np.median(ferritin_times) > 0 else 0
-    print(f"    Ferritin/C++ median ratio: {ratio:.2f}x")
+    ratio = np.median(cpp_times) / np.median(proteon_times) if np.median(proteon_times) > 0 else 0
+    print(f"    Proteon/C++ median ratio: {ratio:.2f}x")
 
     # Worst outliers
     worst_idx = np.argsort(tm_diffs_L1)[-5:][::-1]
@@ -258,7 +258,7 @@ def main():
             "tm_L2_max_diff": round(float(np.max(tm_diffs_L2)), 6),
             "rmsd_median_diff": round(float(np.median(rmsd_diffs)), 4),
             "rmsd_max_diff": round(float(np.max(rmsd_diffs)), 4),
-            "ferritin_median_ms": round(float(np.median(ferritin_times)), 1),
+            "proteon_median_ms": round(float(np.median(proteon_times)), 1),
             "cpp_median_ms": round(float(np.median(cpp_times)), 1),
             "speed_ratio": round(ratio, 2),
             "results": results,

@@ -1,8 +1,8 @@
-# Ferritin Roadmap
+# Proteon Roadmap
 
 **Last updated: 2026-04-19**
 
-This file tracks **what's not done yet**. For what ferritin already covers,
+This file tracks **what's not done yet**. For what proteon already covers,
 read the top-level `README.md` (public surface), `devdocs/ORACLE.md`
 (validation philosophy), and `tests/oracle/README.md` (currently-wired
 oracles with per-component tolerances). Release-note history lives in
@@ -17,7 +17,7 @@ Foldseek-style alphabet, GPU Smith-Waterman kernels), Arrow/Parquet export,
 batch parallelism throughout, CHARMM19+EEF1 / AMBER96 / OBC GB force fields
 on CPU and CUDA, L-BFGS / CG / SD minimizers, Velocity-Verlet MD with
 SHAKE/RATTLE and Berendsen thermostat, cell-list neighbor list wired into
-the default energy path, `ferritin.prepare()` + `batch_prepare()` +
+the default energy path, `proteon.prepare()` + `batch_prepare()` +
 `load_and_prepare()`, the Layer-5 geometric-DL data export, PyPI wheels
 for Python 3.12/3.13 on Linux + macOS-arm64 + Windows.
 
@@ -35,7 +35,7 @@ for Python 3.12/3.13 on Linux + macOS-arm64 + Windows.
 
 ### Structure-preparation gaps (vs PDBFixer / reduce / Schrödinger)
 - Asn / Gln / His flip optimization (amide/ring orientation; reduce does
-  this, ferritin currently doesn't — see `test_reduce_hydrogen_oracle.py`
+  this, proteon currently doesn't — see `test_reduce_hydrogen_oracle.py`
   §Known convention gaps).
 - Rotatable-H optimization (Ser/Thr/Tyr OH, Cys SH, Lys NH3+) — template
   default today; reduce's H-bond scoring would close a 1.5–2 Å residual.

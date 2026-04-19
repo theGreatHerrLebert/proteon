@@ -20,9 +20,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import ferritin
-from ferritin import io as _ferritin_io
-from ferritin.templates import (
+import proteon
+from proteon import io as _proteon_io
+from proteon.templates import (
     TEMPLATE_GAP_INDEX,
     TemplateFeatures,
     _fill_template_from_alignment,
@@ -40,7 +40,7 @@ FIXTURES = {
 
 def _msa_backend_available() -> bool:
     try:
-        from ferritin import rust_msa_available
+        from proteon import rust_msa_available
     except ImportError:
         return False
     return rust_msa_available()
@@ -180,7 +180,7 @@ class TestBuildTemplateFeaturesSynthetic:
             1: self._fake_structure_supervision(1),
             2: self._fake_structure_supervision(2),
         }
-        feats = ferritin.build_template_features(
+        feats = proteon.build_template_features(
             query_length=10,
             engine=self._mock_engine(hits),
             target_supervisions=targets,
@@ -202,7 +202,7 @@ class TestBuildTemplateFeaturesSynthetic:
             for i in range(10)
         ]
         targets = {i: self._fake_structure_supervision(i) for i in range(10)}
-        feats = ferritin.build_template_features(
+        feats = proteon.build_template_features(
             query_length=10,
             engine=self._mock_engine(hits),
             target_supervisions=targets,
@@ -229,7 +229,7 @@ class TestBuildTemplateFeaturesSynthetic:
             42: self._fake_structure_supervision(42),
             1: self._fake_structure_supervision(1),
         }
-        feats = ferritin.build_template_features(
+        feats = proteon.build_template_features(
             query_length=10,
             engine=self._mock_engine(hits),
             target_supervisions=targets,
@@ -244,7 +244,7 @@ class TestBuildTemplateFeaturesSynthetic:
         )
 
     def test_empty_hits_returns_zero_row_bundle(self):
-        feats = ferritin.build_template_features(
+        feats = proteon.build_template_features(
             query_length=10,
             engine=self._mock_engine([]),
             target_supervisions={},
@@ -265,7 +265,7 @@ class TestBuildTemplateFeaturesSynthetic:
              "cigar": "10M", "score": 50},  # 99 not in target_supervisions
         ]
         targets = {1: self._fake_structure_supervision(1)}
-        feats = ferritin.build_template_features(
+        feats = proteon.build_template_features(
             query_length=10,
             engine=self._mock_engine(hits),
             target_supervisions=targets,
@@ -290,7 +290,7 @@ class TestBuildTemplateFeaturesSynthetic:
              "cigar": "10M", "score": 50},
         ]
         targets = {i: self._fake_structure_supervision(i) for i in (1, 2)}
-        feats = ferritin.build_template_features(
+        feats = proteon.build_template_features(
             query_length=10,
             engine=self._mock_engine(hits),
             target_supervisions=targets,
@@ -303,7 +303,7 @@ class TestBuildTemplateFeaturesSynthetic:
 
 @pytest.mark.skipif(
     not all(p.exists() for p in FIXTURES.values())
-    or _ferritin_io._io is None
+    or _proteon_io._io is None
     or not _msa_backend_available(),
     reason="real-engine template test needs Rust connector + real PDB fixtures",
 )
@@ -313,9 +313,9 @@ class TestBuildTemplateFeaturesReal:
     def test_end_to_end_with_real_corpus(self):
         # Load + build supervision for crambin, ubiquitin, BPTI.
         paths = [str(FIXTURES[k]) for k in ("1crn", "1ubq", "1bpi")]
-        pairs = ferritin.batch_load_tolerant(paths)
+        pairs = proteon.batch_load_tolerant(paths)
         structures = [p[1] for p in pairs]
-        supervisions = ferritin.batch_build_structure_supervision_examples(
+        supervisions = proteon.batch_build_structure_supervision_examples(
             structures, record_ids=["1crn:A", "1ubq:A", "1bpi:A"]
         )
 
@@ -323,14 +323,14 @@ class TestBuildTemplateFeaturesReal:
         targets_for_search = [
             (i, sup.sequence) for i, sup in enumerate(supervisions)
         ]
-        engine = ferritin.MsaSearch.build(
+        engine = proteon.MsaSearch.build(
             targets_for_search, k=3, reduce_to=None, min_score=0, max_results=10
         )
         target_supervisions = {i: sup for i, sup in enumerate(supervisions)}
 
         # Query crambin; exclude the self-hit (target_id=0).
         crambin_sup = supervisions[0]
-        feats = ferritin.build_template_features(
+        feats = proteon.build_template_features(
             query_length=crambin_sup.length,
             engine=engine,
             target_supervisions=target_supervisions,

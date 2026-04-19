@@ -14,7 +14,7 @@ use cudarc::driver::*;
 use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 pub use std::sync::Arc;
 
-use ferritin_connector::forcefield::{
+use proteon_connector::forcefield::{
     neighbor_list::NeighborList,
     params::ForceField,
     topology::Topology,

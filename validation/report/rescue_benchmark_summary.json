@@ -8,10 +8,10 @@
     "seqres_total_invalid": 1
   },
   "rescued_paths": [
-    "/scratch/TMAlign/ferritin/validation/pdbs_10k/8a14.pdb",
-    "/scratch/TMAlign/ferritin/validation/pdbs_10k/9l05.pdb"
+    "/scratch/TMAlign/proteon/validation/pdbs_10k/8a14.pdb",
+    "/scratch/TMAlign/proteon/validation/pdbs_10k/9l05.pdb"
   ],
   "pipeline_ok": true,
   "pipeline_error": null,
-  "smoke_output_dir": "/scratch/TMAlign/ferritin/validation/report/rescue_benchmark_smoke"
+  "smoke_output_dir": "/scratch/TMAlign/proteon/validation/report/rescue_benchmark_smoke"
 }

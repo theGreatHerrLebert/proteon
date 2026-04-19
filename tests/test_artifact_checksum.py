@@ -1,4 +1,4 @@
-"""Tests for `ferritin._artifact_checksum`.
+"""Tests for `proteon._artifact_checksum`.
 
 Small crypto-adjacent module that hashes corpus artifacts (`tensors.npz`
 payloads) so release validation can detect silent corruption. A bug
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from ferritin._artifact_checksum import _CHUNK_BYTES, sha256_file, verify_sha256
+from proteon._artifact_checksum import _CHUNK_BYTES, sha256_file, verify_sha256
 
 
 def _write(tmp_path: Path, name: str, data: bytes) -> Path:
@@ -35,7 +35,7 @@ class TestSha256File:
         )
 
     def test_short_payload_matches_hashlib(self, tmp_path: Path):
-        payload = b"ferritin checksum smoke"
+        payload = b"proteon checksum smoke"
         p = _write(tmp_path, "short.bin", payload)
         expected = hashlib.sha256(payload).hexdigest()
         assert sha256_file(p) == expected

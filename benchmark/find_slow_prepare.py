@@ -29,14 +29,14 @@ def main():
     parser.add_argument("--out", default="slow_prepare.json")
     args = parser.parse_args()
 
-    import ferritin
+    import proteon
 
     files = sorted(Path(args.pdb_dir).glob("*.pdb")) + sorted(Path(args.pdb_dir).glob("*.cif"))
     files = [str(f) for f in files[: args.n * 3]]
     files = [f for f in files if os.path.getsize(f) < 20_000_000]
 
     print(f"Loading up to {len(files)} files...", flush=True)
-    loaded = ferritin.batch_load_tolerant(files, n_threads=0)
+    loaded = proteon.batch_load_tolerant(files, n_threads=0)
     items = [(i, s, files[i]) for i, s in loaded if s.atom_count < 25000]
     items = items[: args.n]
     print(f"Running prepare on {len(items)} structures with {args.timeout}s timeout\n", flush=True)
@@ -52,12 +52,12 @@ def main():
             print(f"  [{idx}/{len(items)}] slow={len(slow)} timeout={len(timed_out)}", flush=True)
 
         # Reload fresh copy (prepare modifies in-place)
-        s_copy = ferritin.load(path)
+        s_copy = proteon.load(path)
 
         signal.alarm(args.timeout)
         try:
             t0 = time.perf_counter()
-            reports = ferritin.batch_prepare(
+            reports = proteon.batch_prepare(
                 [s_copy], reconstruct=False, hydrogens="backbone",
                 minimize=True, minimize_steps=50, minimize_method="lbfgs",
                 gradient_tolerance=0.1, n_threads=1,

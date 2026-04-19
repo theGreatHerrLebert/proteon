@@ -1,0 +1,359 @@
+{
+  "corpus": {
+    "pdb_dir": "/globalscratch/dateschn/proteon-benchmark/pdbs_50k",
+    "n_targets": 5000,
+    "n_queries": 50,
+    "top_k": 10,
+    "thresholds": [
+      0.5,
+      0.7,
+      0.9
+    ],
+    "truth_cache": "/globalscratch/dateschn/proteon-benchmark/foldseek_proteon_5k_50q_union50.truth.json",
+    "truth_cache_hit": false,
+    "truth_mode": "candidates",
+    "truth_candidate_top_k": 50,
+    "truth_max_file_size_mb": 20.0,
+    "compare_proteon": true,
+    "proteon_candidate_top_k": 50
+  },
+  "timing": {
+    "load_s": 0.0,
+    "brute_force_s": 515.95,
+    "foldseek_s": 11.847,
+    "proteon_build_s": 226.833,
+    "proteon_compile_s": 84.29,
+    "proteon_warm_s": 0.0,
+    "proteon_search_s": 71.173
+  },
+  "metrics": {
+    "foldseek_top1_exact_nonself": 0.4,
+    "foldseek_recall_at_k": {
+      "0.5": 0.4127,
+      "0.7": 0.6578,
+      "0.9": 0.9094
+    },
+    "proteon_top1_exact_nonself": 0.32,
+    "proteon_recall_at_k": {
+      "0.5": 0.2627,
+      "0.7": 0.5035,
+      "0.9": 0.8761
+    }
+  },
+  "primary_threshold": "0.7",
+  "n_queries": 50,
+  "top1_counts": {
+    "both_miss": 27,
+    "both_exact": 14,
+    "foldseek_only": 6,
+    "proteon_only": 2,
+    "no_truth": 1
+  },
+  "recall_counts": {
+    "foldseek_better": 20,
+    "tie": 24,
+    "proteon_better": 6
+  },
+  "threshold_summary": {
+    "0.5": {
+      "foldseek_mean": 0.4127,
+      "proteon_mean": 0.2627,
+      "proteon_minus_foldseek": -0.15,
+      "counts": {
+        "foldseek_better": 24,
+        "proteon_better": 8,
+        "tie": 18
+      }
+    },
+    "0.7": {
+      "foldseek_mean": 0.6578,
+      "proteon_mean": 0.5035,
+      "proteon_minus_foldseek": -0.1543,
+      "counts": {
+        "foldseek_better": 20,
+        "tie": 24,
+        "proteon_better": 6
+      }
+    },
+    "0.9": {
+      "foldseek_mean": 0.9094,
+      "proteon_mean": 0.8761,
+      "proteon_minus_foldseek": -0.0333,
+      "counts": {
+        "tie": 47,
+        "foldseek_better": 3
+      }
+    }
+  },
+  "worst_proteon_queries": [
+    {
+      "query": "2l19.pdb",
+      "truth": "1d2a.pdb",
+      "truth_tm_score": 0.7786,
+      "foldseek_top": "1d2a.pdb",
+      "proteon_top": "2h3i.pdb",
+      "top1_class": "foldseek_only",
+      "foldseek_recall": 1.0,
+      "proteon_recall": 0.0,
+      "proteon_minus_foldseek": -1.0,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "2mf6.pdb",
+      "truth": "1nqn.pdb",
+      "truth_tm_score": 0.9373,
+      "foldseek_top": "2a8g.pdb",
+      "proteon_top": "2mqn.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 1.0,
+      "proteon_recall": 0.0,
+      "proteon_minus_foldseek": -1.0,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "6hx7.pdb",
+      "truth": "2w7j.pdb",
+      "truth_tm_score": 0.7192,
+      "foldseek_top": "2oat.pdb",
+      "proteon_top": "2oat.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 1.0,
+      "proteon_recall": 0.0,
+      "proteon_minus_foldseek": -1.0,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "7fcc.pdb",
+      "truth": "8qlo.pdb",
+      "truth_tm_score": 0.7487,
+      "foldseek_top": "8qlo.pdb",
+      "proteon_top": "8ju8.pdb",
+      "top1_class": "foldseek_only",
+      "foldseek_recall": 1.0,
+      "proteon_recall": 0.0,
+      "proteon_minus_foldseek": -1.0,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "7p8y.pdb",
+      "truth": "1lcw.pdb",
+      "truth_tm_score": 0.8117,
+      "foldseek_top": "7alx.cif",
+      "proteon_top": "7alx.cif",
+      "top1_class": "both_miss",
+      "foldseek_recall": 1.0,
+      "proteon_recall": 0.25,
+      "proteon_minus_foldseek": -0.75,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "5b3k.pdb",
+      "truth": "1f4p.pdb",
+      "truth_tm_score": 0.8466,
+      "foldseek_top": "1f4p.pdb",
+      "proteon_top": "1f4p.pdb",
+      "top1_class": "both_exact",
+      "foldseek_recall": 0.6667,
+      "proteon_recall": 0.1667,
+      "proteon_minus_foldseek": -0.5,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "6iiu.pdb",
+      "truth": "9p1t.pdb",
+      "truth_tm_score": 0.8022,
+      "foldseek_top": "6dyj.pdb",
+      "proteon_top": "6dyg.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 0.5,
+      "proteon_recall": 0.0,
+      "proteon_minus_foldseek": -0.5,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "2i0i.pdb",
+      "truth": "1gm1.pdb",
+      "truth_tm_score": 0.7641,
+      "foldseek_top": "1gm1.pdb",
+      "proteon_top": "6xa6.pdb",
+      "top1_class": "foldseek_only",
+      "foldseek_recall": 0.6667,
+      "proteon_recall": 0.3333,
+      "proteon_minus_foldseek": -0.3334,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "6kgn.pdb",
+      "truth": "2dw4.pdb",
+      "truth_tm_score": 0.9764,
+      "foldseek_top": "7e0g.pdb",
+      "proteon_top": "7e0g.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 1.0,
+      "proteon_recall": 0.6667,
+      "proteon_minus_foldseek": -0.33330000000000004,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "8jif.cif",
+      "truth": "1h9q.pdb",
+      "truth_tm_score": 0.891,
+      "foldseek_top": "5jnc.pdb",
+      "proteon_top": "5jnc.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 0.2333,
+      "proteon_recall": 0.0,
+      "proteon_minus_foldseek": -0.2333,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    }
+  ],
+  "best_proteon_queries": [
+    {
+      "query": "9iqt.pdb",
+      "truth": "9ppy.pdb",
+      "truth_tm_score": 0.9448,
+      "foldseek_top": "9iy8.pdb",
+      "proteon_top": "9iy8.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 0.3,
+      "proteon_recall": 0.5,
+      "proteon_minus_foldseek": 0.2,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "3sdx.pdb",
+      "truth": "6c6a.pdb",
+      "truth_tm_score": 0.9662,
+      "foldseek_top": "3vwk.pdb",
+      "proteon_top": "3vwk.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 0.2105,
+      "proteon_recall": 0.3158,
+      "proteon_minus_foldseek": 0.10530000000000003,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "3g0e.pdb",
+      "truth": "2i0v.pdb",
+      "truth_tm_score": 0.9396,
+      "foldseek_top": "8jot.pdb",
+      "proteon_top": "2i0v.pdb",
+      "top1_class": "proteon_only",
+      "foldseek_recall": 0.1489,
+      "proteon_recall": 0.1915,
+      "proteon_minus_foldseek": 0.0426,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "9p1t.pdb",
+      "truth": "2j4y.pdb",
+      "truth_tm_score": 0.8557,
+      "foldseek_top": "2y02.pdb",
+      "proteon_top": "6i9k.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 0.2069,
+      "proteon_recall": 0.2414,
+      "proteon_minus_foldseek": 0.0345,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "9ob3.cif",
+      "truth": "9ob2.cif",
+      "truth_tm_score": 0.9991,
+      "foldseek_top": "9ob2.cif",
+      "proteon_top": "9ob2.cif",
+      "top1_class": "both_exact",
+      "foldseek_recall": 0.1951,
+      "proteon_recall": 0.2195,
+      "proteon_minus_foldseek": 0.024400000000000005,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "3bz3.pdb",
+      "truth": "6gcx.pdb",
+      "truth_tm_score": 0.9704,
+      "foldseek_top": "6gcx.pdb",
+      "proteon_top": "6gcx.pdb",
+      "top1_class": "both_exact",
+      "foldseek_recall": 0.1429,
+      "proteon_recall": 0.1607,
+      "proteon_minus_foldseek": 0.01780000000000001,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "9yfm.cif",
+      "truth": "3lfo.pdb",
+      "truth_tm_score": 0.7929,
+      "foldseek_top": "9e7f.cif",
+      "proteon_top": "5ywf.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 0.0,
+      "proteon_recall": 0.0,
+      "proteon_minus_foldseek": 0.0,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "9gs4.cif",
+      "truth": "8ov3.pdb",
+      "truth_tm_score": 0.9984,
+      "foldseek_top": "8ov3.pdb",
+      "proteon_top": "8ov3.pdb",
+      "top1_class": "both_exact",
+      "foldseek_recall": 1.0,
+      "proteon_recall": 1.0,
+      "proteon_minus_foldseek": 0.0,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "9g34.pdb",
+      "truth": "5oz8.pdb",
+      "truth_tm_score": 0.9989,
+      "foldseek_top": "5p2l.pdb",
+      "proteon_top": "5lwu.pdb",
+      "top1_class": "both_miss",
+      "foldseek_recall": 0.36,
+      "proteon_recall": 0.36,
+      "proteon_minus_foldseek": 0.0,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    },
+    {
+      "query": "9fqa.cif",
+      "truth": "8jcm.pdb",
+      "truth_tm_score": 0.9985,
+      "foldseek_top": "8gtv.pdb",
+      "proteon_top": "8z46.cif",
+      "top1_class": "both_miss",
+      "foldseek_recall": 0.1552,
+      "proteon_recall": 0.1552,
+      "proteon_minus_foldseek": 0.0,
+      "truth_rank_in_foldseek_trace": null,
+      "truth_rank_in_proteon_trace": null
+    }
+  ],
+  "truth_skip_metadata_known": true,
+  "n_skipped_truth_candidates": 61,
+  "n_queries_with_skipped_truth_candidates": 22,
+  "skipped_proteon_queries": {
+    "/globalscratch/dateschn/proteon-benchmark/pdbs_50k/8b3d.pdb": "truth_load_failed"
+  },
+  "has_candidate_traces": false
+}

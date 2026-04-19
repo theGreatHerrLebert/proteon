@@ -24,7 +24,7 @@ Non-blocking diagnostics collected for stage 2/3 planning:
 
 Usage:
     python stage1_smoke.py \\
-        --pdb-dir /globalscratch/dateschn/ferritin-benchmark/pdbs_50k \\
+        --pdb-dir /globalscratch/dateschn/proteon-benchmark/pdbs_50k \\
         --output stage1_smoke_results.json \\
         --n 100 --seed 42
 
@@ -57,19 +57,19 @@ def run_one(pdb_path: str, minimize_steps: int) -> dict:
     {"status": "error", "exception": ..., "traceback": ...}. That way
     one bad structure doesn't abort the whole smoke test.
     """
-    import ferritin
+    import proteon
 
     result = {"pdb": os.path.basename(pdb_path)}
     try:
         t_load = time.perf_counter()
-        s = ferritin.load(pdb_path)
+        s = proteon.load(pdb_path)
         load_ms = (time.perf_counter() - t_load) * 1000.0
         result["atom_count_pre_h"] = s.atom_count
         result["residue_count"] = s.residue_count
         result["load_ms"] = load_ms
 
         t_prep = time.perf_counter()
-        reports = ferritin.batch_prepare(
+        reports = proteon.batch_prepare(
             [s],
             reconstruct=False,
             hydrogens="all",

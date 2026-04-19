@@ -1,1425 +1,1425 @@
 {
   "cache_key": "15a1ccabafff114784597c466834d6bb31082f7e1e2e558fba97a977d4a2474c",
   "truth": {
-    "/scratch/TMAlign/ferritin/validation/pdbs_10k/1iuk.pdb": [
+    "/scratch/TMAlign/proteon/validation/pdbs_10k/1iuk.pdb": [
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1iuk.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1iuk.pdb",
         "tm_score": 1.0,
         "rmsd": 0.0,
         "n_aligned": 136
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5wdg.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5wdg.pdb",
         "tm_score": 0.6040572159303574,
         "rmsd": 3.7263783093950433,
         "n_aligned": 124
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3h1e.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3h1e.pdb",
         "tm_score": 0.5853668855949793,
         "rmsd": 3.3958391378301522,
         "n_aligned": 102
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8u4q.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8u4q.pdb",
         "tm_score": 0.5665815630348909,
         "rmsd": 3.821334661593393,
         "n_aligned": 110
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8zpt.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8zpt.pdb",
         "tm_score": 0.5569514601489436,
         "rmsd": 3.757146369281076,
         "n_aligned": 110
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6yrw.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6yrw.pdb",
         "tm_score": 0.5437364509865058,
         "rmsd": 4.149100678565792,
         "n_aligned": 114
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3vhl.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3vhl.pdb",
         "tm_score": 0.5353355179190337,
         "rmsd": 3.844508502234902,
         "n_aligned": 108
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5b6h.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5b6h.pdb",
         "tm_score": 0.5296216950942947,
         "rmsd": 3.7657386171732945,
         "n_aligned": 106
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1odz.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1odz.pdb",
         "tm_score": 0.5197653004152483,
         "rmsd": 3.8522617854293153,
         "n_aligned": 107
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8brv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8brv.pdb",
         "tm_score": 0.5018474422827619,
         "rmsd": 4.218332580334829,
         "n_aligned": 112
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5a6v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5a6v.pdb",
         "tm_score": 0.500074767734911,
         "rmsd": 3.694029590532274,
         "n_aligned": 101
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6cvm.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6cvm.pdb",
         "tm_score": 0.4851242406602342,
         "rmsd": 4.5592453661539,
         "n_aligned": 108
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2g8l.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2g8l.pdb",
         "tm_score": 0.4775093984249735,
         "rmsd": 4.205333157687041,
         "n_aligned": 103
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8r04.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8r04.pdb",
         "tm_score": 0.46496628157020065,
         "rmsd": 3.911654303601249,
         "n_aligned": 94
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4wwv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4wwv.pdb",
         "tm_score": 0.44826665205196325,
         "rmsd": 4.333694512927615,
         "n_aligned": 96
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4fva.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4fva.pdb",
         "tm_score": 0.4466385228960648,
         "rmsd": 4.85549741846886,
         "n_aligned": 112
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2dxn.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2dxn.pdb",
         "tm_score": 0.4354628109031034,
         "rmsd": 4.861773907041913,
         "n_aligned": 110
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3fkq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3fkq.pdb",
         "tm_score": 0.42994275971634716,
         "rmsd": 5.066193409772446,
         "n_aligned": 101
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4dxu.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4dxu.pdb",
         "tm_score": 0.41307910897455463,
         "rmsd": 4.41861151805587,
         "n_aligned": 96
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3tba.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3tba.pdb",
         "tm_score": 0.4120154072699757,
         "rmsd": 5.101676173075782,
         "n_aligned": 100
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1ia6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1ia6.pdb",
         "tm_score": 0.40118611489646516,
         "rmsd": 5.214661606077978,
         "n_aligned": 102
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9l14.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9l14.pdb",
         "tm_score": 0.3938654806567877,
         "rmsd": 4.467736454410632,
         "n_aligned": 87
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1xl7.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1xl7.pdb",
         "tm_score": 0.3869169447962652,
         "rmsd": 5.192209558676707,
         "n_aligned": 96
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6e2f.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6e2f.pdb",
         "tm_score": 0.38470622079253247,
         "rmsd": 5.184694761234787,
         "n_aligned": 97
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2gnw.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2gnw.pdb",
         "tm_score": 0.3835318909930723,
         "rmsd": 4.4567227218706,
         "n_aligned": 87
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5h5q.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5h5q.pdb",
         "tm_score": 0.3810313683338506,
         "rmsd": 4.602188620348645,
         "n_aligned": 87
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8wi6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8wi6.pdb",
         "tm_score": 0.37044907708087044,
         "rmsd": 5.342409417312068,
         "n_aligned": 99
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9s1x.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9s1x.cif",
         "tm_score": 0.37025179067167213,
         "rmsd": 4.890584789642868,
         "n_aligned": 91
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/7lu7.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/7lu7.cif",
         "tm_score": 0.3685514555398068,
         "rmsd": 5.119930879030726,
         "n_aligned": 91
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2awn.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2awn.pdb",
         "tm_score": 0.36659181471246144,
         "rmsd": 5.365256772075002,
         "n_aligned": 93
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2bby.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2bby.pdb",
         "tm_score": 0.35556324723239285,
         "rmsd": 4.040030430978879,
         "n_aligned": 49
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5bnf.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5bnf.pdb",
         "tm_score": 0.3477121879600691,
         "rmsd": 4.708445025069353,
         "n_aligned": 82
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6km1.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6km1.pdb",
         "tm_score": 0.33996321623035586,
         "rmsd": 5.692742261108133,
         "n_aligned": 89
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5vbq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5vbq.pdb",
         "tm_score": 0.33977390371728006,
         "rmsd": 5.109280095425384,
         "n_aligned": 87
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4ez6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4ez6.pdb",
         "tm_score": 0.3362896854064956,
         "rmsd": 5.438542090633998,
         "n_aligned": 93
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1kg2.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1kg2.pdb",
         "tm_score": 0.3334977455766608,
         "rmsd": 5.312072267192521,
         "n_aligned": 86
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9r50.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9r50.cif",
         "tm_score": 0.3306708176258038,
         "rmsd": 5.624712502067278,
         "n_aligned": 86
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2n4a.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2n4a.pdb",
         "tm_score": 0.32880477867615554,
         "rmsd": 4.991862524464844,
         "n_aligned": 80
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4o9m.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4o9m.pdb",
         "tm_score": 0.3281699122924272,
         "rmsd": 4.632688959913507,
         "n_aligned": 76
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1jos.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1jos.pdb",
         "tm_score": 0.3233649410506412,
         "rmsd": 4.118586281458199,
         "n_aligned": 56
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8tzy.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8tzy.pdb",
         "tm_score": 0.31393364102026994,
         "rmsd": 5.231233229500873,
         "n_aligned": 81
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2rqq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2rqq.pdb",
         "tm_score": 0.3091962153316866,
         "rmsd": 5.415557366591499,
         "n_aligned": 71
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6xz7.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6xz7.pdb",
         "tm_score": 0.30763166636687495,
         "rmsd": 5.415674493393912,
         "n_aligned": 81
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9lhv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9lhv.pdb",
         "tm_score": 0.30636211054911816,
         "rmsd": 5.523060206492086,
         "n_aligned": 81
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4k4v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4k4v.pdb",
         "tm_score": 0.3053796717850172,
         "rmsd": 4.620405774394996,
         "n_aligned": 70
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4k64.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4k64.pdb",
         "tm_score": 0.3040021616077409,
         "rmsd": 5.2270095375685335,
         "n_aligned": 81
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6k3f.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6k3f.pdb",
         "tm_score": 0.30148198624600964,
         "rmsd": 5.778456874230221,
         "n_aligned": 80
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2zgo.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2zgo.pdb",
         "tm_score": 0.2890832558933063,
         "rmsd": 5.838549647101419,
         "n_aligned": 87
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9fwh.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9fwh.cif",
         "tm_score": 0.2874374073030755,
         "rmsd": 5.6591265307827685,
         "n_aligned": 81
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6yy6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6yy6.pdb",
         "tm_score": 0.2849007341320195,
         "rmsd": 5.404528074140858,
         "n_aligned": 78
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2hvi.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2hvi.pdb",
         "tm_score": 0.27329684961589157,
         "rmsd": 5.434538790447666,
         "n_aligned": 71
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1bsz.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1bsz.pdb",
         "tm_score": 0.2711542246353308,
         "rmsd": 5.22710844729132,
         "n_aligned": 73
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5xht.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5xht.pdb",
         "tm_score": 0.2688578811986212,
         "rmsd": 4.181640232092926,
         "n_aligned": 38
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2k5n.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2k5n.pdb",
         "tm_score": 0.26691038801125905,
         "rmsd": 4.546236338850368,
         "n_aligned": 43
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5fhb.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5fhb.pdb",
         "tm_score": 0.2616931739450295,
         "rmsd": 5.223364575185528,
         "n_aligned": 68
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/7hgy.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/7hgy.pdb",
         "tm_score": 0.26097182475299197,
         "rmsd": 5.215589347412241,
         "n_aligned": 62
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2k20.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2k20.pdb",
         "tm_score": 0.23738831675557862,
         "rmsd": 5.31173212267632,
         "n_aligned": 59
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4ihb.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4ihb.pdb",
         "tm_score": 0.22964182219948132,
         "rmsd": 5.982712724894322,
         "n_aligned": 68
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1p6v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1p6v.pdb",
         "tm_score": 0.21195152585785337,
         "rmsd": 5.607840674867382,
         "n_aligned": 58
       }
     ],
-    "/scratch/TMAlign/ferritin/validation/pdbs_10k/2zgo.pdb": [
+    "/scratch/TMAlign/proteon/validation/pdbs_10k/2zgo.pdb": [
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2zgo.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2zgo.pdb",
         "tm_score": 1.0,
         "rmsd": 1.254264734690531e-06,
         "n_aligned": 333
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8tzy.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8tzy.pdb",
         "tm_score": 0.3659723273185585,
         "rmsd": 5.395770253639665,
         "n_aligned": 178
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1xl7.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1xl7.pdb",
         "tm_score": 0.36594254048983066,
         "rmsd": 6.552301125836177,
         "n_aligned": 201
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8wi6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8wi6.pdb",
         "tm_score": 0.36528181270787896,
         "rmsd": 6.350512271904312,
         "n_aligned": 198
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5fhb.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5fhb.pdb",
         "tm_score": 0.35661530839805494,
         "rmsd": 5.643623777238072,
         "n_aligned": 176
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6k3f.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6k3f.pdb",
         "tm_score": 0.35211093552343814,
         "rmsd": 6.1954564146650455,
         "n_aligned": 186
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2dxn.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2dxn.pdb",
         "tm_score": 0.35178179821300715,
         "rmsd": 7.048253705777318,
         "n_aligned": 211
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2n4a.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2n4a.pdb",
         "tm_score": 0.3514222504696186,
         "rmsd": 4.982760322768455,
         "n_aligned": 86
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8u4q.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8u4q.pdb",
         "tm_score": 0.3428709387821252,
         "rmsd": 6.383302301788262,
         "n_aligned": 187
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8zpt.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8zpt.pdb",
         "tm_score": 0.34270312367546757,
         "rmsd": 6.385870200435862,
         "n_aligned": 188
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1odz.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1odz.pdb",
         "tm_score": 0.33994507269504354,
         "rmsd": 6.052865495805705,
         "n_aligned": 177
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3tba.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3tba.pdb",
         "tm_score": 0.33933273647692996,
         "rmsd": 6.827680679396383,
         "n_aligned": 190
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4fva.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4fva.pdb",
         "tm_score": 0.3389828687070383,
         "rmsd": 7.2670829112402595,
         "n_aligned": 209
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6yrw.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6yrw.pdb",
         "tm_score": 0.3232727548990646,
         "rmsd": 7.012208273475174,
         "n_aligned": 191
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9lhv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9lhv.pdb",
         "tm_score": 0.32215694378774196,
         "rmsd": 6.549803481228301,
         "n_aligned": 181
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1jos.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1jos.pdb",
         "tm_score": 0.32054562401734954,
         "rmsd": 5.1382798783879915,
         "n_aligned": 72
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5b6h.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5b6h.pdb",
         "tm_score": 0.3202510292000243,
         "rmsd": 5.4739886135718505,
         "n_aligned": 102
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3vhl.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3vhl.pdb",
         "tm_score": 0.3174439562475047,
         "rmsd": 6.930552320877777,
         "n_aligned": 189
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6e2f.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6e2f.pdb",
         "tm_score": 0.3171127911357696,
         "rmsd": 6.572356184520162,
         "n_aligned": 177
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9fwh.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9fwh.cif",
         "tm_score": 0.3157622080736276,
         "rmsd": 6.286081747650818,
         "n_aligned": 171
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1bsz.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1bsz.pdb",
         "tm_score": 0.31298160024637417,
         "rmsd": 6.083351923811566,
         "n_aligned": 167
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2k20.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2k20.pdb",
         "tm_score": 0.30987155119836424,
         "rmsd": 5.004807065112302,
         "n_aligned": 68
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4wwv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4wwv.pdb",
         "tm_score": 0.30744882839802196,
         "rmsd": 6.447138720432769,
         "n_aligned": 168
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6cvm.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6cvm.pdb",
         "tm_score": 0.3072421586235886,
         "rmsd": 7.373666559711681,
         "n_aligned": 193
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2hvi.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2hvi.pdb",
         "tm_score": 0.3071772740220527,
         "rmsd": 6.6648966660731865,
         "n_aligned": 175
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8brv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8brv.pdb",
         "tm_score": 0.306973671253596,
         "rmsd": 6.983814015854613,
         "n_aligned": 185
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5bnf.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5bnf.pdb",
         "tm_score": 0.3061760156630057,
         "rmsd": 6.592340450339866,
         "n_aligned": 175
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5a6v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5a6v.pdb",
         "tm_score": 0.3022910121763495,
         "rmsd": 7.06422769014049,
         "n_aligned": 181
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2bby.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2bby.pdb",
         "tm_score": 0.300973236117646,
         "rmsd": 4.203591748301854,
         "n_aligned": 39
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1ia6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1ia6.pdb",
         "tm_score": 0.2994752970993872,
         "rmsd": 6.713778604090662,
         "n_aligned": 172
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9r50.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9r50.cif",
         "tm_score": 0.29870261990364816,
         "rmsd": 6.732327257576575,
         "n_aligned": 173
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1kg2.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1kg2.pdb",
         "tm_score": 0.2984740475912536,
         "rmsd": 5.789423098612345,
         "n_aligned": 118
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5vbq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5vbq.pdb",
         "tm_score": 0.29679607597243735,
         "rmsd": 6.170301375393294,
         "n_aligned": 126
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2k5n.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2k5n.pdb",
         "tm_score": 0.2948372439040654,
         "rmsd": 4.657816322174721,
         "n_aligned": 48
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2rqq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2rqq.pdb",
         "tm_score": 0.2910424177144732,
         "rmsd": 5.376928006612165,
         "n_aligned": 69
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2awn.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2awn.pdb",
         "tm_score": 0.29008582597576976,
         "rmsd": 7.292348319893517,
         "n_aligned": 181
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/7lu7.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/7lu7.cif",
         "tm_score": 0.289779569378292,
         "rmsd": 6.997638575398873,
         "n_aligned": 171
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4k64.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4k64.pdb",
         "tm_score": 0.28890746358713437,
         "rmsd": 6.448571456272507,
         "n_aligned": 159
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5h5q.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5h5q.pdb",
         "tm_score": 0.2886425078001207,
         "rmsd": 5.743894365871849,
         "n_aligned": 94
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8r04.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8r04.pdb",
         "tm_score": 0.2876312881976527,
         "rmsd": 7.06532190482206,
         "n_aligned": 175
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4k4v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4k4v.pdb",
         "tm_score": 0.28508949271583045,
         "rmsd": 6.792373216758713,
         "n_aligned": 162
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5wdg.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5wdg.pdb",
         "tm_score": 0.2783596645052707,
         "rmsd": 7.4746031560458945,
         "n_aligned": 176
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3h1e.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3h1e.pdb",
         "tm_score": 0.2761843527924288,
         "rmsd": 5.007955378459801,
         "n_aligned": 64
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2g8l.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2g8l.pdb",
         "tm_score": 0.27290164955283225,
         "rmsd": 7.087583728470923,
         "n_aligned": 163
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1iuk.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1iuk.pdb",
         "tm_score": 0.2700342535576045,
         "rmsd": 5.560233891607031,
         "n_aligned": 73
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4ez6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4ez6.pdb",
         "tm_score": 0.26798484853717963,
         "rmsd": 6.704744064673691,
         "n_aligned": 152
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3fkq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3fkq.pdb",
         "tm_score": 0.2630469586285868,
         "rmsd": 7.067737393612123,
         "n_aligned": 162
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/7hgy.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/7hgy.pdb",
         "tm_score": 0.26232377060994666,
         "rmsd": 6.329673343260416,
         "n_aligned": 125
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9l14.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9l14.pdb",
         "tm_score": 0.2585854809650984,
         "rmsd": 6.764137343702005,
         "n_aligned": 141
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6km1.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6km1.pdb",
         "tm_score": 0.2579742681076013,
         "rmsd": 6.175091075015614,
         "n_aligned": 114
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4ihb.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4ihb.pdb",
         "tm_score": 0.2577672216296374,
         "rmsd": 7.1488509517335705,
         "n_aligned": 157
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9s1x.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9s1x.cif",
         "tm_score": 0.25418132956329903,
         "rmsd": 6.4699143722762065,
         "n_aligned": 138
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2gnw.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2gnw.pdb",
         "tm_score": 0.2528232865507565,
         "rmsd": 7.377694607544824,
         "n_aligned": 158
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5xht.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5xht.pdb",
         "tm_score": 0.24979509575945072,
         "rmsd": 4.360242438373961,
         "n_aligned": 37
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6yy6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6yy6.pdb",
         "tm_score": 0.24856221705436854,
         "rmsd": 6.9950640368969905,
         "n_aligned": 134
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4o9m.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4o9m.pdb",
         "tm_score": 0.2465943543025141,
         "rmsd": 7.133941948720097,
         "n_aligned": 148
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1p6v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1p6v.pdb",
         "tm_score": 0.24630270617411737,
         "rmsd": 7.306171001298092,
         "n_aligned": 149
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4dxu.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4dxu.pdb",
         "tm_score": 0.24069401230030668,
         "rmsd": 6.884579636975558,
         "n_aligned": 140
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6xz7.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6xz7.pdb",
         "tm_score": 0.22824742437798695,
         "rmsd": 6.996949063397088,
         "n_aligned": 134
       }
     ],
-    "/scratch/TMAlign/ferritin/validation/pdbs_10k/6xz7.pdb": [
+    "/scratch/TMAlign/proteon/validation/pdbs_10k/6xz7.pdb": [
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6xz7.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6xz7.pdb",
         "tm_score": 1.0,
         "rmsd": 0.0,
         "n_aligned": 6475
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2bby.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2bby.pdb",
         "tm_score": 0.44875556899071367,
         "rmsd": 3.505822572677498,
         "n_aligned": 51
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2k5n.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2k5n.pdb",
         "tm_score": 0.43776054468525155,
         "rmsd": 3.492481940631284,
         "n_aligned": 51
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5xht.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5xht.pdb",
         "tm_score": 0.40900833712825085,
         "rmsd": 4.172031981892395,
         "n_aligned": 53
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3h1e.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3h1e.pdb",
         "tm_score": 0.36179475632568925,
         "rmsd": 4.669565656271605,
         "n_aligned": 79
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2rqq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2rqq.pdb",
         "tm_score": 0.3600293616094401,
         "rmsd": 4.32206111999242,
         "n_aligned": 67
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1jos.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1jos.pdb",
         "tm_score": 0.3543812613001356,
         "rmsd": 4.481619345592617,
         "n_aligned": 69
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2k20.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2k20.pdb",
         "tm_score": 0.34071436571101554,
         "rmsd": 4.3248257431890265,
         "n_aligned": 67
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1iuk.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1iuk.pdb",
         "tm_score": 0.3382859310387048,
         "rmsd": 4.642740104111601,
         "n_aligned": 80
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2n4a.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2n4a.pdb",
         "tm_score": 0.3145620430416219,
         "rmsd": 5.217305665587857,
         "n_aligned": 85
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5b6h.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5b6h.pdb",
         "tm_score": 0.30339798937860557,
         "rmsd": 5.172432443395161,
         "n_aligned": 93
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5h5q.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5h5q.pdb",
         "tm_score": 0.2922957273967858,
         "rmsd": 5.212439238724566,
         "n_aligned": 90
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5vbq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5vbq.pdb",
         "tm_score": 0.26844869252205383,
         "rmsd": 5.871080090455034,
         "n_aligned": 107
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5fhb.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5fhb.pdb",
         "tm_score": 0.25783544797959396,
         "rmsd": 6.817606948290162,
         "n_aligned": 177
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6km1.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6km1.pdb",
         "tm_score": 0.2555254416934174,
         "rmsd": 5.2511933266910775,
         "n_aligned": 101
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4o9m.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4o9m.pdb",
         "tm_score": 0.24808993264423498,
         "rmsd": 7.784019980298624,
         "n_aligned": 169
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4dxu.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4dxu.pdb",
         "tm_score": 0.24730621339935907,
         "rmsd": 6.864155476605048,
         "n_aligned": 150
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/7hgy.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/7hgy.pdb",
         "tm_score": 0.2465400857646509,
         "rmsd": 6.406298526284198,
         "n_aligned": 117
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6yy6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6yy6.pdb",
         "tm_score": 0.2454790073273217,
         "rmsd": 6.65291940935041,
         "n_aligned": 128
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1ia6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1ia6.pdb",
         "tm_score": 0.24092189112235043,
         "rmsd": 7.55503609697077,
         "n_aligned": 178
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9l14.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9l14.pdb",
         "tm_score": 0.24055501616516958,
         "rmsd": 7.24180668783657,
         "n_aligned": 136
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1kg2.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1kg2.pdb",
         "tm_score": 0.23903868218428356,
         "rmsd": 6.189232463713309,
         "n_aligned": 99
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8wi6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8wi6.pdb",
         "tm_score": 0.23741894774934352,
         "rmsd": 7.695338826730582,
         "n_aligned": 169
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2gnw.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2gnw.pdb",
         "tm_score": 0.2364599432932837,
         "rmsd": 7.49044603136412,
         "n_aligned": 150
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1odz.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1odz.pdb",
         "tm_score": 0.2348294783929782,
         "rmsd": 7.9487422020495115,
         "n_aligned": 272
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1bsz.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1bsz.pdb",
         "tm_score": 0.23464385458063572,
         "rmsd": 7.915378890120996,
         "n_aligned": 202
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4wwv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4wwv.pdb",
         "tm_score": 0.2333124688236876,
         "rmsd": 8.895830928356025,
         "n_aligned": 289
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3tba.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3tba.pdb",
         "tm_score": 0.22860153200880295,
         "rmsd": 8.36841909706097,
         "n_aligned": 251
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2zgo.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2zgo.pdb",
         "tm_score": 0.22824742437798695,
         "rmsd": 6.996949063405857,
         "n_aligned": 134
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9fwh.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9fwh.cif",
         "tm_score": 0.22782442777230533,
         "rmsd": 7.92850860888293,
         "n_aligned": 176
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8tzy.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8tzy.pdb",
         "tm_score": 0.2270954648410522,
         "rmsd": 9.822198179034363,
         "n_aligned": 376
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9s1x.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9s1x.cif",
         "tm_score": 0.22294690760683725,
         "rmsd": 6.971517798841977,
         "n_aligned": 144
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8brv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8brv.pdb",
         "tm_score": 0.21932018499922926,
         "rmsd": 7.852671820713226,
         "n_aligned": 200
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1p6v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1p6v.pdb",
         "tm_score": 0.2189321502420363,
         "rmsd": 7.141391810995245,
         "n_aligned": 124
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/7lu7.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/7lu7.cif",
         "tm_score": 0.21690459385568545,
         "rmsd": 10.645003168676428,
         "n_aligned": 481
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2g8l.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2g8l.pdb",
         "tm_score": 0.2156049853891322,
         "rmsd": 7.553556505403984,
         "n_aligned": 190
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3vhl.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3vhl.pdb",
         "tm_score": 0.2142436237473056,
         "rmsd": 7.801165708712349,
         "n_aligned": 167
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3fkq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3fkq.pdb",
         "tm_score": 0.2058338697008017,
         "rmsd": 7.476602864794736,
         "n_aligned": 128
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5bnf.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5bnf.pdb",
         "tm_score": 0.1995811498331284,
         "rmsd": 8.035916422004235,
         "n_aligned": 167
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5a6v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5a6v.pdb",
         "tm_score": 0.19536658034266705,
         "rmsd": 8.46850870753519,
         "n_aligned": 208
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4ez6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4ez6.pdb",
         "tm_score": 0.19512588427575406,
         "rmsd": 10.315911853950606,
         "n_aligned": 379
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4k4v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4k4v.pdb",
         "tm_score": 0.19464773310881023,
         "rmsd": 10.04618977599713,
         "n_aligned": 327
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8zpt.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8zpt.pdb",
         "tm_score": 0.1933390900703017,
         "rmsd": 10.298631910866462,
         "n_aligned": 372
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2awn.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2awn.pdb",
         "tm_score": 0.19190435603654066,
         "rmsd": 10.742602514665151,
         "n_aligned": 428
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6yrw.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6yrw.pdb",
         "tm_score": 0.1917173994998854,
         "rmsd": 11.046074420607157,
         "n_aligned": 500
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8u4q.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8u4q.pdb",
         "tm_score": 0.1892994425316296,
         "rmsd": 10.374419360373134,
         "n_aligned": 405
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2dxn.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2dxn.pdb",
         "tm_score": 0.18733513772571062,
         "rmsd": 8.28368780125815,
         "n_aligned": 175
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9lhv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9lhv.pdb",
         "tm_score": 0.1867284122097606,
         "rmsd": 9.230215280379909,
         "n_aligned": 368
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4ihb.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4ihb.pdb",
         "tm_score": 0.18611401295933525,
         "rmsd": 9.320687197065062,
         "n_aligned": 244
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2hvi.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2hvi.pdb",
         "tm_score": 0.1833779376237898,
         "rmsd": 10.339807461902325,
         "n_aligned": 363
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1xl7.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1xl7.pdb",
         "tm_score": 0.16961251723941667,
         "rmsd": 9.939013908642092,
         "n_aligned": 320
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8r04.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8r04.pdb",
         "tm_score": 0.16772234663793711,
         "rmsd": 12.69805298975392,
         "n_aligned": 667
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5wdg.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5wdg.pdb",
         "tm_score": 0.16753249043336946,
         "rmsd": 10.347607610785776,
         "n_aligned": 311
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6e2f.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6e2f.pdb",
         "tm_score": 0.16654650501758736,
         "rmsd": 12.698696055427595,
         "n_aligned": 692
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4fva.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4fva.pdb",
         "tm_score": 0.16611921991167297,
         "rmsd": 10.054090800054299,
         "n_aligned": 284
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6k3f.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6k3f.pdb",
         "tm_score": 0.16460637129290495,
         "rmsd": 11.85901048804149,
         "n_aligned": 545
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6cvm.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6cvm.pdb",
         "tm_score": 0.1420227704581876,
         "rmsd": 13.901893730674889,
         "n_aligned": 869
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9r50.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9r50.cif",
         "tm_score": 0.12777090730200175,
         "rmsd": 15.711982517206687,
         "n_aligned": 1208
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4k64.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4k64.pdb",
         "tm_score": 0.11071192017648214,
         "rmsd": 11.027593900487888,
         "n_aligned": 329
       }
     ],
-    "/scratch/TMAlign/ferritin/validation/pdbs_10k/7lu7.cif": [
+    "/scratch/TMAlign/proteon/validation/pdbs_10k/7lu7.cif": [
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/7lu7.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/7lu7.cif",
         "tm_score": 1.0,
         "rmsd": 3.4360552369970864e-06,
         "n_aligned": 1341
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9s1x.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9s1x.cif",
         "tm_score": 0.49489985672525977,
         "rmsd": 4.178957803392775,
         "n_aligned": 238
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2bby.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2bby.pdb",
         "tm_score": 0.4371519282757232,
         "rmsd": 4.242008528435523,
         "n_aligned": 55
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5vbq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5vbq.pdb",
         "tm_score": 0.38889465403541207,
         "rmsd": 5.975653586424838,
         "n_aligned": 153
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1iuk.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1iuk.pdb",
         "tm_score": 0.3685514555398066,
         "rmsd": 5.119930879030757,
         "n_aligned": 91
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5bnf.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5bnf.pdb",
         "tm_score": 0.35843573754482877,
         "rmsd": 7.4682161973776315,
         "n_aligned": 277
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1jos.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1jos.pdb",
         "tm_score": 0.3491888497792553,
         "rmsd": 4.909928902133795,
         "n_aligned": 72
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4o9m.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4o9m.pdb",
         "tm_score": 0.3443919999661884,
         "rmsd": 6.458504473940681,
         "n_aligned": 204
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2rqq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2rqq.pdb",
         "tm_score": 0.33912073607635274,
         "rmsd": 5.037124749759609,
         "n_aligned": 73
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2k20.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2k20.pdb",
         "tm_score": 0.3270076977073541,
         "rmsd": 4.362838489898561,
         "n_aligned": 64
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5xht.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5xht.pdb",
         "tm_score": 0.3258753004667578,
         "rmsd": 4.538119072337754,
         "n_aligned": 44
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5b6h.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5b6h.pdb",
         "tm_score": 0.3247398504058547,
         "rmsd": 5.233129445881438,
         "n_aligned": 100
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1bsz.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1bsz.pdb",
         "tm_score": 0.3235461019605319,
         "rmsd": 7.865571933171244,
         "n_aligned": 276
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2n4a.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2n4a.pdb",
         "tm_score": 0.32340644091065346,
         "rmsd": 5.707094650578598,
         "n_aligned": 91
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1ia6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1ia6.pdb",
         "tm_score": 0.3213979224017593,
         "rmsd": 7.825093412791821,
         "n_aligned": 250
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3h1e.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3h1e.pdb",
         "tm_score": 0.3167024971471223,
         "rmsd": 4.643900063048524,
         "n_aligned": 64
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/7hgy.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/7hgy.pdb",
         "tm_score": 0.30710223706923184,
         "rmsd": 6.1737872360679145,
         "n_aligned": 138
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8brv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8brv.pdb",
         "tm_score": 0.30449385006692836,
         "rmsd": 8.28912553886036,
         "n_aligned": 293
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2gnw.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2gnw.pdb",
         "tm_score": 0.3041623391482577,
         "rmsd": 6.037720391433591,
         "n_aligned": 159
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2dxn.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2dxn.pdb",
         "tm_score": 0.2970726238244018,
         "rmsd": 8.294240237627651,
         "n_aligned": 284
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1kg2.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1kg2.pdb",
         "tm_score": 0.2961743193938628,
         "rmsd": 6.183097600266874,
         "n_aligned": 120
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6cvm.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6cvm.pdb",
         "tm_score": 0.2951228214724128,
         "rmsd": 9.51801193889777,
         "n_aligned": 596
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9l14.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9l14.pdb",
         "tm_score": 0.2928582663392947,
         "rmsd": 6.657073904204366,
         "n_aligned": 156
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6km1.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6km1.pdb",
         "tm_score": 0.29241531338640675,
         "rmsd": 6.296215189354777,
         "n_aligned": 133
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9fwh.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9fwh.cif",
         "tm_score": 0.2923784546841505,
         "rmsd": 7.267396627994159,
         "n_aligned": 208
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2zgo.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2zgo.pdb",
         "tm_score": 0.28977956937829186,
         "rmsd": 6.997638575398593,
         "n_aligned": 171
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5h5q.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5h5q.pdb",
         "tm_score": 0.28901125073319683,
         "rmsd": 5.382136951825128,
         "n_aligned": 88
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3vhl.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3vhl.pdb",
         "tm_score": 0.28831793165982095,
         "rmsd": 7.724666895757534,
         "n_aligned": 225
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3fkq.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3fkq.pdb",
         "tm_score": 0.2848530700803975,
         "rmsd": 7.107374466346224,
         "n_aligned": 175
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8wi6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8wi6.pdb",
         "tm_score": 0.283697316636631,
         "rmsd": 7.5989034768359724,
         "n_aligned": 195
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4dxu.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4dxu.pdb",
         "tm_score": 0.2826725504972271,
         "rmsd": 6.846491964456381,
         "n_aligned": 164
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/3tba.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/3tba.pdb",
         "tm_score": 0.2824750921560504,
         "rmsd": 8.438753709628768,
         "n_aligned": 318
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6yy6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6yy6.pdb",
         "tm_score": 0.27640082334719185,
         "rmsd": 6.730649655999427,
         "n_aligned": 143
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2k5n.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2k5n.pdb",
         "tm_score": 0.2668076578033762,
         "rmsd": 4.384033915064051,
         "n_aligned": 39
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1p6v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1p6v.pdb",
         "tm_score": 0.2657785290801581,
         "rmsd": 7.386384415209599,
         "n_aligned": 158
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2g8l.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2g8l.pdb",
         "tm_score": 0.26406380437320254,
         "rmsd": 8.400819313068894,
         "n_aligned": 261
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4wwv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4wwv.pdb",
         "tm_score": 0.2604276406146378,
         "rmsd": 8.498414952206643,
         "n_aligned": 309
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5fhb.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5fhb.pdb",
         "tm_score": 0.25983394020668454,
         "rmsd": 7.41047027119658,
         "n_aligned": 196
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4fva.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4fva.pdb",
         "tm_score": 0.25977092959415804,
         "rmsd": 9.250024928177004,
         "n_aligned": 417
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5a6v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5a6v.pdb",
         "tm_score": 0.25655198776928534,
         "rmsd": 8.088894427027075,
         "n_aligned": 268
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6e2f.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6e2f.pdb",
         "tm_score": 0.25558514975320257,
         "rmsd": 9.724482558147018,
         "n_aligned": 527
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8r04.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8r04.pdb",
         "tm_score": 0.25310082885339885,
         "rmsd": 10.026298349730085,
         "n_aligned": 533
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9r50.cif",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9r50.cif",
         "tm_score": 0.2521173768777096,
         "rmsd": 10.155747356548666,
         "n_aligned": 537
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2awn.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2awn.pdb",
         "tm_score": 0.24598793837061894,
         "rmsd": 10.267992698136542,
         "n_aligned": 529
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6k3f.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6k3f.pdb",
         "tm_score": 0.2459199112093317,
         "rmsd": 10.52191831426517,
         "n_aligned": 541
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1odz.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1odz.pdb",
         "tm_score": 0.24334787129599972,
         "rmsd": 8.538873264400113,
         "n_aligned": 304
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4ez6.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4ez6.pdb",
         "tm_score": 0.24028233719744452,
         "rmsd": 9.169216977509654,
         "n_aligned": 427
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4ihb.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4ihb.pdb",
         "tm_score": 0.23523753121311955,
         "rmsd": 8.930868794315188,
         "n_aligned": 305
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/2hvi.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/2hvi.pdb",
         "tm_score": 0.2321237587205826,
         "rmsd": 9.267757742371185,
         "n_aligned": 427
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/9lhv.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/9lhv.pdb",
         "tm_score": 0.22831589405064967,
         "rmsd": 10.29115367855822,
         "n_aligned": 492
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6xz7.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6xz7.pdb",
         "tm_score": 0.2169045938556853,
         "rmsd": 10.645003168704758,
         "n_aligned": 481
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4k4v.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4k4v.pdb",
         "tm_score": 0.2008223340212733,
         "rmsd": 9.064777255891851,
         "n_aligned": 313
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/5wdg.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/5wdg.pdb",
         "tm_score": 0.19944265586564147,
         "rmsd": 9.640678274447906,
         "n_aligned": 348
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/6yrw.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/6yrw.pdb",
         "tm_score": 0.19438897900115956,
         "rmsd": 10.104766921806526,
         "n_aligned": 412
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8zpt.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8zpt.pdb",
         "tm_score": 0.18806222345399648,
         "rmsd": 9.703219026969588,
         "n_aligned": 347
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8tzy.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8tzy.pdb",
         "tm_score": 0.17096872479384329,
         "rmsd": 9.067395253756969,
         "n_aligned": 260
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/8u4q.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/8u4q.pdb",
         "tm_score": 0.16539614993066862,
         "rmsd": 9.888216336840339,
         "n_aligned": 344
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/1xl7.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/1xl7.pdb",
         "tm_score": 0.1586074969043912,
         "rmsd": 9.853777181186375,
         "n_aligned": 300
       },
       {
-        "source_path": "/scratch/TMAlign/ferritin/validation/pdbs_10k/4k64.pdb",
+        "source_path": "/scratch/TMAlign/proteon/validation/pdbs_10k/4k64.pdb",
         "tm_score": 0.13717848960913454,
         "rmsd": 9.58065016829472,
         "n_aligned": 278

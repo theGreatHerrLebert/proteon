@@ -1,4 +1,4 @@
-"""Regenerate `ferritin-connector/data/amber96_obc.ini` from OpenMM's XMLs.
+"""Regenerate `proteon-connector/data/amber96_obc.ini` from OpenMM's XMLs.
 
 Joins `amber96.xml` (type-id -> class) with `amber96_obc.xml`
 (type-id -> radius nm + HCT scale) and writes an INI file keyed by
@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 OM_DATA = REPO_ROOT / ".venv/lib/python3.10/site-packages/openmm/app/data"
 FF_XML = OM_DATA / "amber96.xml"
 OBC_XML = OM_DATA / "amber96_obc.xml"
-OUT_INI = REPO_ROOT / "ferritin-connector/data/amber96_obc.ini"
+OUT_INI = REPO_ROOT / "proteon-connector/data/amber96_obc.ini"
 
 
 def main() -> int:

@@ -1,7 +1,7 @@
 {
   "corpus": {
-    "pdb_dir": "/scratch/TMAlign/ferritin/validation/pdbs_10k",
-    "db_path": "/tmp/ferritin_retrieval_cache_smoke",
+    "pdb_dir": "/scratch/TMAlign/proteon/validation/pdbs_10k",
+    "db_path": "/tmp/proteon_retrieval_cache_smoke",
     "n_targets": 59,
     "n_queries": 4,
     "k": 6,
@@ -12,7 +12,7 @@
       0.7,
       0.9
     ],
-    "truth_cache": "/scratch/TMAlign/ferritin/validation/retrieval_truth_cache_smoke.json",
+    "truth_cache": "/scratch/TMAlign/proteon/validation/retrieval_truth_cache_smoke.json",
     "truth_cache_hit": false
   },
   "timing": {

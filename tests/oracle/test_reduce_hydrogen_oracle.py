@@ -1,4 +1,4 @@
-"""Oracle test: ferritin H placement vs reduce (Richardson lab, Duke).
+"""Oracle test: proteon H placement vs reduce (Richardson lab, Duke).
 
 Reduce (https://github.com/rlabduke/reduce) is the canonical asymmetric
 hydrogen placer — the Richardson lab's reference implementation, widely
@@ -10,7 +10,7 @@ What this pins
 --------------
 For every standard amino-acid hydrogen whose position is **geometrically
 determined** by its parent heavy atom and the adjacent backbone, reduce
-and ferritin agree within 0.1 Å. That covers:
+and proteon agree within 0.1 Å. That covers:
 
     parent         H count  where it appears
     ─────────────  ───────  ──────────────────────────────────────────
@@ -23,7 +23,7 @@ and ferritin agree within 0.1 Å. That covers:
     sp2 indole N   1        TRP NE1-H
     sp2 imidazole  1        HIS ND1-H / NE2-H (protonated tautomer)
 
-Everything above uses `−NUClear` in reduce to match ferritin's nuclear
+Everything above uses `−NUClear` in reduce to match proteon's nuclear
 H-X bond lengths (C-H 1.09, N-H 1.01, O-H 0.96 Å). Without that flag
 reduce defaults to X-ray-shortened positions that disagree by ~0.1 Å
 systematically — that's the X-ray / neutron convention, not an
@@ -41,22 +41,22 @@ The three known convention gaps, documented here instead of asserted:
 
 2. **sp2 amide NH₂ (ASN HD21/HD22, GLN HE21/HE22, ARG NH1/NH2)**:
    in-plane placement convention differs by ~120° between reduce and
-   ferritin, producing ~1.2 Å residuals even after -NOFLIP + optimal
+   proteon, producing ~1.2 Å residuals even after -NOFLIP + optimal
    matching. Both geometries are valid sp2; a pair-convention test
    would need a separate fixture and is deferred.
 
 3. **Rotatable polar H (SER/THR/TYR OH, CYS SH, LYS NH3+, N-terminal
-   NH3+)**: reduce optimizes rotamer via H-bond scoring, ferritin
+   NH3+)**: reduce optimizes rotamer via H-bond scoring, proteon
    places at template default. 1.5-2 Å residuals are structural, not
    bugs. A separate oracle over a curated high-resolution set would
-   pin this once ferritin gains rotatable-H optimization.
+   pin this once proteon gains rotatable-H optimization.
 
 FF parametrization
 ------------------
 Two runs per structure:
 
 - `polar_only=True`  → CHARMM19-style placement (N-H, O-H, S-H only).
-  We assert ferritin's placed subset agrees with reduce's polar subset.
+  We assert proteon's placed subset agrees with reduce's polar subset.
 - `polar_only=False` → AMBER96-style placement (full H set).
   We assert two-way agreement on the rigid parents above.
 
@@ -89,7 +89,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pytest
 
-import ferritin
+import proteon
 
 pytestmark = pytest.mark.oracle("reduce")
 
@@ -133,11 +133,11 @@ if _REDUCE is None:
 # ---------------------------------------------------------------------------
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-FERRITIN_PDBS = os.path.normpath(os.path.join(_HERE, "..", "..", "test-pdbs"))
+PROTEON_PDBS = os.path.normpath(os.path.join(_HERE, "..", "..", "test-pdbs"))
 
 STRUCTURES = [
-    ("1crn", os.path.join(FERRITIN_PDBS, "1crn.pdb")),
-    ("1ubq", os.path.join(FERRITIN_PDBS, "1ubq.pdb")),
+    ("1crn", os.path.join(PROTEON_PDBS, "1crn.pdb")),
+    ("1ubq", os.path.join(PROTEON_PDBS, "1ubq.pdb")),
 ]
 
 TOLERANCE = 0.1   # Å — rigid-group per-atom distance after optimal matching
@@ -192,11 +192,11 @@ def _strip_hydrogens(path: str) -> str:
     return out
 
 
-def _extract_ferritin(path: str, *, polar_only: bool) -> Tuple[Dict[AtomKey, AtomPos], Dict[AtomKey, AtomPos]]:
-    """Load with ferritin, place H, return (heavy, h) dicts."""
-    from ferritin_connector import py_add_hydrogens
+def _extract_proteon(path: str, *, polar_only: bool) -> Tuple[Dict[AtomKey, AtomPos], Dict[AtomKey, AtomPos]]:
+    """Load with proteon, place H, return (heavy, h) dicts."""
+    from proteon_connector import py_add_hydrogens
 
-    structure = ferritin.load(path)
+    structure = proteon.load(path)
     py_add_hydrogens.place_all_hydrogens(structure.get_py_ptr(), polar_only)
     heavy: Dict[AtomKey, AtomPos] = {}
     hdict: Dict[AtomKey, AtomPos] = {}
@@ -251,7 +251,7 @@ def _group_by_parent(
     return groups
 
 
-# sp2 guanidinium/amide single-H positions where reduce and ferritin use
+# sp2 guanidinium/amide single-H positions where reduce and proteon use
 # different in-plane conventions (~1 Å residual even with -NOFLIP). Classified
 # alongside the N+2 sp2 amides for the same "convention gap" reason.
 _SP2_CONVENTION_PARENTS = frozenset({("ARG", "NE")})
@@ -313,7 +313,7 @@ def _collect_rigid_residuals(
     """Return per-H residuals for the rigid subset shared by both tools.
 
     Each entry is ((chain, resnum, resname, parent), distance,
-    reduce_h_name, ferritin_h_name).
+    reduce_h_name, proteon_h_name).
     """
     groups_r = _group_by_parent(heavy_r, h_r)
     groups_f = _group_by_parent(heavy_f, h_f)
@@ -388,7 +388,7 @@ class TestReduceHydrogenOracle:
     def test_rigid_parity(self, request, stripped_pdb, reduce_atoms, polar_only):
         name = request.node.callspec.id.split("-")[0]
         heavy_r, h_r = reduce_atoms
-        heavy_f, h_f = _extract_ferritin(stripped_pdb, polar_only=polar_only)
+        heavy_f, h_f = _extract_proteon(stripped_pdb, polar_only=polar_only)
 
         residuals = _collect_rigid_residuals(heavy_r, h_r, heavy_f, h_f)
         assert residuals, (
@@ -402,7 +402,7 @@ class TestReduceHydrogenOracle:
             worst = sorted(over, key=lambda x: -x[1])[:10]
             lines = [
                 f"  {r[0][2]:>3} {r[0][3]:<4} resid={r[0][1]:<3}  "
-                f"reduce={r[2]:<5} ferritin={r[3]:<5}  d={r[1]:.3f} Å"
+                f"reduce={r[2]:<5} proteon={r[3]:<5}  d={r[1]:.3f} Å"
                 for r in worst
             ]
             raise AssertionError(
@@ -416,11 +416,11 @@ class TestReduceHydrogenOracle:
         in both outputs — basic sanity check that the placement ran."""
         name = request.node.callspec.id.split("-")[0]
         _, h_r = reduce_atoms
-        _, h_f = _extract_ferritin(stripped_pdb, polar_only=polar_only)
+        _, h_f = _extract_proteon(stripped_pdb, polar_only=polar_only)
 
         n_r = sum(1 for key in h_r if key[2] == "H")
         n_f = sum(1 for key in h_f if key[2] == "H")
         assert abs(n_r - n_f) <= 2, (
             f"{name}: backbone amide H count diverges — reduce={n_r} "
-            f"ferritin={n_f}. Proline / terminal handling likely differs."
+            f"proteon={n_f}. Proline / terminal handling likely differs."
         )

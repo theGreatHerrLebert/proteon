@@ -5,7 +5,7 @@
         "openmm_charmm36": {
           "by_pdb": {
             "1ake": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -47,7 +47,7 @@
               }
             },
             "1aki": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -89,7 +89,7 @@
               }
             },
             "1bpi": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -131,7 +131,7 @@
               }
             },
             "1crn": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -173,7 +173,7 @@
               }
             },
             "1pgb": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -215,7 +215,7 @@
               }
             },
             "1ubq": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {

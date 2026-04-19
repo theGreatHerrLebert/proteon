@@ -1,13 +1,13 @@
 """SOTA comparison: OpenMM CHARMM36+OBC2 fold preservation benchmark.
 
-Same 1000 PDBs (seed=42) as the ferritin benchmark. For each:
+Same 1000 PDBs (seed=42) as the proteon benchmark. For each:
   1. Load PDB via PDBFixer.
   2. Add missing atoms + hydrogens at pH 7.
   3. Extract CA coords (pre-min).
   4. Build system with amber96_obc.xml + .
-  5. LocalEnergyMinimizer (tolerance = 10 kJ/mol/nm, matches ferritin's 0.1 kcal/mol/A).
+  5. LocalEnergyMinimizer (tolerance = 10 kJ/mol/nm, matches proteon's 0.1 kcal/mol/A).
   6. Extract CA coords (post-min).
-  7. TM-score pre vs post (via ferritin.tm_score — pure geometry op).
+  7. TM-score pre vs post (via proteon.tm_score — pure geometry op).
 
 Results as JSONL, compatible shape with tm_fold_preservation.jsonl.
 """
@@ -27,20 +27,20 @@ import openmm.app as app
 from openmm import unit
 from pdbfixer import PDBFixer
 
-# Ferritin only for its TM-score (pure geometry).
-import ferritin
+# Proteon only for its TM-score (pure geometry).
+import proteon
 
 # Worker pool
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 
-PDB_DIR = Path("/globalscratch/dateschn/ferritin-benchmark/pdbs_50k")
-OUT = Path("/globalscratch/dateschn/ferritin-benchmark/tm_fold_preservation_openmm_amber.jsonl")
+PDB_DIR = Path("/globalscratch/dateschn/proteon-benchmark/pdbs_50k")
+OUT = Path("/globalscratch/dateschn/proteon-benchmark/tm_fold_preservation_openmm_amber.jsonl")
 N = 1000
 SEED = 42
 
 MIN_TOL = 10.0 * unit.kilojoule_per_mole / unit.nanometer  # ~0.24 kcal/mol/A
-MAX_ITER = 100  # match ferritin's minimize_steps=100
+MAX_ITER = 100  # match proteon's minimize_steps=100
 
 
 def extract_ca(topology, positions) -> np.ndarray:
@@ -53,7 +53,7 @@ def extract_ca(topology, positions) -> np.ndarray:
 def tm_pair(ca_ref: np.ndarray, ca_mov: np.ndarray) -> dict:
     n = len(ca_ref)
     invmap = np.arange(n, dtype=np.int32)
-    tm, n_aln, rmsd_val, _R, _t = ferritin.tm_score(ca_mov, ca_ref, invmap)
+    tm, n_aln, rmsd_val, _R, _t = proteon.tm_score(ca_mov, ca_ref, invmap)
     return {"tm_score": float(tm), "rmsd": float(rmsd_val),
             "n_ca": int(n), "n_aligned": int(n_aln)}
 
@@ -136,7 +136,7 @@ def _worker(pdb_path: str) -> dict:
 
 
 def main():
-    # Pick sample deterministically (same seed as ferritin bench).
+    # Pick sample deterministically (same seed as proteon bench).
     pdbs = sorted(p.name for p in PDB_DIR.glob("*.pdb"))
     rng = random.Random(SEED)
     rng.shuffle(pdbs)

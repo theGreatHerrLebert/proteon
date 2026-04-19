@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 # BALL Julia oracle: compute AMBER96 energy components on a PDB structure.
-# Outputs JSON with energy breakdown for comparison with ferritin.
+# Outputs JSON with energy breakdown for comparison with proteon.
 #
 # Usage: julia --project=BALL_PATH ball_energy_oracle.jl structure.pdb
 

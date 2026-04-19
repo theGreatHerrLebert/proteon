@@ -1,7 +1,7 @@
 Sample: 1000 PDBs
 Available locally: 1000
 Workers: 16 (1 gmx thread each)
-Output: /scratch/TMAlign/ferritin/validation/gmx_fold_preservation/tm_fold_gromacs.jsonl
+Output: /scratch/TMAlign/proteon/validation/gmx_fold_preservation/tm_fold_gromacs.jsonl
 [25/1000] ok=5 fail=20 rate=8.22/s eta=2.0min
 [50/1000] ok=14 fail=36 rate=3.52/s eta=4.5min
 [75/1000] ok=24 fail=51 rate=2.78/s eta=5.6min

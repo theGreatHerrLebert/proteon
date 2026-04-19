@@ -10,8 +10,8 @@ import pytest
 
 pytest.importorskip("pyarrow")
 
-from ferritin.sequence_example import SequenceExample
-from ferritin.sequence_export import (
+from proteon.sequence_example import SequenceExample
+from proteon.sequence_export import (
     SEQUENCE_EXPORT_FORMAT,
     SequenceParquetWriter,
     build_sequence_schema,
@@ -144,7 +144,7 @@ def test_sequence_release_outer_manifest_agrees_on_empty(tmp_path: Path):
     tensors.parquet on empty releases. Prior dataclass default was
     tensor_file = 'examples/tensors.parquet' regardless of whether
     the file was written."""
-    from ferritin.sequence_release import build_sequence_release
+    from proteon.sequence_release import build_sequence_release
 
     root = build_sequence_release([], tmp_path / "release", release_id="empty")
     outer = json.loads((root / "release_manifest.json").read_text())
@@ -156,7 +156,7 @@ def test_sequence_release_outer_manifest_agrees_on_empty(tmp_path: Path):
 
 
 def test_sequence_release_outer_manifest_points_at_parquet_when_nonempty(tmp_path: Path):
-    from ferritin.sequence_release import build_sequence_release
+    from proteon.sequence_release import build_sequence_release
 
     root = build_sequence_release(
         [_fake_sequence("a", L=3, seed=0, depth=1)],
@@ -178,7 +178,7 @@ def test_build_sequence_release_consumes_generator(tmp_path: Path):
     release accepts a generator that can only be consumed once and
     produces the correct artifact.
     """
-    from ferritin.sequence_release import build_sequence_release
+    from proteon.sequence_release import build_sequence_release
 
     def _one_shot_gen():
         for i in range(5):

@@ -7,7 +7,7 @@ Per structure:
   4. gmx mdrun -nt 1                                 (single-thread EM)
   5. gmx editconf -> out.pdb
   6. Extract CA_pre from the input PDB, CA_post from the EM output.
-  7. ferritin.tm_score(CA_pre, CA_post) with identity invmap.
+  7. proteon.tm_score(CA_pre, CA_post) with identity invmap.
 
 Reports TM-score, RMSD, wall time, failure mode. Runs with a process
 pool — GROMACS handles one structure per worker at a time, each mdrun
@@ -29,10 +29,10 @@ from pathlib import Path
 
 import numpy as np
 
-import ferritin
+import proteon
 
-PDB_DIR = Path("/scratch/TMAlign/ferritin/validation/gmx_fold_preservation/pdbs_1k")
-OUT = Path("/scratch/TMAlign/ferritin/validation/gmx_fold_preservation/tm_fold_gromacs.jsonl")
+PDB_DIR = Path("/scratch/TMAlign/proteon/validation/gmx_fold_preservation/pdbs_1k")
+OUT = Path("/scratch/TMAlign/proteon/validation/gmx_fold_preservation/tm_fold_gromacs.jsonl")
 SAMPLE_FILE = Path("/tmp/gmx_sample.txt")
 
 GMX = os.environ.get(
@@ -41,7 +41,7 @@ GMX = os.environ.get(
 )
 
 # Match OpenMM's LocalEnergyMinimizer budget:
-#   * emtol 10 kJ/mol/nm (OpenMM default 10, ferritin 0.1 kcal/mol/A ≈ 0.4)
+#   * emtol 10 kJ/mol/nm (OpenMM default 10, proteon 0.1 kcal/mol/A ≈ 0.4)
 #   * max 100 steps
 #   * L-BFGS (same flavor OpenMM uses internally, not steepest descent)
 MDP_TEMPLATE = """\
@@ -67,12 +67,12 @@ constraints    = none
 def extract_ca_from_pdb(path: str) -> np.ndarray:
     """Parse a PDB file, return Nx3 CA coordinates (Å)."""
     cas = []
-    # Use ferritin's loader — pdbtbx is stricter than some PDB files, so
+    # Use proteon's loader — pdbtbx is stricter than some PDB files, so
     # fall back to a manual parse for GROMACS output (which has REMARK
     # and CRYST1 lines pdbtbx sometimes rejects).
     try:
-        s = ferritin.load(path)
-        return ferritin.extract_ca_coords(s)
+        s = proteon.load(path)
+        return proteon.extract_ca_coords(s)
     except Exception:
         pass
     for line in open(path):
@@ -94,7 +94,7 @@ def extract_ca_from_pdb(path: str) -> np.ndarray:
 def tm_pair(ca_ref: np.ndarray, ca_mov: np.ndarray) -> dict:
     n = len(ca_ref)
     invmap = np.arange(n, dtype=np.int32)
-    tm, n_aln, rmsd_val, _R, _t = ferritin.tm_score(ca_mov, ca_ref, invmap)
+    tm, n_aln, rmsd_val, _R, _t = proteon.tm_score(ca_mov, ca_ref, invmap)
     return {
         "tm_score": float(tm),
         "rmsd": float(rmsd_val),
@@ -243,9 +243,9 @@ def run_one(pdb_path: str) -> dict:
 
 
 def main():
-    # Sample order from the tm_fold_plots/ferritin.jsonl — matches the
-    # ferritin and OpenMM runs exactly.
-    with open("/scratch/TMAlign/ferritin/validation/tm_fold_plots/ferritin.jsonl") as f:
+    # Sample order from the tm_fold_plots/proteon.jsonl — matches the
+    # proteon and OpenMM runs exactly.
+    with open("/scratch/TMAlign/proteon/validation/tm_fold_plots/proteon.jsonl") as f:
         sample_names = [json.loads(l)["pdb"] for l in f]
     print(f"Sample: {len(sample_names)} PDBs", flush=True)
     sample = [str(PDB_DIR / n) for n in sample_names if (PDB_DIR / n).exists()]

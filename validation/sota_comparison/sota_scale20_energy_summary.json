@@ -5,7 +5,7 @@
         "openmm": {
           "by_pdb": {
             "1ae7": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -35,7 +35,7 @@
               }
             },
             "1dhn": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -65,7 +65,7 @@
               }
             },
             "1gqa": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -95,7 +95,7 @@
               }
             },
             "1iab": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -125,14 +125,14 @@
               }
             },
             "1k24": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 248 (PHE).  The atoms and bonds in the residue match PHE, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             },
             "1n7l": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -162,14 +162,14 @@
               }
             },
             "1onp": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 396 (ALA).  The atoms and bonds in the residue match ALA, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             },
             "1s1y": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -199,35 +199,35 @@
               }
             },
             "1yj1": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 69 (LEU).  The atoms and bonds in the residue match LEU, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             },
             "1ywy": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 73 (ASP).  The atoms and bonds in the residue match ASP, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             },
             "1zmm": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 30 (THR).  The atoms and bonds in the residue match THR, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             },
             "2bgs": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 198 (ILE).  The set of heavy atoms matches VAL, but the residue is missing 1 H atom.  You may be able to add it with Modeller.addHydrogens().  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             },
             "2buq": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -257,14 +257,14 @@
               }
             },
             "2gey": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 289 (PRO).  The atoms and bonds in the residue match PRO, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             },
             "2ksa": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -294,7 +294,7 @@
               }
             },
             "2kzr": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -324,14 +324,14 @@
               }
             },
             "2l34": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 32 (LEU).  The set of atoms is similar to LEU, but is missing 1 O atom.  Is the chain terminated in a way that is unsupported by the force field?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             },
             "2nce": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "_n_atoms_diff": {
@@ -361,16 +361,16 @@
               }
             },
             "2ogw": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 253 (LYS).  The atoms and bonds in the residue match LYS, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             },
             "2otr": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "error",
-              "ferritin_error": null,
+              "proteon_error": null,
               "other_error": "OpenMM createSystem failed: ValueError: No template found for residue 89 (PHE).  The atoms and bonds in the residue match PHE, but the set of externally bonded atoms is missing 1 C atom.  Is the chain missing a terminal capping group?  For more information, see https://github.com/openmm/openmm/wiki/Frequently-Asked-Questions#template",
               "metrics": {}
             }

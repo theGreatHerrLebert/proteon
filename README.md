@@ -1,41 +1,41 @@
-# Ferritin
+# Proteon
 
 Rust-first structural bioinformatics toolkit for loading, aligning, analyzing, searching, and preparing macromolecular structures.
 
 ## TL;DR
 
-- Ferritin is a **library**, not a platform. No service, no database, no scheduler.
+- Proteon is a **library**, not a platform. No service, no database, no scheduler.
 - It gives you **fast structure I/O and heavy compute** from Rust, with Python and CLI entry points.
 - Core jobs already wired in: **PDB/mmCIF loading, TM-align/US-align family alignment, SASA, DSSP, H-bonds, geometry, search, and structure preparation/minimization**.
 - Outputs stay interoperable: **NumPy, Arrow, Parquet, pandas/polars-friendly tables**.
 - The repo also contains **dataset/release utilities** for sequence and structure-supervision pipelines.
 
-If you want a Python package that can sit inside your own pipeline and do the expensive structural-biology work without forcing a platform decision, this is what Ferritin is for.
+If you want a Python package that can sit inside your own pipeline and do the expensive structural-biology work without forcing a platform decision, this is what Proteon is for.
 
 ## Quick Start
 
 ```bash
-pip install ferritin
+pip install proteon
 ```
 
-Ferritin is batch-first. The single-structure helpers are there, but the
+Proteon is batch-first. The single-structure helpers are there, but the
 default shape is "load many, compute many, prepare many":
 
 ```python
-import ferritin
+import proteon
 
 paths = ["1crn.pdb", "1ubq.pdb", "1bpi.pdb"]
-structures = ferritin.batch_load(paths, n_threads=-1)
+structures = proteon.batch_load(paths, n_threads=-1)
 
-sasa = ferritin.batch_total_sasa(structures, n_threads=-1)
-dssp = ferritin.batch_dssp(structures, n_threads=-1)
-prep = ferritin.batch_prepare(
+sasa = proteon.batch_total_sasa(structures, n_threads=-1)
+dssp = proteon.batch_dssp(structures, n_threads=-1)
+prep = proteon.batch_prepare(
     structures,
     hydrogens="backbone",
     minimize=True,
     n_threads=-1,
 )
-hits = ferritin.tm_align_one_to_many(structures[0], structures[1:], n_threads=-1)
+hits = proteon.tm_align_one_to_many(structures[0], structures[1:], n_threads=-1)
 
 print(sasa)
 print(dssp[0][:10])
@@ -47,7 +47,7 @@ Runnable examples live in [`examples/`](examples/).
 
 ## GPU build (optional)
 
-The PyPI wheel is **CPU-only**. Ferritin has GPU-accelerated kernels
+The PyPI wheel is **CPU-only**. Proteon has GPU-accelerated kernels
 for CHARMM19+EEF1 / AMBER96 / OBC GB energy + forces, SASA, and the
 MMseqs2-style Smith-Waterman / PSSM search, but packaging those into
 a PyPI wheel would pin you to a specific CUDA runtime and balloon the
@@ -57,14 +57,14 @@ Runtime dispatch is silent-fallback: the CPU-only wheel runs fine on a
 GPU box, it just ignores the GPU. To use the GPU, build from source:
 
 ```bash
-git clone https://github.com/theGreatHerrLebert/ferritin.git
-cd ferritin
+git clone https://github.com/theGreatHerrLebert/proteon.git
+cd proteon
 python -m venv .venv && source .venv/bin/activate
 pip install maturin numpy
-cd ferritin-connector
+cd proteon-connector
 maturin develop --release --features cuda
 cd ..
-pip install -e packages/ferritin/
+pip install -e packages/proteon/
 ```
 
 Requirements: CUDA 12.5 runtime on `$LD_LIBRARY_PATH` (`cudarc` is
@@ -72,15 +72,15 @@ pinned to `cuda-12050`), an NVIDIA GPU, an NVCC / driver combination
 that supports your card. Confirm the build picked up the GPU with:
 
 ```python
-import ferritin
-print(ferritin.gpu_available(), ferritin.gpu_info())
+import proteon
+print(proteon.gpu_available(), proteon.gpu_info())
 ```
 
 Validated on RTX 5090 via a 50,000-PDB battle test (99.1% correct in
 3.5h, CHARMM19+EEF1 minimization + SASA fully on CUDA). There is no
-`pip install ferritin[cuda]` today; if you hit friction with the
+`pip install proteon[cuda]` today; if you hit friction with the
 source build, open an issue — we'll prioritize a GPU-wheel variant
-(likely published as a separate `ferritin-cuda` package) if there's
+(likely published as a separate `proteon-cuda` package) if there's
 real demand.
 
 ## Persisted Search DBs
@@ -88,10 +88,10 @@ real demand.
 For structural-alphabet search, the default persisted path is:
 
 ```python
-import ferritin
+import proteon
 
-db = ferritin.build_search_db(["1crn.pdb", "1ubq.pdb"], out="search_db", k=6)
-hits = ferritin.search(ferritin.load("1crn.pdb"), "search_db", top_k=5, rerank=False)
+db = proteon.build_search_db(["1crn.pdb", "1ubq.pdb"], out="search_db", k=6)
+hits = proteon.search(proteon.load("1crn.pdb"), "search_db", top_k=5, rerank=False)
 ```
 
 That writes the Parquet corpus and the eager compiled serving layout together,
@@ -100,23 +100,23 @@ so later path-based queries load the faster serving representation by default.
 If you intentionally want Parquet-only storage, opt in explicitly:
 
 ```python
-ferritin.save_search_db(db, "search_db", write_compiled=False)
-lazy = ferritin.load_search_db("search_db", prefer_compiled=False)
+proteon.save_search_db(db, "search_db", write_compiled=False)
+lazy = proteon.load_search_db("search_db", prefer_compiled=False)
 ```
 
 If you already have an older Parquet-only DB and want to upgrade it in place on
 first use, use `auto_compile_missing=True`:
 
 ```python
-hits = ferritin.search(
-    ferritin.load("1crn.pdb"),
+hits = proteon.search(
+    proteon.load("1crn.pdb"),
     "search_db",
     rerank=False,
     auto_compile_missing=True,
 )
 ```
 
-## What Ferritin Covers
+## What Proteon Covers
 
 | Area | Examples |
 |---|---|
@@ -137,7 +137,7 @@ Most structural-bioinformatics tooling still forces at least one bad trade:
 - useful for one algorithm but not for end-to-end data preparation
 - tied to a service or monolithic stack
 
-Ferritin takes a different shape:
+Proteon takes a different shape:
 
 - **Rust core for throughput**
 - **Python API for ergonomics**
@@ -148,7 +148,7 @@ That makes it useful both as a daily research library and as a compute kernel in
 
 ## When To Use It
 
-Use Ferritin when you need one or more of:
+Use Proteon when you need one or more of:
 
 - high-throughput local processing of many structures
 - structure alignment from Python without shelling out to legacy binaries
@@ -156,7 +156,7 @@ Use Ferritin when you need one or more of:
 - preparation/minimization as part of dataset generation
 - Arrow/Parquet outputs for DuckDB, polars, pandas, Spark, or ML workflows
 
-Ferritin is probably not the right repo if you want:
+Proteon is probably not the right repo if you want:
 
 - a hosted platform
 - a GUI workbench
@@ -168,7 +168,7 @@ Ferritin is probably not the right repo if you want:
 **Python**
 
 ```python
-import ferritin
+import proteon
 ```
 
 The Python package is the main user-facing surface and exposes the Rust-backed APIs directly.
@@ -197,16 +197,16 @@ cargo build --release
 
 The workspace is split into focused crates:
 
-- `ferritin-align`
-- `ferritin-io`
-- `ferritin-arrow`
-- `ferritin-search`
-- `ferritin-connector`
-- `ferritin-bin`
+- `proteon-align`
+- `proteon-io`
+- `proteon-arrow`
+- `proteon-search`
+- `proteon-connector`
+- `proteon-bin`
 
 ## Evidence It Works
 
-Ferritin is not just unit-tested on toy inputs.
+Proteon is not just unit-tested on toy inputs.
 
 - End-to-end validation on **45,100 real PDB structures** completed in **17.9 minutes** on **120 cores** after size filtering from a 50k corpus.
 - TM-align behavior is checked against **USAlign** on **4,656 pairs** with **0.003 median TM-score drift**.
@@ -216,7 +216,7 @@ Ferritin is not just unit-tested on toy inputs.
 - Hydrogen placement is checked against **reduce** (Richardson Lab): every geometrically-determined H atom (backbone N-H, Cα, methylene, aromatic C-H, sp3 methine) agrees within **0.1 Å** after optimal matching, across 724 atoms on 1crn + 1ubq in both CHARMM19 polar-only and AMBER96 full-H modes.
 - Large-scale runs already surfaced and fixed multiple real correctness bugs that smaller tests missed.
 
-Each of those numbers is produced by an **oracle test**: ferritin's output compared against an independent, externally-implemented tool (OpenMM, BALL, MMseqs2, USAlign, Biopython, Gemmi, FreeSASA) at a documented tolerance. Every new numerical claim in the codebase lands with an oracle test next to it.
+Each of those numbers is produced by an **oracle test**: proteon's output compared against an independent, externally-implemented tool (OpenMM, BALL, MMseqs2, USAlign, Biopython, Gemmi, FreeSASA) at a documented tolerance. Every new numerical claim in the codebase lands with an oracle test next to it.
 
 - [`docs/ORACLE_SETUP.md`](docs/ORACLE_SETUP.md) — reproducibility recipe: pinned versions + install commands + run invocations. Copy-paste your way from a clean machine to the published numbers.
 - [`tests/oracle/README.md`](tests/oracle/README.md) — per-test coverage table and the oracle-authoring pattern.
@@ -227,13 +227,13 @@ For more detail, see the validation and roadmap material under [`validation/`](v
 ## Repo Shape
 
 ```text
-ferritin-align      alignment algorithms
-ferritin-io         PDB/mmCIF I/O
-ferritin-arrow      Arrow/Parquet export
-ferritin-search     search and structural-alphabet tooling
-ferritin-connector  PyO3 bridge and compute kernels exposed to Python
-packages/ferritin   Python package
-ferritin-bin        CLI binaries
+proteon-align      alignment algorithms
+proteon-io         PDB/mmCIF I/O
+proteon-arrow      Arrow/Parquet export
+proteon-search     search and structural-alphabet tooling
+proteon-connector  PyO3 bridge and compute kernels exposed to Python
+packages/proteon   Python package
+proteon-bin        CLI binaries
 examples/           runnable examples
 tests/              Python test suite
 validation/         benchmarks, reports, and oracle checks
@@ -241,7 +241,7 @@ validation/         benchmarks, reports, and oracle checks
 
 ## Acknowledgements
 
-ferritin is only possible because of the work of the groups whose tools
+proteon is only possible because of the work of the groups whose tools
 and papers it builds on. The structure-alignment core is a Rust port of
 Yang Zhang's TM-align and US-align. The search layer is a port of Martin
 Steinegger and Johannes Söding's MMseqs2 — with the GPU path following the
@@ -253,11 +253,11 @@ implementations follow Martin Karplus, Themis Lazaridis, Peter Kollman,
 David Case, and their collaborators (CHARMM19, EEF1, AMBER96, OBC GB).
 OpenMM (Peter Eastman and the Pande Lab), BALL (Andreas Hildebrandt and
 collaborators), Foldseek, MMseqs2, USAlign, Biopython, Gemmi, and FreeSASA
-serve as oracles — ferritin's correctness claims are only as strong as
+serve as oracles — proteon's correctness claims are only as strong as
 those reference implementations, and the tolerances in our test suite are
 where that dependency is made explicit. I/O rides on Douwe Schulte's
 pdbtbx. The citations below point at the original work behind each of
-these components — please cite them too when you cite ferritin.
+these components — please cite them too when you cite proteon.
 
 ## References
 
@@ -274,16 +274,16 @@ Structural analysis:
 
 Force fields and implicit solvation:
 
-- Neria, Fischer, & Karplus. "Simulation of activation free energies in molecular systems." *J Chem Phys* 105(5), 1902-1921 (1996). https://doi.org/10.1063/1.472061 — CHARMM19 parameter set used by ferritin.
+- Neria, Fischer, & Karplus. "Simulation of activation free energies in molecular systems." *J Chem Phys* 105(5), 1902-1921 (1996). https://doi.org/10.1063/1.472061 — CHARMM19 parameter set used by proteon.
 - Lazaridis & Karplus. "Effective energy function for proteins in solution." *Proteins* 35(2), 133-152 (1999). https://doi.org/10.1002/(SICI)1097-0134(19990501)35:2%3C133::AID-PROT1%3E3.0.CO;2-N — EEF1 implicit solvation.
 - Cornell et al. "A Second Generation Force Field for the Simulation of Proteins, Nucleic Acids, and Organic Molecules." *J Am Chem Soc* 117(19), 5179-5197 (1995). https://doi.org/10.1021/ja00124a002 — AMBER94 / AMBER96 parameters.
 - Onufriev, Bashford, & Case. "Exploring protein native states and large-scale conformational changes with a modified generalized Born model." *Proteins* 55(2), 383-394 (2004). https://doi.org/10.1002/prot.20033 — OBC Generalized Born implicit solvation.
 
 Sequence and structure search:
 
-- Steinegger & Söding. "MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets." *Nat Biotechnol* 35(11), 1026-1028 (2017). https://doi.org/10.1038/nbt.3988 — k-mer prefilter, ungapped/gapped Smith-Waterman, and PSSM/MSA pipeline that ferritin-search ports.
-- Kallenborn, Chacon, Hundt, Sirelkhatim, Didi, Cha, Dallago, Mirdita, Schmidt, Steinegger. "GPU-accelerated homology search with MMseqs2." *Nat Methods* 22, 2024-2027 (2025). https://doi.org/10.1038/s41592-025-02819-8 — libmarv, the canonical GPU Smith-Waterman kernel design that `ferritin-search/src/gpu/pssm_sw*.rs` follows (warp-collaborative PSSM SW, shared-mem PSSM staging, padded-DB coalesced target layout).
-- van Kempen et al. "Fast and accurate protein structure search with Foldseek." *Nat Biotechnol* 42(2), 243-246 (2024). https://doi.org/10.1038/s41587-023-01773-0 — the 3Di structural-alphabet idea that `ferritin-align/src/search/alphabet.rs` builds on. Ferritin ships an experimental, independently-trained 20-letter structural alphabet (no GPL-licensed code re-used); benchmarks under `validation/bench_foldseek_retrieval.py` are currently ~15% behind Foldseek at TM ≥ 0.5 and close to parity at TM ≥ 0.9.
+- Steinegger & Söding. "MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets." *Nat Biotechnol* 35(11), 1026-1028 (2017). https://doi.org/10.1038/nbt.3988 — k-mer prefilter, ungapped/gapped Smith-Waterman, and PSSM/MSA pipeline that proteon-search ports.
+- Kallenborn, Chacon, Hundt, Sirelkhatim, Didi, Cha, Dallago, Mirdita, Schmidt, Steinegger. "GPU-accelerated homology search with MMseqs2." *Nat Methods* 22, 2024-2027 (2025). https://doi.org/10.1038/s41592-025-02819-8 — libmarv, the canonical GPU Smith-Waterman kernel design that `proteon-search/src/gpu/pssm_sw*.rs` follows (warp-collaborative PSSM SW, shared-mem PSSM staging, padded-DB coalesced target layout).
+- van Kempen et al. "Fast and accurate protein structure search with Foldseek." *Nat Biotechnol* 42(2), 243-246 (2024). https://doi.org/10.1038/s41587-023-01773-0 — the 3Di structural-alphabet idea that `proteon-align/src/search/alphabet.rs` builds on. Proteon ships an experimental, independently-trained 20-letter structural alphabet (no GPL-licensed code re-used); benchmarks under `validation/bench_foldseek_retrieval.py` are currently ~15% behind Foldseek at TM ≥ 0.5 and close to parity at TM ≥ 0.9.
 
 Infrastructure:
 

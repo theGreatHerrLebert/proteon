@@ -1,6 +1,6 @@
 """Tests for the PyO3 PDB I/O connector.
 
-Tests the full stack: ferritin_connector.py_io and py_pdb modules.
+Tests the full stack: proteon_connector.py_io and py_pdb modules.
 Validates: loading, hierarchy navigation, numpy arrays, save/roundtrip.
 """
 
@@ -10,7 +10,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from ferritin_connector import py_io, py_pdb
+from proteon_connector import py_io, py_pdb
 
 TEST_PDBS_DIR = os.path.join(os.path.dirname(__file__), "..", "test-pdbs")
 EXAMPLE_PDB = os.path.join(TEST_PDBS_DIR, "1ubq.pdb")

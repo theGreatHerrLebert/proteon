@@ -1,4 +1,4 @@
-"""Tests for `ferritin.corpus_validation`.
+"""Tests for `proteon.corpus_validation`.
 
 `validate_corpus_release` is the QA gate that produces a CorpusValidationReport
 per release. The existing `test_validation_report_build.py` renders rescue-
@@ -17,8 +17,8 @@ from typing import List, Optional
 
 import pytest
 
-from ferritin.corpus_release import CorpusReleaseManifest
-from ferritin.corpus_validation import (
+from proteon.corpus_release import CorpusReleaseManifest
+from proteon.corpus_validation import (
     CorpusValidationReport,
     ValidationIssue,
     validate_corpus_release,

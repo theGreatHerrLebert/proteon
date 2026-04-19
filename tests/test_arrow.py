@@ -1,10 +1,10 @@
 """Tests for Arrow export/import through the full Python stack.
 
-Tests both the low-level connector (ferritin_connector.py_arrow) and
-the public package API (ferritin.to_arrow, ferritin.from_arrow, etc.).
+Tests both the low-level connector (proteon_connector.py_arrow) and
+the public package API (proteon.to_arrow, proteon.from_arrow, etc.).
 
 Covers: basic round-trip, multi-model, Parquet output, schema rejection,
-pyarrow interop, and the public ferritin API surface.
+pyarrow interop, and the public proteon API surface.
 """
 
 import os
@@ -13,7 +13,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from ferritin_connector import py_arrow, py_io
+from proteon_connector import py_arrow, py_io
 
 TEST_PDBS_DIR = os.path.join(os.path.dirname(__file__), "..", "test-pdbs")
 CRAMBIN = os.path.join(TEST_PDBS_DIR, "1crn.pdb")
@@ -27,7 +27,7 @@ MULTI_MODEL = os.path.join(TEST_PDBS_DIR, "models.pdb")
 
 
 class TestConnectorArrow:
-    """Tests for ferritin_connector.py_arrow directly."""
+    """Tests for proteon_connector.py_arrow directly."""
 
     def test_to_arrow_ipc_returns_bytes(self):
         pdb = py_io.load(CRAMBIN)
@@ -198,39 +198,39 @@ class TestPyArrowInterop:
 
 
 # ---------------------------------------------------------------------------
-# Public ferritin API
+# Public proteon API
 # ---------------------------------------------------------------------------
 
 
 class TestPublicAPI:
-    """Tests that the public ferritin package exposes Arrow correctly."""
+    """Tests that the public proteon package exposes Arrow correctly."""
 
     def test_import_to_arrow(self):
-        import ferritin
-        assert hasattr(ferritin, "to_arrow")
-        assert callable(ferritin.to_arrow)
+        import proteon
+        assert hasattr(proteon, "to_arrow")
+        assert callable(proteon.to_arrow)
 
     def test_import_from_arrow(self):
-        import ferritin
-        assert hasattr(ferritin, "from_arrow")
-        assert callable(ferritin.from_arrow)
+        import proteon
+        assert hasattr(proteon, "from_arrow")
+        assert callable(proteon.from_arrow)
 
     def test_import_to_parquet(self):
-        import ferritin
-        assert hasattr(ferritin, "to_parquet")
-        assert callable(ferritin.to_parquet)
+        import proteon
+        assert hasattr(proteon, "to_parquet")
+        assert callable(proteon.to_parquet)
 
     def test_import_to_structure_arrow(self):
-        import ferritin
-        assert hasattr(ferritin, "to_structure_arrow")
-        assert callable(ferritin.to_structure_arrow)
+        import proteon
+        assert hasattr(proteon, "to_structure_arrow")
+        assert callable(proteon.to_structure_arrow)
 
     def test_public_roundtrip(self):
-        import ferritin
+        import proteon
 
-        s = ferritin.load(CRAMBIN)
-        ipc = ferritin.to_arrow(s, "1crn")
-        results = ferritin.from_arrow(ipc)
+        s = proteon.load(CRAMBIN)
+        ipc = proteon.to_arrow(s, "1crn")
+        results = proteon.from_arrow(ipc)
 
         assert len(results) == 1
         sid, rebuilt = results[0]
@@ -238,21 +238,21 @@ class TestPublicAPI:
         assert rebuilt.atom_count == s.atom_count
 
     def test_public_to_parquet(self):
-        import ferritin
+        import proteon
 
-        s = ferritin.load(CRAMBIN)
+        s = proteon.load(CRAMBIN)
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
             path = f.name
         try:
-            ferritin.to_parquet(s, path, "1crn")
+            proteon.to_parquet(s, path, "1crn")
             assert os.path.getsize(path) > 0
         finally:
             os.unlink(path)
 
     def test_import_from_parquet(self):
-        import ferritin
-        assert hasattr(ferritin, "from_parquet")
-        assert callable(ferritin.from_parquet)
+        import proteon
+        assert hasattr(proteon, "from_parquet")
+        assert callable(proteon.from_parquet)
 
 
 # ---------------------------------------------------------------------------
@@ -320,14 +320,14 @@ class TestParquetRoundtrip:
             os.unlink(path)
 
     def test_public_parquet_roundtrip(self):
-        import ferritin
+        import proteon
 
-        s = ferritin.load(CRAMBIN)
+        s = proteon.load(CRAMBIN)
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
             path = f.name
         try:
-            ferritin.to_parquet(s, path, "1crn")
-            results = ferritin.from_parquet(path)
+            proteon.to_parquet(s, path, "1crn")
+            results = proteon.from_parquet(path)
             assert len(results) == 1
             assert results[0][0] == "1crn"
             assert results[0][1].atom_count == s.atom_count

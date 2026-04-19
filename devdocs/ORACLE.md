@@ -1,4 +1,4 @@
-# Oracle Testing in Ferritin
+# Oracle Testing in Proteon
 
 **How we verify correctness, and why this is the thing that lets us move fast.**
 
@@ -6,7 +6,7 @@
 
 ## The principle
 
-Ferritin implements well-trodden algorithms (force fields, MD, alignment,
+Proteon implements well-trodden algorithms (force fields, MD, alignment,
 structure search, SASA, DSSP, supervision-tensor export). For each of these,
 at least one independent, battle-tested implementation already exists
 somewhere else. We treat those implementations as **oracles**: ground-truth
@@ -16,13 +16,13 @@ we're allowed to believe it.
 The reason this works as a *velocity* strategy, not just a correctness one:
 
 1. **We never ship a component without an oracle behind it.** Every
-   scientific claim in the codebase — "ferritin CHARMM19+EEF1 preserves
+   scientific claim in the codebase — "proteon CHARMM19+EEF1 preserves
    folds with median TM=0.9945", "AMBER96 matches OpenMM to 0.2% at
    NoCutoff", "GPU matches CPU to 1e-11 on crambin for OBC GB",
    "50K-PDB battle test passed at 99.1% correct in 3.5h on RTX 5090" —
    points at a reproducible oracle script that anyone can rerun.
 2. **When an oracle disagrees, the oracle is right until proven otherwise.**
-   The default hypothesis is that the bug is in ferritin. Only after a
+   The default hypothesis is that the bug is in proteon. Only after a
    careful read of the oracle's implementation do we consider that *both*
    tools could be correct under different conventions (then we document
    the convention gap explicitly — see *When the oracle is also wrong*
@@ -35,7 +35,7 @@ The reason this works as a *velocity* strategy, not just a correctness one:
    reading code.
 4. **Oracle-driven development turns debates into experiments.** Instead
    of "does the nonbonded cutoff matter?" we write a triangulation
-   oracle that runs ferritin + OpenMM at NoCutoff, 10 Å, and 15 Å on the
+   oracle that runs proteon + OpenMM at NoCutoff, 10 Å, and 15 Å on the
    same inputs, and compare. Three data points beat a Slack thread
    every time.
 
@@ -68,7 +68,7 @@ are only acceptable as a second, faster layer on top of that.
 ordering, altloc/insertion-code handling, model count (NMR), HETATM flag.
 
 - `tests/oracle/conftest.py` extracts a common `StructureSummary` from
-  ferritin + Biopython + Gemmi using the same struct.
+  proteon + Biopython + Gemmi using the same struct.
 - `tests/oracle/test_io_oracle.py` cross-checks all three on standard
   and edge-case PDBs (`1ubq`, `4hhb` multi-chain, `1crn`,
   `models.pdb` multi-model, `insertion_codes.pdb` altloc + insertion).
@@ -84,7 +84,7 @@ hetatm classification).
 **Scope:** TM-score, RMSD, aligned-length, rotation matrix.
 
 - `tests/oracle/test_tmscore_oracle.py` — per-file comparison.
-- `ferritin-align/` Rust core is tested against the C++ binary on the
+- `proteon-align/` Rust core is tested against the C++ binary on the
   same inputs.
 
 **Tolerance:** TM-scores match to 4–5 decimal places, not exactly. The
@@ -108,7 +108,7 @@ electrostatic, solvation (EEF1 for CHARMM, OBC for AMBER).
 - `tests/oracle/test_ball_energy.py` — fast crambin oracle, runs in CI.
 - `validation/amber96_oracle.py` — OpenMM component oracle, 1000 PDBs.
 - `validation/amber96_obc_oracle.py` — OpenMM AMBER96+OBC oracle.
-- `validation/amber96_oracle_triangulate.py` — three-way: ferritin,
+- `validation/amber96_oracle_triangulate.py` — three-way: proteon,
   BALL, OpenMM on the same inputs to localize which tool is the outlier.
 
 **Tolerance matrix:**
@@ -120,12 +120,12 @@ electrostatic, solvation (EEF1 for CHARMM, OBC for AMBER).
 | Torsion | < 0.1% | Same |
 | VdW | < 0.1% at NoCutoff | Cutoff adds ~1.4% at 15 Å — that's policy, not bug |
 | Electrostatic | < 0.1% at NoCutoff | Same cutoff caveat |
-| Improper | ferritin ≥ BALL, OpenMM ≤ 0.5% | BALL uses single-wildcard improper matching; AMBER spec requires double-wildcard (e.g. `* * N H` for amide-plane). BALL therefore misses ~100 amide-plane impropers on crambin. Ferritin: 125 / 8.1 kJ/mol; BALL: 10 / 2.08 kJ/mol; OpenMM amber96 matches ferritin. Test asserts ferritin ≥ BALL as regression guard. |
+| Improper | proteon ≥ BALL, OpenMM ≤ 0.5% | BALL uses single-wildcard improper matching; AMBER spec requires double-wildcard (e.g. `* * N H` for amide-plane). BALL therefore misses ~100 amide-plane impropers on crambin. Proteon: 125 / 8.1 kJ/mol; BALL: 10 / 2.08 kJ/mol; OpenMM amber96 matches proteon. Test asserts proteon ≥ BALL as regression guard. |
 | Total energy | < 1% at NoCutoff | Tightest contract — everything else rolls up here |
-| GB solvation | < 5% | OBC is an analytical approximation; ferritin matches OpenMM to ≤5% GB / ≤1% total on crambin (Phase B) |
+| GB solvation | < 5% | OBC is an analytical approximation; proteon matches OpenMM to ≤5% GB / ≤1% total on crambin (Phase B) |
 
 **Critical rule: NoCutoff for oracle-grade comparison.** Production
-ferritin uses a 15 Å nonbonded cutoff with switching (a perf-vs-accuracy
+proteon uses a 15 Å nonbonded cutoff with switching (a perf-vs-accuracy
 policy choice). That produces a 1.4% total-energy gap against
 OpenMM NoCutoff on crambin. This is **not a bug**, it's the cost of
 the cutoff. Oracle tests set `nonbonded_cutoff=1e6` to disable the
@@ -136,7 +136,7 @@ for oracle-grade comparison.
 
 ### Cross-path parity (accelerated implementations)
 
-**Oracle:** ferritin's own slow, canonical path.
+**Oracle:** proteon's own slow, canonical path.
 **Scope:** any code path with an accelerated variant — NBL
 (neighbor-list), SIMD, GPU (CUDA), rayon parallel iterators.
 
@@ -165,7 +165,7 @@ types to absorb into united carbons, post-minimization energy.
   as an independent reference for fold preservation.
 - CHARMM19 uses polar-only H placement; non-polar C–H must NOT be
   placed because CH1E/CH2E/CH3E absorb them into united carbon types.
-  BALL and GROMACS agree on this — ferritin's prepare pipeline is
+  BALL and GROMACS agree on this — proteon's prepare pipeline is
   FF-aware (`batch_prepare` defaults now vary by force field).
 
 ### Retrieval and search
@@ -174,24 +174,24 @@ types to absorb into united carbons, post-minimization energy.
 TM-align ground-truth labels for retrieval benchmarks.
 **Scope:** top-k recall, nDCG, per-query misses, alignment time.
 
-- `validation/bench_foldseek.py` — ferritin search vs. Foldseek on
+- `validation/bench_foldseek.py` — proteon search vs. Foldseek on
   the same queries.
 - `validation/bench_foldseek_retrieval.py` — 3Di-alphabet retrieval
   scored against TM-align truth labels.
-- `validation/foldseek_ferritin_5k_50q_union50.report.md` —
-  per-query delta table, "where is ferritin worse and why".
-- `ferritin-search/tests/oracle_search.rs` — Rust-side oracle
+- `validation/foldseek_proteon_5k_50q_union50.report.md` —
+  per-query delta table, "where is proteon worse and why".
+- `proteon-search/tests/oracle_search.rs` — Rust-side oracle
   fixture (MMseqs2-style results).
 
-**Contract:** ferritin doesn't need to beat Foldseek on recall at
+**Contract:** proteon doesn't need to beat Foldseek on recall at
 this stage; we need to be *explicit* about where we're worse and
-why. The 5K/50Q retrieval report has a "Worst ferritin Deltas"
+why. The 5K/50Q retrieval report has a "Worst proteon Deltas"
 table that's explicitly read each release.
 
 ### Supervision tensors (AF2-contract)
 
 **Oracles:**
-- **Rust-Python parity** — ferritin's Rust supervision builder vs.
+- **Rust-Python parity** — proteon's Rust supervision builder vs.
   the Python reference implementation. Both must produce
   byte-identical NPZ for the same input.
 - **OpenFold data module** — field-by-field shape/type/content match
@@ -199,7 +199,7 @@ table that's explicitly read each release.
 
 - `tests/test_supervision_rust_parity.py` — pins the parity at commit
   time.
-- `packages/ferritin/src/ferritin/supervision_export.py` carries the
+- `packages/proteon/src/proteon/supervision_export.py` carries the
   tensor-field list as a tuple; both builders consume it.
 
 ### Fold preservation (end-to-end)
@@ -209,9 +209,9 @@ reference.
 **Scope:** TM-score between raw PDB and minimized PDB — does the
 force field + minimizer actually preserve the fold?
 
-- 1000 random PDBs, ferritin CHARMM19+EEF1 vs OpenMM CHARMM36+OBC2.
-- 2026-04-13 result: ferritin median TM=0.9945, OpenMM median
-  TM=0.9991. Ferritin is 30× faster on wall clock and 1.5× more
+- 1000 random PDBs, proteon CHARMM19+EEF1 vs OpenMM CHARMM36+OBC2.
+- 2026-04-13 result: proteon median TM=0.9945, OpenMM median
+  TM=0.9991. Proteon is 30× faster on wall clock and 1.5× more
   tolerant of raw PDBs (OpenMM rejects more inputs). Close enough on
   TM, meaningfully better on throughput and intake robustness.
 
@@ -221,7 +221,7 @@ force field + minimizer actually preserve the fold?
 
 - `tests/test_sasa.py` — Biopython comparison.
 - DSSP is shelled out as a subprocess in some flows;
-  `packages/ferritin/src/ferritin/dssp.py` has a native port that's
+  `packages/proteon/src/proteon/dssp.py` has a native port that's
   cross-checked against the binary.
 
 ---
@@ -239,7 +239,7 @@ What goes in:
   numeric delta and a link back to the source file.
 - SASA speedup histogram and relative-diff distribution (to catch
   outliers, not just means).
-- Component energy tables with ferritin / oracle / delta / %.
+- Component energy tables with proteon / oracle / delta / %.
 - Top-worst retrieval deltas for search benchmarks.
 
 How we read it:
@@ -253,7 +253,7 @@ How we read it:
    absolute delta and look at the worst 10 structures. Usually one
    edge case (terminal residue, altloc, missing sidechain) explains
    most of the tail.
-4. For retrieval, read the "Worst ferritin Deltas" table verbatim.
+4. For retrieval, read the "Worst proteon Deltas" table verbatim.
    Those queries are the ones to regression-lock.
 
 Generate locally:
@@ -291,10 +291,10 @@ Oracles are not infallible. Three cases we've hit:
    improper-torsion matcher supports only single-wildcard atom-type
    patterns; the AMBER spec requires double-wildcard (e.g. `* * N H`
    for amide-plane impropers). On crambin BALL reports 10 impropers
-   / 2.08 kJ/mol; ferritin reports 125 / 8.1 kJ/mol, matching OpenMM
+   / 2.08 kJ/mol; proteon reports 125 / 8.1 kJ/mol, matching OpenMM
    amber96 to 0.5%. This is a BALL gap against the AMBER spec, not a
-   ferritin/BALL convention difference. Documented in
-   `test_ball_energy.py`; the test asserts ferritin ≥ BALL as a
+   proteon/BALL convention difference. Documented in
+   `test_ball_energy.py`; the test asserts proteon ≥ BALL as a
    regression guard and stays live until BALL gains double-wildcard
    support. Worth reporting upstream to the BALL maintainers — the
    impact scales linearly with chain length (one missed improper
@@ -314,12 +314,12 @@ Decision tree when oracle disagrees:
 
 1. Read the oracle's source for the component in question.
 2. Can both implementations produce the same numeric result under some
-   shared convention? If yes → fix ferritin to match.
+   shared convention? If yes → fix proteon to match.
 3. If no (genuine convention difference), write down which convention
-   ferritin uses, why, and the numerical gap it creates. Pin it as a
+   proteon uses, why, and the numerical gap it creates. Pin it as a
    test that asserts the *expected* gap (not equality).
 4. If the oracle itself is buggy (rare), file an issue upstream,
-   switch to a different oracle (triangulate), and leave ferritin
+   switch to a different oracle (triangulate), and leave proteon
    correct.
 
 ---

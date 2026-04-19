@@ -1,11 +1,11 @@
 [workspace]
 members = [
-    "ferritin-align",
-    "ferritin-arrow",
-    "ferritin-io",
-    "ferritin-bin",
-    "ferritin-connector",
-    "ferritin-search",
+    "proteon-align",
+    "proteon-arrow",
+    "proteon-io",
+    "proteon-bin",
+    "proteon-connector",
+    "proteon-search",
 ]
 exclude = ["gpu-poc"]
 resolver = "2"
@@ -16,8 +16,8 @@ edition = "2021"
 rust-version = "1.75"
 authors = ["theGreatHerrLebert"]
 license = "MIT"
-repository = "https://github.com/theGreatHerrLebert/ferritin"
-homepage = "https://github.com/theGreatHerrLebert/ferritin"
+repository = "https://github.com/theGreatHerrLebert/proteon"
+homepage = "https://github.com/theGreatHerrLebert/proteon"
 readme = "README.md"
 keywords = ["bioinformatics", "protein", "pdb", "structural-biology", "tmalign"]
 categories = ["science", "science::bioinformatics"]

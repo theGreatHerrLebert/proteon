@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pytest
 
-from ferritin_connector import py_geometry, py_io
+from proteon_connector import py_geometry, py_io
 
 EXAMPLE_DIR = os.path.join(os.path.dirname(__file__), "..", "test-pdbs")
 UBIQ = os.path.join(EXAMPLE_DIR, "1ubq.pdb")

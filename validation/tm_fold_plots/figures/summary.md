@@ -2,7 +2,7 @@
 
 Sample: 1000 PDBs (seed=42) from the 50K corpus.
 
-|                          | Ferritin CHARMM19+EEF1 | OpenMM CHARMM36+OBC2 |
+|                          | Proteon CHARMM19+EEF1 | OpenMM CHARMM36+OBC2 |
 |--------------------------|------------------------|----------------------|
 | n success                | 949/1000 (94.9%) | 928/1000 (92.8%) |
 | TM mean                  | 0.9878 | 0.9948 |

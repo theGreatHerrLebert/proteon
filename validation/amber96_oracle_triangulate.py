@@ -1,13 +1,13 @@
-"""Triangulated AMBER96 single-point oracle: ferritin vs OpenMM vs GROMACS.
+"""Triangulated AMBER96 single-point oracle: proteon vs OpenMM vs GROMACS.
 
-Demonstrates that ferritin's AMBER96 energy agrees with OpenMM to 0.03% and
+Demonstrates that proteon's AMBER96 energy agrees with OpenMM to 0.03% and
 OpenMM agrees with GROMACS to 0.03% on crambin — transitively validating
-ferritin's force-field math against two independent reference implementations.
+proteon's force-field math against two independent reference implementations.
 
 Requires:
   * gmx binary on PATH or at GMX env var (default: gromacs-2026.1 build tree)
   * openmm, pdbfixer installed
-  * ferritin installed with the nonbonded_cutoff override (2026-04-13 onward)
+  * proteon installed with the nonbonded_cutoff override (2026-04-13 onward)
   * amber96.ff available in the gmx distribution
 
 Usage:
@@ -30,7 +30,7 @@ import openmm.app as app
 from openmm import unit
 from pdbfixer import PDBFixer
 
-import ferritin
+import proteon
 
 
 GMX = os.environ.get(
@@ -128,9 +128,9 @@ def openmm_energy(pdb_path: str) -> float:
     )
 
 
-def ferritin_energy(pdb_path: str) -> float:
-    s = ferritin.load(pdb_path)
-    r = ferritin.compute_energy(
+def proteon_energy(pdb_path: str) -> float:
+    s = proteon.load(pdb_path)
+    r = proteon.compute_energy(
         s, ff="amber96", units="kJ/mol",
         nbl_threshold=10**9, nonbonded_cutoff=1e6,
     )
@@ -140,16 +140,16 @@ def ferritin_energy(pdb_path: str) -> float:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("pdb", nargs="?",
-                   default="/scratch/TMAlign/ferritin/validation/pdbs/1crn.pdb")
+                   default="/scratch/TMAlign/proteon/validation/pdbs/1crn.pdb")
     args = p.parse_args()
     pdb_path = args.pdb
 
     with tempfile.TemporaryDirectory() as work:
-        # Path X: PDBFixer → OpenMM + ferritin.
+        # Path X: PDBFixer → OpenMM + proteon.
         pdbfixer_out = f"{work}/pdbfixer.pdb"
         pdbfixer_prep(pdb_path, pdbfixer_out)
         e_omm_x = openmm_energy(pdbfixer_out)
-        e_fer_x = ferritin_energy(pdbfixer_out)
+        e_fer_x = proteon_energy(pdbfixer_out)
 
         # Path Y: GROMACS pdb2gmx -ignh → GROMACS + OpenMM.
         gmx_pdb, _gmx_top = gromacs_prep(pdb_path, work)
@@ -157,13 +157,13 @@ def main():
         e_gmx_y = gromacs_energy(work)
 
     print(f"AMBER96 single-point on {Path(pdb_path).name} (kJ/mol):\n")
-    print(f"  {'input prep':<18s} {'openmm':>10s} {'ferritin':>10s} {'gromacs':>10s}")
+    print(f"  {'input prep':<18s} {'openmm':>10s} {'proteon':>10s} {'gromacs':>10s}")
     print(f"  {'PDBFixer':<18s} {e_omm_x:10.2f} {e_fer_x:10.2f} {'—':>10s}")
     print(f"  {'gmx pdb2gmx':<18s} {e_omm_y:10.2f} {'—':>10s} {e_gmx_y:10.2f}")
     print()
     d_fo = abs(e_fer_x - e_omm_x)
     d_og = abs(e_omm_y - e_gmx_y)
-    print(f"  ferritin vs OpenMM (PDBFixer):  {d_fo:7.3f} kJ/mol  "
+    print(f"  proteon vs OpenMM (PDBFixer):  {d_fo:7.3f} kJ/mol  "
           f"({100*d_fo/max(abs(e_omm_x),1):.3f}%)")
     print(f"  OpenMM vs GROMACS (pdb2gmx):    {d_og:7.3f} kJ/mol  "
           f"({100*d_og/max(abs(e_gmx_y),1):.3f}%)")

@@ -7,7 +7,7 @@ from textwrap import dedent
 
 import pytest
 
-from ferritin.msa_io import (
+from proteon.msa_io import (
     load_msas_from_dir,
     parse_a3m_file,
     parse_a3m_text,

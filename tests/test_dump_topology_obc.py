@@ -7,7 +7,7 @@ for OBC exactly where you'd want them — when debugging OBC-specific
 atom-type or charge assignments.
 
 Guards the Rust-side dispatch arms in
-`ferritin-connector/src/py_forcefield.rs::dump_topology`. Skips when
+`proteon-connector/src/py_forcefield.rs::dump_topology`. Skips when
 the connector isn't built.
 """
 
@@ -19,13 +19,13 @@ import pytest
 
 
 try:
-    from ferritin_connector import py_forcefield
+    from proteon_connector import py_forcefield
     _CONN_AVAILABLE = True
 except ImportError:
     py_forcefield = None  # type: ignore
     _CONN_AVAILABLE = False
 
-import ferritin
+import proteon
 
 FIXTURE = Path(__file__).resolve().parent.parent / "test-pdbs" / "1crn.pdb"
 
@@ -36,8 +36,8 @@ pytestmark = pytest.mark.skipif(
 
 
 def _pyo3_pdb():
-    from ferritin.forcefield import _get_ptr
-    return _get_ptr(ferritin.load_pdb(str(FIXTURE)))
+    from proteon.forcefield import _get_ptr
+    return _get_ptr(proteon.load_pdb(str(FIXTURE)))
 
 
 def test_dump_topology_accepts_amber96_obc():

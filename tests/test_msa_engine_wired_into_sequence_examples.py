@@ -15,8 +15,8 @@ when callers pass pre-computed `msas` instead.
 
 Uses the repo's real PDB fixtures (crambin, ubiquitin, BPTI). Skips
 when the Rust connector isn't available — this path requires both
-`ferritin.io._io` (for batch_load_tolerant) and the
-`ferritin_connector.py_msa.SearchEngine` (for the search itself).
+`proteon.io._io` (for batch_load_tolerant) and the
+`proteon_connector.py_msa.SearchEngine` (for the search itself).
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import ferritin
-from ferritin import io as _ferritin_io
+import proteon
+from proteon import io as _proteon_io
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = {
@@ -40,7 +40,7 @@ FIXTURES = {
 
 def _msa_backend_available() -> bool:
     try:
-        from ferritin import rust_msa_available
+        from proteon import rust_msa_available
     except ImportError:
         return False
     return rust_msa_available()
@@ -48,7 +48,7 @@ def _msa_backend_available() -> bool:
 
 pytestmark = pytest.mark.skipif(
     not all(p.exists() for p in FIXTURES.values())
-    or _ferritin_io._io is None
+    or _proteon_io._io is None
     or not _msa_backend_available(),
     reason=(
         "MSA-engine wiring test requires the Rust connector (py_io + py_msa) "
@@ -59,14 +59,14 @@ pytestmark = pytest.mark.skipif(
 
 def _load_all():
     paths = [str(FIXTURES[k]) for k in ("1crn", "1ubq", "1bpi")]
-    pairs = ferritin.batch_load_tolerant(paths)
+    pairs = proteon.batch_load_tolerant(paths)
     assert len(pairs) == 3, "failed to load all three fixtures"
     return [pair[1] for pair in pairs]
 
 
 def _build_engine(structures):
     """Build an MsaSearch over the three protein chain sequences."""
-    from ferritin.supervision_constants import residue_to_one_letter
+    from proteon.supervision_constants import residue_to_one_letter
 
     targets = []
     for i, structure in enumerate(structures):
@@ -79,7 +79,7 @@ def _build_engine(structures):
     # reduce_to=None + small k keeps the hashmap-based index happy
     # for tiny corpora. In production, reduce_to=13 + k=6 is the
     # MMseqs2-compatible default.
-    return ferritin.MsaSearch.build(
+    return proteon.MsaSearch.build(
         targets, k=3, reduce_to=None, min_score=0, max_results=10
     )
 
@@ -88,7 +88,7 @@ class TestBatchEngineIntegration:
     def test_batch_build_sequence_examples_with_msa_populates_msa_tensors(self):
         structures = _load_all()
         engine = _build_engine(structures)
-        examples = ferritin.batch_build_sequence_examples_with_msa(
+        examples = proteon.batch_build_sequence_examples_with_msa(
             structures, engine
         )
         assert len(examples) == 3
@@ -128,7 +128,7 @@ class TestReleaseBuilderWithEngine:
         structures = _load_all()
         engine = _build_engine(structures)
 
-        out_dir = ferritin.build_sequence_dataset(
+        out_dir = proteon.build_sequence_dataset(
             structures,
             tmp_path / "seq_engine",
             release_id="msa-engine-v0",
@@ -139,7 +139,7 @@ class TestReleaseBuilderWithEngine:
         )
         assert (out_dir / "release_manifest.json").exists()
 
-        loaded = ferritin.load_sequence_examples(out_dir / "examples")
+        loaded = proteon.load_sequence_examples(out_dir / "examples")
         assert len(loaded) == 3
         for ex in loaded:
             assert ex.msa is not None and ex.msa.shape[0] >= 1, (
@@ -158,7 +158,7 @@ class TestReleaseBuilderWithEngine:
             ["MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"],
             ["RPDFCLEPPYTGPCKARIIRYFYNAKAGLCQTFVYGGCRAKRNNFKSAEDCMRTCGGA"],
         ]
-        out_dir = ferritin.build_sequence_dataset(
+        out_dir = proteon.build_sequence_dataset(
             structures,
             tmp_path / "seq_explicit",
             release_id="explicit-v0",
@@ -167,5 +167,5 @@ class TestReleaseBuilderWithEngine:
             msas=explicit_msa,
             overwrite=True,
         )
-        loaded = ferritin.load_sequence_examples(out_dir / "examples")
+        loaded = proteon.load_sequence_examples(out_dir / "examples")
         assert all(ex.msa is not None and ex.msa.shape[0] == 1 for ex in loaded)

@@ -31,7 +31,7 @@ from typing import Iterable, List
 
 # Make the package importable when run as a script.
 _THIS = Path(__file__).resolve()
-_REPO = _THIS.parents[2]  # /scratch/TMAlign/ferritin
+_REPO = _THIS.parents[2]  # /scratch/TMAlign/proteon
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 

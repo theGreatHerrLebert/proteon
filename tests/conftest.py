@@ -1,4 +1,4 @@
-"""Shared pytest fixtures + registry for the ferritin test suite.
+"""Shared pytest fixtures + registry for the proteon test suite.
 
 This file is the single source of truth for:
   * which force fields we test      → FORCE_FIELDS
@@ -40,7 +40,7 @@ from typing import List, Optional, Tuple
 
 import pytest
 
-import ferritin
+import proteon
 
 
 # ---------------------------------------------------------------------------
@@ -148,13 +148,13 @@ STRUCT_FF_PATH_PARAMS = [
 
 @pytest.fixture(scope="session")
 def loaded_structures():
-    """Dict mapping StructureSpec.name → loaded ferritin.Structure.
+    """Dict mapping StructureSpec.name → loaded proteon.Structure.
 
     Loaded once per pytest session. Tests that mutate coordinates
-    should do a fresh ``ferritin.load(...)`` instead of using this
+    should do a fresh ``proteon.load(...)`` instead of using this
     fixture, to avoid cross-test contamination.
     """
-    return {s.name: ferritin.load(s.absolute_path) for s in STRUCTURES}
+    return {s.name: proteon.load(s.absolute_path) for s in STRUCTURES}
 
 
 @pytest.fixture(scope="session")
@@ -172,7 +172,7 @@ def v1_energies(loaded_structures):
         structure = loaded_structures[s.name]
         for ff in FORCE_FIELDS:
             for path_id, nbl_threshold in PATHS:
-                out[(s.name, ff, path_id)] = ferritin.compute_energy(
+                out[(s.name, ff, path_id)] = proteon.compute_energy(
                     structure,
                     ff=ff,
                     units="kJ/mol",
@@ -203,7 +203,7 @@ ENERGY_COMPONENTS = (
 # Custom markers
 # ---------------------------------------------------------------------------
 #
-# `oracle(tool)`: every externally-anchored test ("does ferritin agree with
+# `oracle(tool)`: every externally-anchored test ("does proteon agree with
 # OpenMM / BALL / Biopython / MMseqs2 / …?") is tagged with
 # @pytest.mark.oracle("<tool>"), so you can run just the oracle layer with:
 #
@@ -225,7 +225,7 @@ ENERGY_COMPONENTS = (
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
-        "oracle(tool): test compares ferritin against an independent "
+        "oracle(tool): test compares proteon against an independent "
         "external implementation (BALL, OpenMM, Biopython, Gemmi, "
         "FreeSASA, DSSP, MMseqs2, USAlign, …). Slow and may require "
         "installing the oracle. Filter with `pytest -m oracle`.",

@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   # =========================================================================
-  # Build ferritin-connector wheels (Rust + PyO3)
+  # Build proteon-connector wheels (Rust + PyO3)
   # =========================================================================
   build-connector:
     name: Build connector - ${{ matrix.os }} ${{ matrix.target }}
@@ -55,7 +55,7 @@ jobs:
           # supported interpreter. Inside the manylinux docker container
           # used for linux targets the default `python3` search can find
           # older interpreters we do not support, so enumerate the grid.
-          args: --release --out dist --manifest-path ferritin-connector/Cargo.toml -i 3.11 -i 3.12 -i 3.13
+          args: --release --out dist --manifest-path proteon-connector/Cargo.toml -i 3.11 -i 3.12 -i 3.13
           manylinux: ${{ matrix.manylinux || 'auto' }}
 
       - name: Upload wheels
@@ -73,16 +73,16 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist --manifest-path ferritin-connector/Cargo.toml
+          args: --out dist --manifest-path proteon-connector/Cargo.toml
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-connector-sdist
           path: dist/*.tar.gz
 
   # =========================================================================
-  # Build ferritin pure Python package
+  # Build proteon pure Python package
   # =========================================================================
-  build-ferritin:
+  build-proteon:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -92,15 +92,15 @@ jobs:
       - name: Install build
         run: pip install build
       - name: Build package
-        run: python -m build packages/ferritin/
+        run: python -m build packages/proteon/
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-ferritin
-          path: packages/ferritin/dist/*
+          name: wheels-proteon
+          path: packages/proteon/dist/*
 
   verify-distributions:
     name: Verify distributions (Python ${{ matrix.python-version }})
-    needs: [build-connector, build-connector-sdist, build-ferritin]
+    needs: [build-connector, build-connector-sdist, build-proteon]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -117,7 +117,7 @@ jobs:
           path: dist/
       - uses: actions/download-artifact@v4
         with:
-          name: wheels-ferritin
+          name: wheels-proteon
           path: dist/
       - name: Install verification tools
         run: python -m pip install --upgrade pip twine
@@ -126,35 +126,35 @@ jobs:
       - name: Install built artifacts
         run: |
           PYTAG="$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')"
-          CONN_WHEEL="$(ls dist/ferritin_connector-*-${PYTAG}-${PYTAG}-*x86_64*.whl | head -n 1)"
-          FERRITIN_WHEEL="$(ls dist/ferritin-*.whl | head -n 1)"
+          CONN_WHEEL="$(ls dist/proteon_connector-*-${PYTAG}-${PYTAG}-*x86_64*.whl | head -n 1)"
+          PROTEON_WHEEL="$(ls dist/proteon-*.whl | head -n 1)"
           test -n "$CONN_WHEEL"
-          test -n "$FERRITIN_WHEEL"
-          python -m pip install "$CONN_WHEEL" "$FERRITIN_WHEEL"
+          test -n "$PROTEON_WHEEL"
+          python -m pip install "$CONN_WHEEL" "$PROTEON_WHEEL"
       - name: Smoke import
         run: |
           python - <<'PY'
           import importlib.metadata as metadata
-          import ferritin
-          import ferritin_connector
+          import proteon
+          import proteon_connector
 
-          assert ferritin.__version__ == metadata.version("ferritin")
-          assert metadata.version("ferritin-connector")
-          print("ferritin", ferritin.__version__)
-          print("connector", ferritin_connector.__name__)
+          assert proteon.__version__ == metadata.version("proteon")
+          assert metadata.version("proteon-connector")
+          print("proteon", proteon.__version__)
+          print("connector", proteon_connector.__name__)
           PY
 
   # =========================================================================
   # Publish to PyPI
   # =========================================================================
   publish-connector:
-    name: Publish ferritin-connector to PyPI
+    name: Publish proteon-connector to PyPI
     if: github.event_name == 'release'
     needs: [build-connector, build-connector-sdist, verify-distributions]
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/ferritin-connector
+      url: https://pypi.org/p/proteon-connector
     permissions:
       id-token: write  # trusted publishing
     steps:
@@ -167,20 +167,20 @@ jobs:
         with:
           packages-dir: dist/
 
-  publish-ferritin:
-    name: Publish ferritin to PyPI
+  publish-proteon:
+    name: Publish proteon to PyPI
     if: github.event_name == 'release'
-    needs: [build-ferritin, publish-connector, verify-distributions]
+    needs: [build-proteon, publish-connector, verify-distributions]
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/ferritin
+      url: https://pypi.org/p/proteon
     permissions:
       id-token: write  # trusted publishing
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: wheels-ferritin
+          name: wheels-proteon
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:

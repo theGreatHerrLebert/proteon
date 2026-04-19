@@ -13,7 +13,7 @@ Usage:
     python examples/02_structural_alignment.py
 """
 
-import ferritin
+import proteon
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -21,10 +21,10 @@ import numpy as np
 # ---------------------------------------------------------------------------
 print("=== Pairwise TM-align ===")
 
-s1 = ferritin.load("test-pdbs/1crn.pdb")
-s2 = ferritin.load("test-pdbs/1bpi.pdb")
+s1 = proteon.load("test-pdbs/1crn.pdb")
+s2 = proteon.load("test-pdbs/1bpi.pdb")
 
-result = ferritin.tm_align(s1, s2)
+result = proteon.tm_align(s1, s2)
 
 print(f"  Structure 1:    {s1.identifier} ({s1.residue_count} residues)")
 print(f"  Structure 2:    {s2.identifier} ({s2.residue_count} residues)")
@@ -59,17 +59,17 @@ t = result.translation
 
 # Superpose all atoms of s1
 original_coords = s1.coords
-superposed = ferritin.apply_transform(original_coords, R, t)
+superposed = proteon.apply_transform(original_coords, R, t)
 
-print(f"  Original centroid:   ({ferritin.centroid(original_coords)[0]:.2f}, "
-      f"{ferritin.centroid(original_coords)[1]:.2f}, "
-      f"{ferritin.centroid(original_coords)[2]:.2f})")
-print(f"  Superposed centroid: ({ferritin.centroid(superposed)[0]:.2f}, "
-      f"{ferritin.centroid(superposed)[1]:.2f}, "
-      f"{ferritin.centroid(superposed)[2]:.2f})")
-print(f"  Target centroid:     ({ferritin.centroid(s2.coords)[0]:.2f}, "
-      f"{ferritin.centroid(s2.coords)[1]:.2f}, "
-      f"{ferritin.centroid(s2.coords)[2]:.2f})")
+print(f"  Original centroid:   ({proteon.centroid(original_coords)[0]:.2f}, "
+      f"{proteon.centroid(original_coords)[1]:.2f}, "
+      f"{proteon.centroid(original_coords)[2]:.2f})")
+print(f"  Superposed centroid: ({proteon.centroid(superposed)[0]:.2f}, "
+      f"{proteon.centroid(superposed)[1]:.2f}, "
+      f"{proteon.centroid(superposed)[2]:.2f})")
+print(f"  Target centroid:     ({proteon.centroid(s2.coords)[0]:.2f}, "
+      f"{proteon.centroid(s2.coords)[1]:.2f}, "
+      f"{proteon.centroid(s2.coords)[2]:.2f})")
 print()
 
 # ---------------------------------------------------------------------------
@@ -80,10 +80,10 @@ print("=== One-to-Many (Parallel) ===")
 # Load several target structures
 target_files = ["test-pdbs/1crn.pdb", "test-pdbs/1bpi.pdb",
                 "test-pdbs/1aaj.pdb", "test-pdbs/1ubq.pdb"]
-targets = [ferritin.load(f) for f in target_files]
+targets = [proteon.load(f) for f in target_files]
 
 # Align query against all targets using all available CPU cores
-results = ferritin.tm_align_one_to_many(s1, targets, n_threads=4)
+results = proteon.tm_align_one_to_many(s1, targets, n_threads=4)
 
 print(f"  Query: {s1.identifier} ({s1.residue_count} residues)")
 print(f"  {'Target':>10s}  {'Res':>4s}  {'TM1':>6s}  {'TM2':>6s}  {'RMSD':>6s}  {'Aligned':>7s}  {'SeqId':>6s}")
@@ -102,7 +102,7 @@ print()
 print("=== Many-to-Many (All Pairs) ===")
 
 # Use the same set as both queries and targets for a symmetric comparison
-all_results = ferritin.tm_align_many_to_many(targets, targets, n_threads=4)
+all_results = proteon.tm_align_many_to_many(targets, targets, n_threads=4)
 
 # Build a TM-score matrix
 n = len(targets)
@@ -123,7 +123,7 @@ print()
 # 5. Fast mode for large-scale screening
 # ---------------------------------------------------------------------------
 print("=== Fast Mode ===")
-fast_result = ferritin.tm_align(s1, s2, fast=True)
+fast_result = proteon.tm_align(s1, s2, fast=True)
 print(f"  Normal: TM={result.tm_score_chain1:.4f}, RMSD={result.rmsd:.2f}")
 print(f"  Fast:   TM={fast_result.tm_score_chain1:.4f}, RMSD={fast_result.rmsd:.2f}")
 print(f"  (fast mode trades ~1% accuracy for ~3x speed)")

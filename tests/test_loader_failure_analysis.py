@@ -1,6 +1,6 @@
 """Tests for rescue-oriented loader failure bucketing."""
 
-from ferritin.loader_failure_analysis import (
+from proteon.loader_failure_analysis import (
     ATOM_CHARGE_SUFFIX,
     MODEL_ATOM_MISMATCH,
     SEQADV_INVALID_FIELD,

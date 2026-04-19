@@ -7,7 +7,7 @@ current value of every energy component to 6 decimal places in a
 JSON file under tests/fixtures/golden/. Any code change that alters
 a recorded value by more than TOL_KJ_MOL fails this test and MUST
 be accompanied by an explicit snapshot update via the env var
-``FERRITIN_UPDATE_SNAPSHOTS=1``.
+``PROTEON_UPDATE_SNAPSHOTS=1``.
 
 Why
 ---
@@ -30,7 +30,7 @@ bond_stretch in release builds.
 Updating snapshots
 ------------------
 On purpose:
-  FERRITIN_UPDATE_SNAPSHOTS=1 pytest tests/test_golden_snapshots.py
+  PROTEON_UPDATE_SNAPSHOTS=1 pytest tests/test_golden_snapshots.py
 
 Never commit a snapshot update without a matching explanation in
 the commit message. The point of this test is that changes to these
@@ -45,7 +45,7 @@ import math
 
 import pytest
 
-import ferritin
+import proteon
 
 from conftest import ENERGY_COMPONENTS, STRUCTURES
 
@@ -76,8 +76,8 @@ def _compute_snapshot(pdb_name: str, absolute_path: str, ff: str) -> dict:
     per (pdb, ff). If cross-path parity breaks, the parity test will
     flag it directly; this file only needs to pin one number.
     """
-    s = ferritin.load(absolute_path)
-    e = ferritin.compute_energy(s, ff=ff, units="kJ/mol")
+    s = proteon.load(absolute_path)
+    e = proteon.compute_energy(s, ff=ff, units="kJ/mol")
     return {
         "pdb": pdb_name,
         "ff": ff,
@@ -89,7 +89,7 @@ def _compute_snapshot(pdb_name: str, absolute_path: str, ff: str) -> dict:
 
 @pytest.fixture(scope="session", autouse=False)
 def update_snapshots():
-    return os.environ.get("FERRITIN_UPDATE_SNAPSHOTS", "0") == "1"
+    return os.environ.get("PROTEON_UPDATE_SNAPSHOTS", "0") == "1"
 
 
 @pytest.mark.parametrize(
@@ -111,7 +111,7 @@ def test_snapshot_matches(spec, ff, update_snapshots):
 
     if not os.path.exists(path):
         pytest.fail(
-            f"no snapshot at {path}. Run with FERRITIN_UPDATE_SNAPSHOTS=1 "
+            f"no snapshot at {path}. Run with PROTEON_UPDATE_SNAPSHOTS=1 "
             f"to create it."
         )
 
@@ -124,7 +124,7 @@ def test_snapshot_matches(spec, ff, update_snapshots):
         f"{spec.name}/{ff}: component set changed. Actual: "
         f"{sorted(actual['components'])}, expected: "
         f"{sorted(expected['components'])}. Run with "
-        f"FERRITIN_UPDATE_SNAPSHOTS=1 to update."
+        f"PROTEON_UPDATE_SNAPSHOTS=1 to update."
     )
 
     # Value check — each component plus the total.
@@ -147,7 +147,7 @@ def test_snapshot_matches(spec, ff, update_snapshots):
     if drifts:
         lines = [
             f"{spec.name}/{ff}: snapshot drift detected. If intentional, "
-            "rerun with FERRITIN_UPDATE_SNAPSHOTS=1 and commit the updated JSON."
+            "rerun with PROTEON_UPDATE_SNAPSHOTS=1 and commit the updated JSON."
         ]
         for comp, expected_val, actual_val, diff, tol in drifts:
             lines.append(

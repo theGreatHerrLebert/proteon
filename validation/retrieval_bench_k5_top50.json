@@ -1,7 +1,7 @@
 {
   "corpus": {
-    "pdb_dir": "/scratch/TMAlign/ferritin/validation/pdbs_10k",
-    "db_path": "/tmp/ferritin_retrieval_k5",
+    "pdb_dir": "/scratch/TMAlign/proteon/validation/pdbs_10k",
+    "db_path": "/tmp/proteon_retrieval_k5",
     "n_targets": 115,
     "n_queries": 8,
     "k": 5,

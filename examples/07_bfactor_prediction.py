@@ -26,7 +26,7 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, global_mean_pool
 
-import ferritin
+import proteon
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -43,7 +43,7 @@ pdb_files = sorted(glob.glob(os.path.join(pdb_dir, "*.pdb")))[:200]
 print(f"\n{len(pdb_files)} PDB files")
 
 t0 = time.time()
-loaded = ferritin.batch_load_tolerant(pdb_files, n_threads=-1)
+loaded = proteon.batch_load_tolerant(pdb_files, n_threads=-1)
 print(f"  Loaded {len(loaded)} structures in {time.time()-t0:.2f}s")
 
 
@@ -53,16 +53,16 @@ def structure_to_bfactor_graph(s):
     Node features: phi/psi, RSA, H-bond count, SS one-hot (14 features)
     Target: normalized CA B-factors
     """
-    ca_coords = ferritin.extract_ca_coords(s)
+    ca_coords = proteon.extract_ca_coords(s)
     n = len(ca_coords)
     if n < 10:
         return None
 
     # Features
-    phi, psi, _ = ferritin.backbone_dihedrals(s)
-    rsa = ferritin.relative_sasa(s)
-    hbc = ferritin.hbond_count(s)
-    ss = ferritin.dssp(s)
+    phi, psi, _ = proteon.backbone_dihedrals(s)
+    rsa = proteon.relative_sasa(s)
+    hbc = proteon.hbond_count(s)
+    ss = proteon.dssp(s)
 
     # Pad/truncate to n
     def fit(arr, n):
@@ -86,7 +86,7 @@ def structure_to_bfactor_graph(s):
     ])
 
     # Contact graph
-    cm = ferritin.contact_map(ca_coords, cutoff=10.0)
+    cm = proteon.contact_map(ca_coords, cutoff=10.0)
     rows, cols = np.where(np.triu(cm, k=1))
     edge_index = np.stack([
         np.concatenate([rows, cols]),
@@ -94,7 +94,7 @@ def structure_to_bfactor_graph(s):
     ], axis=0)
 
     # Target: CA B-factors, normalized per structure
-    mask = ferritin.select(s, "CA")
+    mask = proteon.select(s, "CA")
     bfactors = s.b_factors[mask][:n].astype(np.float32)
     # Z-score normalize
     mean_b = bfactors.mean()

@@ -1,7 +1,7 @@
 {
   "release_id": "sample-v0",
   "artifact_type": "validation_report",
-  "format": "ferritin.corpus_validation.v0",
+  "format": "proteon.corpus_validation.v0",
   "created_at": "2026-04-16T16:56:18.273272+00:00",
   "ok": true,
   "counts": {

@@ -1,10 +1,10 @@
-"""Shared matplotlib style for the ferritin validation report.
+"""Shared matplotlib style for the proteon validation report.
 
 Design principles:
   * Sans-serif DejaVu / Helvetica-style, 11 pt body, 13 pt labels, 14 pt titles.
   * Each tool has a distinct, printable color. Colors chosen for adjacent
     contrast in bar/line plots and for viridis-adjacent perception:
-      ferritin = deep teal (brand, calm, technical)
+      proteon = deep teal (brand, calm, technical)
       openmm   = warm orange-red (matches openmm.org branding)
       gromacs  = purple (matches gromacs.org)
   * Lines are 1.6 pt. Markers are 30 px^2 (size=5 in scatter).
@@ -17,7 +17,7 @@ Import this module once at the top of any plot script:
     from style import apply, C, savefig
 
     fig, ax = plt.subplots()
-    ax.plot(xs, ys, color=C["ferritin"], lw=1.6, label="Ferritin")
+    ax.plot(xs, ys, color=C["proteon"], lw=1.6, label="Proteon")
     apply(ax, title="Fold preservation", xlabel="TM-score")
     savefig(fig, "01_tm_overlay.png")
 """
@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 # Colorblind-safe, distinct under printing. Verified in Chromatic Vision
 # Simulator (protanopia/deuteranopia/tritanopia).
 C = {
-    "ferritin": "#0a7e8c",    # deep teal
+    "proteon": "#0a7e8c",    # deep teal
     "openmm":   "#d94801",    # OpenMM orange-red
     "gromacs":  "#6a3d9a",    # GROMACS purple
     "ball":     "#4a4a4a",    # slate
@@ -45,7 +45,7 @@ C = {
 }
 
 # Neutral palette for 3+ category plots that aren't about specific tools.
-PALETTE = [C["ferritin"], C["openmm"], C["gromacs"], C["ball"], "#e31a1c", "#33a02c"]
+PALETTE = [C["proteon"], C["openmm"], C["gromacs"], C["ball"], "#e31a1c", "#33a02c"]
 
 # --- RC params ----------------------------------------------------------------
 _RC = {

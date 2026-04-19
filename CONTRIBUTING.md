@@ -1,4 +1,4 @@
-# Contributing to ferritin
+# Contributing to proteon
 
 Thanks for considering a contribution. This file is short on purpose — it
 captures the few conventions that matter and points at the docs that
@@ -8,17 +8,17 @@ explain them in depth.
 
 | Layer | What goes here |
 |---|---|
-| `ferritin-align/`, `ferritin-io/`, `ferritin-arrow/`, `ferritin-search/` | Pure Rust, no Python dependency. Algorithm code lives here. |
-| `ferritin-connector/` | PyO3 bridge — `#[pyclass]` wrappers, `#[pyfunction]` entry points. Thin layer. |
-| `packages/ferritin/` | Pythonic wrapper. One module per subsystem (align, dssp, sasa, forcefield, …). Decorates the connector types with an ABC (`RustWrapperObject`). |
+| `proteon-align/`, `proteon-io/`, `proteon-arrow/`, `proteon-search/` | Pure Rust, no Python dependency. Algorithm code lives here. |
+| `proteon-connector/` | PyO3 bridge — `#[pyclass]` wrappers, `#[pyfunction]` entry points. Thin layer. |
+| `packages/proteon/` | Pythonic wrapper. One module per subsystem (align, dssp, sasa, forcefield, …). Decorates the connector types with an ABC (`RustWrapperObject`). |
 | `tests/` | Python test suite (matches the wrapper surface). |
-| `tests/oracle/` | Tests that compare ferritin against independent external tools. **See [tests/oracle/README.md](tests/oracle/README.md).** |
+| `tests/oracle/` | Tests that compare proteon against independent external tools. **See [tests/oracle/README.md](tests/oracle/README.md).** |
 | `validation/` | Large-scale benchmarks and reports — not part of CI, but reproducible. |
 | `devdocs/` | Internal planning and philosophy — [`ORACLE.md`](devdocs/ORACLE.md) in particular. |
 
 ## Quality bar
 
-ferritin is a scientific compute kernel, not a platform. That shapes what a
+proteon is a scientific compute kernel, not a platform. That shapes what a
 "good" contribution looks like:
 
 1. **New features land with at least one oracle test.** An oracle is an
@@ -75,8 +75,8 @@ cargo fmt --all -- --check
 python -m venv .venv
 source .venv/bin/activate
 pip install maturin pytest numpy pandas pyarrow
-cd ferritin-connector && maturin develop --release && cd ..
-pip install -e packages/ferritin/
+cd proteon-connector && maturin develop --release && cd ..
+pip install -e packages/proteon/
 pytest                              # skips oracle tests that need heavy installs
 pytest -m oracle                    # runs every oracle you have installed
 pytest -m "not slow and not oracle" # fast dev loop (skips >10s tests)
@@ -97,7 +97,7 @@ If your PR drops below, CI fails — either add tests or, if you
 intentionally raised the floor by landing well-tested code, bump
 `--cov-fail-under` in `.github/workflows/test.yml` as part of the PR.
 The `ImportError` fallback branches that guard against a missing
-`ferritin_connector` install are marked `# pragma: no cover` — they
+`proteon_connector` install are marked `# pragma: no cover` — they
 only fire when the native extension isn't built, which is never true
 in CI and can't be meaningfully faked.
 

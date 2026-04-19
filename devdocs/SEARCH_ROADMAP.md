@@ -1,12 +1,12 @@
-# Ferritin Search Roadmap
+# Proteon Search Roadmap
 
 **Last updated: 2026-04-09**
 
-Ferritin does not have a real Foldseek-equivalent search product yet.
+Proteon does not have a real Foldseek-equivalent search product yet.
 
 What exists today:
 
-- a substantial structural alphabet prototype in [ferritin-align/src/search/alphabet.rs](./ferritin-align/src/search/alphabet.rs)
+- a substantial structural alphabet prototype in [proteon-align/src/search/alphabet.rs](./proteon-align/src/search/alphabet.rs)
 - validation scripts that use Foldseek as an oracle / benchmark
 - strong downstream geometric refinement capability via TM-align, SOI-align, FlexAlign, and MM-align
 
@@ -21,7 +21,7 @@ What is missing:
 
 This roadmap focuses on one goal:
 
-**Make ferritin-search the fast, reliable structure-search interface for AI-assisted structure bioinformatics, with modern data plumbing and geometry-aware reranking.**
+**Make proteon-search the fast, reliable structure-search interface for AI-assisted structure bioinformatics, with modern data plumbing and geometry-aware reranking.**
 
 ---
 
@@ -32,17 +32,17 @@ The intended search stack is:
 1. encode each structure into a per-residue structural alphabet
 2. build a compact searchable corpus
 3. run a very fast prefilter over alphabet / hybrid sequence features
-4. rerank the top candidates with ferritin’s stronger geometric alignment stack
+4. rerank the top candidates with proteon’s stronger geometric alignment stack
 5. expose the entire workflow through Python, CLI, and Arrow/Parquet outputs
 
-Ferritin should not try to beat Foldseek everywhere on day one.
+Proteon should not try to beat Foldseek everywhere on day one.
 It should first become:
 
 - easy to use
 - inspectable
 - batch-native
 - reliable
-- tightly integrated with ferritin’s existing wrangling and alignment APIs
+- tightly integrated with proteon’s existing wrangling and alignment APIs
 
 ---
 
@@ -50,7 +50,7 @@ It should first become:
 
 ### What Is Real
 
-- `ferritin-align/src/search/alphabet.rs` contains:
+- `proteon-align/src/search/alphabet.rs` contains:
   - virtual-center construction
   - nearest spatial neighbor selection
   - 10D geometric feature extraction
@@ -71,7 +71,7 @@ It should first become:
 
 Implication:
 
-**Ferritin currently has search groundwork, not a search product.**
+**Proteon currently has search groundwork, not a search product.**
 
 ---
 
@@ -79,7 +79,7 @@ Implication:
 
 1. Search should be pipeline-native, not a separate silo.
 2. The first fast stage should be approximate and cheap.
-3. The final ranking stage should use ferritin’s geometry strengths.
+3. The final ranking stage should use proteon’s geometry strengths.
 4. Every stage must be benchmarkable independently.
 5. Every scientific approximation needs a retrieval benchmark behind it.
 6. Public APIs should expose both convenience and inspectable intermediate artifacts.
@@ -144,7 +144,7 @@ Do not start with:
 
 ### Stage D: Reranking
 
-Use existing ferritin strengths:
+Use existing proteon strengths:
 
 - alphabet local/global alignment score
 - TM-align / SOI-align / FlexAlign reranking
@@ -186,8 +186,8 @@ Deliverables:
 
 - Rust public API for `encode_structure`
 - Python API:
-  - `ferritin.encode_alphabet(structure)`
-  - `ferritin.extract_alphabet_features(structure)`
+  - `proteon.encode_alphabet(structure)`
+  - `proteon.extract_alphabet_features(structure)`
 - result object with:
   - `states`
   - `alphabet`
@@ -283,11 +283,11 @@ Definition of done:
 
 CLI:
 
-- `ferritin-search createdb input_dir/ --out db_dir/`
+- `proteon-search createdb input_dir/ --out db_dir/`
 
 Python:
 
-- `ferritin.build_search_db(paths, out=...)`
+- `proteon.build_search_db(paths, out=...)`
 
 Definition of done:
 
@@ -329,10 +329,10 @@ Definition of done:
 
 Target API:
 
-- `ferritin.encode_alphabet(structure)`
-- `ferritin.build_search_db(paths, out=...)`
-- `ferritin.search(query, db, top_k=100, refine_top_n=20)`
-- `ferritin.search_many(queries, db, ...)`
+- `proteon.encode_alphabet(structure)`
+- `proteon.build_search_db(paths, out=...)`
+- `proteon.search(query, db, top_k=100, refine_top_n=20)`
+- `proteon.search_many(queries, db, ...)`
 
 Result object:
 
@@ -346,10 +346,10 @@ Result object:
 
 Target commands:
 
-- `ferritin-search createdb`
-- `ferritin-search search`
-- `ferritin-search inspect`
-- `ferritin-search benchmark`
+- `proteon-search createdb`
+- `proteon-search search`
+- `proteon-search inspect`
+- `proteon-search benchmark`
 
 Definition of done:
 
@@ -380,8 +380,8 @@ Metrics:
 Comparators:
 
 - Foldseek
-- ferritin prefilter only
-- ferritin prefilter + rerank
+- proteon prefilter only
+- proteon prefilter + rerank
 
 ### 13. Oracle and Drift Tests
 
@@ -436,23 +436,23 @@ Definition of done:
 
 Rust:
 
-- `ferritin-align/src/search/alphabet.rs`
-- `ferritin-align/src/search/index.rs`
-- `ferritin-align/src/search/prefilter.rs`
-- `ferritin-align/src/search/rerank.rs`
-- `ferritin-align/src/search/db.rs`
+- `proteon-align/src/search/alphabet.rs`
+- `proteon-align/src/search/index.rs`
+- `proteon-align/src/search/prefilter.rs`
+- `proteon-align/src/search/rerank.rs`
+- `proteon-align/src/search/db.rs`
 
 Connector:
 
-- `ferritin-connector/src/py_search.rs`
+- `proteon-connector/src/py_search.rs`
 
 Python:
 
-- `packages/ferritin/src/ferritin/search.py`
+- `packages/proteon/src/proteon/search.py`
 
 CLI:
 
-- `ferritin-bin/src/bin/search.rs`
+- `proteon-bin/src/bin/search.rs`
 
 Tests:
 
@@ -470,5 +470,5 @@ Tests:
 4. Add a k-mer prefilter and top-K retrieval.
 5. Rerank top candidates with TM-align.
 
-If these five steps are complete, ferritin will have its first real search capability.
+If these five steps are complete, proteon will have its first real search capability.
 Before that, it has search research code and validation scripts, but not a usable Foldseek-style interface.

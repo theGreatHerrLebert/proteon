@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from ferritin.loader_failure_analysis import (
+from proteon.loader_failure_analysis import (
     load_failure_rows,
     summarize_loader_failures,
     summaries_to_markdown,

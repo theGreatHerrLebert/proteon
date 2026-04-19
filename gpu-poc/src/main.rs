@@ -1,8 +1,8 @@
 //! GPU POC: full nonbonded kernel on REAL crambin data.
 //!
-//! Loads 1crn.pdb via pdbtbx, builds CHARMM19+EEF1 topology via ferritin,
+//! Loads 1crn.pdb via pdbtbx, builds CHARMM19+EEF1 topology via proteon,
 //! marshals real pairs/types/charges/EEF1 params to GPU, runs the kernel,
-//! and compares to ferritin's CPU energy to 1e-4 kcal/mol.
+//! and compares to proteon's CPU energy to 1e-4 kcal/mol.
 //!
 //! Tests both f64 and f32 precision to characterize the tradeoff.
 
@@ -10,7 +10,7 @@ use cudarc::driver::{CudaContext, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 use std::time::Instant;
 
-use ferritin_connector::forcefield::{
+use proteon_connector::forcefield::{
     energy::compute_energy_nbl,
     neighbor_list::NeighborList,
     params::{charmm19_eef1, ForceField},
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_pairs = nbl.pairs.len();
     println!("  {} NBL pairs within {} Å", n_pairs, cutoff);
 
-    // --- CPU reference via ferritin ---
+    // --- CPU reference via proteon ---
     let cpu_e = compute_energy_nbl(&coords, &topo, &ff, &nbl);
     println!("\nCPU reference (kcal/mol):");
     println!("  vdw  = {:+.6}", cpu_e.vdw);
@@ -319,7 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Force comparison: GPU f32 vs CPU f64
     let cpu_forces = {
-        let (_, forces) = ferritin_connector::forcefield::energy::compute_energy_and_forces_nbl(
+        let (_, forces) = proteon_connector::forcefield::energy::compute_energy_and_forces_nbl(
             &coords, &topo, &ff, &nbl,
         );
         forces

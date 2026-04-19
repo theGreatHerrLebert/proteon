@@ -7,7 +7,7 @@ Interface residues are defined by change in SASA between complex and
 isolated chain — a residue that becomes buried when the complex forms
 is at the interface. This is the standard definition used in PDBe PISA.
 
-Ferritin computes SASA on both the complex and isolated chains, giving
+Proteon computes SASA on both the complex and isolated chains, giving
 us free labels without external annotation.
 
 Requirements:
@@ -28,7 +28,7 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GATConv, global_mean_pool
 
-import ferritin
+import proteon
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -45,7 +45,7 @@ pdb_files = sorted(glob.glob(os.path.join(pdb_dir, "*.pdb")))[:300]
 
 print(f"\nScanning {len(pdb_files)} PDB files for multi-chain structures...")
 t0 = time.time()
-loaded = ferritin.batch_load_tolerant(pdb_files, n_threads=-1)
+loaded = proteon.batch_load_tolerant(pdb_files, n_threads=-1)
 multi_chain = [(i, s) for i, s in loaded if s.chain_count >= 2]
 print(f"  {len(multi_chain)} multi-chain structures in {time.time()-t0:.2f}s")
 
@@ -59,13 +59,13 @@ def structure_to_interface_graph(s):
     if s.chain_count < 2:
         return None
 
-    ca = ferritin.extract_ca_coords(s)
+    ca = proteon.extract_ca_coords(s)
     n = len(ca)
     if n < 20:
         return None
 
     # SASA of the full complex
-    complex_sasa = ferritin.residue_sasa(s)
+    complex_sasa = proteon.residue_sasa(s)
 
     # For each chain, compute SASA in isolation (approximate: use the
     # per-residue SASA and check which residues lose > 10 A² in the complex)
@@ -76,11 +76,11 @@ def structure_to_interface_graph(s):
     # Simpler approach: use geometric criterion
     # Interface = residue within 8A of any residue from a different chain
     chain_ids = s.chain_ids
-    ca_mask = ferritin.select(s, "CA")
+    ca_mask = proteon.select(s, "CA")
     ca_chains = np.array(chain_ids)[ca_mask][:n]
 
     # For each residue, check if any CA from another chain is within 8A
-    dm = ferritin.distance_matrix(ca)
+    dm = proteon.distance_matrix(ca)
     interface_labels = np.zeros(n, dtype=np.float32)
     for i in range(n):
         for j in range(n):
@@ -94,10 +94,10 @@ def structure_to_interface_graph(s):
         return None
 
     # Node features
-    phi, psi, _ = ferritin.backbone_dihedrals(s)
-    rsa = ferritin.relative_sasa(s)
-    hbc = ferritin.hbond_count(s)
-    ss = ferritin.dssp(s)
+    phi, psi, _ = proteon.backbone_dihedrals(s)
+    rsa = proteon.relative_sasa(s)
+    hbc = proteon.hbond_count(s)
+    ss = proteon.dssp(s)
 
     def fit(arr, n):
         arr = np.nan_to_num(np.asarray(arr).flatten(), nan=0.0).astype(np.float32)
@@ -118,7 +118,7 @@ def structure_to_interface_graph(s):
     ])
 
     # Contact graph (use 10A for interface prediction)
-    cm = ferritin.contact_map(ca, cutoff=10.0)
+    cm = proteon.contact_map(ca, cutoff=10.0)
     rows, cols = np.where(np.triu(cm, k=1))
     edge_index = np.stack([
         np.concatenate([rows, cols]),

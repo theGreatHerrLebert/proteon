@@ -5,7 +5,7 @@
         "freesasa": {
           "by_pdb": {
             "1ake": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "total_pct_diff": {
@@ -24,7 +24,7 @@
                   "value": 566,
                   "band": "INFO"
                 },
-                "_n_ferritin_residues": {
+                "_n_proteon_residues": {
                   "value": 808,
                   "band": "INFO"
                 },
@@ -35,7 +35,7 @@
               }
             },
             "1aki": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "total_pct_diff": {
@@ -54,7 +54,7 @@
                   "value": 207,
                   "band": "INFO"
                 },
-                "_n_ferritin_residues": {
+                "_n_proteon_residues": {
                   "value": 207,
                   "band": "INFO"
                 },
@@ -65,7 +65,7 @@
               }
             },
             "1bpi": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "total_pct_diff": {
@@ -84,7 +84,7 @@
                   "value": 226,
                   "band": "INFO"
                 },
-                "_n_ferritin_residues": {
+                "_n_proteon_residues": {
                   "value": 226,
                   "band": "INFO"
                 },
@@ -95,7 +95,7 @@
               }
             },
             "1crn": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "total_pct_diff": {
@@ -114,7 +114,7 @@
                   "value": 46,
                   "band": "INFO"
                 },
-                "_n_ferritin_residues": {
+                "_n_proteon_residues": {
                   "value": 46,
                   "band": "INFO"
                 },
@@ -125,7 +125,7 @@
               }
             },
             "1pgb": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "total_pct_diff": {
@@ -144,7 +144,7 @@
                   "value": 80,
                   "band": "INFO"
                 },
-                "_n_ferritin_residues": {
+                "_n_proteon_residues": {
                   "value": 80,
                   "band": "INFO"
                 },
@@ -155,7 +155,7 @@
               }
             },
             "1ubq": {
-              "ferritin_status": "ok",
+              "proteon_status": "ok",
               "other_status": "ok",
               "metrics": {
                 "total_pct_diff": {
@@ -174,7 +174,7 @@
                   "value": 116,
                   "band": "INFO"
                 },
-                "_n_ferritin_residues": {
+                "_n_proteon_residues": {
                   "value": 116,
                   "band": "INFO"
                 },

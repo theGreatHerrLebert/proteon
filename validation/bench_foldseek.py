@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""FoldSeek benchmark: compare ferritin TM-align vs FoldSeek structural search.
+"""FoldSeek benchmark: compare proteon TM-align vs FoldSeek structural search.
 
 Creates a FoldSeek database from test PDBs, runs all-vs-all structural search,
-then compares FoldSeek TM-scores against ferritin TM-align scores.
+then compares FoldSeek TM-scores against proteon TM-align scores.
 
 This benchmarks:
 1. FoldSeek 3Di+AA search accuracy vs rigorous TM-align
-2. Speed: FoldSeek prefilter+align vs ferritin TM-align (sequential & parallel)
+2. Speed: FoldSeek prefilter+align vs proteon TM-align (sequential & parallel)
 3. Rank correlation: do both methods agree on which structures are most similar?
 
 Usage:
@@ -25,7 +25,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from ferritin_connector import py_align_funcs, py_io
+from proteon_connector import py_align_funcs, py_io
 
 FOLDSEEK_BIN = "/scratch/TMAlign/foldseek/bin/foldseek"
 
@@ -93,7 +93,7 @@ def run_foldseek_allvsall(pdb_dir: str, pdb_files: list, tmpdir: str) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="FoldSeek vs ferritin benchmark")
+    parser = argparse.ArgumentParser(description="FoldSeek vs proteon benchmark")
     parser.add_argument("--n-structures", type=int, default=50)
     parser.add_argument("--pdb-dir", default="/scratch/TMAlign/test-pdbs/")
     parser.add_argument("--output", default="validation/foldseek_bench.json")
@@ -126,8 +126,8 @@ def main():
         fs_pairs, fs_time = run_foldseek_allvsall(args.pdb_dir, pdbs, tmpdir)
     print(f"  {len(fs_pairs)} pairs found in {fs_time:.1f}s")
 
-    # --- Phase 2: Ferritin TM-align (parallel batch) ---
-    print("\nPhase 2: Ferritin TM-align (parallel, many-to-many)...")
+    # --- Phase 2: Proteon TM-align (parallel batch) ---
+    print("\nPhase 2: Proteon TM-align (parallel, many-to-many)...")
     names = [os.path.splitext(f)[0] for f in pdbs]
     paths = [os.path.join(args.pdb_dir, f) for f in pdbs]
 
@@ -150,7 +150,7 @@ def main():
     fe_time = time.time() - t0
     print(f"  {len(raw_results)} pairs computed in {fe_time:.1f}s")
 
-    # Build ferritin results dict
+    # Build proteon results dict
     fe_pairs = {}
     for qi, ti, r in raw_results:
         qname = loadable_names[qi]
@@ -158,7 +158,7 @@ def main():
         if qname == tname:
             continue
         fe_pairs[(qname, tname)] = {
-            # ferritin chain1 = normL2, chain2 = normL1
+            # proteon chain1 = normL2, chain2 = normL1
             "qtmscore": r.tm_score_chain2,  # norm by query length
             "ttmscore": r.tm_score_chain1,  # norm by target length
             "rmsd": r.rmsd,
@@ -166,7 +166,7 @@ def main():
         }
 
     # --- Phase 3: Compare ---
-    print(f"\nPhase 3: Comparing {len(fs_pairs)} FoldSeek pairs vs ferritin...")
+    print(f"\nPhase 3: Comparing {len(fs_pairs)} FoldSeek pairs vs proteon...")
 
     # Find common pairs
     common_keys = set(fs_pairs.keys()) & set(fe_pairs.keys())
@@ -221,10 +221,10 @@ def main():
     # Summary
     n_total_pairs = len(loadable_names) * (len(loadable_names) - 1)
     print(f"\n{'='*65}")
-    print(f"FOLDSEEK vs FERRITIN BENCHMARK ({len(common_keys)} pairs)")
+    print(f"FOLDSEEK vs PROTEON BENCHMARK ({len(common_keys)} pairs)")
     print(f"{'='*65}\n")
 
-    print("  TM-score agreement (FoldSeek vs ferritin TM-align):")
+    print("  TM-score agreement (FoldSeek vs proteon TM-align):")
     print(f"    Query-norm:  median |diff| = {np.median(tm_diffs_q):.4f}, "
           f"max = {np.max(tm_diffs_q):.4f}, "
           f"within 0.01: {np.sum(tm_diffs_q < 0.01)}/{len(tm_diffs_q)}")
@@ -242,10 +242,10 @@ def main():
     print(f"\n  Speed:")
     print(f"    FoldSeek (exhaustive all-vs-all):  {fs_time:.1f}s "
           f"({len(fs_pairs)/fs_time:.0f} pairs/s)")
-    print(f"    Ferritin (parallel many-to-many):  {fe_time:.1f}s "
+    print(f"    Proteon (parallel many-to-many):  {fe_time:.1f}s "
           f"({n_total_pairs/fe_time:.0f} pairs/s)")
     speedup = fs_time / fe_time if fe_time > 0 else 0
-    print(f"    Ferritin speedup vs FoldSeek: {speedup:.1f}x")
+    print(f"    Proteon speedup vs FoldSeek: {speedup:.1f}x")
 
     # FoldSeek coverage: what fraction of all possible pairs did FoldSeek report?
     fs_coverage = len(fs_pairs) / n_total_pairs * 100
@@ -269,8 +269,8 @@ def main():
             "n_common_pairs": len(common_keys),
             "foldseek_pairs": len(fs_pairs),
             "foldseek_time_s": round(fs_time, 1),
-            "ferritin_time_s": round(fe_time, 1),
-            "ferritin_speedup": round(speedup, 1),
+            "proteon_time_s": round(fe_time, 1),
+            "proteon_speedup": round(speedup, 1),
             "tm_q_median_diff": round(float(np.median(tm_diffs_q)), 5),
             "tm_q_max_diff": round(float(np.max(tm_diffs_q)), 5),
             "spearman_rho": round(rho, 4),

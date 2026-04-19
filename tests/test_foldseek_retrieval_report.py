@@ -23,35 +23,35 @@ def _load_report_module():
 def _sample_benchmark() -> dict:
     return {
         "corpus": {"thresholds": [0.5, 0.7, 0.9]},
-        "timing": {"foldseek_s": 1.0, "ferritin_search_s": 2.0},
+        "timing": {"foldseek_s": 1.0, "proteon_search_s": 2.0},
         "metrics": {},
         "per_query": [
             {
                 "query": "q1.pdb",
                 "best_truth_nonself": {"source_path": "a.pdb", "tm_score": 0.95},
                 "foldseek_top_nonself": {"source_path": "a.pdb"},
-                "ferritin_top_nonself": {"source_path": "b.pdb"},
-                "ferritin_top_hits": [{"source_path": "b.pdb"}, {"source_path": "a.pdb"}],
+                "proteon_top_nonself": {"source_path": "b.pdb"},
+                "proteon_top_hits": [{"source_path": "b.pdb"}, {"source_path": "a.pdb"}],
                 "thresholds": {
-                    "0.5": {"recall_at_k": 1.0, "ferritin_recall_at_k": 0.5},
-                    "0.7": {"recall_at_k": 1.0, "ferritin_recall_at_k": 0.0},
-                    "0.9": {"recall_at_k": 1.0, "ferritin_recall_at_k": 0.0},
+                    "0.5": {"recall_at_k": 1.0, "proteon_recall_at_k": 0.5},
+                    "0.7": {"recall_at_k": 1.0, "proteon_recall_at_k": 0.0},
+                    "0.9": {"recall_at_k": 1.0, "proteon_recall_at_k": 0.0},
                 },
             },
             {
                 "query": "q2.pdb",
                 "best_truth_nonself": {"source_path": "c.pdb", "tm_score": 0.8},
                 "foldseek_top_nonself": {"source_path": "d.pdb"},
-                "ferritin_top_nonself": {"source_path": "c.pdb"},
+                "proteon_top_nonself": {"source_path": "c.pdb"},
                 "thresholds": {
-                    "0.5": {"recall_at_k": 0.0, "ferritin_recall_at_k": 1.0},
-                    "0.7": {"recall_at_k": 0.0, "ferritin_recall_at_k": 1.0},
-                    "0.9": {"recall_at_k": 1.0, "ferritin_recall_at_k": 1.0},
+                    "0.5": {"recall_at_k": 0.0, "proteon_recall_at_k": 1.0},
+                    "0.7": {"recall_at_k": 0.0, "proteon_recall_at_k": 1.0},
+                    "0.9": {"recall_at_k": 1.0, "proteon_recall_at_k": 1.0},
                 },
             },
         ],
         "skipped_truth_candidates": {"q1.pdb": [{"source_path": "large.pdb"}]},
-        "skipped_ferritin_queries": {"bad.pdb": "load_failed"},
+        "skipped_proteon_queries": {"bad.pdb": "load_failed"},
     }
 
 
@@ -60,12 +60,12 @@ def test_summarize_classifies_top1_and_recall():
 
     summary = report.summarize(_sample_benchmark(), primary_threshold="0.7")
 
-    assert summary["top1_counts"] == {"foldseek_only": 1, "ferritin_only": 1}
-    assert summary["recall_counts"] == {"foldseek_better": 1, "ferritin_better": 1}
-    assert summary["threshold_summary"]["0.7"]["ferritin_minus_foldseek"] == 0.0
+    assert summary["top1_counts"] == {"foldseek_only": 1, "proteon_only": 1}
+    assert summary["recall_counts"] == {"foldseek_better": 1, "proteon_better": 1}
+    assert summary["threshold_summary"]["0.7"]["proteon_minus_foldseek"] == 0.0
     assert summary["n_skipped_truth_candidates"] == 1
-    assert summary["worst_ferritin_queries"][0]["query"] == "q1.pdb"
-    assert summary["worst_ferritin_queries"][0]["truth_rank_in_ferritin_trace"] == 2
+    assert summary["worst_proteon_queries"][0]["query"] == "q1.pdb"
+    assert summary["worst_proteon_queries"][0]["truth_rank_in_proteon_trace"] == 2
 
 
 def test_cli_writes_markdown_and_json(tmp_path: Path):
@@ -91,6 +91,6 @@ def test_cli_writes_markdown_and_json(tmp_path: Path):
         text=True,
     )
 
-    assert "Foldseek vs ferritin Retrieval Diagnostics" in result.stdout
+    assert "Foldseek vs proteon Retrieval Diagnostics" in result.stdout
     assert json.loads(json_output.read_text(encoding="utf-8"))["primary_threshold"] == "0.7"
     assert "| q1.pdb | a.pdb |" in markdown_output.read_text(encoding="utf-8")

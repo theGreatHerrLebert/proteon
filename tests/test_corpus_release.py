@@ -3,7 +3,7 @@
 import json
 from types import SimpleNamespace
 
-import ferritin
+import proteon
 
 
 def _atom(name, xyz):
@@ -39,29 +39,29 @@ def _fake_structure(chain_id="A"):
 class TestCorpusRelease:
     def test_build_corpus_release_manifest(self, tmp_path):
         structures = [_fake_structure("A")]
-        prep = ferritin.PrepReport(hydrogens_added=2, converged=True)
+        prep = proteon.PrepReport(hydrogens_added=2, converged=True)
 
-        prepared_root = ferritin.build_structure_supervision_dataset_from_prepared(
+        prepared_root = proteon.build_structure_supervision_dataset_from_prepared(
             structures,
             [prep],
             tmp_path / "prepared_root",
             release_id="struc-v0",
             record_ids=["fake:A"],
         )
-        seq_release = ferritin.build_sequence_dataset(
+        seq_release = proteon.build_sequence_dataset(
             structures,
             tmp_path / "seq_release",
             release_id="seq-v0",
             record_ids=["fake:A"],
         )
-        train_release = ferritin.build_training_release(
+        train_release = proteon.build_training_release(
             seq_release,
             prepared_root / "supervision_release",
             tmp_path / "train_release",
             release_id="train-v0",
             split_assignments={"fake:A": "train"},
         )
-        corpus_root = ferritin.build_corpus_release_manifest(
+        corpus_root = proteon.build_corpus_release_manifest(
             tmp_path / "corpus_release",
             release_id="corpus-v0",
             prepared_manifest=prepared_root / "prepared_structures.jsonl",
@@ -73,7 +73,7 @@ class TestCorpusRelease:
             provenance={"source_manifest": "raw-v1"},
         )
 
-        manifest = ferritin.load_corpus_release_manifest(corpus_root / "corpus_release_manifest.json")
+        manifest = proteon.load_corpus_release_manifest(corpus_root / "corpus_release_manifest.json")
         assert manifest.release_id == "corpus-v0"
         assert manifest.count_prepared == 1
         assert manifest.count_sequence_examples == 1
@@ -87,7 +87,7 @@ class TestCorpusRelease:
         raw = json.loads((corpus_root / "corpus_release_manifest.json").read_text(encoding="utf-8"))
         assert raw["sequence_release"].endswith("seq_release")
 
-        report = ferritin.validate_corpus_release(
+        report = proteon.validate_corpus_release(
             corpus_root / "corpus_release_manifest.json",
             out_path=corpus_root / "validation_report.json",
         )
@@ -108,13 +108,13 @@ class TestCorpusRelease:
             encoding="utf-8",
         )
 
-        corpus_root = ferritin.build_corpus_release_manifest(
+        corpus_root = proteon.build_corpus_release_manifest(
             out,
             release_id="corpus-v0",
             rescued_inputs_manifest=rescued_path,
             overwrite=True,
         )
 
-        manifest = ferritin.load_corpus_release_manifest(corpus_root / "corpus_release_manifest.json")
+        manifest = proteon.load_corpus_release_manifest(corpus_root / "corpus_release_manifest.json")
         assert manifest.count_rescued_inputs == 2
         assert manifest.rescued_inputs_manifest == str(rescued_path)

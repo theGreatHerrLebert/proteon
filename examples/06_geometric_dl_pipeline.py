@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Example 06: From PDB Files to Geometric Deep Learning.
 
-Demonstrates how ferritin collapses the structural biology data pipeline
+Demonstrates how proteon collapses the structural biology data pipeline
 from ~200 lines of glue code (Biopython + Gemmi + MDTraj + FreeSASA)
-into 5 lines of ferritin, then feeds directly into PyTorch Geometric.
+into 5 lines of proteon, then feeds directly into PyTorch Geometric.
 
 This is the "missing link" between PDB files and GNN training.
 
@@ -21,13 +21,13 @@ import glob
 import numpy as np
 
 # ============================================================================
-# STEP 1: Data preparation with ferritin (the hard part, now easy)
+# STEP 1: Data preparation with proteon (the hard part, now easy)
 # ============================================================================
 
-import ferritin
+import proteon
 
 print("=" * 60)
-print("PDB → Features → GNN: The Ferritin Pipeline")
+print("PDB → Features → GNN: The Proteon Pipeline")
 print("=" * 60)
 
 # Grab some structures: prefer the bigger validation/ corpus if present,
@@ -39,16 +39,16 @@ if not os.path.exists(pdb_dir):
 pdb_files = sorted(glob.glob(os.path.join(pdb_dir, "*.pdb")))[:100]
 print(f"\n{len(pdb_files)} PDB files")
 
-# --- THE FERRITIN WAY: one call, everything you need ---
-print("\n--- Ferritin: load + analyze in one call ---")
+# --- THE PROTEON WAY: one call, everything you need ---
+print("\n--- Proteon: load + analyze in one call ---")
 t0 = time.time()
-results = ferritin.load_and_analyze(pdb_files, cutoff=8.0, n_threads=-1)
-t_ferritin = time.time() - t0
-print(f"  {len(results)} structures processed in {t_ferritin:.2f}s")
-print(f"  ({len(results)/t_ferritin:.0f} structures/second)")
+results = proteon.load_and_analyze(pdb_files, cutoff=8.0, n_threads=-1)
+t_proteon = time.time() - t0
+print(f"  {len(results)} structures processed in {t_proteon:.2f}s")
+print(f"  ({len(results)/t_proteon:.0f} structures/second)")
 
 # Now add SASA and DSSP (need loaded structures for these)
-structures = ferritin.batch_load_tolerant(pdb_files, n_threads=-1)
+structures = proteon.batch_load_tolerant(pdb_files, n_threads=-1)
 struct_map = {i: s for i, s in structures}
 
 t0 = time.time()
@@ -56,13 +56,13 @@ for r in results:
     idx = r["index"]
     if idx in struct_map:
         s = struct_map[idx]
-        r["sasa"] = np.asarray(ferritin.residue_sasa(s))
-        r["rsa"] = np.asarray(ferritin.relative_sasa(s))
-        r["dssp"] = ferritin.dssp(s)
-        r["hbond_count"] = np.asarray(ferritin.hbond_count(s))
+        r["sasa"] = np.asarray(proteon.residue_sasa(s))
+        r["rsa"] = np.asarray(proteon.relative_sasa(s))
+        r["dssp"] = proteon.dssp(s)
+        r["hbond_count"] = np.asarray(proteon.hbond_count(s))
 t_features = time.time() - t0
 print(f"  SASA + DSSP + H-bonds: {t_features:.2f}s")
-print(f"  Total data prep: {t_ferritin + t_features:.2f}s")
+print(f"  Total data prep: {t_proteon + t_features:.2f}s")
 
 # ============================================================================
 # STEP 2: Build graph dataset for PyTorch Geometric
@@ -90,7 +90,7 @@ def ss_to_onehot(ss_string, n_residues):
 
 
 def structure_to_graph(result):
-    """Convert ferritin analysis result to a PyG Data object.
+    """Convert proteon analysis result to a PyG Data object.
 
     Node features (per residue):
         - phi, psi angles (sin/cos encoded, 4 features)
@@ -280,16 +280,16 @@ print(f"""
     {len(pdb_files)} PDB files → {len(graphs)} protein graphs
     Features per residue: phi/psi (4) + RSA (1) + H-bonds (1) + SS (8) = 14
     Edges: CA-CA contacts at 8Å cutoff
-    Time: {t_ferritin + t_features:.1f}s (ferritin, {len(results)/t_ferritin:.0f} structs/sec)
+    Time: {t_proteon + t_features:.1f}s (proteon, {len(results)/t_proteon:.0f} structs/sec)
 
-  Without ferritin, this would require:
-    - Biopython for loading + SASA (~{t_ferritin * 24:.0f}s at 24x slower)
+  Without proteon, this would require:
+    - Biopython for loading + SASA (~{t_proteon * 24:.0f}s at 24x slower)
     - External DSSP binary + subprocess parsing
     - MDTraj or manual code for dihedrals
     - Custom contact map code
     - ~200 lines of glue code
 
-  With ferritin: 5 function calls, {t_ferritin + t_features:.1f}s, zero glue.
+  With proteon: 5 function calls, {t_proteon + t_features:.1f}s, zero glue.
 
   Model: 3-layer GCN, {sum(p.numel() for p in model.parameters())} parameters
   Device: {DEVICE}

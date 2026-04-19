@@ -1,23 +1,23 @@
 #!/bin/bash
-# Create the sota_venv and install ferritin + v1 SOTA tools.
+# Create the sota_venv and install proteon + v1 SOTA tools.
 #
 # Usage:
 #   bash validation/sota_comparison/setup_sota_env.sh
 #
 # Environment variables (override to customize):
 #   SOTA_VENV      — path to the new venv (default: sibling of the build venv)
-#   FERRITIN_ROOT  — ferritin repo root (default: auto-detect from script location)
-#   SKIP_FERRITIN  — if set, don't reinstall ferritin (faster repeat runs)
+#   PROTEON_ROOT  — proteon repo root (default: auto-detect from script location)
+#   SKIP_PROTEON  — if set, don't reinstall proteon (faster repeat runs)
 #
 # Idempotent: safe to re-run. Will skip venv creation if SOTA_VENV already exists.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FERRITIN_ROOT="${FERRITIN_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
-SOTA_VENV="${SOTA_VENV:-/globalscratch/dateschn/ferritin-benchmark/sota_venv}"
+PROTEON_ROOT="${PROTEON_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+SOTA_VENV="${SOTA_VENV:-/globalscratch/dateschn/proteon-benchmark/sota_venv}"
 
-echo "[sota setup] ferritin root: $FERRITIN_ROOT"
+echo "[sota setup] proteon root: $PROTEON_ROOT"
 echo "[sota setup] sota venv:     $SOTA_VENV"
 
 # --- 1. Create the venv if it doesn't already exist ---
@@ -36,14 +36,14 @@ echo "[sota setup] upgrading pip + installing build tools..."
 pip install --quiet --upgrade pip wheel
 pip install --quiet "maturin>=1.5,<2"
 
-# --- 3. Install ferritin via maturin develop ---
-if [ -z "${SKIP_FERRITIN:-}" ]; then
-    echo "[sota setup] building ferritin-connector via maturin develop --release..."
-    (cd "$FERRITIN_ROOT/ferritin-connector" && maturin develop --release)
-    echo "[sota setup] installing ferritin Python wrapper (editable)..."
-    pip install --quiet -e "$FERRITIN_ROOT/packages/ferritin"
+# --- 3. Install proteon via maturin develop ---
+if [ -z "${SKIP_PROTEON:-}" ]; then
+    echo "[sota setup] building proteon-connector via maturin develop --release..."
+    (cd "$PROTEON_ROOT/proteon-connector" && maturin develop --release)
+    echo "[sota setup] installing proteon Python wrapper (editable)..."
+    pip install --quiet -e "$PROTEON_ROOT/packages/proteon"
 else
-    echo "[sota setup] SKIP_FERRITIN set, skipping ferritin reinstall"
+    echo "[sota setup] SKIP_PROTEON set, skipping proteon reinstall"
 fi
 
 # --- 4. Install SOTA requirements ---
@@ -55,7 +55,7 @@ echo "[sota setup] sanity check imports..."
 python - <<'PY'
 import sys
 failures = []
-for name in ("ferritin", "freesasa", "openmm", "numpy"):
+for name in ("proteon", "freesasa", "openmm", "numpy"):
     try:
         mod = __import__(name)
         ver = getattr(mod, "__version__", "?")

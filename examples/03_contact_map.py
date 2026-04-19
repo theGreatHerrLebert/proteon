@@ -11,14 +11,14 @@ Usage:
     python examples/03_contact_map.py
 """
 
-import ferritin
+import proteon
 import numpy as np
 
 # ---------------------------------------------------------------------------
 # 1. Load structure and extract CA coordinates
 # ---------------------------------------------------------------------------
-structure = ferritin.load("test-pdbs/1crn.pdb")
-ca = ferritin.extract_ca_coords(structure)
+structure = proteon.load("test-pdbs/1crn.pdb")
+ca = proteon.extract_ca_coords(structure)
 
 print("=== Crambin (1CRN) ===")
 print(f"  Residues: {len(ca)}")
@@ -28,7 +28,7 @@ print()
 # ---------------------------------------------------------------------------
 # 2. Distance matrix
 # ---------------------------------------------------------------------------
-dm = ferritin.distance_matrix(ca)
+dm = proteon.distance_matrix(ca)
 
 print("=== CA-CA Distance Matrix ===")
 print(f"  Shape: {dm.shape}")
@@ -51,7 +51,7 @@ print()
 print("=== Contact Maps ===")
 
 for cutoff in [6.0, 8.0, 10.0, 12.0]:
-    cm = ferritin.contact_map(ca, cutoff=cutoff)
+    cm = proteon.contact_map(ca, cutoff=cutoff)
     n_contacts = cm.sum() - len(ca)  # subtract self-contacts (diagonal)
     n_pairs = n_contacts // 2  # each contact counted twice
     density = n_contacts / (len(ca) * (len(ca) - 1))
@@ -63,7 +63,7 @@ print()
 # ---------------------------------------------------------------------------
 print("=== Contact Classification ===")
 
-cm8 = ferritin.contact_map(ca, cutoff=8.0)
+cm8 = proteon.contact_map(ca, cutoff=8.0)
 n = len(ca)
 
 short_range = 0   # |i-j| <= 4  (within a helix turn)
@@ -92,11 +92,11 @@ print()
 # ---------------------------------------------------------------------------
 print("=== Cross-Structure Distances ===")
 
-s2 = ferritin.load("test-pdbs/1bpi.pdb")
-ca2 = ferritin.extract_ca_coords(s2)
+s2 = proteon.load("test-pdbs/1bpi.pdb")
+ca2 = proteon.extract_ca_coords(s2)
 
 # NxM cross-distance matrix
-cross_dm = ferritin.distance_matrix(ca, ca2)
+cross_dm = proteon.distance_matrix(ca, ca2)
 print(f"  Structure 1: {len(ca)} residues (1CRN)")
 print(f"  Structure 2: {len(ca2)} residues ({s2.identifier})")
 print(f"  Cross-distance matrix: {cross_dm.shape}")
@@ -109,7 +109,7 @@ print()
 print("=== Per-Residue Contact Count (8A cutoff) ===")
 
 contact_count = cm8.sum(axis=1) - 1  # subtract self
-df = ferritin.to_dataframe(structure)
+df = proteon.to_dataframe(structure)
 ca_df = df[df.atom_name.str.strip() == "CA"].reset_index(drop=True)
 
 print(f"  {'Residue':>10s}  {'Contacts':>8s}")

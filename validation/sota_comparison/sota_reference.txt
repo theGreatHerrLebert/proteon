@@ -3,8 +3,8 @@
 # 6 well-known small proteins, all-standard-amino-acid, single-model,
 # minimal heteroatoms. Picked for unambiguous SOTA comparison.
 #
-# On monster3, these live at /globalscratch/dateschn/ferritin-benchmark/sota_pdbs/
-# (assembled from /scratch/TMAlign/ferritin/test-pdbs/ and the 50K corpus).
+# On monster3, these live at /globalscratch/dateschn/proteon-benchmark/sota_pdbs/
+# (assembled from /scratch/TMAlign/proteon/test-pdbs/ and the 50K corpus).
 # All 6 must be present in --pdb-dir at runtime.
 #
 # NOTE: earlier drafts included 1lmb, but PDB 1LMB is actually the λ

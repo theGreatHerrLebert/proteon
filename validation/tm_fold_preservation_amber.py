@@ -1,8 +1,8 @@
-"""TM-align fold preservation benchmark — ferritin AMBER96 variant.
+"""TM-align fold preservation benchmark — proteon AMBER96 variant.
 
-Mirrors tm_fold_preservation.py but runs ferritin with ff='amber96'
+Mirrors tm_fold_preservation.py but runs proteon with ff='amber96'
 instead of charmm19_eef1. Produces a second dataset that lets us
-compare ferritin's two supported force fields side-by-side on the same
+compare proteon's two supported force fields side-by-side on the same
 1000-PDB sample, and pairs with tm_fold_preservation_openmm_amber.py
 for a three-tool AMBER96 comparison.
 """
@@ -17,23 +17,23 @@ from pathlib import Path
 
 import numpy as np
 
-import ferritin
+import proteon
 
-PDB_DIR = Path("/globalscratch/dateschn/ferritin-benchmark/pdbs_50k")
-OUT = Path("/globalscratch/dateschn/ferritin-benchmark/tm_fold_preservation_amber.jsonl")
+PDB_DIR = Path("/globalscratch/dateschn/proteon-benchmark/pdbs_50k")
+OUT = Path("/globalscratch/dateschn/proteon-benchmark/tm_fold_preservation_amber.jsonl")
 N = 1000
 SEED = 42
 CHUNK = 25
 MINIMIZE_STEPS = 100
 
 # Silence the AMBER96-experimental warning for batch runs.
-warnings.filterwarnings("ignore", category=UserWarning, module="ferritin.forcefield")
+warnings.filterwarnings("ignore", category=UserWarning, module="proteon.forcefield")
 
 
 def tm_pair(ca_ref: np.ndarray, ca_mov: np.ndarray) -> dict:
     n = len(ca_ref)
     invmap = np.arange(n, dtype=np.int32)
-    tm, n_aln, rmsd_val, _R, _t = ferritin.tm_score(ca_mov, ca_ref, invmap)
+    tm, n_aln, rmsd_val, _R, _t = proteon.tm_score(ca_mov, ca_ref, invmap)
     return {
         "tm_score": float(tm),
         "rmsd": float(rmsd_val),
@@ -44,11 +44,11 @@ def tm_pair(ca_ref: np.ndarray, ca_mov: np.ndarray) -> dict:
 
 def process_chunk(paths_chunk, out_fh):
     results = []
-    ref_loaded = ferritin.batch_load_tolerant([str(p) for p in paths_chunk])
+    ref_loaded = proteon.batch_load_tolerant([str(p) for p in paths_chunk])
     ref_by_idx = dict(ref_loaded)
-    ca_pre_by_idx = {i: ferritin.extract_ca_coords(s) for i, s in ref_loaded}
+    ca_pre_by_idx = {i: proteon.extract_ca_coords(s) for i, s in ref_loaded}
 
-    work_loaded = ferritin.batch_load_tolerant([str(p) for p in paths_chunk])
+    work_loaded = proteon.batch_load_tolerant([str(p) for p in paths_chunk])
     work_by_idx = dict(work_loaded)
 
     both_idx = sorted(set(ref_by_idx) & set(work_by_idx))
@@ -71,7 +71,7 @@ def process_chunk(paths_chunk, out_fh):
         # atoms). The FF-aware default is True for AMBER96 because heavy-
         # atom vacuum minimization is normally ill-posed; here we're
         # explicitly asking for it in the benchmark.
-        reports = ferritin.batch_prepare(
+        reports = proteon.batch_prepare(
             work_structs, ff="amber96", minimize_steps=MINIMIZE_STEPS,
             constrain_heavy=False,
         )
@@ -95,7 +95,7 @@ def process_chunk(paths_chunk, out_fh):
                 rec["minimizer_steps"] = int(report.minimizer_steps)
                 rec["converged"] = bool(report.converged)
                 ca_pre = ca_pre_by_idx[i]
-                ca_post = ferritin.extract_ca_coords(work_by_idx[i])
+                ca_post = proteon.extract_ca_coords(work_by_idx[i])
                 rec["n_ca_pre"] = int(len(ca_pre))
                 rec["n_ca_post"] = int(len(ca_post))
                 if ca_pre.shape != ca_post.shape:
@@ -158,7 +158,7 @@ def main():
                 rmsds.append(r["rmsd"])
     if tms:
         tms = np.array(tms); rmsds = np.array(rmsds)
-        print(f"\nFerritin AMBER96 TM (n={len(tms)}):")
+        print(f"\nProteon AMBER96 TM (n={len(tms)}):")
         print(f"  mean={tms.mean():.4f}  median={np.median(tms):.4f}")
         print(f"  min={tms.min():.4f}  p05={np.percentile(tms,5):.4f}")
         print(f"RMSD: mean={rmsds.mean():.3f}  median={np.median(rmsds):.3f}  max={rmsds.max():.3f}")

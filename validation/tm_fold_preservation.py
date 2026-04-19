@@ -19,10 +19,10 @@ from pathlib import Path
 
 import numpy as np
 
-import ferritin
+import proteon
 
-PDB_DIR = Path("/globalscratch/dateschn/ferritin-benchmark/pdbs_50k")
-OUT = Path("/globalscratch/dateschn/ferritin-benchmark/tm_fold_preservation.jsonl")
+PDB_DIR = Path("/globalscratch/dateschn/proteon-benchmark/pdbs_50k")
+OUT = Path("/globalscratch/dateschn/proteon-benchmark/tm_fold_preservation.jsonl")
 N = 1000
 SEED = 42
 CHUNK = 25
@@ -32,7 +32,7 @@ MINIMIZE_STEPS = 100  # match 50K smoke-test settings; caps straggler cost
 def tm_pair(ca_ref: np.ndarray, ca_mov: np.ndarray) -> dict:
     n = len(ca_ref)
     invmap = np.arange(n, dtype=np.int32)
-    tm, n_aln, rmsd_val, _R, _t = ferritin.tm_score(ca_mov, ca_ref, invmap)
+    tm, n_aln, rmsd_val, _R, _t = proteon.tm_score(ca_mov, ca_ref, invmap)
     return {
         "tm_score": float(tm),
         "rmsd": float(rmsd_val),
@@ -45,12 +45,12 @@ def process_chunk(paths_chunk, out_fh):
     """Process one chunk: parallel load x2 + parallel batch_prepare + per-pair TM."""
     results = []
     # Reference load
-    ref_loaded = ferritin.batch_load_tolerant([str(p) for p in paths_chunk])
+    ref_loaded = proteon.batch_load_tolerant([str(p) for p in paths_chunk])
     ref_by_idx = dict(ref_loaded)
-    ca_pre_by_idx = {i: ferritin.extract_ca_coords(s) for i, s in ref_loaded}
+    ca_pre_by_idx = {i: proteon.extract_ca_coords(s) for i, s in ref_loaded}
 
     # Working-copy load
-    work_loaded = ferritin.batch_load_tolerant([str(p) for p in paths_chunk])
+    work_loaded = proteon.batch_load_tolerant([str(p) for p in paths_chunk])
     work_by_idx = dict(work_loaded)
 
     # Only structures that loaded BOTH times can be compared. Intersect.
@@ -69,7 +69,7 @@ def process_chunk(paths_chunk, out_fh):
     # Batch minimize
     work_structs = [work_by_idx[i] for i in both_idx]
     try:
-        reports = ferritin.batch_prepare(
+        reports = proteon.batch_prepare(
             work_structs,
             ff="charmm19_eef1",
             minimize_steps=MINIMIZE_STEPS,
@@ -95,7 +95,7 @@ def process_chunk(paths_chunk, out_fh):
                 rec["converged"] = bool(report.converged)
 
                 ca_pre = ca_pre_by_idx[i]
-                ca_post = ferritin.extract_ca_coords(work_by_idx[i])
+                ca_post = proteon.extract_ca_coords(work_by_idx[i])
                 rec["n_ca_pre"] = int(len(ca_pre))
                 rec["n_ca_post"] = int(len(ca_post))
 
@@ -119,8 +119,8 @@ def main():
     sample = [PDB_DIR / name for name in pdbs[:N]]
     print(f"Sampled {len(sample)} PDBs (seed={SEED})", flush=True)
     print(f"Writing to {OUT}", flush=True)
-    if hasattr(ferritin, "gpu_available") and ferritin.gpu_available():
-        print(f"GPU: {ferritin.gpu_info()}", flush=True)
+    if hasattr(proteon, "gpu_available") and proteon.gpu_available():
+        print(f"GPU: {proteon.gpu_info()}", flush=True)
 
     t0 = time.perf_counter()
     n_ok = n_fail = n_skip = 0

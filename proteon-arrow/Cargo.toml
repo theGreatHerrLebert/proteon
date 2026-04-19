@@ -1,0 +1,27 @@
+[package]
+name = "proteon-arrow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Arrow RecordBatch output for proteon — zero-copy structural data export"
+
+[lints]
+workspace = true
+
+[dependencies]
+proteon-io = { path = "../proteon-io" }
+proteon-align = { path = "../proteon-align" }
+pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
+arrow = { version = "54", default-features = false }
+parquet = { version = "54", optional = true }
+anyhow = "1"
+
+[features]
+default = ["parquet"]

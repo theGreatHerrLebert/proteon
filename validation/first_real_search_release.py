@@ -1,6 +1,6 @@
 """First real end-to-end corpus release with GPU MSA + templates.
 
-Drives ferritin's full Layer-5 stack over the four single-chain PDB
+Drives proteon's full Layer-5 stack over the four single-chain PDB
 fixtures (1crn / 1ubq / 1bpi / 1aaj), building:
 
   1. Prepared-structure manifest   (Layer 3)
@@ -18,9 +18,9 @@ milestone: the entire pipeline running against actual crystal
 structures instead of hand-built SimpleNamespaces.
 
 Run:
-    cd /scratch/TMAlign/ferritin
+    cd /scratch/TMAlign/proteon
     .venv/bin/python validation/first_real_search_release.py \\
-        --out /tmp/ferritin_first_real_search
+        --out /tmp/proteon_first_real_search
 """
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ from pathlib import Path
 
 import numpy as np
 
-import ferritin
-from ferritin.supervision_constants import residue_to_one_letter
+import proteon
+from proteon.supervision_constants import residue_to_one_letter
 
 
 DEFAULT_INPUTS = [
@@ -55,7 +55,7 @@ def run(inputs, out_dir: Path, release_id: str) -> dict:
 
     # 1. Raw intake.
     t0 = time.time()
-    pairs = ferritin.batch_load_tolerant([str(p) for p in inputs])
+    pairs = proteon.batch_load_tolerant([str(p) for p in inputs])
     loaded_structures = [pair[1] for pair in pairs]
     record_ids = [Path(inputs[pair[0]]).stem + ":A" for pair in pairs]
     source_ids = [str(inputs[pair[0]]) for pair in pairs]
@@ -65,7 +65,7 @@ def run(inputs, out_dir: Path, release_id: str) -> dict:
 
     # 2. Prep.
     t0 = time.time()
-    prep_reports = ferritin.batch_prepare(loaded_structures)
+    prep_reports = proteon.batch_prepare(loaded_structures)
     timings["prep_s"] = time.time() - t0
     print(f"  prepared {len(prep_reports)} structures in {timings['prep_s']:.2f}s")
 
@@ -73,7 +73,7 @@ def run(inputs, out_dir: Path, release_id: str) -> dict:
     # build_local_corpus_smoke_release so we can layer MSA + templates
     # via the lower-level builders).
     t0 = time.time()
-    struc_root = ferritin.build_structure_supervision_dataset_from_prepared(
+    struc_root = proteon.build_structure_supervision_dataset_from_prepared(
         loaded_structures,
         prep_reports,
         out_dir / "prepared",
@@ -90,13 +90,13 @@ def run(inputs, out_dir: Path, release_id: str) -> dict:
     # 4. Build a search engine over every chain's sequence. Keyed by
     # its index so templates can cross-reference target supervisions.
     t0 = time.time()
-    supervisions = ferritin.batch_build_structure_supervision_examples(
+    supervisions = proteon.batch_build_structure_supervision_examples(
         loaded_structures, record_ids=record_ids, source_ids=source_ids
     )
     chain_seqs = [
         (i, sup.sequence) for i, sup in enumerate(supervisions)
     ]
-    engine = ferritin.MsaSearch.build(
+    engine = proteon.MsaSearch.build(
         chain_seqs, k=3, reduce_to=None, min_score=0, max_results=10
     )
     timings["engine_build_s"] = time.time() - t0
@@ -105,7 +105,7 @@ def run(inputs, out_dir: Path, release_id: str) -> dict:
 
     # 5. Sequence release WITH GPU-backed MSA assembly.
     t0 = time.time()
-    sequence_root = ferritin.build_sequence_dataset(
+    sequence_root = proteon.build_sequence_dataset(
         loaded_structures,
         out_dir / "sequence",
         release_id=f"{release_id}-sequence",
@@ -129,7 +129,7 @@ def run(inputs, out_dir: Path, release_id: str) -> dict:
     target_supervisions = {i: sup for i, sup in enumerate(supervisions)}
     template_stats = []
     for i, sup in enumerate(supervisions):
-        feats = ferritin.build_template_features(
+        feats = proteon.build_template_features(
             query_length=sup.length,
             engine=engine,
             target_supervisions=target_supervisions,
@@ -159,7 +159,7 @@ def run(inputs, out_dir: Path, release_id: str) -> dict:
     t0 = time.time()
     split_assignments = {rid: ("val" if i == len(record_ids) - 1 else "train")
                          for i, rid in enumerate(record_ids)}
-    training_root = ferritin.build_training_release(
+    training_root = proteon.build_training_release(
         sequence_root,
         struc_root / "supervision_release",
         out_dir / "training",
@@ -175,7 +175,7 @@ def run(inputs, out_dir: Path, release_id: str) -> dict:
 
     # 8. Corpus release manifest.
     t0 = time.time()
-    corpus_root = ferritin.build_corpus_release_manifest(
+    corpus_root = proteon.build_corpus_release_manifest(
         out_dir / "corpus",
         release_id=release_id,
         prepared_manifest=struc_root / "prepared_structures.jsonl",
@@ -196,7 +196,7 @@ def run(inputs, out_dir: Path, release_id: str) -> dict:
     timings["corpus_s"] = time.time() - t0
 
     # 9. Validation.
-    ferritin.validate_corpus_release(
+    proteon.validate_corpus_release(
         corpus_root / "corpus_release_manifest.json",
         out_path=corpus_root / "validation_report.json",
     )
@@ -245,7 +245,7 @@ def summarize(report: dict) -> None:
     print(f"  supervision tensor_sha256: {sup_mf['tensor_sha256'][:16]}…")
 
     # Load training Parquet + verify shape.
-    trn_examples = ferritin.load_training_examples(out_dir / "training")
+    trn_examples = proteon.load_training_examples(out_dir / "training")
     print(f"\n  training examples loaded: {len(trn_examples)}")
     for ex in trn_examples:
         struc = ex.structure
@@ -265,16 +265,16 @@ def summarize(report: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", default="/tmp/ferritin_first_real_search")
+    parser.add_argument("--out", default="/tmp/proteon_first_real_search")
     parser.add_argument("--inputs", nargs="*", default=DEFAULT_INPUTS)
-    parser.add_argument("--release-id", default="ferritin-smoke-real-v0")
+    parser.add_argument("--release-id", default="proteon-smoke-real-v0")
     args = parser.parse_args()
 
-    if ferritin.io._io is None:
+    if proteon.io._io is None:
         print("ERROR: Rust I/O backend unavailable. Run maturin develop -r in "
-              "ferritin-connector/ first.", file=sys.stderr)
+              "proteon-connector/ first.", file=sys.stderr)
         return 1
-    if not ferritin.rust_msa_available():
+    if not proteon.rust_msa_available():
         print("ERROR: Rust MSA backend unavailable. Same fix as above.", file=sys.stderr)
         return 1
 

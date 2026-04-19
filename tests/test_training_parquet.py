@@ -9,9 +9,9 @@ import pytest
 
 pytest.importorskip("pyarrow")
 
-from ferritin.sequence_example import SequenceExample
-from ferritin.supervision import StructureSupervisionExample
-from ferritin.training_example import (
+from proteon.sequence_example import SequenceExample
+from proteon.supervision import StructureSupervisionExample
+from proteon.training_example import (
     TRAINING_EXPORT_FORMAT,
     TrainingExample,
     _build_training_schema,
@@ -99,8 +99,8 @@ def _write_release(tmp_path: Path, training_examples, row_group_size: int = 512)
     # build the training release from them via the real public API.
     # The release builders expect per-exporter output to live under
     # `<release>/examples/` so the training-release loader can find it.
-    from ferritin.sequence_export import export_sequence_examples
-    from ferritin.supervision_export import export_structure_supervision_examples
+    from proteon.sequence_export import export_sequence_examples
+    from proteon.supervision_export import export_structure_supervision_examples
 
     seq_dir = tmp_path / "sequence"
     struc_dir = tmp_path / "structure"
@@ -161,7 +161,7 @@ def test_scalar_fields_round_trip(tmp_path):
     """Regression: sequence / code_rev / config_rev / prep_run_id / quality
     must round-trip through training.parquet. Previously the reader zeroed
     them (sequence='', revs=None, prep_run_id=None, quality=None)."""
-    from ferritin.supervision import StructureQualityMetadata
+    from proteon.supervision import StructureQualityMetadata
     rng = np.random.default_rng(99)
     L = 5
     seq = SequenceExample(

@@ -13,8 +13,8 @@ import pytest
 
 pytest.importorskip("pyarrow")
 
-from ferritin.supervision import StructureSupervisionExample
-from ferritin.supervision_export import (
+from proteon.supervision import StructureSupervisionExample
+from proteon.supervision_export import (
     SUPERVISION_EXPORT_FORMAT,
     SupervisionParquetWriter,
     build_supervision_schema,
@@ -225,7 +225,7 @@ def test_supervision_release_outer_manifest_agrees_on_empty(tmp_path):
     """Outer release_manifest.json must not claim examples/tensors.parquet
     when no tensors.parquet was written. Prior default hardcoded the
     string regardless of count_examples."""
-    from ferritin.supervision_release import build_structure_supervision_release
+    from proteon.supervision_release import build_structure_supervision_release
 
     root = build_structure_supervision_release([], tmp_path / "sup", release_id="empty")
     outer = json.loads((root / "release_manifest.json").read_text())
@@ -235,7 +235,7 @@ def test_supervision_release_outer_manifest_agrees_on_empty(tmp_path):
 
 
 def test_supervision_release_outer_manifest_points_at_parquet_when_nonempty(tmp_path):
-    from ferritin.supervision_release import build_structure_supervision_release
+    from proteon.supervision_release import build_structure_supervision_release
 
     root = build_structure_supervision_release(
         [_fake_supervision("a", L=3, seed=0)],

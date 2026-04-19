@@ -2,14 +2,14 @@
 
 WHY THIS FILE EXISTS
 --------------------
-ferritin's production default force field is CHARMM19+EEF1
+proteon's production default force field is CHARMM19+EEF1
 (`batch_prepare(ff="charmm19_eef1")`), but the only existing tests for
 it are smoke checks ("energy is not zero", "solvation magnitude > 1").
 The well-validated FF in the repo is AMBER96 (against BALL Julia, 0.02%
 match), which is NOT what users actually run.
 
 This module is the Tier-2 piece of the CHARMM validation roadmap:
-a deliberately WEAK cross-FF oracle that compares ferritin's
+a deliberately WEAK cross-FF oracle that compares proteon's
 CHARMM19+EEF1 against OpenMM's CHARMM36+OBC2. The two parameter sets
 are different — CHARMM19 vs CHARMM36 differ in atomtypes, charges,
 torsion parameters, and implicit-solvation model (EEF1 is the
@@ -22,7 +22,7 @@ Instead, the matching aggregator uses `compare_energy_weak`, a
 direction-only comparator that catches:
   - NaN / Inf (numerical blowup)
   - Sign disagreement on the total or any large component (sign error
-    in a ferritin kernel)
+    in a proteon kernel)
   - log10(|f|/|o|) > 1 (≥ 10× scaling error — kernel computing the
     wrong number of contributions, missing a constant factor, etc.)
 This is what "weak oracle" means: it cannot validate parameter
@@ -49,7 +49,7 @@ import os as _os
 import tempfile as _tempfile
 
 # Reuse the helpers + import guards from the AMBER runner module so we
-# don't double-up the HETATM stripping logic, the ferritin/openmm/pdbfixer
+# don't double-up the HETATM stripping logic, the proteon/openmm/pdbfixer
 # import detection, or the per-input PDBFixer cache. The functions and
 # flags imported here are module-level in `runners/energy.py` and live
 # inside its `if _OPENMM_OK:` / `if _PDBFIXER_OK:` blocks (which are
@@ -60,8 +60,8 @@ from .energy import (  # noqa: F401  (re-export by side effect of import)
     _strip_hetatm_to_tempfile,
     _prep_input_for_amber96,
     _PREP_CACHE,
-    _FERRITIN_OK,
-    _FERRITIN_VERSION,
+    _PROTEON_OK,
+    _PROTEON_VERSION,
     _OPENMM_OK,
     _OPENMM_VERSION,
     _PDBFIXER_OK,
@@ -75,21 +75,21 @@ if _OPENMM_OK:
     import openmm.app as _openmm_app  # type: ignore
     import openmm.unit as _openmm_unit  # type: ignore
 
-if _FERRITIN_OK:
-    import ferritin as _ferritin  # type: ignore
+if _PROTEON_OK:
+    import proteon as _proteon  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# ferritin (CHARMM19+EEF1)
+# proteon (CHARMM19+EEF1)
 # ---------------------------------------------------------------------------
 
-if _FERRITIN_OK:
+if _PROTEON_OK:
 
-    @register("energy_charmm", "ferritin")
-    def ferritin(pdb_path: str) -> RunnerResult:
-        """Compute CHARMM19+EEF1 energy via ferritin's batch_prepare.
+    @register("energy_charmm", "proteon")
+    def proteon(pdb_path: str) -> RunnerResult:
+        """Compute CHARMM19+EEF1 energy via proteon's batch_prepare.
 
-        Mirror of the AMBER96 ferritin runner, with `ff="charmm19_eef1"`.
+        Mirror of the AMBER96 proteon runner, with `ff="charmm19_eef1"`.
         Uses the same shared PDBFixer prep helper so this runner sees the
         same atom set as the OpenMM CHARMM36 runner — necessary for the
         weak comparison to be apples-to-apples-shaped (same input atoms,
@@ -103,8 +103,8 @@ if _FERRITIN_OK:
         """
         t0 = _time_perf()
         prep_path = _prep_input_for_amber96(pdb_path)
-        s = _ferritin.load(prep_path)
-        reports = _ferritin.batch_prepare(
+        s = _proteon.load(prep_path)
+        reports = _proteon.batch_prepare(
             [s],
             reconstruct=False,
             hydrogens="all",
@@ -119,8 +119,8 @@ if _FERRITIN_OK:
         r = reports[0]
         return RunnerResult(
             op="energy_charmm",
-            impl="ferritin",
-            impl_version=_FERRITIN_VERSION,
+            impl="proteon",
+            impl_version=_PROTEON_VERSION,
             pdb_id="",
             pdb_path=pdb_path,
             elapsed_s=elapsed,
@@ -138,9 +138,9 @@ if _FERRITIN_OK:
             },
         )
 
-    @register_batch("energy_charmm", "ferritin")
-    def ferritin_batch(pdb_paths: _List[str]) -> _List[RunnerResult]:
-        """Batched ferritin CHARMM19+EEF1 runner.
+    @register_batch("energy_charmm", "proteon")
+    def proteon_batch(pdb_paths: _List[str]) -> _List[RunnerResult]:
+        """Batched proteon CHARMM19+EEF1 runner.
 
         Same shape as the AMBER96 batched runner: shared prep, parallel
         load, single rayon-parallel batch_prepare call across all
@@ -150,7 +150,7 @@ if _FERRITIN_OK:
         """
         t0 = _time_perf()
         prep_paths = [_prep_input_for_amber96(p) for p in pdb_paths]
-        loaded = _ferritin.batch_load_tolerant(prep_paths, n_threads=-1)
+        loaded = _proteon.batch_load_tolerant(prep_paths, n_threads=-1)
         load_index = {i: s for i, s in loaded}
 
         pos_map: _List[int] = []
@@ -161,7 +161,7 @@ if _FERRITIN_OK:
                 structs_to_prep.append(load_index[i])
 
         if structs_to_prep:
-            reports = _ferritin.batch_prepare(
+            reports = _proteon.batch_prepare(
                 structs_to_prep,
                 reconstruct=False,
                 hydrogens="all",
@@ -181,8 +181,8 @@ if _FERRITIN_OK:
         for i, pdb_path in enumerate(pdb_paths):
             if i not in load_index:
                 out.append(RunnerResult(
-                    op="energy_charmm", impl="ferritin",
-                    impl_version=_FERRITIN_VERSION,
+                    op="energy_charmm", impl="proteon",
+                    impl_version=_PROTEON_VERSION,
                     pdb_id="", pdb_path=pdb_path, elapsed_s=0.0,
                     status="error",
                     error="batch_load_tolerant failed for this file",
@@ -193,8 +193,8 @@ if _FERRITIN_OK:
             r = reports[pos]
             s = structs_to_prep[pos]
             out.append(RunnerResult(
-                op="energy_charmm", impl="ferritin",
-                impl_version=_FERRITIN_VERSION,
+                op="energy_charmm", impl="proteon",
+                impl_version=_PROTEON_VERSION,
                 pdb_id="", pdb_path=pdb_path,
                 elapsed_s=0.0,
                 status="ok", error=None,
@@ -219,7 +219,7 @@ if _FERRITIN_OK:
 # ---------------------------------------------------------------------------
 #
 # OpenMM's CHARMM36 force field combined with OBC2 implicit solvation is the
-# closest readily-available analog to ferritin's CHARMM19+EEF1. Differences:
+# closest readily-available analog to proteon's CHARMM19+EEF1. Differences:
 #
 #   - CHARMM19 (1980s, polar-H model) vs CHARMM36 (2012, all-atom)
 #     => atomtypes are different, K_b and K_theta values differ, charges
@@ -231,7 +231,7 @@ if _FERRITIN_OK:
 #     do for typical proteins.
 #   - CHARMM36 has a CMAP backbone correction term (φ/ψ cross term) that
 #     CHARMM19 lacks. This shows up in OpenMM's CMAPTorsionForce and
-#     contributes a non-trivial energy that ferritin's torsion bucket
+#     contributes a non-trivial energy that proteon's torsion bucket
 #     does not include.
 #
 # So percent diffs are misleading on this comparison. The aggregator's
@@ -244,7 +244,7 @@ if _OPENMM_OK:
         """Compute CHARMM36+OBC2 energy via OpenMM as a weak CHARMM oracle.
 
         Pipeline:
-          1. Shared PDBFixer prep (same atom set as the ferritin runner).
+          1. Shared PDBFixer prep (same atom set as the proteon runner).
           2. Load via PDBFile.
           3. Modeller.addHydrogens(forcefield) — CHARMM36 H placement.
           4. createSystem with charmm36.xml + implicit/obc2.xml.
@@ -362,7 +362,7 @@ if _OPENMM_OK:
         # - PeriodicTorsionForce holds proper + improper for CHARMM36.
         # - CMAPTorsionForce is the CHARMM-specific φ/ψ correction; we
         #   add it into the torsion bucket for the weak comparison
-        #   because ferritin's CHARMM19 lumps everything torsion-shaped
+        #   because proteon's CHARMM19 lumps everything torsion-shaped
         #   into one slot anyway.
         # - CustomGBForce is OBC2 implicit solvation.
         bond = group_energies.get("HarmonicBondForce")

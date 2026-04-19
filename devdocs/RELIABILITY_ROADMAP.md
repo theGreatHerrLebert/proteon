@@ -1,8 +1,8 @@
-# Ferritin Reliability Roadmap
+# Proteon Reliability Roadmap
 
 **Last updated: 2026-04-19**
 
-Ferritin has a strong compute core and a maturing reliability layer. What
+Proteon has a strong compute core and a maturing reliability layer. What
 remains is mostly depth, not basic coverage:
 
 - Core I/O, alignment, Arrow, and Python API tests are in good shape.
@@ -20,7 +20,7 @@ remains is mostly depth, not basic coverage:
 
 This document focuses on one goal:
 
-**Make ferritin the default reliable interface for AI-assisted structure-based bioinformatics, especially for data wrangling and structure preparation before downstream modeling.**
+**Make proteon the default reliable interface for AI-assisted structure-based bioinformatics, especially for data wrangling and structure preparation before downstream modeling.**
 
 ---
 
@@ -42,7 +42,7 @@ Current strengths:
 
 - Pure Rust kernels with thin Python wrappers.
 - Library-parity oracle tests under `tests/oracle/` run on every PR
-  (ferritin vs pydssp / biopython / gemmi / freesasa / BALL-on-crambin).
+  (proteon vs pydssp / biopython / gemmi / freesasa / BALL-on-crambin).
 - Heavier oracle measurements reproducible end-to-end via
   `docs/ORACLE_SETUP.md` (OpenMM 1000-PDB parity, USAlign pair
   benchmark, BALL Julia regen).
@@ -97,7 +97,7 @@ Current weaknesses:
 
 ## Agent Notes Policy
 
-Ferritin’s boundary-layer docstrings can carry short structured notes for AI-assisted callers, but they should be treated as part of the interface contract, not as free-form commentary.
+Proteon’s boundary-layer docstrings can carry short structured notes for AI-assisted callers, but they should be treated as part of the interface contract, not as free-form commentary.
 
 Allowed prefixes:
 
@@ -152,7 +152,7 @@ Must cover:
 - H-bonds
 - forcefield/minimization API contracts
 - Arrow/Parquet roundtrip
-- CLI integration for `ferritin-ingest`, `tmalign`, `usalign`
+- CLI integration for `proteon-ingest`, `tmalign`, `usalign`
 
 Success criteria:
 - deterministic
@@ -162,7 +162,7 @@ Success criteria:
 ### Tier 2: Oracle Validation
 
 Purpose:
-- Compare ferritin against independent trusted tools.
+- Compare proteon against independent trusted tools.
 
 Must cover:
 - I/O vs Gemmi / Biopython
@@ -200,7 +200,7 @@ Success criteria:
 ### Tier 4: Performance and Scaling
 
 Purpose:
-- Protect ferritin’s value proposition: modern, easy, fast.
+- Protect proteon’s value proposition: modern, easy, fast.
 
 Must cover:
 - batch loading throughput
@@ -244,17 +244,17 @@ surfaced two problems:
    the cadence was also wrong.
 2. More importantly, running "oracle tests" as binary-pass-fail CI
    gates is a category error. Oracle tests are *measurements*, not
-   assertions — a "failure" can be ferritin regressing, upstream
+   assertions — a "failure" can be proteon regressing, upstream
    drifting (BALL Julia's numbers shifted between April and 2026-04-18
-   — caught by regeneration, not by reverting ferritin), a newly
+   — caught by regeneration, not by reverting proteon), a newly
    discovered convention gap, or tolerance miscalibration. None of
    those are things a green/red check can adjudicate.
 
 What replaced it:
 
-- **Library-parity tests** under `tests/oracle/` (ferritin-DSSP vs
-  pydssp, ferritin-I/O vs biopython/gemmi, ferritin-SASA vs freesasa,
-  ferritin-AMBER96 vs BALL-on-crambin) are really unit tests using
+- **Library-parity tests** under `tests/oracle/` (proteon-DSSP vs
+  pydssp, proteon-I/O vs biopython/gemmi, proteon-SASA vs freesasa,
+  proteon-AMBER96 vs BALL-on-crambin) are really unit tests using
   another library as the ground-truth source. They now run on every
   PR via `.github/workflows/test.yml` (oracle.yml deleted).
 - **Heavy oracle measurements** (OpenMM 1000-PDB AMBER96 parity,
@@ -290,15 +290,15 @@ Why:
 
 Add explicit tests for:
 
-- `ferritin-ingest` single-file output
-- `ferritin-ingest --per-structure`
+- `proteon-ingest` single-file output
+- `proteon-ingest --per-structure`
 - `tmalign` tabular output
 - `usalign` tabular output
 - failure modes on bad input
 
 Why:
 
-- ferritin’s data-wrangling story depends on the ingest and CLI layer
+- proteon’s data-wrangling story depends on the ingest and CLI layer
 - these are product surfaces and should not rely on manual checks
 
 ---
@@ -339,7 +339,7 @@ Prep report should include:
 Why:
 
 - this is the missing interface for real use
-- it aligns directly with the stated ferritin vision
+- it aligns directly with the stated proteon vision
 
 ### 6. Add End-to-End Prep Tests
 
@@ -489,14 +489,14 @@ Add:
 
 Be explicit:
 
-- ferritin MD is suitable for structure relaxation and short equilibration
-- for production MD, use GROMACS/OpenMM with ferritin for prep and analysis
+- proteon MD is suitable for structure relaxation and short equilibration
+- for production MD, use GROMACS/OpenMM with proteon for prep and analysis
 
 ---
 
 ## P4: Data-Wrangling Reliability
 
-### 15. Make `ferritin-ingest` a Core Reliability Target
+### 15. Make `proteon-ingest` a Core Reliability Target
 
 Add tests for:
 
@@ -625,7 +625,7 @@ tests/
 
 ## Success Metrics
 
-Ferritin should be considered reliability-ready when:
+Proteon should be considered reliability-ready when:
 
 - every public API surface is covered by deterministic tests
 - oracle validation runs automatically on a schedule
@@ -640,11 +640,11 @@ Ferritin should be considered reliability-ready when:
 ## Recommended Immediate Next Actions
 
 1. Update CI to add a Python/version matrix and a scheduled oracle workflow.
-2. Add CLI integration tests for `ferritin-ingest`, `tmalign`, and `usalign`.
+2. Add CLI integration tests for `proteon-ingest`, `tmalign`, and `usalign`.
 3. Expose structure-prep functions already present in the connector.
-4. Implement `ferritin.prepare()` with a prep report object.
+4. Implement `proteon.prepare()` with a prep report object.
 5. Build a fixed regression corpus from real problematic structures.
 
-This order keeps ferritin focused on the actual user pain point:
+This order keeps proteon focused on the actual user pain point:
 
 **reliable, fast structure wrangling before downstream modeling or AI experimentation.**

@@ -1,4 +1,4 @@
-# CLAUDE.md — Ferritin
+# CLAUDE.md — Proteon
 
 Structural bioinformatics toolkit in Rust with Python bindings. Library, not a platform.
 
@@ -8,12 +8,12 @@ Structural bioinformatics toolkit in Rust with Python bindings. Library, not a p
 
 | Crate | Purpose |
 |-------|---------|
-| `ferritin-align/` | TM-align + US-align family (core/, ext/) — pure Rust, no I/O |
-| `ferritin-io/` | PDB/mmCIF loader bridge over pdbtbx |
-| `ferritin-arrow/` | Arrow RecordBatch + Parquet export for atoms/structures |
-| `ferritin-search/` | MMseqs2-compatible search: DB I/O, k-mer prefilter, ungapped/gapped SW, PSSM, MSA, GPU kernels (feature `cuda`) |
-| `ferritin-bin/` | CLI binaries: `tmalign`, `usalign`, `ingest`, `build_kmi`, `fasta_to_mmseqs_db` |
-| `ferritin-connector/` | PyO3 cdylib bridge — exposes alignment, DSSP, SASA, H-bonds, geometry, forcefield/MD, search, supervision (feature `cuda`) |
+| `proteon-align/` | TM-align + US-align family (core/, ext/) — pure Rust, no I/O |
+| `proteon-io/` | PDB/mmCIF loader bridge over pdbtbx |
+| `proteon-arrow/` | Arrow RecordBatch + Parquet export for atoms/structures |
+| `proteon-search/` | MMseqs2-compatible search: DB I/O, k-mer prefilter, ungapped/gapped SW, PSSM, MSA, GPU kernels (feature `cuda`) |
+| `proteon-bin/` | CLI binaries: `tmalign`, `usalign`, `ingest`, `build_kmi`, `fasta_to_mmseqs_db` |
+| `proteon-connector/` | PyO3 cdylib bridge — exposes alignment, DSSP, SASA, H-bonds, geometry, forcefield/MD, search, supervision (feature `cuda`) |
 
 `gpu-poc/` is a standalone exploratory crate, excluded from the workspace.
 
@@ -21,7 +21,7 @@ Structural bioinformatics toolkit in Rust with Python bindings. Library, not a p
 
 | Package | Purpose |
 |---------|---------|
-| `packages/ferritin/` | Pythonic wrapper; one module per subsystem (align, dssp, sasa, hbond, geometry, forcefield, prepare, search, msa, supervision, corpus_release, …). `RustWrapperObject` ABC over `ferritin-connector` types. |
+| `packages/proteon/` | Pythonic wrapper; one module per subsystem (align, dssp, sasa, hbond, geometry, forcefield, prepare, search, msa, supervision, corpus_release, …). `RustWrapperObject` ABC over `proteon-connector` types. |
 
 ### Docs
 
@@ -37,7 +37,7 @@ Under `devdocs/`:
 
 ### Reference C++ / external repos
 
-Sibling directories under `/scratch/TMAlign/` (read-only oracles, not part of ferritin build):
+Sibling directories under `/scratch/TMAlign/` (read-only oracles, not part of proteon build):
 `TMAlign/`, `USAlign/`, `MMseqs2/`, `foldseek/`, `gromacs-2026.1/`, `ball/`, `BiochemicalAlgorithms.jl`, `freesasa`, `gemmi`, `openfold`, `alphafold`, `pdbtbx/`, `tm-align/`, `us-align/`.
 
 ### External Dependencies
@@ -53,22 +53,22 @@ Sibling directories under `/scratch/TMAlign/` (read-only oracles, not part of fe
 ## Build Commands
 
 ```bash
-cd ferritin
+cd proteon
 
 # Build everything
 cargo build
 
 # Build specific crate
-cargo build -p ferritin-align
-cargo build -p ferritin-search --features cuda
+cargo build -p proteon-align
+cargo build -p proteon-search --features cuda
 
 # Run all tests (Rust)
 cargo test --workspace
 
 # Run a specific test module
-cargo test -p ferritin-align kabsch
-cargo test -p ferritin-search prefilter
-cargo test -p ferritin-connector forcefield
+cargo test -p proteon-align kabsch
+cargo test -p proteon-search prefilter
+cargo test -p proteon-connector forcefield
 
 # Run binaries
 cargo run --bin tmalign -- structure1.pdb structure2.pdb
@@ -81,7 +81,7 @@ cargo run --bin fasta_to_mmseqs_db -- input.fa out_db
 cargo build --release
 
 # Python (PyO3 connector)
-cd packages/ferritin
+cd packages/proteon
 maturin develop --release           # CPU-only
 maturin develop --release --features cuda
 
@@ -92,19 +92,19 @@ pytest tests/oracle                 # oracle parity (slow; needs OpenMM/BALL/MMs
 
 ### Python venv
 
-A ready-to-use venv lives at `/scratch/TMAlign/ferritin/.venv` with
-`ferritin` already installed (Python 3.10). Activate it before running
+A ready-to-use venv lives at `/scratch/TMAlign/proteon/.venv` with
+`proteon` already installed (Python 3.10). Activate it before running
 Python / pytest / pip commands:
 
 ```bash
-source /scratch/TMAlign/ferritin/.venv/bin/activate
+source /scratch/TMAlign/proteon/.venv/bin/activate
 ```
 
 Install oracle dependencies into this venv (not conda, not a fresh one).
 
 ## Architecture
 
-### ferritin-align
+### proteon-align
 
 ```
 src/
@@ -122,7 +122,7 @@ src/
     └── mmalign/         # multi-chain: chain_assign, complex_score, dimer, iter, trim
 ```
 
-### ferritin-search (MMseqs2 port)
+### proteon-search (MMseqs2 port)
 
 ```
 src/
@@ -141,20 +141,20 @@ src/
     └── *.cu                                  # NVRTC sources, embedded via include_str!
 ```
 
-### ferritin-connector (PyO3 bridge)
+### proteon-connector (PyO3 bridge)
 
 Three-layer rustims-style architecture:
-1. **Pure Rust** (`ferritin-align`, `ferritin-io`, `ferritin-arrow`, `ferritin-search`) — no Python dep
-2. **PyO3 connector** (`ferritin-connector`) — `#[pyclass]` wrappers, `inner: RustType`
-3. **Python package** (`packages/ferritin/`) — Pythonic API over the connector
+1. **Pure Rust** (`proteon-align`, `proteon-io`, `proteon-arrow`, `proteon-search`) — no Python dep
+2. **PyO3 connector** (`proteon-connector`) — `#[pyclass]` wrappers, `inner: RustType`
+3. **Python package** (`packages/proteon/`) — Pythonic API over the connector
 
-Subsystems live in `ferritin-connector/src/`:
+Subsystems live in `proteon-connector/src/`:
 - **Geometry / I/O**: `py_pdb.rs`, `py_io.rs`, `py_structure.rs`, `py_geometry.rs`, `py_transform.rs`, `py_arrow.rs`, `altloc.rs`
 - **Analysis**: `py_analysis.rs`, `py_dssp.rs`/`dssp.rs`, `py_sasa.rs`/`sasa.rs`, `py_hbond.rs`/`hbond.rs`
 - **Preparation**: `py_add_hydrogens.rs`/`add_hydrogens.rs`, `bond_order.rs`, `fragment_templates.rs`, `reconstruct.rs`
 - **Forcefield / MD** (`forcefield/`): CHARMM19+EEF1, AMBER96, OBC GB Phase B (CPU+GPU), neighbor list, minimize, MD with SHAKE/RATTLE; CUDA kernels in `*.cu` (energy, OBC, SASA, bonded)
-- **Alignment**: `py_align.rs`, `py_align_funcs.rs` — one-to-many / many-to-many over `ferritin-align`
-- **Search / MSA**: `py_search.rs`, `py_msa.rs` — bridges to `ferritin-search`
+- **Alignment**: `py_align.rs`, `py_align_funcs.rs` — one-to-many / many-to-many over `proteon-align`
+- **Search / MSA**: `py_search.rs`, `py_msa.rs` — bridges to `proteon-search`
 - **Supervision (Layer 5)**: `py_supervision.rs` — geometric-DL data export, atom37 indexing, parity-tested against Python supervision pipeline
 - **Parallelism**: `parallel.rs` — rayon thread budget (note: `n_threads=0` runs SERIAL; use -1 or None)
 
@@ -182,7 +182,7 @@ C++ TMalign/USalign are compiled with `-ffast-math`. Rust does not allow this. T
 - SASA vs Biopython: 0.17% median deviation (1,000 PDBs)
 - AMBER96 vs OpenMM: ≤0.5% all components at NoCutoff (218/218 invariants pass)
 - OBC GB vs OpenMM: ≤5% GB / ≤1% total on crambin; GPU matches CPU to 1e-11
-- Fold preservation (1000 PDBs): ferritin CHARMM19+EEF1 median TM=0.9945, 30× faster than OpenMM CHARMM36+OBC2
+- Fold preservation (1000 PDBs): proteon CHARMM19+EEF1 median TM=0.9945, 30× faster than OpenMM CHARMM36+OBC2
 
 ## MSRV
 

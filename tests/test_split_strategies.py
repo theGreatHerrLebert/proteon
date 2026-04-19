@@ -9,7 +9,7 @@ import pytest
 from pathlib import Path
 from types import SimpleNamespace
 
-from ferritin.corpus_smoke import (
+from proteon.corpus_smoke import (
     _default_split_assignments,
     _expand_chains,
     _hash_split_assignments,

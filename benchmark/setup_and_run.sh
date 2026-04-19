@@ -1,15 +1,15 @@
 #!/bin/bash
-# Setup and run ferritin 50K benchmark on monster3.
+# Setup and run proteon 50K benchmark on monster3.
 # Usage: ssh monster3 "bash /path/to/setup_and_run.sh"
 
 set -e
 
-BENCH_DIR="/globalscratch/dateschn/ferritin-benchmark"
-REPO_DIR="$BENCH_DIR/ferritin"
+BENCH_DIR="/globalscratch/dateschn/proteon-benchmark"
+REPO_DIR="$BENCH_DIR/proteon"
 PDB_DIR="$BENCH_DIR/pdbs_50k"
 RESULTS="$BENCH_DIR/benchmark_results.json"
 
-echo "=== Ferritin 50K Benchmark Setup ==="
+echo "=== Proteon 50K Benchmark Setup ==="
 echo "Date: $(date)"
 echo "Host: $(hostname) ($(nproc) cores, $(free -h | awk '/^Mem:/{print $2}') RAM)"
 
@@ -20,17 +20,17 @@ git pull --ff-only
 
 # 2. Build release
 echo -e "\n[2/5] Building release binaries..."
-cargo build --release -p ferritin-connector -p ferritin-bin 2>&1 | tail -3
+cargo build --release -p proteon-connector -p proteon-bin 2>&1 | tail -3
 
 # 3. Setup Python environment
 echo -e "\n[3/5] Setting up Python environment..."
 python3 -m venv "$BENCH_DIR/venv" 2>/dev/null || true
 source "$BENCH_DIR/venv/bin/activate"
 pip install --quiet maturin numpy pytest pandas pyarrow
-cd ferritin-connector
+cd proteon-connector
 maturin develop --release 2>&1 | tail -1
 cd ..
-pip install -e packages/ferritin/ --quiet
+pip install -e packages/proteon/ --quiet
 
 # 4. Download PDB corpus (if not already done)
 echo -e "\n[4/5] Downloading 50K PDB corpus..."

@@ -1,7 +1,7 @@
 {
   "release_id": "rescue-benchmark-v0-structure",
   "artifact_type": "release_manifest",
-  "format": "ferritin.structure_supervision.v0",
+  "format": "proteon.structure_supervision.v0",
   "created_at": "2026-04-14T08:22:32.130896+00:00",
   "code_rev": null,
   "config_rev": null,
@@ -19,8 +19,8 @@
   "sequence_lengths": [],
   "provenance": {
     "input_paths": [
-      "/scratch/TMAlign/ferritin/validation/pdbs_10k/8a14.pdb",
-      "/scratch/TMAlign/ferritin/validation/pdbs_10k/9l05.pdb"
+      "/scratch/TMAlign/proteon/validation/pdbs_10k/8a14.pdb",
+      "/scratch/TMAlign/proteon/validation/pdbs_10k/9l05.pdb"
     ]
   }
 }

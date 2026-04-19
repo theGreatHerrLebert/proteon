@@ -1,4 +1,4 @@
-# Ferritin Rust Batch Supervision Contract
+# Proteon Rust Batch Supervision Contract
 
 **Status:** draft v0  
 **Last updated:** 2026-04-13
@@ -8,7 +8,7 @@ This document defines the first Rust-side extraction contract for
 
 The goal is straightforward:
 
-- keep Ferritin framework-neutral
+- keep Proteon framework-neutral
 - keep the public Python boundary NumPy-first
 - move heavy structural extraction into Rust
 - make batching the default production path
@@ -20,7 +20,7 @@ This is the intended shape for the fast path:
 3. PyO3 exposes those results as `numpy.ndarray`
 4. Python assembles thin metadata objects and convenience wrappers
 
-Ferritin should not expose PyTorch, JAX, or framework-native tensors here.
+Proteon should not expose PyTorch, JAX, or framework-native tensors here.
 
 ---
 
@@ -28,8 +28,8 @@ Ferritin should not expose PyTorch, JAX, or framework-native tensors here.
 
 The public semantic contract is defined by:
 
-- [STRUCTURE_SUPERVISION_SCHEMA.md](/scratch/TMAlign/ferritin/STRUCTURE_SUPERVISION_SCHEMA.md)
-- [supervision.py](/scratch/TMAlign/ferritin/packages/ferritin/src/ferritin/supervision.py)
+- [STRUCTURE_SUPERVISION_SCHEMA.md](/scratch/TMAlign/proteon/STRUCTURE_SUPERVISION_SCHEMA.md)
+- [supervision.py](/scratch/TMAlign/proteon/packages/proteon/src/proteon/supervision.py)
 
 Rust is an implementation backend for that contract, not a second schema.
 
@@ -47,14 +47,14 @@ path should move to Rust when practical.
 
 ## 2. Production Surface
 
-Ferritin should expose two conceptual layers:
+Proteon should expose two conceptual layers:
 
 ### 2.1 Public Python API
 
 Single-example convenience:
 
 ```python
-ex = ferritin.build_structure_supervision_example(
+ex = proteon.build_structure_supervision_example(
     structure,
     prep_report=prep_report,
     record_id="...",
@@ -65,7 +65,7 @@ ex = ferritin.build_structure_supervision_example(
 Batch production path:
 
 ```python
-batch = ferritin.batch_build_structure_supervision_examples(
+batch = proteon.batch_build_structure_supervision_examples(
     structures,
     prep_reports=prep_reports,
     record_ids=record_ids,
@@ -123,7 +123,7 @@ batch path, not the other way around.
 
 ## 4. Input Contract
 
-The Rust extractor should consume already prepared Ferritin structures.
+The Rust extractor should consume already prepared Proteon structures.
 
 v0 assumptions:
 
@@ -304,12 +304,12 @@ become fast.
 
 This contract does not imply:
 
-- adding a DL library to Ferritin
+- adding a DL library to Proteon
 - exposing framework-specific dataset types
-- binding Ferritin to one training stack
+- binding Proteon to one training stack
 - putting crop/sample logic into the Rust extractor immediately
 
-Ferritin’s role here is supervision generation and data-contract enforcement,
+Proteon’s role here is supervision generation and data-contract enforcement,
 not framework ownership.
 
 ---

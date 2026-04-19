@@ -1,4 +1,4 @@
-"""Smoke tests for the ferritin.msa Pythonic wrapper.
+"""Smoke tests for the proteon.msa Pythonic wrapper.
 
 Covers the end-to-end Rust-Python bridge:
   - connector availability
@@ -16,16 +16,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ferritin.msa_backend import rust_msa_available
+from proteon.msa_backend import rust_msa_available
 
 if not rust_msa_available():
     pytest.skip(
-        "ferritin_connector.py_msa not available; run "
-        "`maturin develop` in ferritin-connector/ first.",
+        "proteon_connector.py_msa not available; run "
+        "`maturin develop` in proteon-connector/ first.",
         allow_module_level=True,
     )
 
-from ferritin.msa import MsaSearch  # noqa: E402  (skip-then-import)
+from proteon.msa import MsaSearch  # noqa: E402  (skip-then-import)
 
 
 # Three distinct proteins; targets 1 and 3 share the same sequence so

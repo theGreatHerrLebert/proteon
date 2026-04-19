@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Ferritin validation suite — oracle testing against established tools.
+"""Proteon validation suite — oracle testing against established tools.
 
-Runs ferritin analysis on a set of PDB files and compares results against
+Runs proteon analysis on a set of PDB files and compares results against
 Biopython, Gemmi, and C++ USAlign as independent oracles.
 
 Reports per-structure and aggregate agreement statistics.
@@ -34,7 +34,7 @@ import numpy as np
 # Oracle imports
 # ---------------------------------------------------------------------------
 
-import ferritin
+import proteon
 
 try:
     from Bio.PDB import PDBParser
@@ -57,10 +57,10 @@ HAS_USALIGN = os.path.exists("/scratch/TMAlign/USAlign/USalign")
 # ---------------------------------------------------------------------------
 
 def test_loading(path: str) -> dict:
-    """Test that ferritin loads the file and basic counts are sane."""
+    """Test that proteon loads the file and basic counts are sane."""
     result = {"test": "loading", "status": "pass", "details": {}}
     try:
-        s = ferritin.load(path)
+        s = proteon.load(path)
         result["details"]["atom_count"] = s.atom_count
         result["details"]["residue_count"] = s.residue_count
         result["details"]["chain_count"] = s.chain_count
@@ -76,23 +76,23 @@ def test_loading(path: str) -> dict:
 
 
 def test_loading_oracle(path: str) -> dict:
-    """Compare ferritin atom/residue counts against Biopython and Gemmi."""
+    """Compare proteon atom/residue counts against Biopython and Gemmi."""
     result = {"test": "loading_oracle", "status": "pass", "details": {}}
 
     try:
-        fe_s = ferritin.load(path)
+        fe_s = proteon.load(path)
         fe_atoms = fe_s.atom_count
         fe_residues = fe_s.residue_count
         fe_chains = fe_s.chain_count
-        result["details"]["ferritin"] = {
+        result["details"]["proteon"] = {
             "atoms": fe_atoms, "residues": fe_residues, "chains": fe_chains
         }
     except Exception as e:
         result["status"] = "fail"
-        result["details"]["error"] = f"ferritin load failed: {e}"
+        result["details"]["error"] = f"proteon load failed: {e}"
         return result
 
-    # Biopython (note: Biopython takes first alt conformer, ferritin includes all)
+    # Biopython (note: Biopython takes first alt conformer, proteon includes all)
     if HAS_BIOPYTHON:
         try:
             parser = PDBParser(QUIET=True)
@@ -103,15 +103,15 @@ def test_loading_oracle(path: str) -> dict:
 
             if fe_atoms != bp_atoms:
                 result["details"]["atom_diff_bp"] = fe_atoms - bp_atoms
-                # Ferritin includes all alt conformers, Biopython takes first only.
-                # So ferritin >= biopython is expected. Only warn if biopython is LARGER.
+                # Proteon includes all alt conformers, Biopython takes first only.
+                # So proteon >= biopython is expected. Only warn if biopython is LARGER.
                 if fe_atoms < bp_atoms:
                     result["status"] = "warn"
                     result["details"]["warning"] = f"fewer atoms than biopython: {fe_atoms} vs {bp_atoms}"
         except Exception as e:
             result["details"]["biopython_error"] = str(e)[:100]
 
-    # Gemmi (includes all alt conformers, like ferritin)
+    # Gemmi (includes all alt conformers, like proteon)
     if HAS_GEMMI:
         try:
             doc = gemmi.read_pdb(path)
@@ -121,7 +121,7 @@ def test_loading_oracle(path: str) -> dict:
 
             if fe_atoms != gm_atoms:
                 result["details"]["atom_diff_gemmi"] = fe_atoms - gm_atoms
-                # Gemmi and ferritin should agree on atom count
+                # Gemmi and proteon should agree on atom count
                 if abs(fe_atoms - gm_atoms) > max(5, fe_atoms * 0.01):
                     result["status"] = "warn"
                     result["details"]["warning"] = f"atom count differs from gemmi: {fe_atoms} vs {gm_atoms}"
@@ -137,15 +137,15 @@ def test_sasa(path: str) -> dict:
 
     try:
         t0 = time.time()
-        fe_s = ferritin.load(path)
-        fe_total = ferritin.total_sasa(fe_s)
+        fe_s = proteon.load(path)
+        fe_total = proteon.total_sasa(fe_s)
         fe_time = time.time() - t0
-        result["details"]["ferritin_total"] = round(fe_total, 1)
-        result["details"]["ferritin_time_ms"] = round(fe_time * 1000, 1)
+        result["details"]["proteon_total"] = round(fe_total, 1)
+        result["details"]["proteon_time_ms"] = round(fe_time * 1000, 1)
         result["details"]["n_atoms"] = fe_s.atom_count
     except Exception as e:
         result["status"] = "fail"
-        result["details"]["error"] = f"ferritin: {e}"
+        result["details"]["error"] = f"proteon: {e}"
         return result
 
     if HAS_BIOPYTHON:
@@ -180,8 +180,8 @@ def test_dihedrals(path: str) -> dict:
     result = {"test": "dihedrals", "status": "pass", "details": {}}
 
     try:
-        fe_s = ferritin.load(path)
-        phi, psi, omega = ferritin.backbone_dihedrals(fe_s)
+        fe_s = proteon.load(path)
+        phi, psi, omega = proteon.backbone_dihedrals(fe_s)
 
         n_residues = len(phi)
         result["details"]["n_residues"] = n_residues
@@ -220,8 +220,8 @@ def test_dssp(path: str) -> dict:
     result = {"test": "dssp", "status": "pass", "details": {}}
 
     try:
-        fe_s = ferritin.load(path)
-        ss = ferritin.dssp(fe_s)
+        fe_s = proteon.load(path)
+        ss = proteon.dssp(fe_s)
 
         result["details"]["length"] = len(ss)
 
@@ -256,8 +256,8 @@ def test_hbonds(path: str) -> dict:
     result = {"test": "hbonds", "status": "pass", "details": {}}
 
     try:
-        fe_s = ferritin.load(path)
-        hb = ferritin.backbone_hbonds(fe_s)
+        fe_s = proteon.load(path)
+        hb = proteon.backbone_hbonds(fe_s)
 
         result["details"]["n_hbonds"] = len(hb)
 
@@ -283,14 +283,14 @@ def test_contact_map(path: str) -> dict:
     result = {"test": "contact_map", "status": "pass", "details": {}}
 
     try:
-        fe_s = ferritin.load(path)
-        ca = ferritin.extract_ca_coords(fe_s)
+        fe_s = proteon.load(path)
+        ca = proteon.extract_ca_coords(fe_s)
 
         if len(ca) < 2:
             result["details"]["skipped"] = "too few CA atoms"
             return result
 
-        cm = ferritin.contact_map(ca, cutoff=8.0)
+        cm = proteon.contact_map(ca, cutoff=8.0)
         result["details"]["n_residues"] = len(ca)
         result["details"]["n_contacts"] = int(cm.sum())
 
@@ -321,14 +321,14 @@ def test_energy(path: str) -> dict:
     result = {"test": "energy", "status": "pass", "details": {}}
 
     try:
-        fe_s = ferritin.load(path)
+        fe_s = proteon.load(path)
 
         # Only test on smaller structures (energy is O(N^2))
         if fe_s.atom_count > 5000:
             result["details"]["skipped"] = "too large for energy test"
             return result
 
-        e = ferritin.compute_energy(fe_s)
+        e = proteon.compute_energy(fe_s)
         result["details"]["total"] = round(e["total"], 1)
         result["details"]["bond_stretch"] = round(e["bond_stretch"], 1)
         result["details"]["angle_bend"] = round(e["angle_bend"], 1)
@@ -355,14 +355,14 @@ def test_hydrogens(path: str) -> dict:
     result = {"test": "hydrogens", "status": "pass", "details": {}}
 
     try:
-        fe_s = ferritin.load(path)
+        fe_s = proteon.load(path)
 
         # DSSP before placing H (virtual H path)
-        ss_before = ferritin.dssp(fe_s)
+        ss_before = proteon.dssp(fe_s)
 
         # Place hydrogens
         t0 = time.time()
-        n_added, n_skipped = ferritin.place_peptide_hydrogens(fe_s)
+        n_added, n_skipped = proteon.place_peptide_hydrogens(fe_s)
         h_time = time.time() - t0
 
         result["details"]["n_added"] = n_added
@@ -370,7 +370,7 @@ def test_hydrogens(path: str) -> dict:
         result["details"]["time_ms"] = round(h_time * 1000, 2)
 
         # DSSP after placing H (real H path)
-        ss_after = ferritin.dssp(fe_s)
+        ss_after = proteon.dssp(fe_s)
 
         result["details"]["dssp_length"] = len(ss_before)
         result["details"]["dssp_match"] = ss_before == ss_after
@@ -386,7 +386,7 @@ def test_hydrogens(path: str) -> dict:
             result["details"]["dssp_after"] = ss_after
 
         # Idempotency: second call should add 0
-        n_added2, _ = ferritin.place_peptide_hydrogens(fe_s)
+        n_added2, _ = proteon.place_peptide_hydrogens(fe_s)
         if n_added2 != 0:
             result["status"] = "fail"
             result["details"]["error"] = f"not idempotent: second pass added {n_added2}"
@@ -409,11 +409,11 @@ def test_select(path: str) -> dict:
     result = {"test": "select", "status": "pass", "details": {}}
 
     try:
-        fe_s = ferritin.load(path)
+        fe_s = proteon.load(path)
 
-        ca_mask = ferritin.select(fe_s, "CA")
-        bb_mask = ferritin.select(fe_s, "backbone")
-        all_mask = ferritin.select(fe_s, "all")
+        ca_mask = proteon.select(fe_s, "CA")
+        bb_mask = proteon.select(fe_s, "backbone")
+        all_mask = proteon.select(fe_s, "all")
 
         result["details"]["n_ca"] = int(ca_mask.sum())
         result["details"]["n_backbone"] = int(bb_mask.sum())
@@ -559,7 +559,7 @@ def run_validation(pdb_dir: str, n_structures: int = 1000, output_file: str = No
 
     if sasa_speedups:
         sp = np.array(sasa_speedups)
-        print(f"\n  SASA speed (ferritin vs Biopython):")
+        print(f"\n  SASA speed (proteon vs Biopython):")
         print(f"    Median speedup: {np.median(sp):.1f}x")
         print(f"    Mean speedup:   {np.mean(sp):.1f}x")
         print(f"    Range:          {np.min(sp):.1f}x - {np.max(sp):.1f}x")
@@ -587,7 +587,7 @@ def run_validation(pdb_dir: str, n_structures: int = 1000, output_file: str = No
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ferritin validation suite")
+    parser = argparse.ArgumentParser(description="Proteon validation suite")
     parser.add_argument("--n-structures", type=int, default=1000)
     parser.add_argument("--pdb-dir", default="validation/pdbs/")
     parser.add_argument("--output", default="validation/results.json")

@@ -1,16 +1,16 @@
 cff-version: 1.2.0
-title: "ferritin"
-message: "If you use ferritin in your research, please cite it using the metadata below, and also cite the upstream papers for whichever ferritin subsystem you relied on (see the References section of the README)."
+title: "proteon"
+message: "If you use proteon in your research, please cite it using the metadata below, and also cite the upstream papers for whichever proteon subsystem you relied on (see the References section of the README)."
 type: software
 authors:
   - given-names: David
     family-names: Teschner
     email: davidteschner@googlemail.com
     # orcid: https://orcid.org/0000-0000-0000-0000  # add once available
-repository-code: "https://github.com/theGreatHerrLebert/ferritin"
-url: "https://github.com/theGreatHerrLebert/ferritin"
+repository-code: "https://github.com/theGreatHerrLebert/proteon"
+url: "https://github.com/theGreatHerrLebert/proteon"
 abstract: >-
-  ferritin is a Rust-first structural bioinformatics toolkit with Python
+  proteon is a Rust-first structural bioinformatics toolkit with Python
   bindings for loading, aligning, analyzing, searching, and preparing
   macromolecular structures. It consolidates faithful implementations of
   TM-align / US-align (structure alignment), CHARMM19+EEF1 and AMBER96

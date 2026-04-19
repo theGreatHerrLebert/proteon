@@ -1,5 +1,5 @@
 {
-  "format": "ferritin.sequence_example.v0",
+  "format": "proteon.sequence_example.v0",
   "count": 0,
   "examples_file": "examples.jsonl"
 }

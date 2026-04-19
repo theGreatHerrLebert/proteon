@@ -4,7 +4,7 @@
 
 ## energy
 
-### ferritin vs openmm (n=20 PDBs)
+### proteon vs openmm (n=20 PDBs)
 
 Totals: PASS=4 WARN=13 FAIL=33
 

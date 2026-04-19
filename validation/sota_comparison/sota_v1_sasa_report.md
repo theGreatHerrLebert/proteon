@@ -4,7 +4,7 @@
 
 ## sasa
 
-### ferritin vs freesasa (n=6 PDBs)
+### proteon vs freesasa (n=6 PDBs)
 
 Totals: PASS=18 WARN=0 FAIL=0
 

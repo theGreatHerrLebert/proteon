@@ -2,7 +2,7 @@
 kcal/mol on every energy component, for every force field, on every
 reference structure.
 
-This is the highest-leverage regression guard in the ferritin test
+This is the highest-leverage regression guard in the proteon test
 suite. Both 2026-04-11 CHARMM+EEF1 bugs would have failed this test
 on day one:
 
@@ -17,7 +17,7 @@ on day one:
       is O(10³) kcal/mol — unmissable.
 
 The Rust side has the same parity test in
-ferritin-connector/src/forcefield/energy.rs gradient_tests module,
+proteon-connector/src/forcefield/energy.rs gradient_tests module,
 but the Python version exercises the full compute_energy binding
 path including the kJ/mol unit conversion and dict assembly — so
 both sides close the loop from API down to kernel.
@@ -29,7 +29,7 @@ import math
 
 import pytest
 
-import ferritin
+import proteon
 
 from conftest import STRUCT_FF_PARAMS, ENERGY_COMPONENTS
 
@@ -52,10 +52,10 @@ def test_nbl_matches_exact_all_components(structure_spec, ff, loaded_structures)
     """
     structure = loaded_structures[structure_spec.name]
 
-    e_exact = ferritin.compute_energy(
+    e_exact = proteon.compute_energy(
         structure, ff=ff, units="kJ/mol", nbl_threshold=10_000_000
     )
-    e_nbl = ferritin.compute_energy(
+    e_nbl = proteon.compute_energy(
         structure, ff=ff, units="kJ/mol", nbl_threshold=0
     )
 
@@ -101,11 +101,11 @@ def test_default_path_matches_one_of_the_forced_paths(
     any structure with > 2000 atoms must match ``force_nbl`` exactly.
     """
     structure = loaded_structures[structure_spec.name]
-    e_default = ferritin.compute_energy(structure, ff=ff, units="kJ/mol")
-    e_exact = ferritin.compute_energy(
+    e_default = proteon.compute_energy(structure, ff=ff, units="kJ/mol")
+    e_exact = proteon.compute_energy(
         structure, ff=ff, units="kJ/mol", nbl_threshold=10_000_000
     )
-    e_nbl = ferritin.compute_energy(
+    e_nbl = proteon.compute_energy(
         structure, ff=ff, units="kJ/mol", nbl_threshold=0
     )
 

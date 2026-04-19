@@ -2,13 +2,13 @@
 """Sample N PDBs from the monster3 50K corpus for scaling tests.
 
 Filters out nucleic acid structures (AMBER96 has no templates, would be
-flagged as skipped_no_protein by ferritin anyway) and huge files. The
+flagged as skipped_no_protein by proteon anyway) and huge files. The
 output is a list of PDB IDs (stem of each filename) one per line, suitable
 for feeding to `run_all.py --pdbs @sample.txt`.
 
 Usage:
     python validation/sota_comparison/sample_corpus.py \\
-        --pdb-dir /globalscratch/dateschn/ferritin-benchmark/pdbs_50k \\
+        --pdb-dir /globalscratch/dateschn/proteon-benchmark/pdbs_50k \\
         --n 100 \\
         --seed 42 \\
         --output validation/sota_comparison/sample_100.txt

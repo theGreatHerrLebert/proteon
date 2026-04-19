@@ -7,7 +7,7 @@
 use cudarc::driver::CudaContext;
 use std::time::Instant;
 
-use ferritin_connector::forcefield::{
+use proteon_connector::forcefield::{
     neighbor_list::NeighborList,
     params::{charmm19_eef1, ForceField},
     topology::build_topology,

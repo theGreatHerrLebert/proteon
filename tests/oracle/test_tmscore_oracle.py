@@ -1,6 +1,6 @@
 """Oracle tests: TM-score validation against C++ USAlign binary.
 
-Runs C++ USAlign on reference pairs and compares TM-scores to ferritin.
+Runs C++ USAlign on reference pairs and compares TM-scores to proteon.
 Should match to ~4-5 decimal places (limited by -ffast-math differences).
 """
 
@@ -10,7 +10,7 @@ from typing import NamedTuple, Optional
 
 import pytest
 
-from ferritin_connector import py_align_funcs, py_io
+from proteon_connector import py_align_funcs, py_io
 
 pytestmark = pytest.mark.oracle("usalign")
 
@@ -105,7 +105,7 @@ def pair(request):
 
 
 class TestTMScoreVsCpp:
-    """Compare ferritin TM-scores against C++ USAlign."""
+    """Compare proteon TM-scores against C++ USAlign."""
 
     def test_tm_scores_match(self, pair):
         skip_if_no_usalign()
@@ -119,13 +119,13 @@ class TestTMScoreVsCpp:
         rust = py_align_funcs.tm_align_pair(pdb1, pdb2)
 
         # C++ convention: TM1 = norm by L1 (chain1), TM2 = norm by L2 (chain2)
-        # Ferritin convention: tm_score_chain1 = norm by L2, tm_score_chain2 = norm by L1
-        # So: ferritin.chain1 ↔ cpp.tm2, ferritin.chain2 ↔ cpp.tm1
+        # Proteon convention: tm_score_chain1 = norm by L2, tm_score_chain2 = norm by L1
+        # So: proteon.chain1 ↔ cpp.tm2, proteon.chain2 ↔ cpp.tm1
         # Match to ~4 decimal places (limited by -ffast-math differences)
         assert rust.tm_score_chain1 == pytest.approx(cpp.tm2, abs=5e-4), \
-            f"{name}: TM(normL2) ferritin={rust.tm_score_chain1:.5f} cpp={cpp.tm2:.5f}"
+            f"{name}: TM(normL2) proteon={rust.tm_score_chain1:.5f} cpp={cpp.tm2:.5f}"
         assert rust.tm_score_chain2 == pytest.approx(cpp.tm1, abs=5e-4), \
-            f"{name}: TM(normL1) ferritin={rust.tm_score_chain2:.5f} cpp={cpp.tm1:.5f}"
+            f"{name}: TM(normL1) proteon={rust.tm_score_chain2:.5f} cpp={cpp.tm1:.5f}"
 
     def test_rmsd_matches(self, pair):
         skip_if_no_usalign()
@@ -140,7 +140,7 @@ class TestTMScoreVsCpp:
 
         # RMSD should match to ~2 decimal places
         assert rust.rmsd == pytest.approx(cpp.rmsd, abs=0.05), \
-            f"{name}: RMSD ferritin={rust.rmsd:.3f} cpp={cpp.rmsd:.3f}"
+            f"{name}: RMSD proteon={rust.rmsd:.3f} cpp={cpp.rmsd:.3f}"
 
     def test_n_aligned_matches(self, pair):
         skip_if_no_usalign()
@@ -155,7 +155,7 @@ class TestTMScoreVsCpp:
 
         # Allow ±2 residue difference in alignment length
         assert abs(rust.n_aligned - cpp.n_aligned) <= 2, \
-            f"{name}: Lali ferritin={rust.n_aligned} cpp={cpp.n_aligned}"
+            f"{name}: Lali proteon={rust.n_aligned} cpp={cpp.n_aligned}"
 
     def test_chain_lengths_positive(self, pair):
         """Verify C++ reports positive chain lengths."""

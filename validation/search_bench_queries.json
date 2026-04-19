@@ -4,7 +4,7 @@
     "n_input_files": 10000,
     "n_indexed": 9646,
     "n_skipped": 354,
-    "db_path": "/tmp/ferritin_search_10k",
+    "db_path": "/tmp/proteon_search_10k",
     "db_size_mb": 78.461,
     "k": 6,
     "version": 2

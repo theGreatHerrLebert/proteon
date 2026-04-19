@@ -12,14 +12,14 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PYTHON_API_ROOT = REPO_ROOT / "packages" / "ferritin" / "src" / "ferritin"
+PYTHON_API_ROOT = REPO_ROOT / "packages" / "proteon" / "src" / "proteon"
 README = REPO_ROOT / "README.md"
 SCAN_ROOTS = [
-    REPO_ROOT / "packages" / "ferritin" / "src",
-    REPO_ROOT / "ferritin-connector" / "src",
-    REPO_ROOT / "ferritin-align" / "src",
-    REPO_ROOT / "ferritin-io" / "src",
-    REPO_ROOT / "ferritin-arrow" / "src",
+    REPO_ROOT / "packages" / "proteon" / "src",
+    REPO_ROOT / "proteon-connector" / "src",
+    REPO_ROOT / "proteon-align" / "src",
+    REPO_ROOT / "proteon-io" / "src",
+    REPO_ROOT / "proteon-arrow" / "src",
 ]
 
 ALLOWED_PREFIXES = {"WATCH", "PREFER", "COST", "INVARIANT"}

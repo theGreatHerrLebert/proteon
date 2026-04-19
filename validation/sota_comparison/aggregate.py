@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Aggregator for the SOTA comparison harness.
 
-Reads the per-(pdb, op, impl) JSON produced by `run_all.py`, pairs `ferritin`
+Reads the per-(pdb, op, impl) JSON produced by `run_all.py`, pairs `proteon`
 against every other registered impl per op, computes per-metric agreement
 values, classifies each metric as PASS / WARN / FAIL per the locked tolerance
 table, and emits both a human-readable `report.md` and a machine-readable
@@ -59,8 +59,8 @@ def _band(value: float, pass_at: float, warn_at: float, lower_is_better: bool = 
 # Per-op comparison functions
 # ---------------------------------------------------------------------------
 
-def compare_sasa(ferritin_payload: dict, other_payload: dict) -> Dict[str, dict]:
-    """Compare ferritin SASA against another impl's SASA.
+def compare_sasa(proteon_payload: dict, other_payload: dict) -> Dict[str, dict]:
+    """Compare proteon SASA against another impl's SASA.
 
     Returns:
         {
@@ -72,7 +72,7 @@ def compare_sasa(ferritin_payload: dict, other_payload: dict) -> Dict[str, dict]
     out: Dict[str, dict] = {}
 
     # Total %diff (always defined when both runs succeeded)
-    a_total = ferritin_payload.get("total_sasa")
+    a_total = proteon_payload.get("total_sasa")
     b_total = other_payload.get("total_sasa")
     if a_total is not None and b_total is not None and a_total > 0:
         pct = abs(a_total - b_total) / a_total * 100.0
@@ -88,7 +88,7 @@ def compare_sasa(ferritin_payload: dict, other_payload: dict) -> Dict[str, dict]
     # the numerator and denominator and reported as `n_joined`.
     a_by_key = {
         (r["chain"], int(r["resi"]), r.get("icode", "")): float(r["sasa"])
-        for r in ferritin_payload.get("per_residue", [])
+        for r in proteon_payload.get("per_residue", [])
     }
     b_by_key = {
         (r["chain"], int(r["resi"]), r.get("icode", "")): float(r["sasa"])
@@ -121,7 +121,7 @@ def compare_sasa(ferritin_payload: dict, other_payload: dict) -> Dict[str, dict]
         "band": _band(rmsd, 2.0, 5.0, lower_is_better=True),
     }
     out["_n_joined_residues"] = {"value": n, "band": "INFO"}
-    out["_n_ferritin_residues"] = {"value": len(a_by_key), "band": "INFO"}
+    out["_n_proteon_residues"] = {"value": len(a_by_key), "band": "INFO"}
     out["_n_other_residues"] = {"value": len(b_by_key), "band": "INFO"}
     return out
 
@@ -135,8 +135,8 @@ def _pct_diff(a: float, b: float) -> float:
     return abs(a - b) / abs(a) * 100.0
 
 
-def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dict]:
-    """Compare ferritin energy against another impl's energy.
+def compare_energy(proteon_payload: dict, other_payload: dict) -> Dict[str, dict]:
+    """Compare proteon energy against another impl's energy.
 
     Returns total %diff (PASS ≤ 1%, WARN ≤ 5%, FAIL > 5%) and per-component
     %diff (PASS ≤ 2%, WARN ≤ 10%, FAIL > 10%).
@@ -144,10 +144,10 @@ def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dic
     Handles cross-impl component-grouping differences:
 
     - OpenMM reports `torsion` as the sum of proper + improper (PeriodicTorsionForce
-      handles both); ferritin splits them. For the comparison, we sum ferritin's
+      handles both); proteon splits them. For the comparison, we sum proteon's
       torsion + improper_torsion and compare against OpenMM's torsion.
 
-    - OpenMM reports `nonbonded_total` (NonbondedForce); ferritin splits into
+    - OpenMM reports `nonbonded_total` (NonbondedForce); proteon splits into
       vdw + electrostatic. We compare the sum to OpenMM's nonbonded_total.
     """
     out: Dict[str, dict] = {}
@@ -156,7 +156,7 @@ def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dic
     # explanation for energy disagreements, because it usually means the
     # two tools placed different numbers of H atoms on terminal residues
     # (different protonation states -> different charges).
-    a_atoms = ferritin_payload.get("n_atoms_after_h")
+    a_atoms = proteon_payload.get("n_atoms_after_h")
     b_atoms = other_payload.get("n_atoms_after_h")
     if a_atoms is not None and b_atoms is not None and a_atoms >= 0 and b_atoms >= 0:
         out["_n_atoms_diff"] = {
@@ -166,14 +166,14 @@ def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dic
 
     # Total
     out["total_pct_diff"] = {
-        "value": _pct_diff(ferritin_payload.get("total"), other_payload.get("total")),
+        "value": _pct_diff(proteon_payload.get("total"), other_payload.get("total")),
         "band": _band(
-            _pct_diff(ferritin_payload.get("total"), other_payload.get("total")),
+            _pct_diff(proteon_payload.get("total"), other_payload.get("total")),
             1.0, 5.0, lower_is_better=True,
         ),
     }
 
-    a_comp = ferritin_payload.get("components", {}) or {}
+    a_comp = proteon_payload.get("components", {}) or {}
     b_comp = other_payload.get("components", {}) or {}
 
     # Direct per-component comparisons: bond_stretch, angle_bend
@@ -189,7 +189,7 @@ def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dic
         }
 
     # Torsion: OpenMM PeriodicTorsionForce combines proper + improper.
-    # If the "other" runner only has a combined torsion, sum ferritin's
+    # If the "other" runner only has a combined torsion, sum proteon's
     # torsion + improper for the comparison. Otherwise compare directly.
     a_tor = a_comp.get("torsion")
     a_imp = a_comp.get("improper_torsion")
@@ -197,7 +197,7 @@ def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dic
     b_imp = b_comp.get("improper_torsion")
     if a_tor is not None and b_tor is not None:
         if b_imp is None and a_imp is not None:
-            # Other runner has combined torsion; sum ferritin sides.
+            # Other runner has combined torsion; sum proteon sides.
             a_sum = a_tor + a_imp
             pct = _pct_diff(a_sum, b_tor)
             out["torsion_combined_pct_diff"] = {
@@ -217,7 +217,7 @@ def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dic
                     "band": _band(pct_i, 2.0, 10.0, lower_is_better=True),
                 }
 
-    # Nonbonded: OpenMM reports a single nonbonded_total; ferritin splits
+    # Nonbonded: OpenMM reports a single nonbonded_total; proteon splits
     # into vdw + electrostatic. Compare the sum to the other's nonbonded_total
     # if present, otherwise compare vdw and electrostatic directly.
     a_vdw = a_comp.get("vdw")
@@ -249,14 +249,14 @@ def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dic
 # Weak (cross-FF) energy comparison
 # ---------------------------------------------------------------------------
 #
-# Used by the `energy_charmm` op (ferritin CHARMM19+EEF1 vs OpenMM
+# Used by the `energy_charmm` op (proteon CHARMM19+EEF1 vs OpenMM
 # CHARMM36+OBC2). The two parameter sets are different (atomtypes,
 # charges, K_b, implicit solvation model), so percent diffs would be
-# 30-100% even on a correct ferritin kernel. Reporting them under the
+# 30-100% even on a correct proteon kernel. Reporting them under the
 # AMBER tolerance scheme would mark every record as FAIL meaninglessly.
 #
 # Instead this comparator reports:
-#   - log10_ratio: log10(|ferritin| / |other|), classified as
+#   - log10_ratio: log10(|proteon| / |other|), classified as
 #     PASS ≤ 0.5 (within ~3x), WARN ≤ 1.0 (within 10x), FAIL > 1.0
 #   - sign_agree: 1.0 if signs match (or both ~0), else 0.0
 #     PASS = 1.0, FAIL = 0.0
@@ -268,7 +268,7 @@ def compare_energy(ferritin_payload: dict, other_payload: dict) -> Dict[str, dic
 def _log10_ratio(a: Optional[float], b: Optional[float]) -> float:
     """log10(|a| / |b|), or NaN if either is None / non-finite / ~zero.
 
-    Returns the *signed* ratio so the renderer can show "ferritin is
+    Returns the *signed* ratio so the renderer can show "proteon is
     higher than openmm by Nx" with a single number. The classifier
     uses |this| against the bands.
     """
@@ -307,7 +307,7 @@ def _sign_agree(a: Optional[float], b: Optional[float]) -> float:
     return 1.0 if (a > 0) == (b > 0) else 0.0
 
 
-def compare_energy_weak(ferritin_payload: dict, other_payload: dict) -> Dict[str, dict]:
+def compare_energy_weak(proteon_payload: dict, other_payload: dict) -> Dict[str, dict]:
     """Cross-FF weak comparison: log10 ratios + sign agreement.
 
     Used for `energy_charmm` op (CHARMM19+EEF1 vs CHARMM36+OBC2). The
@@ -318,12 +318,12 @@ def compare_energy_weak(ferritin_payload: dict, other_payload: dict) -> Dict[str
     out: Dict[str, dict] = {}
 
     # Atom-count diff sidecar (INFO only) — same idea as compare_energy.
-    a_atoms = ferritin_payload.get("n_atoms_after_h")
+    a_atoms = proteon_payload.get("n_atoms_after_h")
     b_atoms = other_payload.get("n_atoms_after_h")
     if a_atoms is not None and b_atoms is not None and a_atoms >= 0 and b_atoms >= 0:
         out["_n_atoms_diff"] = {"value": a_atoms - b_atoms, "band": "INFO"}
 
-    a_total = ferritin_payload.get("total")
+    a_total = proteon_payload.get("total")
     b_total = other_payload.get("total")
 
     # Total log10 ratio (the headline number)
@@ -343,7 +343,7 @@ def compare_energy_weak(ferritin_payload: dict, other_payload: dict) -> Dict[str
     # Per-component log10 ratios on bond and angle (CHARMM19 vs CHARMM36
     # both use the same harmonic functional form, so these should be
     # within an order of magnitude even with different parameters).
-    a_comp = ferritin_payload.get("components", {}) or {}
+    a_comp = proteon_payload.get("components", {}) or {}
     b_comp = other_payload.get("components", {}) or {}
     for key in ("bond_stretch", "angle_bend"):
         a = a_comp.get(key)
@@ -357,7 +357,7 @@ def compare_energy_weak(ferritin_payload: dict, other_payload: dict) -> Dict[str
                            0.5, 1.0, lower_is_better=True),
         }
 
-    # Nonbonded combined: ferritin splits into vdw + electrostatic;
+    # Nonbonded combined: proteon splits into vdw + electrostatic;
     # OpenMM lumps them as nonbonded_total. Sum and compare.
     # Both magnitude (log10) and sign get their own metric — log10
     # uses |a|/|b| which strips sign, so a sign flip would otherwise
@@ -451,7 +451,7 @@ def _is_lower_better(metric_name: str) -> bool:
 def _is_signed_magnitude_metric(metric_name: str) -> bool:
     """Whether outlier ranking should sort by |value| rather than value.
 
-    log10 ratios are signed (positive = ferritin higher, negative = lower)
+    log10 ratios are signed (positive = proteon higher, negative = lower)
     but BOTH extremes are "worst". A log10_ratio of -2.5 is just as wrong
     as +2.5. Sorting by raw value ascending or descending hides one of
     the two failure directions; sorting by |value| descending captures
@@ -599,7 +599,7 @@ def index_records(records: List[dict]) -> Dict[Tuple[str, str, str], dict]:
 
 
 def aggregate(records: List[dict]) -> dict:
-    """Pair ferritin against every other impl per (pdb, op) and run comparators.
+    """Pair proteon against every other impl per (pdb, op) and run comparators.
 
     Returns a nested summary:
         {
@@ -608,7 +608,7 @@ def aggregate(records: List[dict]) -> dict:
                     "by_impl": {
                         "freesasa": {
                             "by_pdb": {
-                                "1crn": {"metrics": {...}, "ferritin_status": "ok", "other_status": "ok"},
+                                "1crn": {"metrics": {...}, "proteon_status": "ok", "other_status": "ok"},
                                 ...
                             },
                             "n_pdbs": int,
@@ -632,25 +632,25 @@ def aggregate(records: List[dict]) -> dict:
             continue
         compare_fn = COMPARATORS[op]
         impls = sorted({r["impl"] for r in records if r["op"] == op})
-        if "ferritin" not in impls:
+        if "proteon" not in impls:
             continue
 
         op_section: Dict[str, dict] = {"by_impl": {}}
         for other in impls:
-            if other == "ferritin":
+            if other == "proteon":
                 continue
             impl_section: Dict[str, dict] = {"by_pdb": {}}
             band_counts = defaultdict(int)
             for pid in pdbs:
-                fer = idx.get((pid, op, "ferritin"))
+                fer = idx.get((pid, op, "proteon"))
                 oth = idx.get((pid, op, other))
                 if fer is None or oth is None:
                     continue
                 if fer["status"] != "ok" or oth["status"] != "ok":
                     impl_section["by_pdb"][pid] = {
-                        "ferritin_status": fer["status"],
+                        "proteon_status": fer["status"],
                         "other_status": oth["status"],
-                        "ferritin_error": fer.get("error"),
+                        "proteon_error": fer.get("error"),
                         "other_error": oth.get("error"),
                         "metrics": {},
                     }
@@ -658,7 +658,7 @@ def aggregate(records: List[dict]) -> dict:
                     continue
                 metrics = compare_fn(fer["payload"], oth["payload"])
                 impl_section["by_pdb"][pid] = {
-                    "ferritin_status": "ok",
+                    "proteon_status": "ok",
                     "other_status": "ok",
                     "metrics": metrics,
                 }
@@ -725,7 +725,7 @@ def _render_per_pdb_table(impl_section: dict) -> List[str]:
         row = impl_section["by_pdb"][pid]
         metrics = row.get("metrics", {})
         if not metrics:
-            err = row.get("ferritin_error") or row.get("other_error") or "skipped"
+            err = row.get("proteon_error") or row.get("other_error") or "skipped"
             cell = f"_{err}_"
             lines.append(f"| {pid} | " + " | ".join([cell] * len(metric_names)) + " |")
             continue
@@ -840,7 +840,7 @@ def render_markdown(
         lines.append(f"## {op}")
         lines.append("")
         for other, impl_section in op_section["by_impl"].items():
-            lines.append(f"### ferritin vs {other} (n={impl_section['n_pdbs']} PDBs)")
+            lines.append(f"### proteon vs {other} (n={impl_section['n_pdbs']} PDBs)")
             lines.append("")
             t = impl_section["totals"]
             lines.append(

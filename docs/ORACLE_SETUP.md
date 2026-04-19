@@ -1,6 +1,6 @@
 # Oracle environment setup
 
-This doc is the single recipe for standing up the oracle tools ferritin
+This doc is the single recipe for standing up the oracle tools proteon
 validates against, and for running the evaluations. If the "0.2% OpenMM
 AMBER96 parity" or "0.1 Å reduce hydrogen-placement parity" claims are
 ever in doubt, this recipe is how you reproduce them on your own machine.
@@ -16,7 +16,7 @@ Eight external oracles are covered here, split by what runs where:
 - **CI-gated slice** (pip-installable, small, fast — installed by
   `.github/workflows/test.yml` and exercised on every PR): pydssp,
   biopython, gemmi, FreeSASA. These are the library-parity checks
-  under `tests/oracle/` — ferritin's DSSP vs pydssp, I/O vs
+  under `tests/oracle/` — proteon's DSSP vs pydssp, I/O vs
   biopython/gemmi, SASA vs FreeSASA.
 - **Release-quality slice** (pip-installable but heavier — OpenMM alone
   is ~500 MB — or source-built): OpenMM, reduce, USAlign, BALL Julia
@@ -33,10 +33,10 @@ dedicated docs.
 
 ## Pinned versions
 
-These are the versions against which ferritin's current reference
+These are the versions against which proteon's current reference
 numbers (in `validation/reports/`, when a release is tagged) were
 produced. If you install newer versions and see drift, that is the
-oracle drifting, not ferritin — follow the regeneration workflow in the
+oracle drifting, not proteon — follow the regeneration workflow in the
 last section.
 
 | Tool | Version | Source |
@@ -53,17 +53,17 @@ last section.
 
 ## Prerequisites
 
-- A Python venv with ferritin installed — `packages/ferritin` built via
+- A Python venv with proteon installed — `packages/proteon` built via
   `maturin develop --release` and the repo's Python deps on the path.
-  The existing `/scratch/TMAlign/ferritin/.venv` on the dev machine is
+  The existing `/scratch/TMAlign/proteon/.venv` on the dev machine is
   configured this way; on a new machine, see the top-level README's
   Quick Start.
 - A C++ toolchain (`gcc` / `clang`, `cmake` >= 3.12, `make`) for the
   source-build oracles.
 - Julia 1.11.5 or newer for the BALL oracle.
 
-All commands below assume the ferritin repo is checked out at
-`$FERRITIN` and the venv is activated.
+All commands below assume the proteon repo is checked out at
+`$PROTEON` and the venv is activated.
 
 ## Install — CI-gated slice
 
@@ -71,7 +71,7 @@ These four are what `.github/workflows/test.yml` installs on every PR.
 Install them locally to reproduce CI exactly.
 
 ```bash
-source $FERRITIN/.venv/bin/activate
+source $PROTEON/.venv/bin/activate
 pip install \
     biopython==1.87 \
     gemmi==0.7.5 \
@@ -99,13 +99,13 @@ because their binaries / env vars / modules aren't set up yet.
 
 ## Install — OpenMM (force-field reference)
 
-OpenMM is the authoritative oracle for ferritin's AMBER96 + OBC GB
+OpenMM is the authoritative oracle for proteon's AMBER96 + OBC GB
 claims (`validation/amber96_oracle.py` runs the 1000-PDB benchmark).
 It's pip-installable but heavy (~500 MB with its molecular-dynamics
 dependencies), which is why it's not in the CI install list.
 
 ```bash
-source $FERRITIN/.venv/bin/activate
+source $PROTEON/.venv/bin/activate
 pip install openmm==8.5.0
 ```
 
@@ -128,11 +128,11 @@ cmake ..
 make -j4
 ```
 
-Only the `reduce` binary target matters for ferritin's oracle; the
+Only the `reduce` binary target matters for proteon's oracle; the
 Python extension (`mmtbx_reduceOrig_ext`) can fail to build against
 modern Boost.Python — that is not a problem for us.
 
-Tell ferritin's tests where the binary and het dictionary live:
+Tell proteon's tests where the binary and het dictionary live:
 
 ```bash
 export REDUCE_BIN="$HOME/src/reduce/build/reduce_src/reduce"
@@ -143,7 +143,7 @@ Smoke test (should print `reduce.4.16.250520` and add 315 H to crambin):
 
 ```bash
 $REDUCE_BIN -version
-$REDUCE_BIN -NOFLIP -Quiet -NUClear -DB "$REDUCE_DB" $FERRITIN/test-pdbs/1crn.pdb \
+$REDUCE_BIN -NOFLIP -Quiet -NUClear -DB "$REDUCE_DB" $PROTEON/test-pdbs/1crn.pdb \
     | grep -c "^ATOM"
 # expect 642 (327 heavy + 315 H)
 ```
@@ -186,8 +186,8 @@ Smoke test (should print crambin energies and a JSON blob):
 ```bash
 export BALL_JL=$HOME/src/BiochemicalAlgorithms.jl
 julia --project=$BALL_JL \
-    $FERRITIN/tests/oracle/ball_energy_raw.jl \
-    $FERRITIN/test-pdbs/1crn.pdb
+    $PROTEON/tests/oracle/ball_energy_raw.jl \
+    $PROTEON/test-pdbs/1crn.pdb
 ```
 
 The expected JSON has `total` ≈ 78911 kJ/mol and `NonBonded::Electrostatic`
@@ -204,7 +204,7 @@ installed skip cleanly (reduce if `REDUCE_BIN` unset, USAlign if
 four CI-installed oracles (biopython, gemmi, pydssp, freesasa) run.
 
 ```bash
-cd $FERRITIN
+cd $PROTEON
 source .venv/bin/activate
 pytest tests/oracle/ -v
 ```
@@ -231,14 +231,14 @@ hours depending on dataset size.
 ```bash
 # AMBER96 vs OpenMM on 1000 random PDBs (primary force-field oracle).
 # Needs pre-downloaded PDB corpus at the path configured in the script.
-python $FERRITIN/validation/amber96_oracle.py
+python $PROTEON/validation/amber96_oracle.py
 
-# Fold preservation benchmark (ferritin CHARMM19+EEF1 minimizer vs
+# Fold preservation benchmark (proteon CHARMM19+EEF1 minimizer vs
 # OpenMM CHARMM36+OBC2 on 1000 PDBs).
-python $FERRITIN/validation/tm_fold_preservation_amber.py
+python $PROTEON/validation/tm_fold_preservation_amber.py
 
 # TM-align vs USAlign on a curated pair set.
-python $FERRITIN/validation/bench_alignment.py
+python $PROTEON/validation/bench_alignment.py
 ```
 
 Outputs are JSON / JSONL files; numerical summaries + plots live under
@@ -247,20 +247,20 @@ Outputs are JSON / JSONL files; numerical summaries + plots live under
 ## Regenerating reference values when an oracle drifts
 
 Oracle libraries publish new versions, fix bugs, change defaults. When
-that happens ferritin's reference numbers need to move with them. The
+that happens proteon's reference numbers need to move with them. The
 workflow (using BALL Julia as the worked example from 2026-04-19):
 
 1. **Run the oracle fresh** on the canonical input:
    ```bash
    julia --project=$BALL_JL \
-       $FERRITIN/tests/oracle/ball_energy_raw.jl \
-       $FERRITIN/test-pdbs/1crn.pdb > /tmp/ball_fresh.json
+       $PROTEON/tests/oracle/ball_energy_raw.jl \
+       $PROTEON/test-pdbs/1crn.pdb > /tmp/ball_fresh.json
    ```
 
 2. **Diff vs the hardcoded expected values** in the relevant test file
    (e.g. `BALL_CRAMBIN_RAW` in `tests/oracle/test_ball_energy.py`) or
    against `validation/reports/`. Is the gap explained by the upstream
-   oracle's changelog, by a ferritin change, or by a deeper convention
+   oracle's changelog, by a proteon change, or by a deeper convention
    difference (charge dictionary, 1-4 scaling, cutoff policy)?
 
 3. **If the oracle moved for a defensible reason**, update the reference:
@@ -270,13 +270,13 @@ workflow (using BALL Julia as the worked example from 2026-04-19):
      documented reason if it surfaces a convention gap (see the BALL
      electrostatic row for what that looks like).
 
-4. **If ferritin moved**, investigate before touching the reference —
+4. **If proteon moved**, investigate before touching the reference —
    the oracle is the authority here. Check against a second oracle
    (e.g. OpenMM if BALL drifted) to triangulate.
 
 5. **Bump the pinned-versions table** in this file to match what you
    actually ran against.
 
-An oracle failure is not a "fix ferritin and move on" signal; it's an
+An oracle failure is not a "fix proteon and move on" signal; it's an
 investigation prompt. The regeneration workflow is part of the oracle,
 not an escape hatch from it.

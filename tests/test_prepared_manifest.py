@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import ferritin
+import proteon
 
 
 def _residue(name: str, serial: int, *, is_amino_acid: bool):
@@ -77,9 +77,9 @@ class TestPreparedStructureRecordSequenceLength:
         """Regression for 2026-04-14 review finding: _sequence_length
         previously read `residue_count` (which includes HETATMs) and
         overreported. Must count only amino-acid residues."""
-        records = ferritin.build_prepared_structure_records(
+        records = proteon.build_prepared_structure_records(
             [_structure_with_hetero()],
-            prep_reports=[ferritin.PrepReport(hydrogens_added=0, converged=True)],
+            prep_reports=[proteon.PrepReport(hydrogens_added=0, converged=True)],
         )
         assert len(records) == 1
         assert records[0].sequence_length == 2, (
@@ -90,8 +90,8 @@ class TestPreparedStructureRecordSequenceLength:
     def test_sequence_length_matches_residue_count_when_no_hetero(self):
         """When every residue is an amino acid, the two values
         coincide. Pins that the fix didn't break the common case."""
-        records = ferritin.build_prepared_structure_records(
+        records = proteon.build_prepared_structure_records(
             [_structure_no_hetero()],
-            prep_reports=[ferritin.PrepReport(hydrogens_added=0, converged=True)],
+            prep_reports=[proteon.PrepReport(hydrogens_added=0, converged=True)],
         )
         assert records[0].sequence_length == 3

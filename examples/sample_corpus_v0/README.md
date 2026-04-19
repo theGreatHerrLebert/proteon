@@ -19,7 +19,7 @@ sample_corpus_v0/
 │       ├── release_manifest.json
 │       ├── failures.jsonl
 │       └── examples/
-│           ├── manifest.json          # format: ferritin.structure_supervision.parquet.v0
+│           ├── manifest.json          # format: proteon.structure_supervision.parquet.v0
 │           ├── examples.jsonl         # one row per chain
 │           └── tensors.parquet        # streamed Parquet, row-group chunked, zstd-3
 ├── sequence/
@@ -30,7 +30,7 @@ sample_corpus_v0/
 │       ├── examples.jsonl
 │       └── tensors.npz
 └── training/
-    ├── release_manifest.json          # format: ferritin.training_example.parquet.v0
+    ├── release_manifest.json          # format: proteon.training_example.parquet.v0
     ├── training_examples.jsonl        # per-row split + weight metadata
     └── training.parquet               # joined training artifact, streamed
 ```

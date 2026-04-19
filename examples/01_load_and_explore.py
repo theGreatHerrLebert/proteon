@@ -11,14 +11,14 @@ Usage:
     python examples/01_load_and_explore.py
 """
 
-import ferritin
+import proteon
 import numpy as np
 
 # ---------------------------------------------------------------------------
 # 1. Load a structure
 # ---------------------------------------------------------------------------
-# ferritin auto-detects format from the extension (.pdb, .cif, .mmcif)
-structure = ferritin.load("test-pdbs/1crn.pdb")
+# proteon auto-detects format from the extension (.pdb, .cif, .mmcif)
+structure = proteon.load("test-pdbs/1crn.pdb")
 
 print("=== Structure Overview ===")
 print(f"  Identifier:  {structure.identifier}")
@@ -68,22 +68,22 @@ print()
 # 4. Quick geometric properties
 # ---------------------------------------------------------------------------
 print("=== Geometry ===")
-center = ferritin.centroid(coords)
-rg = ferritin.radius_of_gyration(coords)
+center = proteon.centroid(coords)
+rg = proteon.radius_of_gyration(coords)
 print(f"  Centroid:     ({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f})")
 print(f"  Rg:           {rg:.2f} A")
 
 # CA coordinates only
-ca_coords = ferritin.extract_ca_coords(structure)
+ca_coords = proteon.extract_ca_coords(structure)
 print(f"  CA atoms:     {len(ca_coords)}")
-print(f"  CA Rg:        {ferritin.radius_of_gyration(ca_coords):.2f} A")
+print(f"  CA Rg:        {proteon.radius_of_gyration(ca_coords):.2f} A")
 print()
 
 # ---------------------------------------------------------------------------
 # 5. DataFrame export — bridge to pandas/polars
 # ---------------------------------------------------------------------------
 print("=== DataFrame Export ===")
-df = ferritin.to_dataframe(structure)
+df = proteon.to_dataframe(structure)
 print(f"  Shape: {df.shape}")
 print(f"  Columns: {list(df.columns)}")
 print()
@@ -105,6 +105,6 @@ print()
 # 6. Loading mmCIF format
 # ---------------------------------------------------------------------------
 # Same API — just change the file extension
-# cif_structure = ferritin.load("structure.cif")
+# cif_structure = proteon.load("structure.cif")
 
 print("Done! Crambin (1CRN) has 46 residues and 327 atoms.")

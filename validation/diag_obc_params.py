@@ -1,4 +1,4 @@
-"""Diagnose the 16% GB gap between ferritin and OpenMM on crambin.
+"""Diagnose the 16% GB gap between proteon and OpenMM on crambin.
 
 Dumps per-atom (OBC radius, OBC scale, charge) from both tools on
 identical PDBFixer-prepped structures and prints the atoms whose
@@ -15,10 +15,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CRAMBIN = REPO_ROOT / "test-pdbs" / "1crn.pdb"
-OBC_INI = REPO_ROOT / "ferritin-connector/data/amber96_obc.ini"
+OBC_INI = REPO_ROOT / "proteon-connector/data/amber96_obc.ini"
 
 
-def load_ferritin_class_to_obc() -> dict[str, tuple[float, float]]:
+def load_proteon_class_to_obc() -> dict[str, tuple[float, float]]:
     """Parse amber96_obc.ini -> {amber_class: (radius_A, scale)}."""
     table: dict[str, tuple[float, float]] = {}
     section = None
@@ -61,14 +61,14 @@ def pdbfixer_prepped(pdb_path: Path):
     return Path(tmp.name), fixer.topology, fixer.positions
 
 
-def ferritin_per_atom(prepped_pdb: Path, cls_to_obc):
-    import ferritin
-    import ferritin_connector
+def proteon_per_atom(prepped_pdb: Path, cls_to_obc):
+    import proteon
+    import proteon_connector
 
-    s = ferritin.load(str(prepped_pdb))
-    # Reuse ferritin's shared _get_ptr trick (same as compute_energy does).
-    from ferritin.align import _get_ptr  # type: ignore
-    topo = ferritin_connector.py_forcefield.dump_topology(_get_ptr(s), "amber96")
+    s = proteon.load(str(prepped_pdb))
+    # Reuse proteon's shared _get_ptr trick (same as compute_energy does).
+    from proteon.align import _get_ptr  # type: ignore
+    topo = proteon_connector.py_forcefield.dump_topology(_get_ptr(s), "amber96")
     idents = topo["atom_identities"]
     types = topo["atom_types"]
     charges = topo["atom_charges"]
@@ -127,15 +127,15 @@ def openmm_per_atom(topology, positions):
 
 
 def main() -> int:
-    cls_to_obc = load_ferritin_class_to_obc()
+    cls_to_obc = load_proteon_class_to_obc()
     prepped, topology, positions = pdbfixer_prepped(CRAMBIN)
     try:
-        ferr = ferritin_per_atom(prepped, cls_to_obc)
+        ferr = proteon_per_atom(prepped, cls_to_obc)
         om = openmm_per_atom(topology, positions)
     finally:
         prepped.unlink(missing_ok=True)
 
-    print(f"ferritin atoms: {len(ferr)}   openmm atoms: {len(om)}")
+    print(f"proteon atoms: {len(ferr)}   openmm atoms: {len(om)}")
     if len(ferr) != len(om):
         print("WARNING: atom counts differ — cannot align 1:1")
         # Fall back to resname+atom_name lookup
@@ -145,9 +145,9 @@ def main() -> int:
         pairs = [(ferr_by_key[k], om_by_key[k]) for k in common]
         only_ferr = sorted(set(ferr_by_key) - set(om_by_key))
         only_om = sorted(set(om_by_key) - set(ferr_by_key))
-        print(f"in both: {len(pairs)}   ferritin-only: {len(only_ferr)}   openmm-only: {len(only_om)}")
+        print(f"in both: {len(pairs)}   proteon-only: {len(only_ferr)}   openmm-only: {len(only_om)}")
         if only_ferr[:5]:
-            print(f"  sample ferritin-only: {only_ferr[:5]}")
+            print(f"  sample proteon-only: {only_ferr[:5]}")
         if only_om[:5]:
             print(f"  sample openmm-only: {only_om[:5]}")
     else:
@@ -185,7 +185,7 @@ def main() -> int:
         if (not r_match or not s_match) and len(sample_rows) < 25:
             sample_rows.append(
                 f"  res {fr['resname']}:{fr['atom_name']} (class={cls})  "
-                f"ferritin r={fr['radius_A']:.4f}/s={fr['scale']:.3f}  "
+                f"proteon r={fr['radius_A']:.4f}/s={fr['scale']:.3f}  "
                 f"openmm r={om_row['radius_A']:.4f}/s={om_row['scale']:.3f}"
             )
 
@@ -210,14 +210,14 @@ def main() -> int:
     print(f"  radius mismatches: {n_radius_diff}")
     print(f"  scale  mismatches: {n_scale_diff}")
     print(f"  charge mismatches: {n_charge_diff}")
-    print(f"\nCharge totals:  ferritin Σq={tot_q_ferr:+.4f}  openmm Σq={tot_q_om:+.4f}")
-    print(f"Charge² totals: ferritin Σq²={ss_ferr:.4f}  openmm Σq²={ss_om:.4f}"
+    print(f"\nCharge totals:  proteon Σq={tot_q_ferr:+.4f}  openmm Σq={tot_q_om:+.4f}")
+    print(f"Charge² totals: proteon Σq²={ss_ferr:.4f}  openmm Σq²={ss_om:.4f}"
           f"  Δ(Σq²)={ss_ferr-ss_om:+.4f}  ({(ss_ferr/ss_om - 1)*100:+.1f}%)")
     if charge_rows:
         print("\nCharge mismatches (top 30 by |Δq|):")
         charge_rows.sort(key=lambda r: -abs(r[6]))
         print(f"  {'resid':>5} {'resn':<4} {'atom':<5} {'class':<5}  "
-              f"{'ferritin q':>10} {'openmm q':>10}  {'Δq':>9}")
+              f"{'proteon q':>10} {'openmm q':>10}  {'Δq':>9}")
         for r in charge_rows[:30]:
             print(f"  {r[0]:>5} {r[1]:<4} {r[2]:<5} {r[3]:<5}  "
                   f"{r[4]:>+10.4f} {r[5]:>+10.4f}  {r[6]:>+9.4f}")
@@ -231,7 +231,7 @@ def main() -> int:
         for k, n in sorted(by_pair.items(), key=lambda kv: -kv[1])[:20]:
             print(f"  {k[0]:<4} {k[1]:<5}  {n}")
     if n_radius_diff + n_scale_diff:
-        print("\nMismatches grouped by ferritin amber class (n_diffs / n_total):")
+        print("\nMismatches grouped by proteon amber class (n_diffs / n_total):")
         for cls, n in sorted(class_mismatch_by_class.items(), key=lambda kv: -kv[1]):
             total = class_stats[cls]["n"]
             print(f"  {cls:<6}  {n}/{total}")

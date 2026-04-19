@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark ferritin structural search on a local corpus.
+"""Benchmark proteon structural search on a local corpus.
 
 Measures:
 - DB build time
@@ -27,9 +27,9 @@ import time
 from pathlib import Path
 from statistics import mean, median
 
-import ferritin
-from ferritin import search as ferritin_search_fn
-ferritin_search_mod = importlib.import_module("ferritin.search")
+import proteon
+from proteon import search as proteon_search_fn
+proteon_search_mod = importlib.import_module("proteon.search")
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -78,7 +78,7 @@ def hit_metrics(query_path: Path, hits, k: int) -> tuple[bool, bool]:
     return self_top1, self_topk
 
 
-def filtered_query_panel(query_panel: list[Path], db: ferritin.SearchDB) -> list[Path]:
+def filtered_query_panel(query_panel: list[Path], db: proteon.SearchDB) -> list[Path]:
     if db.entries is not None:
         indexed_paths = {Path(entry.source_path) for entry in db.entries}
     else:
@@ -89,20 +89,20 @@ def filtered_query_panel(query_panel: list[Path], db: ferritin.SearchDB) -> list
 
 def write_manifest(root: Path, *, k: int, n_entries: int) -> None:
     payload = {
-        "version": ferritin_search_mod.SEARCH_DB_VERSION,
+        "version": proteon_search_mod.SEARCH_DB_VERSION,
         "k": k,
         "n_entries": n_entries,
         "entries_file": "entries.parquet",
         "postings_dir": "postings",
-        "postings_bucket_count": ferritin_search_mod.POSTINGS_BUCKET_COUNT,
+        "postings_bucket_count": proteon_search_mod.POSTINGS_BUCKET_COUNT,
     }
     (root / "manifest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark ferritin search on a local structure corpus")
-    parser.add_argument("--pdb-dir", default="/scratch/TMAlign/ferritin/validation/pdbs_10k")
-    parser.add_argument("--db-path", default="/tmp/ferritin_search_10k")
+    parser = argparse.ArgumentParser(description="Benchmark proteon search on a local structure corpus")
+    parser.add_argument("--pdb-dir", default="/scratch/TMAlign/proteon/validation/pdbs_10k")
+    parser.add_argument("--db-path", default="/tmp/proteon_search_10k")
     parser.add_argument("--k", type=int, default=6, help="k-mer length")
     parser.add_argument("--n-queries", type=int, default=50)
     parser.add_argument("--query-paths", type=str, default=None, help="Optional file of PDB IDs to use as queries")
@@ -148,7 +148,7 @@ def main() -> None:
         print("Build stages")
         print("  Skipping build; loading existing DB...", flush=True)
         t0 = time.time()
-        db = ferritin.load_search_db(db_root)
+        db = proteon.load_search_db(db_root)
         build_elapsed = time.time() - t0
         skipped = len(corpus_paths) - len(db)
         db_size_mb = sum(p.stat().st_size for p in db_root.rglob("*") if p.is_file()) / (1024 * 1024)
@@ -167,14 +167,14 @@ def main() -> None:
         entries_path = db_root / "entries.parquet"
         entry_writer = None
         posting_writers = {}
-        posting_schema = ferritin_search_mod._empty_postings_table().schema
+        posting_schema = proteon_search_mod._empty_postings_table().schema
 
         print(f"  1. Loading structures in chunks of {args.build_chunk_size}...", flush=True)
         total_loaded = 0
         total_indexed = 0
         for start, chunk in chunked(corpus_paths, args.build_chunk_size):
             t0 = time.time()
-            chunk_loaded = ferritin.batch_load_tolerant(chunk, n_threads=-1)
+            chunk_loaded = proteon.batch_load_tolerant(chunk, n_threads=-1)
             load_elapsed += time.time() - t0
             total_loaded += len(chunk_loaded)
             print(
@@ -186,11 +186,11 @@ def main() -> None:
             if chunk_loaded:
                 t0 = time.time()
                 chunk_indices, chunk_structures = zip(*chunk_loaded)
-                chunk_encoded = ferritin.batch_encode_alphabet(chunk_structures, n_threads=-1)
+                chunk_encoded = proteon.batch_encode_alphabet(chunk_structures, n_threads=-1)
                 encode_elapsed += time.time() - t0
 
                 chunk_entries = [
-                    ferritin_search_mod._build_entry(
+                    proteon_search_mod._build_entry(
                         corpus_paths[start + source_index],
                         start + source_index,
                         structure,
@@ -202,15 +202,15 @@ def main() -> None:
                         zip(chunk_indices, chunk_structures, chunk_encoded)
                     )
                 ]
-                entry_rows = [ferritin_search_mod.asdict(entry) for entry in chunk_entries]
+                entry_rows = [proteon_search_mod.asdict(entry) for entry in chunk_entries]
                 entry_table = pa.Table.from_pylist(entry_rows)
                 if entry_writer is None:
                     entry_writer = pq.ParquetWriter(entries_path, entry_table.schema, compression="zstd")
                 entry_writer.write_table(entry_table)
 
                 posting_rows = []
-                sa_postings = ferritin_search_mod._build_postings(chunk_entries, args.k, attr="valid_alphabet")
-                aa_postings = ferritin_search_mod._build_postings(chunk_entries, args.k, attr="valid_aa_sequence")
+                sa_postings = proteon_search_mod._build_postings(chunk_entries, args.k, attr="valid_alphabet")
+                aa_postings = proteon_search_mod._build_postings(chunk_entries, args.k, attr="valid_aa_sequence")
                 for kind, postings in (("sa", sa_postings), ("aa", aa_postings)):
                     for kmer, local_indices in postings.items():
                         for local_index in local_indices:
@@ -223,12 +223,12 @@ def main() -> None:
                             )
                 rows_by_partition = {}
                 for row in posting_rows:
-                    bucket = ferritin_search_mod._posting_bucket(row["kmer"])
+                    bucket = proteon_search_mod._posting_bucket(row["kmer"])
                     rows_by_partition.setdefault((row["kind"], bucket), []).append(
                         {"kmer": row["kmer"], "entry_index": row["entry_index"]}
                     )
                 for (kind, bucket), bucket_rows in rows_by_partition.items():
-                    bucket_path = ferritin_search_mod._bucket_file(db_root, kind=kind, bucket=bucket)
+                    bucket_path = proteon_search_mod._bucket_file(db_root, kind=kind, bucket=bucket)
                     bucket_path.parent.mkdir(parents=True, exist_ok=True)
                     writer = posting_writers.get((kind, bucket))
                     if writer is None:
@@ -289,7 +289,7 @@ def main() -> None:
         print(f"     finalized DB in {save_elapsed:.2f}s", flush=True)
 
         build_elapsed = time.time() - build_start
-        db = ferritin.load_search_db(db_root)
+        db = proteon.load_search_db(db_root)
         skipped = len(corpus_paths) - len(db)
         db_size_mb = sum(p.stat().st_size for p in db_root.rglob("*") if p.is_file()) / (1024 * 1024)
 
@@ -342,13 +342,13 @@ def main() -> None:
 
     for i, query_path in enumerate(query_panel, start=1):
         try:
-            query = ferritin.load(query_path)
+            query = proteon.load(query_path)
         except Exception:
             query_load_failures += 1
             continue
 
         t0 = time.time()
-        pre_hits = ferritin_search_fn(
+        pre_hits = proteon_search_fn(
             query,
             db,
             top_k=args.top_k,
@@ -361,7 +361,7 @@ def main() -> None:
         prefilter_topk += int(topk)
 
         t0 = time.time()
-        rr_hits = ferritin_search_fn(
+        rr_hits = proteon_search_fn(
             query,
             db,
             top_k=args.top_k,

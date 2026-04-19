@@ -1,16 +1,16 @@
-# Ferritin Geometric DL Infrastructure Roadmap
+# Proteon Geometric DL Infrastructure Roadmap
 
 **Last updated: 2026-04-13**
 
-This document is the design anchor for steering ferritin toward a complete
+This document is the design anchor for steering proteon toward a complete
 infrastructure layer for geometric deep learning in protein folding, docking,
 search, and corpus construction.
 
-The intent is not to turn ferritin into "just another model repo".
+The intent is not to turn proteon into "just another model repo".
 
 The intended role is:
 
-**Ferritin should become the reliable, high-throughput data and geometry layer
+**Proteon should become the reliable, high-throughput data and geometry layer
 that prepares, validates, transforms, indexes, and exports protein structure
 corpora for downstream geometric DL systems.**
 
@@ -35,7 +35,7 @@ This repo should optimize for:
 
 ## 1. Product Direction
 
-Ferritin is already more than a geometry kernel, but it is not yet a complete
+Proteon is already more than a geometry kernel, but it is not yet a complete
 geometric-DL prep platform.
 
 The long-term product surface should look like this:
@@ -58,9 +58,9 @@ The north star is:
 
 ---
 
-## 2. What Ferritin Already Has
+## 2. What Proteon Already Has
 
-Ferritin already has unusually strong building blocks for this direction.
+Proteon already has unusually strong building blocks for this direction.
 
 ### Core strengths
 
@@ -89,19 +89,19 @@ Ferritin already has unusually strong building blocks for this direction.
 
 From [validation/report/report.html](./validation/report/report.html):
 
-- Ferritin CHARMM19+EEF1 minimization preserves fold strongly on the sampled
+- Proteon CHARMM19+EEF1 minimization preserves fold strongly on the sampled
   corpus:
   median TM-score `0.9945`
-- Ferritin AMBER96 single-point energy agrees with OpenMM within about `0.2%`
+- Proteon AMBER96 single-point energy agrees with OpenMM within about `0.2%`
   total-energy error on the oracle case
-- Ferritin runs the 1000-PDB prep benchmark in `14.9 min` versus `449.7 min`
+- Proteon runs the 1000-PDB prep benchmark in `14.9 min` versus `449.7 min`
   for OpenMM at the reported equal-parallelism setting
-- Ferritin accepts `94.9%` of raw sampled PDBs end-to-end, versus `92.8%`
+- Proteon accepts `94.9%` of raw sampled PDBs end-to-end, versus `92.8%`
   for OpenMM and `36.3%` for GROMACS under the compared setups
 
 Interpretation:
 
-**Ferritin is already credible as a structure-prep kernel for corpus
+**Proteon is already credible as a structure-prep kernel for corpus
 construction.**
 
 That matters more for the stated goal than an early model implementation.
@@ -180,13 +180,13 @@ Use them to extract:
 - crop / sampling logic
 - data layout expectations
 
-Then implement ferritin-native artifact formats and transforms.
+Then implement proteon-native artifact formats and transforms.
 
 ---
 
 ## 5. Architecture Target
 
-Ferritin should evolve into five layers.
+Proteon should evolve into five layers.
 
 ### Layer 1: Raw Intake
 
@@ -398,13 +398,13 @@ Typical structure-side supervision includes:
 
 Important distinction:
 
-Ferritin does not need to precompute every pair feature that a model uses
+Proteon does not need to precompute every pair feature that a model uses
 internally, but it does need to provide the raw and supervised tensors that
 training code expects.
 
 ---
 
-## 9. AF2 / OpenFold Gap Analysis Against Ferritin
+## 9. AF2 / OpenFold Gap Analysis Against Proteon
 
 This is the current working assessment, not a final audit.
 
@@ -435,7 +435,7 @@ This is the current working assessment, not a final audit.
 
 ### Practical implication
 
-Ferritin likely already covers much of the **structure cleanup** problem,
+Proteon likely already covers much of the **structure cleanup** problem,
 but not yet the full **model-supervision data contract** problem.
 
 That gap is where near-term infra work should concentrate.
@@ -444,7 +444,7 @@ That gap is where near-term infra work should concentrate.
 
 ## 10. Training-Loop Data Contract We Should Aim For
 
-Ferritin should not jump directly from raw PDBs to "model batch".
+Proteon should not jump directly from raw PDBs to "model batch".
 
 Use three explicit training-side artifact layers.
 
@@ -464,7 +464,7 @@ Fields should likely include:
 - template hits / template features
 - masks
 
-Initial Ferritin v0 implementation should stay primitive:
+Initial Proteon v0 implementation should stay primitive:
 
 - `record_id`
 - `source_id`
@@ -521,7 +521,7 @@ The first two should be stable reusable dataset artifacts.
 
 The third can be model-family-specific.
 
-Ferritin v0 should keep `training_example` deliberately thin:
+Proteon v0 should keep `training_example` deliberately thin:
 
 - join by `record_id`
 - point to one `sequence_example` and one `structure_supervision_example`
@@ -539,7 +539,7 @@ Retrieval is not just a search product here.
 
 It is part of the data engine.
 
-Ferritin retrieval should support:
+Proteon retrieval should support:
 
 - deduplication / clustering
 - nearest-neighbor corpus exploration
@@ -574,13 +574,13 @@ Every release should state:
 
 Release naming should be explicit, for example:
 
-- `ferritin-corpus-v0.1`
-- `ferritin-corpus-v0.2-afdbmix1`
-- `ferritin-supervision-v0.1`
+- `proteon-corpus-v0.1`
+- `proteon-corpus-v0.2-afdbmix1`
+- `proteon-supervision-v0.1`
 
 Do not rely on ad hoc benchmark outputs as the corpus record of truth.
 
-Ferritin v0 should provide a top-level corpus release manifest that links:
+Proteon v0 should provide a top-level corpus release manifest that links:
 
 - `prepared_structures.jsonl`
 - sequence release directory
@@ -595,7 +595,7 @@ and records:
 - failure breakdown
 - length summaries
 
-On top of that, Ferritin should provide a release validation report that checks:
+On top of that, Proteon should provide a release validation report that checks:
 
 - count consistency across layers
 - split-count consistency
@@ -721,7 +721,7 @@ Likely validation additions:
 
 ## 16. Non-Goals
 
-At least for now, ferritin should not optimize for:
+At least for now, proteon should not optimize for:
 
 - becoming a giant end-to-end training framework
 - duplicating every model architecture in public repos
@@ -740,7 +740,7 @@ The correct order is:
 
 ## 17. Summary
 
-Ferritin should be driven toward a single coherent outcome:
+Proteon should be driven toward a single coherent outcome:
 
 **a reproducible, high-throughput, geometry-aware infrastructure layer for
 building and serving protein datasets for geometric deep learning.**
@@ -758,6 +758,6 @@ It is:
 - release discipline
 - training-ready exports
 
-If we keep the repo pointed at those goals, ferritin can become the data and
+If we keep the repo pointed at those goals, proteon can become the data and
 geometry backbone for folding, docking, retrieval, and related protein DL
 systems.

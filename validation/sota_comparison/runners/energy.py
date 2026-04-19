@@ -15,7 +15,7 @@ Per-op payload schema (`payload` field of RunnerResult):
             "electrostatic": float,
             "solvation": Optional[float],
         },
-        "n_unassigned_atoms": int,     # ferritin reports this; -1 for tools
+        "n_unassigned_atoms": int,     # proteon reports this; -1 for tools
                                        # that don't.
     }
 """
@@ -46,7 +46,7 @@ def _strip_hetatm_to_tempfile(pdb_path: str) -> str:
     Why: OpenMM's amber96.xml force field only has templates for the 20
     standard amino acids. Water (HOH), phosphate (PO4), and ligand
     residues like AP5 cause createSystem to fail with "No template
-    found". We strip HETATM in both runners (ferritin + openmm) so they
+    found". We strip HETATM in both runners (proteon + openmm) so they
     see the same protein-only topology. This keeps the energy comparison
     apples-to-apples at the cost of ignoring any energy contribution from
     crystal waters or bound ligands — that's a v2 item (PDBFixer gives
@@ -64,19 +64,19 @@ def _strip_hetatm_to_tempfile(pdb_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# ferritin baseline
+# proteon baseline
 # ---------------------------------------------------------------------------
 
 try:
-    import ferritin as _ferritin
-    _FERRITIN_OK = True
+    import proteon as _proteon
+    _PROTEON_OK = True
     try:
-        _FERRITIN_VERSION = "ferritin " + _metadata.version("ferritin")
+        _PROTEON_VERSION = "proteon " + _metadata.version("proteon")
     except Exception:
-        _FERRITIN_VERSION = "ferritin (unknown version)"
+        _PROTEON_VERSION = "proteon (unknown version)"
 except ImportError:
-    _FERRITIN_OK = False
-    _FERRITIN_VERSION = ""
+    _PROTEON_OK = False
+    _PROTEON_VERSION = ""
 
 
 _COMPONENT_KEYS = (
@@ -91,20 +91,20 @@ _COMPONENT_KEYS = (
 
 
 def _normalize_components(d: dict) -> dict:
-    """Pick out the canonical component keys from a ferritin energy dict.
+    """Pick out the canonical component keys from a proteon energy dict.
 
     Returns a dict with every key from _COMPONENT_KEYS present, using None for
-    components the source dict doesn't have. Defensive against ferritin adding
+    components the source dict doesn't have. Defensive against proteon adding
     new components in the future without breaking the schema.
     """
     return {k: float(d[k]) if d.get(k) is not None else None for k in _COMPONENT_KEYS}
 
 
-if _FERRITIN_OK:
+if _PROTEON_OK:
 
-    @register("energy", "ferritin")
-    def ferritin(pdb_path: str) -> RunnerResult:
-        """Compute AMBER96 energy via ferritin's batch_prepare with ff="amber96".
+    @register("energy", "proteon")
+    def proteon(pdb_path: str) -> RunnerResult:
+        """Compute AMBER96 energy via proteon's batch_prepare with ff="amber96".
 
         Pipeline: load → strip HETATM → batch_prepare(hydrogens="all",
         minimize=True, ff="amber96"). batch_prepare runs place_all_hydrogens
@@ -112,7 +112,7 @@ if _FERRITIN_OK:
         list caching fast path (the same one that made the 50K benchmark
         prepare phase 22s for 200 structures).
 
-        Before this runner switched to batch_prepare, the ferritin side used
+        Before this runner switched to batch_prepare, the proteon side used
         minimize_hydrogens() which runs the O(N²) no-NBL path and takes
         14-72 seconds per structure on the v1 reference set. batch_prepare
         drops that to <1 second per structure and makes 10K-scale energy
@@ -129,15 +129,15 @@ if _FERRITIN_OK:
         # Shared prep with the OpenMM runner: HETATM strip + PDBFixer
         # heavy-atom repair, written to a single tempfile both runners
         # read. See _prep_input_for_amber96 for the rationale; without
-        # it the openmm side runs PDBFixer while ferritin doesn't,
+        # it the openmm side runs PDBFixer while proteon doesn't,
         # contaminating the comparison on PDBs with missing heavy atoms.
         prep_path = _prep_input_for_amber96(pdb_path)
-        s = _ferritin.load(prep_path)
+        s = _proteon.load(prep_path)
         # Full prepare pipeline in one Rust call, AMBER96 throughout.
         # strip_hydrogens=False because we loaded a heavy-only PDB (no H to
         # strip). reconstruct=False because the test corpus has complete
         # heavy atom sets.
-        reports = _ferritin.batch_prepare(
+        reports = _proteon.batch_prepare(
             [s],
             reconstruct=False,
             hydrogens="all",
@@ -159,8 +159,8 @@ if _FERRITIN_OK:
         # PrepReport.components is populated from the minimizer's final state.
         return RunnerResult(
             op="energy",
-            impl="ferritin",
-            impl_version=_FERRITIN_VERSION,
+            impl="proteon",
+            impl_version=_PROTEON_VERSION,
             pdb_id="",
             pdb_path=pdb_path,
             elapsed_s=elapsed,
@@ -178,12 +178,12 @@ if _FERRITIN_OK:
             },
         )
 
-    @register_batch("energy", "ferritin")
-    def ferritin_batch(pdb_paths: _List[str]) -> _List[RunnerResult]:
-        """Batched ferritin energy runner.
+    @register_batch("energy", "proteon")
+    def proteon_batch(pdb_paths: _List[str]) -> _List[RunnerResult]:
+        """Batched proteon energy runner.
 
         Loads all structures (after HETATM stripping), then calls
-        `ferritin.batch_prepare(ff="amber96")` ONCE across the whole list.
+        `proteon.batch_prepare(ff="amber96")` ONCE across the whole list.
         This unlocks in-Rust rayon parallelism across the full batch plus
         the NBL-cached fast minimizer path for structures > 2000 atoms.
 
@@ -203,7 +203,7 @@ if _FERRITIN_OK:
         # the openmm runner pays nothing on its second pass.
         prep_paths = [_prep_input_for_amber96(p) for p in pdb_paths]
         # Parallel load of the prepared files
-        loaded = _ferritin.batch_load_tolerant(prep_paths, n_threads=-1)
+        loaded = _proteon.batch_load_tolerant(prep_paths, n_threads=-1)
         load_index = {i: s for i, s in loaded}
 
         # Collect successful structures for the batch call
@@ -216,14 +216,14 @@ if _FERRITIN_OK:
 
         # Batched prep + minimize + energy-eval, all in one Rust call
         if structs_to_prep:
-            reports = _ferritin.batch_prepare(
+            reports = _proteon.batch_prepare(
                 structs_to_prep,
                 reconstruct=False,
                 hydrogens="all",
                 minimize=True,
                 minimize_method="lbfgs",
                 # P1c: 500 caps per-structure LBFGS wall time. See the
-                # ferritin (per-structure) runner above for the rationale.
+                # proteon (per-structure) runner above for the rationale.
                 minimize_steps=500,
                 gradient_tolerance=0.1,
                 strip_hydrogens=False,
@@ -239,7 +239,7 @@ if _FERRITIN_OK:
         for i, pdb_path in enumerate(pdb_paths):
             if i not in load_index:
                 out.append(RunnerResult(
-                    op="energy", impl="ferritin", impl_version=_FERRITIN_VERSION,
+                    op="energy", impl="proteon", impl_version=_PROTEON_VERSION,
                     pdb_id="", pdb_path=pdb_path, elapsed_s=0.0,
                     status="error",
                     error="batch_load_tolerant failed for this file",
@@ -250,7 +250,7 @@ if _FERRITIN_OK:
             r = reports[pos]
             s = structs_to_prep[pos]
             out.append(RunnerResult(
-                op="energy", impl="ferritin", impl_version=_FERRITIN_VERSION,
+                op="energy", impl="proteon", impl_version=_PROTEON_VERSION,
                 pdb_id="", pdb_path=pdb_path,
                 elapsed_s=0.0,  # see batch elapsed below
                 status="ok", error=None,
@@ -276,7 +276,7 @@ if _FERRITIN_OK:
 # ---------------------------------------------------------------------------
 #
 # OpenMM 8.5 bundles amber96.xml, so we can do a like-for-like AMBER96 vs
-# AMBER96 comparison against ferritin's `compute_energy(ff="amber96")`.
+# AMBER96 comparison against proteon's `compute_energy(ff="amber96")`.
 #
 # Per-component breakdown is obtained by assigning each Force object to its
 # own group and calling Context.getState(groups=1<<group) per group. AMBER96
@@ -290,16 +290,16 @@ if _FERRITIN_OK:
 #   NonbondedForce         → vdw + electrostatic (combined; same caveat)
 #
 # So the components dict has:
-#   bond_stretch      ← matches ferritin exactly
-#   angle_bend        ← matches ferritin exactly
-#   torsion           ← OpenMM torsion TOTAL (use ferritin_torsion_total for
+#   bond_stretch      ← matches proteon exactly
+#   angle_bend        ← matches proteon exactly
+#   torsion           ← OpenMM torsion TOTAL (use proteon_torsion_total for
 #                       the apples-to-apples comparison; see aggregate.py)
 #   improper_torsion  ← None (folded into torsion by OpenMM)
 #   vdw               ← None (folded into nonbonded by OpenMM)
 #   electrostatic     ← None
-#   nonbonded_total   ← OpenMM nonbonded TOTAL (ferritin doesn't export this
-#                       directly, so the aggregator sums ferritin.vdw +
-#                       ferritin.electrostatic to compare)
+#   nonbonded_total   ← OpenMM nonbonded TOTAL (proteon doesn't export this
+#                       directly, so the aggregator sums proteon.vdw +
+#                       proteon.electrostatic to compare)
 
 try:
     import openmm as _openmm  # noqa: F401
@@ -333,10 +333,10 @@ except ImportError:
 # Shared input prep for the AMBER96 energy comparison
 # ---------------------------------------------------------------------------
 #
-# Both energy runners (ferritin + openmm) MUST see identical atom sets,
+# Both energy runners (proteon + openmm) MUST see identical atom sets,
 # otherwise we are comparing two different structures and any percent
 # diff is meaningless. Before this helper existed, the openmm runner ran
-# PDBFixer (heavy-atom repair) but the ferritin runner did not — on the
+# PDBFixer (heavy-atom repair) but the proteon runner did not — on the
 # v1 6-PDB set this was a no-op (clean structures), but on the messy 50K
 # corpus the two stacks would have diverged silently on every dirty PDB.
 #
@@ -398,7 +398,7 @@ def _prep_input_for_amber96(pdb_path: str) -> str:
         fixer.addMissingAtoms()
     except Exception:
         # Repair failed — fall back to the HETATM-stripped file. The
-        # ferritin and openmm runners will get the same fallback path,
+        # proteon and openmm runners will get the same fallback path,
         # so they still see the same atom set.
         _PREP_CACHE[pdb_path] = hetatm_tmp
         return hetatm_tmp
@@ -430,8 +430,8 @@ if _OPENMM_OK:
         """Compute AMBER96 energy via OpenMM for apples-to-apples comparison.
 
         Uses OpenMM's bundled `amber96.xml` force field with:
-        - No cutoffs (NoCutoff method) — matches ferritin's O(N²) vacuum path
-        - No constraints — matches ferritin (which computes energy on the
+        - No cutoffs (NoCutoff method) — matches proteon's O(N²) vacuum path
+        - No constraints — matches proteon (which computes energy on the
           raw geometry, not a constrained one)
         - CPU platform (deterministic, no GPU dependency)
 
@@ -447,10 +447,10 @@ if _OPENMM_OK:
         import time as _time
         t0 = _time.perf_counter()
 
-        # Shared prep with the ferritin runner: HETATM strip + PDBFixer
+        # Shared prep with the proteon runner: HETATM strip + PDBFixer
         # heavy-atom repair, written to a single tempfile both runners
         # read. See _prep_input_for_amber96 above. The cache means this
-        # call is O(1) when the ferritin runner has already prepped the
+        # call is O(1) when the proteon runner has already prepped the
         # same path within the same driver process.
         prep_path = _prep_input_for_amber96(pdb_path)
 
@@ -468,14 +468,14 @@ if _OPENMM_OK:
 
         # AMBER96 requires hydrogens on every standard residue. PDBFixer
         # adds heavy atoms but not H, so add H via Modeller.addHydrogens
-        # using the AMBER96 H templates. The ferritin runner does the
+        # using the AMBER96 H templates. The proteon runner does the
         # same via place_all_hydrogens() inside batch_prepare; both
         # stacks see the same atom set.
         #
         # We then run LocalEnergyMinimizer with heavy atoms frozen to relax
-        # the placed H positions, mirroring ferritin's minimize_hydrogens()
+        # the placed H positions, mirroring proteon's minimize_hydrogens()
         # step. Without this the raw Modeller H placements have the same
-        # kind of residual clashes that ferritin's template placement has,
+        # kind of residual clashes that proteon's template placement has,
         # and the FF evaluation is dominated by them rather than the
         # actual interaction energies we want to compare.
         #
@@ -521,7 +521,7 @@ if _OPENMM_OK:
         context.setPositions(modeller.positions)
 
         # Freeze heavy atoms and minimize H positions only. Mirrors
-        # ferritin.minimize_hydrogens(): mass=0 is OpenMM's idiom for
+        # proteon.minimize_hydrogens(): mass=0 is OpenMM's idiom for
         # "don't move this particle" during minimization.
         for i, atom in enumerate(modeller.topology.atoms()):
             if atom.element is None or atom.element.symbol != "H":
@@ -593,9 +593,9 @@ if _OPENMM_OK:
                 "components": components,
                 # Extra fields specific to the OpenMM runner for cross-
                 # checking: the aggregator uses nonbonded_total to compare
-                # against (ferritin.vdw + ferritin.electrostatic), and
-                # verifies torsion_total matches (ferritin.torsion +
-                # ferritin.improper_torsion).
+                # against (proteon.vdw + proteon.electrostatic), and
+                # verifies torsion_total matches (proteon.torsion +
+                # proteon.improper_torsion).
                 "nonbonded_total": float(nonbonded_total) if nonbonded_total is not None else None,
                 "n_unassigned_atoms": -1,  # OpenMM doesn't have the concept
                 "n_atoms_after_h": int(modeller.topology.getNumAtoms()),

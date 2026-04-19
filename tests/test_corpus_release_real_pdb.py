@@ -23,8 +23,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import ferritin
-from ferritin import io as _ferritin_io
+import proteon
+from proteon import io as _proteon_io
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CRAMBIN_PDB = REPO_ROOT / "test-pdbs" / "1crn.pdb"
@@ -32,16 +32,16 @@ CRAMBIN_PDB = REPO_ROOT / "test-pdbs" / "1crn.pdb"
 
 # Skip when either the PDB fixture is missing OR the Rust I/O backend
 # isn't importable. In source-only environments without
-# ferritin_connector, `ferritin.io._io` is None and
-# `ferritin.batch_load_tolerant()` raises AttributeError on first call.
+# proteon_connector, `proteon.io._io` is None and
+# `proteon.batch_load_tolerant()` raises AttributeError on first call.
 # The structure-supervision tests can run on hand-built namespaces,
 # but this file is explicitly a "real PDB through real I/O" smoke —
 # no fake-structure shortcut applies.
 pytestmark = pytest.mark.skipif(
-    not CRAMBIN_PDB.exists() or _ferritin_io._io is None,
+    not CRAMBIN_PDB.exists() or _proteon_io._io is None,
     reason=(
         "real-PDB smoke requires both test-pdbs/1crn.pdb and the Rust "
-        "I/O backend (ferritin_connector.py_io). Skipping; run the "
+        "I/O backend (proteon_connector.py_io). Skipping; run the "
         "source-only Layer 5 tests via tests/test_supervision.py etc."
     ),
 )
@@ -49,7 +49,7 @@ pytestmark = pytest.mark.skipif(
 
 def _load_crambin():
     """Load the crambin fixture via the public batch API."""
-    pairs = ferritin.batch_load_tolerant([str(CRAMBIN_PDB)])
+    pairs = proteon.batch_load_tolerant([str(CRAMBIN_PDB)])
     assert len(pairs) == 1, "expected exactly one parsed structure"
     _, structure = pairs[0]
     return structure
@@ -60,7 +60,7 @@ class TestStructureSupervisionOnRealCrambin:
 
     def test_supervision_tensors_have_af2_canonical_shapes(self):
         structure = _load_crambin()
-        examples = ferritin.batch_build_structure_supervision_examples(
+        examples = proteon.batch_build_structure_supervision_examples(
             [structure], record_ids=["1crn:A"]
         )
         assert len(examples) == 1
@@ -95,7 +95,7 @@ class TestStructureSupervisionOnRealCrambin:
     def test_atom14_mask_consistent_with_coords(self):
         """`atom14_gt_exists` must be 1 exactly where coords are finite."""
         structure = _load_crambin()
-        ex = ferritin.batch_build_structure_supervision_examples(
+        ex = proteon.batch_build_structure_supervision_examples(
             [structure], record_ids=["1crn:A"]
         )[0]
 
@@ -120,7 +120,7 @@ class TestStructureSupervisionOnRealCrambin:
         A bug in frame construction would show up here as a reflection
         (det ~ -1) or a non-homogeneous last row."""
         structure = _load_crambin()
-        ex = ferritin.batch_build_structure_supervision_examples(
+        ex = proteon.batch_build_structure_supervision_examples(
             [structure], record_ids=["1crn:A"]
         )[0]
 
@@ -148,11 +148,11 @@ class TestExportRoundtripOnRealCrambin:
 
     def test_export_roundtrip_preserves_structure_tensors(self, tmp_path):
         structure = _load_crambin()
-        examples = ferritin.batch_build_structure_supervision_examples(
+        examples = proteon.batch_build_structure_supervision_examples(
             [structure], record_ids=["1crn:A"]
         )
 
-        out_dir = ferritin.export_structure_supervision_examples(
+        out_dir = proteon.export_structure_supervision_examples(
             examples, tmp_path / "supervision_1crn"
         )
         manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -161,7 +161,7 @@ class TestExportRoundtripOnRealCrambin:
         assert "tensor_sha256" in manifest
         assert len(manifest["tensor_sha256"]) == 64  # SHA-256 hex
 
-        loaded = ferritin.load_structure_supervision_examples(out_dir)
+        loaded = proteon.load_structure_supervision_examples(out_dir)
         assert len(loaded) == 1
         assert loaded[0].sequence == examples[0].sequence
         np.testing.assert_array_equal(
@@ -177,7 +177,7 @@ class TestSequenceExampleOnRealCrambin:
 
     def test_sequence_example_basics(self):
         structure = _load_crambin()
-        examples = ferritin.batch_build_sequence_examples([structure])
+        examples = proteon.batch_build_sequence_examples([structure])
         assert len(examples) == 1
         ex = examples[0]
         assert ex.length == 46

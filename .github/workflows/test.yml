@@ -67,12 +67,12 @@ jobs:
       - name: Build connector
         run: |
           source .venv/bin/activate
-          cd ferritin-connector
+          cd proteon-connector
           maturin develop --release
-      - name: Install ferritin package
+      - name: Install proteon package
         run: |
           source .venv/bin/activate
-          pip install -e packages/ferritin/
+          pip install -e packages/proteon/
       - name: Run Python tests
         run: |
           source .venv/bin/activate
@@ -88,18 +88,18 @@ jobs:
           # is real signal — either add tests or, if the PR intentionally
           # raised the baseline, bump --cov-fail-under in the same commit.
           pytest tests/ -v --tb=short \
-            --cov=ferritin \
+            --cov=proteon \
             --cov-report=term \
             --cov-fail-under=87
 
-  # Enforces the byte-exact round-trip promise of the ferritin-search DB I/O
+  # Enforces the byte-exact round-trip promise of the proteon-search DB I/O
   # layer by provisioning a PINNED upstream MMseqs2 release and running the
-  # oracle integration tests with FERRITIN_SEARCH_REQUIRE_ORACLE=1.
+  # oracle integration tests with PROTEON_SEARCH_REQUIRE_ORACLE=1.
   #
   # Inputs are pinned end-to-end so unrelated PRs can't fail when upstream
   # changes its binary or corpus:
   #   - Binary: GitHub release tag MMSEQS_VERSION (not mmseqs.com/latest)
-  #   - FASTA:  vendored in ferritin-search/tests/data/oracle_fixture.fasta
+  #   - FASTA:  vendored in proteon-search/tests/data/oracle_fixture.fasta
   #             (50-seq subset of upstream examples/DB.fasta, committed)
   #
   # Bump MMSEQS_VERSION deliberately when tracking a new upstream release.
@@ -124,11 +124,11 @@ jobs:
           echo "Pinned MMseqs2 release: $MMSEQS_VERSION"
       - name: Byte-exact round-trip oracle (vendored fixture)
         env:
-          FERRITIN_SEARCH_REQUIRE_ORACLE: "1"
-          FERRITIN_SEARCH_MMSEQS_BIN: ${{ env.MMSEQS_BIN }}
+          PROTEON_SEARCH_REQUIRE_ORACLE: "1"
+          PROTEON_SEARCH_MMSEQS_BIN: ${{ env.MMSEQS_BIN }}
           # FASTA defaults to tests/data/oracle_fixture.fasta (vendored);
           # no env override needed.
-        run: cargo test -p ferritin-search --test roundtrip -- --nocapture
+        run: cargo test -p proteon-search --test roundtrip -- --nocapture
       - name: Fetch upstream examples/DB.fasta at pinned tag
         run: |
           cd "$RUNNER_TEMP"
@@ -140,14 +140,14 @@ jobs:
           echo "MMSEQS_TARGET_FASTA=$RUNNER_TEMP/upstream_examples.fasta" >> "$GITHUB_ENV"
       - name: End-to-end search recall oracle (50 vendored queries × ~20k targets)
         env:
-          FERRITIN_SEARCH_REQUIRE_ORACLE: "1"
-          FERRITIN_SEARCH_MMSEQS_BIN: ${{ env.MMSEQS_BIN }}
+          PROTEON_SEARCH_REQUIRE_ORACLE: "1"
+          PROTEON_SEARCH_MMSEQS_BIN: ${{ env.MMSEQS_BIN }}
           # Queries default to the vendored 50-seq fixture.
           # Targets are upstream's full examples/DB.fasta at the pinned
           # release tag — gives realistic cross-similarity so recall@10
           # is a meaningful sensitivity assertion.
-          FERRITIN_SEARCH_TARGET_FASTA: ${{ env.MMSEQS_TARGET_FASTA }}
-        run: cargo test -p ferritin-search --test oracle_search -- --nocapture
+          PROTEON_SEARCH_TARGET_FASTA: ${{ env.MMSEQS_TARGET_FASTA }}
+        run: cargo test -p proteon-search --test oracle_search -- --nocapture
 
   # Smoke test: binaries build and run
   cli-smoke:
@@ -162,7 +162,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build release binaries
-        run: cargo build --release -p ferritin-bin
+        run: cargo build --release -p proteon-bin
       - name: tmalign help
         run: ./target/release/tmalign --help
       - name: usalign help

@@ -18,7 +18,7 @@ import pytest
 
 pytest.importorskip("pyarrow")
 
-import ferritin
+import proteon
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = [
@@ -28,14 +28,14 @@ FIXTURES = [
 ]
 
 pytestmark = pytest.mark.skipif(
-    not all(p.exists() for p in FIXTURES) or ferritin.io._io is None,
+    not all(p.exists() for p in FIXTURES) or proteon.io._io is None,
     reason="chunked intake test needs the Rust IO connector + 1crn/1ubq/1bpi fixtures",
 )
 
 
 def _build(tmp, chunk_size):
     out = tmp / ("chunked" if chunk_size else "single")
-    return ferritin.build_local_corpus_smoke_release(
+    return proteon.build_local_corpus_smoke_release(
         [str(p) for p in FIXTURES],
         out,
         release_id="chunked-equiv",
@@ -66,7 +66,7 @@ def test_chunked_matches_single_shot_contract(tmp_path: Path):
     assert s_train["count_examples"] == c_train["count_examples"]
     assert s_train["split_counts"] == c_train["split_counts"]
 
-    from ferritin.training_example import load_training_examples
+    from proteon.training_example import load_training_examples
     s_exs = sorted(load_training_examples(single / "training"), key=lambda e: e.record_id)
     c_exs = sorted(load_training_examples(chunked / "training"), key=lambda e: e.record_id)
     assert [e.record_id for e in s_exs] == [e.record_id for e in c_exs]
@@ -112,7 +112,7 @@ def test_chunked_records_chunk_size_in_corpus_manifest(tmp_path: Path):
 
 def test_chunk_size_none_is_single_shot_path(tmp_path: Path):
     """chunk_size=None is the default, matches historical behavior."""
-    out = ferritin.build_local_corpus_smoke_release(
+    out = proteon.build_local_corpus_smoke_release(
         [str(FIXTURES[0])],
         tmp_path / "single",
         release_id="default-single",
@@ -135,7 +135,7 @@ def test_chunked_provenance_covers_supervision_only_successes(tmp_path: Path, mo
     _expand_chains output), matching the single-shot path's
     "provenance = what was attempted" semantics.
     """
-    from ferritin import sequence_example as _seq_mod
+    from proteon import sequence_example as _seq_mod
 
     real_build_sequence_example = _seq_mod.build_sequence_example
     fail_on_stem = FIXTURES[1].stem  # 1ubq
@@ -154,7 +154,7 @@ def test_chunked_provenance_covers_supervision_only_successes(tmp_path: Path, mo
     # corpus_smoke itself.
     monkeypatch.setattr(_seq_mod, "build_sequence_example", _selective_sequence_failure)
 
-    root = ferritin.build_local_corpus_smoke_release(
+    root = proteon.build_local_corpus_smoke_release(
         [str(p) for p in FIXTURES],
         tmp_path / "out",
         release_id="chunked-seq-fail",

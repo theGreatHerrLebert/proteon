@@ -31,7 +31,7 @@ def main():
     parser.add_argument("--out", default="bad_structures.json")
     args = parser.parse_args()
 
-    import ferritin
+    import proteon
 
     files = sorted(Path(args.pdb_dir).glob("*.pdb")) + sorted(Path(args.pdb_dir).glob("*.cif"))
     files = [str(f) for f in files[: args.n]]
@@ -39,7 +39,7 @@ def main():
     print(f"Files: {len(files)}", flush=True)
 
     print("Loading...", flush=True)
-    loaded = ferritin.batch_load_tolerant(files, n_threads=0)
+    loaded = proteon.batch_load_tolerant(files, n_threads=0)
     structures_with_files = []
     file_idx = 0
     for orig_idx, s in loaded:
@@ -74,7 +74,7 @@ def main():
         signal.alarm(args.timeout)
         try:
             t0 = time.perf_counter()
-            ferritin.batch_total_sasa([s], n_threads=1, radii="protor")
+            proteon.batch_total_sasa([s], n_threads=1, radii="protor")
             dt = time.perf_counter() - t0
             signal.alarm(0)
             if dt > 5:

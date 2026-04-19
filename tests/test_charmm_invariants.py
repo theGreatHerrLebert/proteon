@@ -38,7 +38,7 @@ import os
 
 import pytest
 
-import ferritin
+import proteon
 
 from conftest import (
     ENERGY_COMPONENTS as CHARMM_COMPONENTS,
@@ -48,7 +48,7 @@ from conftest import (
 )
 
 
-# Force-field name used by ferritin's `compute_energy(ff=...)` API.
+# Force-field name used by proteon's `compute_energy(ff=...)` API.
 CHARMM = "charmm19_eef1"
 
 
@@ -80,8 +80,8 @@ def charmm_energy(request):
     hidden until the Tier-2 oracle surfaced it.
     """
     structure_spec, (_path_id, nbl_threshold) = request.param
-    s = ferritin.load(structure_spec.absolute_path)
-    e = ferritin.compute_energy(
+    s = proteon.load(structure_spec.absolute_path)
+    e = proteon.compute_energy(
         s, ff=CHARMM, units="kJ/mol", nbl_threshold=nbl_threshold
     )
     return structure_spec.name, e
@@ -166,11 +166,11 @@ class TestSolvationNegative:
     """EEF1 self-solvation MUST be negative for any folded protein.
 
     Why this exists (regression test for the 2026-04-10 sign bug):
-    The Tier-2 weak oracle (commit 8f979f4) caught that ferritin's
+    The Tier-2 weak oracle (commit 8f979f4) caught that proteon's
     CHARMM19+EEF1 returns POSITIVE solvation on every v1 PDB while
     OpenMM's CHARMM36+OBC2 returns NEGATIVE. Canonical EEF1 self-
     solvation for 1crn computed independently from the .ini parameter
-    file is -2748 kJ/mol; ferritin reports +537 kJ/mol. The bug was
+    file is -2748 kJ/mol; proteon reports +537 kJ/mol. The bug was
     invisible because the existing test_solvation_nontrivial only
     checks |solvation| > 1.0 — never the sign.
 
@@ -181,7 +181,7 @@ class TestSolvationNegative:
     positives. For a real folded protein the polar terms dominate,
     so the total Σ dg_ref is always negative under this convention.
 
-    If a future ferritin maintainer deliberately changes the sign
+    If a future proteon maintainer deliberately changes the sign
     convention (e.g., reports the negation, or some "lost solvation"
     quantity), update this test AND the SOTA aggregator's
     `solvation_sign_agree` check in compare_energy_weak together —
@@ -252,9 +252,9 @@ class TestDeterminism:
         ids=[s.name for s in STRUCTURES],
     )
     def test_two_calls_identical(self, spec):
-        s = ferritin.load(spec.absolute_path)
-        e1 = ferritin.compute_energy(s, ff=CHARMM)
-        e2 = ferritin.compute_energy(s, ff=CHARMM)
+        s = proteon.load(spec.absolute_path)
+        e1 = proteon.compute_energy(s, ff=CHARMM)
+        e2 = proteon.compute_energy(s, ff=CHARMM)
         for key in CHARMM_COMPONENTS + ("total",):
             assert e1[key] == e2[key], (
                 f"{spec.name}: {key} not deterministic — "
@@ -282,8 +282,8 @@ class TestMinimizationDecreases:
         ids=[s.name for s in STRUCTURES],
     )
     def test_final_not_above_initial(self, spec):
-        s = ferritin.load(spec.absolute_path)
-        reports = ferritin.batch_prepare(
+        s = proteon.load(spec.absolute_path)
+        reports = proteon.batch_prepare(
             [s],
             reconstruct=False,
             hydrogens="all",
@@ -334,8 +334,8 @@ class TestMinimizedTotalIsNegative:
         ids=[s.name for s in STRUCTURES],
     )
     def test_final_total_negative(self, spec):
-        s = ferritin.load(spec.absolute_path)
-        reports = ferritin.batch_prepare(
+        s = proteon.load(spec.absolute_path)
+        reports = proteon.batch_prepare(
             [s],
             reconstruct=False,
             hydrogens="all",
@@ -375,9 +375,9 @@ class TestCharmmDistinctFromAmber:
     """
 
     def test_charmm_total_differs_from_amber(self):
-        s = ferritin.load(os.path.join(TEST_PDBS_DIR, "1crn.pdb"))
-        e_charmm = ferritin.compute_energy(s, ff=CHARMM)
-        e_amber = ferritin.compute_energy(s, ff="amber96")
+        s = proteon.load(os.path.join(TEST_PDBS_DIR, "1crn.pdb"))
+        e_charmm = proteon.compute_energy(s, ff=CHARMM)
+        e_amber = proteon.compute_energy(s, ff="amber96")
         assert e_charmm["total"] != e_amber["total"], (
             "CHARMM and AMBER returned identical totals on 1crn — "
             "one force field is silently falling back to the other"
@@ -388,9 +388,9 @@ class TestCharmmDistinctFromAmber:
         solvation term, CHARMM19+EEF1 always does. If both have the
         same solvation value, EEF1 is not active.
         """
-        s = ferritin.load(os.path.join(TEST_PDBS_DIR, "1crn.pdb"))
-        e_charmm = ferritin.compute_energy(s, ff=CHARMM)
-        e_amber = ferritin.compute_energy(s, ff="amber96")
+        s = proteon.load(os.path.join(TEST_PDBS_DIR, "1crn.pdb"))
+        e_charmm = proteon.compute_energy(s, ff=CHARMM)
+        e_amber = proteon.compute_energy(s, ff="amber96")
         assert e_charmm["solvation"] != e_amber["solvation"], (
             f"CHARMM solvation ({e_charmm['solvation']}) == AMBER "
             f"solvation ({e_amber['solvation']}) — EEF1 is not running"

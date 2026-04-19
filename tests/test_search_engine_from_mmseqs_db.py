@@ -1,7 +1,7 @@
 """Python-side smoke for PySearchEngine.from_mmseqs_db.
 
 The authoritative parity test is
-`ferritin-search::search::tests::build_from_mmseqs_db_round_trips_against_in_memory_build`
+`proteon-search::search::tests::build_from_mmseqs_db_round_trips_against_in_memory_build`
 (Rust-side). This file exercises the Python binding + error-path surface
 + round-trips a tiny DB written byte-compatibly with `mmseqs createdb`.
 """
@@ -14,19 +14,19 @@ from pathlib import Path
 
 import pytest
 
-import ferritin
+import proteon
 
 
 def _rust_msa_available() -> bool:
     try:
-        return ferritin.rust_msa_available()
+        return proteon.rust_msa_available()
     except Exception:
         return False
 
 
 pytestmark = pytest.mark.skipif(
     not _rust_msa_available(),
-    reason="requires ferritin_connector.py_msa (build with MSA bindings)",
+    reason="requires proteon_connector.py_msa (build with MSA bindings)",
 )
 
 
@@ -62,8 +62,8 @@ def test_from_mmseqs_db_parity_against_in_memory_build(tmp_path: Path):
     prefix = tmp_path / "tiny"
     _write_db(prefix, entries)
 
-    db_engine = ferritin.build_search_engine_from_mmseqs_db(str(prefix))
-    mem_engine = ferritin.build_search_engine(
+    db_engine = proteon.build_search_engine_from_mmseqs_db(str(prefix))
+    mem_engine = proteon.build_search_engine(
         [(k, p.decode("ascii")) for k, p in entries]
     )
     assert db_engine.target_count() == len(entries) == mem_engine.target_count()
@@ -90,7 +90,7 @@ def test_from_mmseqs_db_builds_msa_end_to_end(tmp_path: Path):
     prefix = tmp_path / "msa-db"
     _write_db(prefix, entries)
 
-    engine = ferritin.build_search_engine_from_mmseqs_db(str(prefix))
+    engine = proteon.build_search_engine_from_mmseqs_db(str(prefix))
     msa = engine.search_and_build_msa("MKLVRQPSTNLKACDFGHIY", max_seqs=16, gap_idx=21)
     assert int(msa["query_len"]) == 20
     assert int(msa["n_seqs"]) >= 2  # query + at least the near-copy
@@ -99,5 +99,5 @@ def test_from_mmseqs_db_builds_msa_end_to_end(tmp_path: Path):
 
 def test_from_mmseqs_db_missing_path_raises_value_error():
     with pytest.raises(Exception) as excinfo:
-        ferritin.build_search_engine_from_mmseqs_db("/nonexistent/path/to/db")
+        proteon.build_search_engine_from_mmseqs_db("/nonexistent/path/to/db")
     assert "mmseqs DB build failed" in str(excinfo.value)

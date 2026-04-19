@@ -10,7 +10,7 @@ import time
 import numpy as np
 import pytest
 
-from ferritin_connector import py_align_funcs, py_io
+from proteon_connector import py_align_funcs, py_io
 
 EXAMPLE_DIR = os.path.join(os.path.dirname(__file__), "..", "test-pdbs")
 TEST_PDBS_DIR = os.path.join(os.path.dirname(__file__), "..", "test-pdbs")

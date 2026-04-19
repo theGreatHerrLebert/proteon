@@ -1,6 +1,6 @@
 # Test suite
 
-This directory holds ~650 Python test functions covering the ferritin
+This directory holds ~650 Python test functions covering the proteon
 public surface. The tree is flat — one `test_<module>.py` per Python
 module where it made sense, plus the `oracle/` and `corpus/`
 sub-directories for tests that share fixtures.
@@ -24,7 +24,7 @@ enforced with `--strict-markers`.
 
 ### `@pytest.mark.oracle("<tool>")`
 
-Tags tests that compare ferritin output against an independent,
+Tags tests that compare proteon output against an independent,
 externally-implemented tool. One argument, lowercase — `openmm`,
 `ball`, `biopython`, `gemmi`, `usalign`, `mmseqs2`, `pydssp`, `reduce`,
 `freesasa`. Lets you run the oracle layer specifically:
@@ -67,7 +67,7 @@ pytest tests/test_alignment.py tests/test_forcefield.py
 pytest tests/oracle/ -v
 
 # With coverage report (requires pytest-cov)
-pytest --cov=ferritin --cov-report=term-missing
+pytest --cov=proteon --cov-report=term-missing
 ```
 
 ## The registry fixture
@@ -97,7 +97,7 @@ See `conftest.py`'s module docstring for the full rationale.
 
 ## Layout
 
-- `test_<module>.py` — unit tests for `packages/ferritin/src/ferritin/<module>.py`.
+- `test_<module>.py` — unit tests for `packages/proteon/src/proteon/<module>.py`.
 - `oracle/` — oracle tests + shared fixtures (`conftest.py`,
   `ball_energy_raw.jl`, `ball_energy_oracle.jl`).
 - `corpus/` — corpus-release pipeline test fixtures.
@@ -106,7 +106,7 @@ See `conftest.py`'s module docstring for the full rationale.
 
 ## When to add a new test file vs extend an existing one
 
-- New module in `packages/ferritin/src/ferritin/` → new `test_<module>.py`.
+- New module in `packages/proteon/src/proteon/` → new `test_<module>.py`.
   Matches the invariant: every shipped binary / module has a same-named
   test file as a coverage signal, even if it starts with a single smoke
   test.

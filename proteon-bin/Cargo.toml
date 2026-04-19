@@ -1,0 +1,27 @@
+[package]
+name = "proteon-bin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "CLI binaries for TM-align and US-align"
+
+[lints]
+workspace = true
+
+[dependencies]
+proteon-align = { path = "../proteon-align" }
+proteon-arrow = { path = "../proteon-arrow" }
+proteon-io = { path = "../proteon-io" }
+proteon-search = { path = "../proteon-search" }
+pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
+clap = { version = "4", features = ["derive"] }
+parquet = "54"
+anyhow = "1"
+rayon = "1"

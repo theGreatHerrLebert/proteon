@@ -1,6 +1,6 @@
 {
   "corpus": {
-    "pdb_dir": "/scratch/TMAlign/ferritin/validation/pdbs_10k",
+    "pdb_dir": "/scratch/TMAlign/proteon/validation/pdbs_10k",
     "n_targets": 115,
     "n_queries": 8,
     "top_k": 10,
@@ -9,7 +9,7 @@
       0.7,
       0.9
     ],
-    "truth_cache": "/scratch/TMAlign/ferritin/validation/retrieval_truth_cache_120x8.json",
+    "truth_cache": "/scratch/TMAlign/proteon/validation/retrieval_truth_cache_120x8.json",
     "truth_cache_hit": true
   },
   "foldseek": {

@@ -1,4 +1,4 @@
-"""AF2-style consumer smoke over a ferritin corpus release.
+"""AF2-style consumer smoke over a proteon corpus release.
 
 What we're pinning:
   - training.parquet (scalars + structure supervision tensors) and
@@ -46,7 +46,7 @@ def load_sequence_index(release_dir: Path) -> Dict[str, object]:
     comfortably fit; big corpora should instead query a Parquet
     predicate-pushdown reader by record_id as needed.
     """
-    from ferritin.sequence_export import iter_sequence_examples
+    from proteon.sequence_export import iter_sequence_examples
 
     seq_dir = release_dir / "sequence" / "examples"
     if not seq_dir.exists():
@@ -179,7 +179,7 @@ def main():
     ap.add_argument("--split", type=str, default=None, help="filter to one split (predicate pushdown)")
     args = ap.parse_args()
 
-    from ferritin.training_example import iter_training_examples
+    from proteon.training_example import iter_training_examples
 
     release = args.release_dir.resolve()
     if not (release / "training" / "release_manifest.json").exists():

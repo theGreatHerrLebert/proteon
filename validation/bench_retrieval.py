@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Retrieval-quality benchmark for ferritin structural search.
+"""Retrieval-quality benchmark for proteon structural search.
 
 This benchmark measures recall against exact TM-align ground truth on a sampled
 subset of the corpus. It is intended to answer a concrete question:
 
-"When ferritin search retrieves top-k candidates, how often does it recover the
+"When proteon search retrieves top-k candidates, how often does it recover the
 true structural neighbors that exhaustive TM-align would find?"
 
 The benchmark builds or loads a search DB over a sampled target set, computes
@@ -15,7 +15,7 @@ exact TM-align scores query-vs-target, and compares:
 Usage:
     python validation/bench_retrieval.py
     python validation/bench_retrieval.py --pdb-dir validation/pdbs_10k --n-targets 500 --n-queries 25
-    python validation/bench_retrieval.py --db-path /tmp/ferritin_retrieval_eval --compile-db
+    python validation/bench_retrieval.py --db-path /tmp/proteon_retrieval_eval --compile-db
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from statistics import mean
 
-import ferritin
+import proteon
 
 
 def collect_structure_paths(pdb_dir: Path) -> list[Path]:
@@ -56,7 +56,7 @@ def build_truth_for_query(
     target_paths: list[Path],
     target_structures: list,
 ) -> list[dict]:
-    results = ferritin.tm_align_one_to_many(
+    results = proteon.tm_align_one_to_many(
         query_structure,
         target_structures,
         n_threads=-1,
@@ -115,7 +115,7 @@ def truth_cache_key(
         "targets": [str(path) for path in target_paths],
         "queries": [str(path) for path in query_paths],
         "seed": seed,
-        "aligner": "ferritin.tm_align_one_to_many.fast",
+        "aligner": "proteon.tm_align_one_to_many.fast",
     }
     blob = json.dumps(payload, sort_keys=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
@@ -140,9 +140,9 @@ def save_truth_cache(path: Path, *, cache_key: str, truth: dict[str, list[dict]]
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark ferritin retrieval quality against sampled brute-force TM-align")
-    parser.add_argument("--pdb-dir", default="/scratch/TMAlign/ferritin/validation/pdbs_10k")
-    parser.add_argument("--db-path", default="/tmp/ferritin_retrieval_eval")
+    parser = argparse.ArgumentParser(description="Benchmark proteon retrieval quality against sampled brute-force TM-align")
+    parser.add_argument("--pdb-dir", default="/scratch/TMAlign/proteon/validation/pdbs_10k")
+    parser.add_argument("--db-path", default="/tmp/proteon_retrieval_eval")
     parser.add_argument("--n-targets", type=int, default=500)
     parser.add_argument("--n-queries", type=int, default=20)
     parser.add_argument("--k", type=int, default=6)
@@ -183,26 +183,26 @@ def main() -> None:
 
     t0 = time.time()
     if args.reuse_db and db_path.exists():
-        db = ferritin.load_search_db(db_path)
+        db = proteon.load_search_db(db_path)
     else:
-        db = ferritin.build_search_db(target_paths, out=db_path, k=build_k, n_threads=-1)
+        db = proteon.build_search_db(target_paths, out=db_path, k=build_k, n_threads=-1)
     build_s = time.time() - t0
 
     if args.warm_db:
         t0 = time.time()
-        ferritin.warm_search_db(db, posting_cache_max_size=128)
+        proteon.warm_search_db(db, posting_cache_max_size=128)
         warm_s = time.time() - t0
     else:
         warm_s = 0.0
 
     if args.compile_db:
         t0 = time.time()
-        db = ferritin.compile_search_db(db)
+        db = proteon.compile_search_db(db)
         compile_s = time.time() - t0
     else:
         compile_s = 0.0
 
-    loaded_targets = ferritin.batch_load_tolerant(target_paths, n_threads=-1)
+    loaded_targets = proteon.batch_load_tolerant(target_paths, n_threads=-1)
     if not loaded_targets:
         raise SystemExit("No target structures could be loaded for brute-force evaluation")
     loaded_target_map = {
@@ -240,7 +240,7 @@ def main() -> None:
     rerank_s = 0.0
 
     for query_path in query_paths:
-        query = ferritin.load(query_path)
+        query = proteon.load(query_path)
 
         query_key = str(query_path)
         if query_key in truth_cache:
@@ -252,7 +252,7 @@ def main() -> None:
             truth_cache[query_key] = truth_rows
 
         t0 = time.time()
-        pre_hits = ferritin.search(
+        pre_hits = proteon.search(
             query,
             db,
             top_k=args.top_k,
@@ -268,7 +268,7 @@ def main() -> None:
         prefilter_s += time.time() - t0
 
         t0 = time.time()
-        rr_hits = ferritin.search(
+        rr_hits = proteon.search(
             query,
             db,
             top_k=args.top_k,

@@ -11,7 +11,7 @@ import os
 import numpy as np
 import pytest
 
-import ferritin
+import proteon
 
 CORPUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus")
 
@@ -37,21 +37,21 @@ class TestInsertionCodes:
     """
 
     def test_loads(self):
-        s = ferritin.load(corpus_path("insertion_codes", "icode_interleave.pdb"))
+        s = proteon.load(corpus_path("insertion_codes", "icode_interleave.pdb"))
         assert s.atom_count > 0
 
     def test_dihedrals_break_detected(self):
-        s = ferritin.load(corpus_path("insertion_codes", "icode_interleave.pdb"))
-        phi, psi, omega = ferritin.backbone_dihedrals(s)
+        s = proteon.load(corpus_path("insertion_codes", "icode_interleave.pdb"))
+        phi, psi, omega = proteon.backbone_dihedrals(s)
         # With backbone-break detection, the interleaved insertion code
         # boundary (res 3 -> 3A, 50 A apart) should produce NaN
         n_nan = np.sum(np.isnan(omega))
         assert n_nan > 0, "Should have NaN at the backbone break"
 
     def test_prepare_succeeds(self):
-        s = ferritin.load(corpus_path("insertion_codes", "icode_interleave.pdb"))
-        report = ferritin.prepare(s, reconstruct=False, minimize=False)
-        assert isinstance(report, ferritin.PrepReport)
+        s = proteon.load(corpus_path("insertion_codes", "icode_interleave.pdb"))
+        report = proteon.prepare(s, reconstruct=False, minimize=False)
+        assert isinstance(report, proteon.PrepReport)
 
 
 # =========================================================================
@@ -70,13 +70,13 @@ class TestMultiModel:
     """
 
     def test_loads(self):
-        s = ferritin.load(corpus_path("multimodel", "two_models.pdb"))
+        s = proteon.load(corpus_path("multimodel", "two_models.pdb"))
         assert s.model_count == 2
 
     def test_prepare_succeeds(self):
-        s = ferritin.load(corpus_path("multimodel", "two_models.pdb"))
-        report = ferritin.prepare(s, reconstruct=False, minimize=False)
-        assert isinstance(report, ferritin.PrepReport)
+        s = proteon.load(corpus_path("multimodel", "two_models.pdb"))
+        report = proteon.prepare(s, reconstruct=False, minimize=False)
+        assert isinstance(report, proteon.PrepReport)
 
 
 # =========================================================================
@@ -91,18 +91,18 @@ class TestAltloc:
     """
 
     def test_loads(self):
-        s = ferritin.load(corpus_path("altloc", "dual_conformer.pdb"))
+        s = proteon.load(corpus_path("altloc", "dual_conformer.pdb"))
         assert s.atom_count > 0
 
     def test_energy_finite(self):
-        s = ferritin.load(corpus_path("altloc", "dual_conformer.pdb"))
-        e = ferritin.compute_energy(s)
+        s = proteon.load(corpus_path("altloc", "dual_conformer.pdb"))
+        e = proteon.compute_energy(s)
         assert np.isfinite(e["total"])
 
     def test_prepare_succeeds(self):
-        s = ferritin.load(corpus_path("altloc", "dual_conformer.pdb"))
-        report = ferritin.prepare(s, reconstruct=False, minimize=False)
-        assert isinstance(report, ferritin.PrepReport)
+        s = proteon.load(corpus_path("altloc", "dual_conformer.pdb"))
+        report = proteon.prepare(s, reconstruct=False, minimize=False)
+        assert isinstance(report, proteon.PrepReport)
 
 
 # =========================================================================
@@ -118,23 +118,23 @@ class TestMissingAtoms:
     """
 
     def test_loads(self):
-        s = ferritin.load(corpus_path("missing_atoms", "missing_cb.pdb"))
+        s = proteon.load(corpus_path("missing_atoms", "missing_cb.pdb"))
         assert s.atom_count > 0
 
     def test_energy_finite(self):
-        s = ferritin.load(corpus_path("missing_atoms", "missing_cb.pdb"))
-        e = ferritin.compute_energy(s)
+        s = proteon.load(corpus_path("missing_atoms", "missing_cb.pdb"))
+        e = proteon.compute_energy(s)
         assert np.isfinite(e["total"])
 
     def test_dihedrals_no_crash(self):
-        s = ferritin.load(corpus_path("missing_atoms", "missing_cb.pdb"))
-        phi, psi, omega = ferritin.backbone_dihedrals(s)
+        s = proteon.load(corpus_path("missing_atoms", "missing_cb.pdb"))
+        phi, psi, omega = proteon.backbone_dihedrals(s)
         assert len(phi) > 0
 
     def test_prepare_succeeds(self):
-        s = ferritin.load(corpus_path("missing_atoms", "missing_cb.pdb"))
-        report = ferritin.prepare(s, reconstruct=True, minimize=False)
-        assert isinstance(report, ferritin.PrepReport)
+        s = proteon.load(corpus_path("missing_atoms", "missing_cb.pdb"))
+        report = proteon.prepare(s, reconstruct=True, minimize=False)
+        assert isinstance(report, proteon.PrepReport)
 
 
 # =========================================================================
@@ -153,19 +153,19 @@ class TestChainBreaks:
     """
 
     def test_loads(self):
-        s = ferritin.load(corpus_path("chain_breaks", "gap_in_chain.pdb"))
+        s = proteon.load(corpus_path("chain_breaks", "gap_in_chain.pdb"))
         assert s.atom_count > 0
 
     def test_dihedrals_gap_is_nan(self):
-        s = ferritin.load(corpus_path("chain_breaks", "gap_in_chain.pdb"))
-        phi, psi, omega = ferritin.backbone_dihedrals(s)
+        s = proteon.load(corpus_path("chain_breaks", "gap_in_chain.pdb"))
+        phi, psi, omega = proteon.backbone_dihedrals(s)
         # There should be NaN values at the gap between residue 3 and 7
         assert np.any(np.isnan(omega)), "Gap should produce NaN omega"
 
     def test_prepare_succeeds(self):
-        s = ferritin.load(corpus_path("chain_breaks", "gap_in_chain.pdb"))
-        report = ferritin.prepare(s, reconstruct=False, minimize=False)
-        assert isinstance(report, ferritin.PrepReport)
+        s = proteon.load(corpus_path("chain_breaks", "gap_in_chain.pdb"))
+        report = proteon.prepare(s, reconstruct=False, minimize=False)
+        assert isinstance(report, proteon.PrepReport)
 
 
 # =========================================================================
@@ -176,24 +176,24 @@ class TestChainBreaks:
 class TestLigands:
     """Edge case: structures with HETATM ligands.
 
-    Ferritin includes HETATM atoms in SASA and energy; FreeSASA does not.
+    Proteon includes HETATM atoms in SASA and energy; FreeSASA does not.
     Selection language should be able to filter protein-only.
     """
 
     def test_loads(self):
-        s = ferritin.load(corpus_path("ligands", "protein_with_ligand.pdb"))
+        s = proteon.load(corpus_path("ligands", "protein_with_ligand.pdb"))
         assert s.atom_count > 0
 
     def test_has_hetatm(self):
-        s = ferritin.load(corpus_path("ligands", "protein_with_ligand.pdb"))
+        s = proteon.load(corpus_path("ligands", "protein_with_ligand.pdb"))
         assert s.atom_count > 9  # 9 protein atoms + 6 ligand atoms
 
     def test_energy_finite(self):
-        s = ferritin.load(corpus_path("ligands", "protein_with_ligand.pdb"))
-        e = ferritin.compute_energy(s)
+        s = proteon.load(corpus_path("ligands", "protein_with_ligand.pdb"))
+        e = proteon.compute_energy(s)
         assert np.isfinite(e["total"])
 
     def test_prepare_succeeds(self):
-        s = ferritin.load(corpus_path("ligands", "protein_with_ligand.pdb"))
-        report = ferritin.prepare(s, reconstruct=False, hydrogens="general", minimize=False)
-        assert isinstance(report, ferritin.PrepReport)
+        s = proteon.load(corpus_path("ligands", "protein_with_ligand.pdb"))
+        report = proteon.prepare(s, reconstruct=False, hydrogens="general", minimize=False)
+        assert isinstance(report, proteon.PrepReport)

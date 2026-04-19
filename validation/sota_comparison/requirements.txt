@@ -4,8 +4,8 @@
 # v1 tools
 freesasa>=2.2,<3          # SASA reference implementation
 openmm>=8.1,<9            # Energy + minimization reference implementation
-numpy>=1.26               # required by both ferritin and the runners
-pyarrow>=15               # required eagerly by ferritin.__init__ (arrow + search submodules)
+numpy>=1.26               # required by both proteon and the runners
+pyarrow>=15               # required eagerly by proteon.__init__ (arrow + search submodules)
 
 # Build tooling (so maturin develop works in the sota_venv)
 maturin>=1.5,<2

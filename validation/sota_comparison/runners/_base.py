@@ -2,7 +2,7 @@
 
 Every runner is a function `(pdb_path: str) -> RunnerResult`. Runners register
 themselves on a per-op basis via the `@register` decorator. The aggregator
-pairs `ferritin` against every other registered impl per op.
+pairs `proteon` against every other registered impl per op.
 
 Design decisions (locked, see plan file):
 - Per-op payload schemas. No free-form dicts.
@@ -42,7 +42,7 @@ class RunnerResult:
 
     Attributes:
         op: The operation being measured ("sasa", "energy", "dssp", ...).
-        impl: The implementation that produced this result ("ferritin",
+        impl: The implementation that produced this result ("proteon",
             "freesasa", "openmm", ...).
         impl_version: Tool version string (e.g. "freesasa 2.2.1"). Empty if
             unknown — log a warning so the user knows to fix it.
@@ -79,7 +79,7 @@ def register(op: str, impl: str) -> Callable:
             ...
 
     The decorated function is left unchanged so it can be called directly in
-    tests. Registry order is insertion order; `ferritin` should be registered
+    tests. Registry order is insertion order; `proteon` should be registered
     first in each op module so it appears as the baseline column in reports.
     """
 
@@ -100,8 +100,8 @@ def register_batch(op: str, impl: str) -> Callable:
     at once on 120 cores is ~100x faster than 200 single-structure calls).
 
     Usage:
-        @register_batch("energy", "ferritin")
-        def ferritin_batch(paths: List[str]) -> List[RunnerResult]:
+        @register_batch("energy", "proteon")
+        def proteon_batch(paths: List[str]) -> List[RunnerResult]:
             ...
 
     The corresponding non-batched runner should still be registered via

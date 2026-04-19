@@ -22,7 +22,7 @@ def main():
     parser.add_argument("--out", default="convergence_diagnosis.json")
     args = parser.parse_args()
 
-    import ferritin
+    import proteon
 
     # Collect first N files (same order as benchmark)
     files = sorted(Path(args.pdb_dir).glob("*.pdb")) + sorted(Path(args.pdb_dir).glob("*.cif"))
@@ -30,7 +30,7 @@ def main():
     files = [f for f in files if os.path.getsize(f) < 20_000_000]
 
     print(f"Loading up to {len(files)} files...", flush=True)
-    loaded = ferritin.batch_load_tolerant(files, n_threads=0)
+    loaded = proteon.batch_load_tolerant(files, n_threads=0)
     structures = [(Path(files[i]).stem, s) for i, s in loaded if s.atom_count < 25000]
     structures = structures[: args.n]
     print(f"Got {len(structures)} structures after filter\n", flush=True)
@@ -39,7 +39,7 @@ def main():
     print("=== Round 1: 50 steps, tol=0.1 (benchmark config) ===", flush=True)
     t0 = time.perf_counter()
     structs_only = [s for _, s in structures]
-    reports_50 = ferritin.batch_prepare(
+    reports_50 = proteon.batch_prepare(
         structs_only, reconstruct=False, hydrogens="backbone",
         minimize=True, minimize_steps=50, minimize_method="lbfgs",
         gradient_tolerance=0.1, n_threads=0,
@@ -59,10 +59,10 @@ def main():
     # Note: we need to work on copies since prepare modifies in-place
     # Round 2: 500 steps, tol=0.1 (is 50 too few?)
     print("\n=== Round 2: 500 steps, tol=0.1 (more steps) ===", flush=True)
-    structs_fresh = [ferritin.load(files[i]) for i, _ in enumerate(loaded) if i < len(loaded)]
+    structs_fresh = [proteon.load(files[i]) for i, _ in enumerate(loaded) if i < len(loaded)]
     structs_fresh = [s for s in structs_fresh if s.atom_count < 25000][: args.n]
     t0 = time.perf_counter()
-    reports_500 = ferritin.batch_prepare(
+    reports_500 = proteon.batch_prepare(
         structs_fresh, reconstruct=False, hydrogens="backbone",
         minimize=True, minimize_steps=500, minimize_method="lbfgs",
         gradient_tolerance=0.1, n_threads=0,
@@ -75,10 +75,10 @@ def main():
 
     # Round 3: 50 steps, looser tolerance (is 0.1 too tight?)
     print("=== Round 3: 50 steps, tol=1.0 (looser tolerance) ===", flush=True)
-    structs_fresh = [ferritin.load(files[i]) for i, _ in enumerate(loaded) if i < len(loaded)]
+    structs_fresh = [proteon.load(files[i]) for i, _ in enumerate(loaded) if i < len(loaded)]
     structs_fresh = [s for s in structs_fresh if s.atom_count < 25000][: args.n]
     t0 = time.perf_counter()
-    reports_tol1 = ferritin.batch_prepare(
+    reports_tol1 = proteon.batch_prepare(
         structs_fresh, reconstruct=False, hydrogens="backbone",
         minimize=True, minimize_steps=50, minimize_method="lbfgs",
         gradient_tolerance=1.0, n_threads=0,
@@ -89,10 +89,10 @@ def main():
 
     # Round 4: 500 steps, tol=1.0 (both relaxed)
     print("=== Round 4: 500 steps, tol=1.0 (both relaxed) ===", flush=True)
-    structs_fresh = [ferritin.load(files[i]) for i, _ in enumerate(loaded) if i < len(loaded)]
+    structs_fresh = [proteon.load(files[i]) for i, _ in enumerate(loaded) if i < len(loaded)]
     structs_fresh = [s for s in structs_fresh if s.atom_count < 25000][: args.n]
     t0 = time.perf_counter()
-    reports_both = ferritin.batch_prepare(
+    reports_both = proteon.batch_prepare(
         structs_fresh, reconstruct=False, hydrogens="backbone",
         minimize=True, minimize_steps=500, minimize_method="lbfgs",
         gradient_tolerance=1.0, n_threads=0,

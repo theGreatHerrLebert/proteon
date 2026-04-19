@@ -1,5 +1,5 @@
 {
-  "format": "ferritin.structure_supervision.parquet.v0",
+  "format": "proteon.structure_supervision.parquet.v0",
   "schema_version": 1,
   "count": 33,
   "examples_file": "examples.jsonl",

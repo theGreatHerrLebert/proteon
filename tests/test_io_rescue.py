@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ferritin import io
+from proteon import io
 
 
 class FakeBackend:

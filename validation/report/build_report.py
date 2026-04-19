@@ -1,4 +1,4 @@
-"""Build the single-file HTML validation report for ferritin.
+"""Build the single-file HTML validation report for proteon.
 
 Generates report.html with:
   * Headline numbers
@@ -27,19 +27,19 @@ HERE = pathlib.Path(__file__).parent
 FIG_DIR = HERE / "figures"
 OUT = HERE / "report.html"
 
-FERRITIN_JSONL = pathlib.Path("/scratch/TMAlign/ferritin/validation/tm_fold_plots/ferritin.jsonl")
-OPENMM_JSONL = pathlib.Path("/scratch/TMAlign/ferritin/validation/tm_fold_plots/openmm.jsonl")
-GROMACS_JSONL = pathlib.Path("/scratch/TMAlign/ferritin/validation/gmx_fold_preservation/tm_fold_gromacs.jsonl")
-FERRITIN_AMBER_JSONL = pathlib.Path("/scratch/TMAlign/ferritin/validation/tm_fold_plots/ferritin_amber.jsonl")
-OPENMM_AMBER_JSONL = pathlib.Path("/scratch/TMAlign/ferritin/validation/tm_fold_plots/openmm_amber.jsonl")
-FERRITIN_STAGE2_JSONL = pathlib.Path("/scratch/TMAlign/ferritin/validation/stage2_1k_postfix.jsonl")
+PROTEON_JSONL = pathlib.Path("/scratch/TMAlign/proteon/validation/tm_fold_plots/proteon.jsonl")
+OPENMM_JSONL = pathlib.Path("/scratch/TMAlign/proteon/validation/tm_fold_plots/openmm.jsonl")
+GROMACS_JSONL = pathlib.Path("/scratch/TMAlign/proteon/validation/gmx_fold_preservation/tm_fold_gromacs.jsonl")
+PROTEON_AMBER_JSONL = pathlib.Path("/scratch/TMAlign/proteon/validation/tm_fold_plots/proteon_amber.jsonl")
+OPENMM_AMBER_JSONL = pathlib.Path("/scratch/TMAlign/proteon/validation/tm_fold_plots/openmm_amber.jsonl")
+PROTEON_STAGE2_JSONL = pathlib.Path("/scratch/TMAlign/proteon/validation/stage2_1k_postfix.jsonl")
 RESCUE_BENCHMARK_JSON = HERE / "rescue_benchmark_summary.json"
 
-PACKAGE_SRC = HERE.parent.parent / "packages" / "ferritin" / "src"
+PACKAGE_SRC = HERE.parent.parent / "packages" / "proteon" / "src"
 if str(PACKAGE_SRC) not in sys.path:
     sys.path.insert(0, str(PACKAGE_SRC))
 
-from ferritin.loader_failure_analysis import summarize_loader_failures  # noqa: E402
+from proteon.loader_failure_analysis import summarize_loader_failures  # noqa: E402
 
 
 def load_jsonl(path: pathlib.Path) -> list[dict]:
@@ -141,7 +141,7 @@ def rescue_summary_table(rows: list[dict]) -> str:
 
     return f"""
 <div class="callout">
-<strong>Rescue potential inside ferritin's parse failures:</strong>
+<strong>Rescue potential inside proteon's parse failures:</strong>
 {rescueable_count}/{total_count} current loader failures ({(100 * rescueable_count / max(total_count, 1)):.1f}%)
 match deterministic rescue buckets in the first-pass rescue layer. These are primarily metadata cleanup
 or fixed-width PDB field repairs, not ambiguous structural reconstruction.
@@ -213,34 +213,34 @@ loaded successfully through the explicit rescue path.
 
 def main() -> None:
     # Load all the jsonls that exist.
-    rec_fer_ch = load_jsonl(FERRITIN_JSONL)
+    rec_fer_ch = load_jsonl(PROTEON_JSONL)
     rec_omm_ch = load_jsonl(OPENMM_JSONL)
     rec_gmx    = load_jsonl(GROMACS_JSONL)
-    rec_fer_a  = load_jsonl(FERRITIN_AMBER_JSONL)
+    rec_fer_a  = load_jsonl(PROTEON_AMBER_JSONL)
     rec_omm_a  = load_jsonl(OPENMM_AMBER_JSONL)
 
     stats_ch = {
-        "Ferritin CHARMM19+EEF1": summary_stats(rec_fer_ch),
+        "Proteon CHARMM19+EEF1": summary_stats(rec_fer_ch),
         "OpenMM CHARMM36+OBC2":   summary_stats(rec_omm_ch),
     }
     stats_a = {
-        "Ferritin AMBER96":    summary_stats(rec_fer_a),
+        "Proteon AMBER96":    summary_stats(rec_fer_a),
         "OpenMM AMBER96+OBC":  summary_stats(rec_omm_a),
         "GROMACS AMBER96":     summary_stats(rec_gmx),
     }
 
     # Headline numbers for the hero box.
     headlines = {
-        "tm_median_charmm":  stats_ch["Ferritin CHARMM19+EEF1"].get("tm_median", 0),
-        "n_pdbs":             stats_ch["Ferritin CHARMM19+EEF1"].get("n_total", 0),
-        "success_pct":        stats_ch["Ferritin CHARMM19+EEF1"].get("success_pct", 0),
+        "tm_median_charmm":  stats_ch["Proteon CHARMM19+EEF1"].get("tm_median", 0),
+        "n_pdbs":             stats_ch["Proteon CHARMM19+EEF1"].get("n_total", 0),
+        "success_pct":        stats_ch["Proteon CHARMM19+EEF1"].get("success_pct", 0),
         "throughput_ratio":   30,   # computed: 449.7/14.9 ≈ 30
         "amber_agreement":    "0.2%",
         "omm_gmx_agreement":  "0.03%",
     }
 
     today = datetime.date.today().isoformat()
-    rescue_rows = _load_rescue_candidate_rows(FERRITIN_STAGE2_JSONL)
+    rescue_rows = _load_rescue_candidate_rows(PROTEON_STAGE2_JSONL)
     rescue_html = rescue_summary_table(rescue_rows)
     realized_rescue_html = realized_rescue_summary_table(RESCUE_BENCHMARK_JSON)
 
@@ -248,10 +248,10 @@ def main() -> None:
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Ferritin validation report — {today}</title>
+<title>Proteon validation report — {today}</title>
 <style>
 :root {{
-  --ferritin: #0a7e8c;
+  --proteon: #0a7e8c;
   --openmm:   #d94801;
   --gromacs:  #6a3d9a;
   --ink:      #222;
@@ -276,7 +276,7 @@ main {{
   padding: 40px 32px 80px;
 }}
 header {{
-  border-bottom: 3px solid var(--ferritin);
+  border-bottom: 3px solid var(--proteon);
   margin-bottom: 28px;
   padding-bottom: 16px;
 }}
@@ -290,7 +290,7 @@ h2 {{
 }}
 h2::before {{
   content: ""; display: inline-block; width: 4px; height: 18px;
-  background: var(--ferritin); margin-right: 10px; vertical-align: -3px;
+  background: var(--proteon); margin-right: 10px; vertical-align: -3px;
 }}
 h3 {{
   font-size: 16px; font-weight: 600; margin: 22px 0 8px;
@@ -310,7 +310,7 @@ h3 {{
   padding: 18px 20px;
 }}
 .hero .num {{
-  font-size: 32px; font-weight: 700; color: var(--ferritin);
+  font-size: 32px; font-weight: 700; color: var(--proteon);
   letter-spacing: -0.02em; line-height: 1;
 }}
 .hero .lbl {{
@@ -338,7 +338,7 @@ section img {{
 section p {{ max-width: 780px; }}
 .callout {{
   background: #f4fbfc;
-  border-left: 3px solid var(--ferritin);
+  border-left: 3px solid var(--proteon);
   padding: 12px 16px;
   margin: 18px 0;
   font-size: 14px;
@@ -409,7 +409,7 @@ pre {{
   padding: 10px 16px; margin: 18px 0 28px;
   font-size: 14px;
 }}
-.toc a {{ color: var(--ferritin); text-decoration: none; margin-right: 14px; }}
+.toc a {{ color: var(--proteon); text-decoration: none; margin-right: 14px; }}
 .toc a:hover {{ text-decoration: underline; }}
 footer {{
   margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--rule);
@@ -421,12 +421,12 @@ footer {{
 <main>
 
 <header>
-  <h1>Ferritin validation report</h1>
+  <h1>Proteon validation report</h1>
   <div class="meta">Structural bioinformatics compute kernel · generated {today}</div>
 </header>
 
 <p class="lede">
-Ferritin is a Rust-based force-field + alignment engine with Python bindings,
+Proteon is a Rust-based force-field + alignment engine with Python bindings,
 designed as a fast, embeddable alternative to full MD packages for structural
 bioinformatics workflows. This report documents the correctness and
 performance of its energy + minimization pipeline against two reference
@@ -451,7 +451,7 @@ implementations (OpenMM and GROMACS) on identical inputs.
   <div class="card">
     <div class="num">{headlines['tm_median_charmm']:.4f}</div>
     <div class="lbl">Median TM-score, 1000 PDBs</div>
-    <div class="sub">Ferritin CHARMM19+EEF1 pre vs post minimization. Fold is preserved.</div>
+    <div class="sub">Proteon CHARMM19+EEF1 pre vs post minimization. Fold is preserved.</div>
   </div>
   <div class="card">
     <div class="num">{headlines['amber_agreement']}</div>
@@ -461,7 +461,7 @@ implementations (OpenMM and GROMACS) on identical inputs.
   <div class="card">
     <div class="num">{headlines['throughput_ratio']}×</div>
     <div class="lbl">Faster than OpenMM end-to-end</div>
-    <div class="sub">1000 PDBs in 14.9 min (ferritin) vs 449.7 min (OpenMM) at equal parallelism.</div>
+    <div class="sub">1000 PDBs in 14.9 min (proteon) vs 449.7 min (OpenMM) at equal parallelism.</div>
   </div>
 </div>
 
@@ -477,7 +477,7 @@ behind it on a seed-42 random sample of 1000 PDB entries drawn from a 50,000
 PDB corpus.
 </p>
 <div class="callout">
-Ferritin ships two force fields: <strong>CHARMM19+EEF1</strong> (polar-H
+Proteon ships two force fields: <strong>CHARMM19+EEF1</strong> (polar-H
 united-atom, the production default — used by the 50K battle test and the
 main fold-preservation benchmark) and <strong>AMBER96</strong> (all-atom,
 validated against both OpenMM and GROMACS implementations at reference
@@ -493,7 +493,7 @@ unambiguous.
 
 <section>
 <p>
-Three independent AMBER96 implementations (ferritin, OpenMM 8.5, GROMACS 2026.1)
+Three independent AMBER96 implementations (proteon, OpenMM 8.5, GROMACS 2026.1)
 compute the single-point energy of crambin (PDB 1crn, 46 residues, ≈640 atoms
 after hydrogen placement). All three tools consume the same atomic
 coordinates within each preprocessing path. Components — bond stretch,
@@ -505,7 +505,7 @@ bar-for-bar.
 
 <p>
 The left panel uses PDBFixer's hydrogen-placement library (consumed by
-ferritin and OpenMM). All four components agree to below 0.5%, with bond
+proteon and OpenMM). All four components agree to below 0.5%, with bond
 stretching matching to <strong>0.02%</strong> — well below the noise
 introduced by parameter precision. The right panel uses GROMACS's own
 <code>pdb2gmx</code> output (different hydrogen positions, which is why the
@@ -516,7 +516,7 @@ AMBER96 implementations.
 </p>
 
 <div class="callout">
-<strong>Interpretation:</strong> ferritin's AMBER96 force-field math is
+<strong>Interpretation:</strong> proteon's AMBER96 force-field math is
 canonical. The remaining &lt;0.5% per-component residual is within the
 noise floor of hydrogen-placement library differences, not a math bug. The
 reproducer lives at
@@ -530,7 +530,7 @@ reproducer lives at
 <section>
 <p>
 Each tool runs its production CHARMM-family pipeline on the same 1000 PDBs:
-<strong>ferritin</strong> with CHARMM19+EEF1 (polar-H united-atom with
+<strong>proteon</strong> with CHARMM19+EEF1 (polar-H united-atom with
 Lazaridis-Karplus implicit solvent), <strong>OpenMM</strong> with
 CHARMM36+OBC2 (all-atom with GB implicit solvent). TM-score and RMSD are
 computed on Cα coordinates before vs after minimization.
@@ -540,11 +540,11 @@ computed on Cα coordinates before vs after minimization.
 
 <p>
 Both tools preserve fold at the "same-fold" level (TM &gt; 0.5) on every
-successful structure. Ferritin's median TM-score of
-<strong>{stats_ch['Ferritin CHARMM19+EEF1'].get('tm_median', 0):.4f}</strong>
+successful structure. Proteon's median TM-score of
+<strong>{stats_ch['Proteon CHARMM19+EEF1'].get('tm_median', 0):.4f}</strong>
 vs OpenMM's
 <strong>{stats_ch['OpenMM CHARMM36+OBC2'].get('tm_median', 0):.4f}</strong>
-differs marginally; the p05 tails show ferritin has slightly more
+differs marginally; the p05 tails show proteon has slightly more
 structures with TM in the 0.90–0.97 range, driven by CHARMM19's inflated
 united-atom carbon radii (which absorb implicit hydrogens and thus relax
 slightly more during minimization).
@@ -553,7 +553,7 @@ slightly more during minimization).
 {img_tag(FIG_DIR / "02a_rmsd_charmm.png", "CHARMM RMSD")}
 
 <p>
-The RMSD gap (≈0.58 Å ferritin vs ≈0.21 Å OpenMM median) is the
+The RMSD gap (≈0.58 Å proteon vs ≈0.21 Å OpenMM median) is the
 expected signature of a polar-H united-atom force field: the absorbed
 implicit hydrogens create small initial clashes that heavy-atom-free
 minimization must relax. All-atom CHARMM36 has explicit hydrogens, smaller
@@ -599,7 +599,7 @@ cutoff policy, minimizer flavor).
 <section>
 <p>
 End-to-end wall time per structure is dominated by force-field evaluation
-during minimization. Ferritin's LBFGS minimizer auto-dispatches to a CUDA
+during minimization. Proteon's LBFGS minimizer auto-dispatches to a CUDA
 kernel on structures ≥ 2000 atoms (on a machine with a CUDA-capable GPU);
 OpenMM and GROMACS ran here on CPU. The dashed horizontal lines mark
 amortized throughput when each tool is run batch-parallel across the full
@@ -627,11 +627,11 @@ bounded.
 
 <p>
 The <strong>right panel</strong> is the production number: total wall time to
-process a 1000-PDB batch on each tool's native parallelism. Ferritin at
+process a 1000-PDB batch on each tool's native parallelism. Proteon at
 14.9 min on CHARMM19+EEF1 is the fastest configuration — benefiting from
 (a) cheap polar-H united-atom evaluation, (b) rayon-parallel
 <code>batch_prepare</code> with zero Python overhead, and (c) GPU dispatch
-for structures ≥ 2000 atoms. Ferritin AMBER96 at 210 min pays the expected
+for structures ≥ 2000 atoms. Proteon AMBER96 at 210 min pays the expected
 cost of all-atom evaluation with a 15 Å nonbonded cutoff (≈14× heavier per
 structure than CHARMM19+EEF1's 9 Å polar-H path). OpenMM on CHARMM36+OBC2
 sits at 449.7 min despite equivalent parallelism — the per-structure context
@@ -641,7 +641,7 @@ GROMACS looks fastest on its aggregate bar, but only because
 </p>
 
 <div class="callout">
-<strong>Platform notes:</strong> ferritin ran 64-way rayon with GPU
+<strong>Platform notes:</strong> proteon ran 64-way rayon with GPU
 auto-dispatch on monster3 (128 AMD cores, RTX 5090). OpenMM ran 64
 single-thread CPU workers via ProcessPoolExecutor on monster3. GROMACS ran
 16 single-thread CPU workers on a 16-core Ubuntu local box. The per-structure
@@ -665,10 +665,10 @@ PDB entries with no manual curation.
 {img_tag(FIG_DIR / "06_input_robustness.png", "Robustness comparison")}
 
 <p>
-<strong>Ferritin accepts 94.9% of raw PDBs end-to-end</strong>, compared to
+<strong>Proteon accepts 94.9% of raw PDBs end-to-end</strong>, compared to
 OpenMM's 92.8% (PDBFixer + CHARMM36 template strictness) and GROMACS's 36.3%
 (<code>pdb2gmx</code> + AMBER96 residue database is significantly stricter).
-Ferritin's dominant failure mode is <em>input parse error</em> in pdbtbx on
+Proteon's dominant failure mode is <em>input parse error</em> in pdbtbx on
 rare malformed records; OpenMM and GROMACS fail chiefly because their
 force-field residue databases don't recognize non-standard amino acids
 that appear in natural PDB entries.
@@ -676,15 +676,15 @@ that appear in natural PDB entries.
 
 <div class="callout">
 <strong>Practical consequence:</strong> if your pipeline feeds 50,000 PDBs
-in, ferritin returns ≈47,000 minimized structures, OpenMM returns ≈46,000,
+in, proteon returns ≈47,000 minimized structures, OpenMM returns ≈46,000,
 GROMACS returns ≈18,000. For archive-scale workflows this is the
 dominant filter on the other end of the pipeline.
 </div>
 
-<h3>What looks rescuable inside ferritin's remaining parse errors?</h3>
+<h3>What looks rescuable inside proteon's remaining parse errors?</h3>
 
 <p>
-The remaining ferritin failures are not all equally hard. Most are concentrated
+The remaining proteon failures are not all equally hard. Most are concentrated
 in a small number of malformed-record buckets, which makes them good candidates
 for an explicit rescue pass rather than a broader parser rewrite.
 </p>
@@ -708,8 +708,8 @@ were actually recovered by the explicit rescue path on that slice.
 <section>
 <h3>Scripts</h3>
 <ul>
-  <li><code>validation/tm_fold_preservation.py</code> — ferritin CHARMM19+EEF1 fold run</li>
-  <li><code>validation/tm_fold_preservation_amber.py</code> — ferritin AMBER96 fold run</li>
+  <li><code>validation/tm_fold_preservation.py</code> — proteon CHARMM19+EEF1 fold run</li>
+  <li><code>validation/tm_fold_preservation_amber.py</code> — proteon AMBER96 fold run</li>
   <li><code>validation/tm_fold_preservation_openmm.py</code> — OpenMM CHARMM36+OBC2 run</li>
   <li><code>validation/tm_fold_preservation_openmm_amber.py</code> — OpenMM AMBER96+OBC run</li>
   <li><code>validation/tm_fold_preservation_gromacs.py</code> — GROMACS AMBER96 run</li>
@@ -719,14 +719,14 @@ were actually recovered by the explicit rescue path on that slice.
 </ul>
 
 <h3>Environments</h3>
-<pre>Ferritin:   cargo +stable (Rust 1.83) / maturin develop --release / PyO3
+<pre>Proteon:   cargo +stable (Rust 1.83) / maturin develop --release / PyO3
 OpenMM:     OpenMM 8.5 + PDBFixer in sota_venv
 GROMACS:    GROMACS 2026.1 (local build, CPU + OpenMP, no CUDA)
 Python:     3.10.x
-Sample:     seed=42, 1000 PDBs from /globalscratch/dateschn/ferritin-benchmark/pdbs_50k/</pre>
+Sample:     seed=42, 1000 PDBs from /globalscratch/dateschn/proteon-benchmark/pdbs_50k/</pre>
 
 <h3>Hardware</h3>
-<pre>ferritin GPU benchmark:   monster3 — 128 AMD cores, 1 × NVIDIA RTX 5090
+<pre>proteon GPU benchmark:   monster3 — 128 AMD cores, 1 × NVIDIA RTX 5090
 OpenMM benchmark:         monster3 — 128 AMD cores, CPU only
 GROMACS benchmark:        local — 16 cores, CPU only</pre>
 

@@ -1,7 +1,7 @@
 """Rust-vs-Python parity regression guards for supervision extraction.
 
 The supervision hot path dispatches to the Rust batch extractor
-(`ferritin_connector.py_supervision.batch_extract_structure_supervision`)
+(`proteon_connector.py_supervision.batch_extract_structure_supervision`)
 whenever it's available, falling back to the Python implementation
 in `supervision.py` / `supervision_geometry.py` otherwise. Both paths
 are required to produce bit-for-bit identical tensors — any drift
@@ -20,8 +20,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import ferritin
-from ferritin.supervision_backend import (
+import proteon
+from proteon.supervision_backend import (
     batch_extract_structure_supervision,
     rust_supervision_available,
 )
@@ -33,7 +33,7 @@ UBIQUITIN = REPO_ROOT / "test-pdbs" / "1ubq.pdb"
 
 pytestmark = pytest.mark.skipif(
     not rust_supervision_available(),
-    reason="ferritin_connector.py_supervision not importable — Rust parity test skipped",
+    reason="proteon_connector.py_supervision not importable — Rust parity test skipped",
 )
 
 
@@ -61,7 +61,7 @@ _FRAME_FIELDS = ("rigidgroups_gt_frames",)
 
 
 def _load(path: Path):
-    pairs = ferritin.batch_load_tolerant([str(path)])
+    pairs = proteon.batch_load_tolerant([str(path)])
     assert len(pairs) == 1, f"failed to load {path}"
     return pairs[0][1]
 
@@ -119,7 +119,7 @@ class TestRustPythonParity:
         Exercises chi-angle + rigidgroup-frame paths."""
         structure = _load(CRAMBIN)
         rust = _rust_extract_single(structure)
-        py = ferritin.batch_build_structure_supervision_examples(
+        py = proteon.batch_build_structure_supervision_examples(
             [structure], record_ids=["1crn:A"]
         )[0]
         _compare_single(rust, py, tag="crambin")
@@ -131,7 +131,7 @@ class TestRustPythonParity:
         flag chi-angle atom-lookup bugs that crambin doesn't hit."""
         structure = _load(UBIQUITIN)
         rust = _rust_extract_single(structure)
-        py = ferritin.batch_build_structure_supervision_examples(
+        py = proteon.batch_build_structure_supervision_examples(
             [structure], record_ids=["1ubq:A"]
         )[0]
         _compare_single(rust, py, tag="ubiquitin")
@@ -149,7 +149,7 @@ class TestRustPythonParity:
         crambin = _load(CRAMBIN)
         ubq = _load(UBIQUITIN)
         rust = batch_extract_structure_supervision([crambin, ubq])
-        py = ferritin.batch_build_structure_supervision_examples(
+        py = proteon.batch_build_structure_supervision_examples(
             [crambin, ubq], record_ids=["1crn:A", "1ubq:A"]
         )
 

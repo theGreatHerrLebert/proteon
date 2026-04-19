@@ -608,78 +608,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
-name = "ferritin-align"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "approx",
-]
-
-[[package]]
-name = "ferritin-arrow"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "arrow",
- "ferritin-align",
- "ferritin-io",
- "parquet",
- "pdbtbx",
-]
-
-[[package]]
-name = "ferritin-bin"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "clap",
- "ferritin-align",
- "ferritin-arrow",
- "ferritin-io",
- "ferritin-search",
- "parquet",
- "pdbtbx",
- "rayon",
-]
-
-[[package]]
-name = "ferritin-connector"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "arrow",
- "cudarc",
- "ferritin-align",
- "ferritin-arrow",
- "ferritin-io",
- "ferritin-search",
- "numpy",
- "pdbtbx",
- "pyo3",
- "rayon",
-]
-
-[[package]]
-name = "ferritin-io"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "ferritin-align",
- "pdbtbx",
-]
-
-[[package]]
-name = "ferritin-search"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "cudarc",
- "memmap2",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1259,6 +1187,78 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "proteon-align"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "approx",
+]
+
+[[package]]
+name = "proteon-arrow"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "parquet",
+ "pdbtbx",
+ "proteon-align",
+ "proteon-io",
+]
+
+[[package]]
+name = "proteon-bin"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "parquet",
+ "pdbtbx",
+ "proteon-align",
+ "proteon-arrow",
+ "proteon-io",
+ "proteon-search",
+ "rayon",
+]
+
+[[package]]
+name = "proteon-connector"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "cudarc",
+ "numpy",
+ "pdbtbx",
+ "proteon-align",
+ "proteon-arrow",
+ "proteon-io",
+ "proteon-search",
+ "pyo3",
+ "rayon",
+]
+
+[[package]]
+name = "proteon-io"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "pdbtbx",
+ "proteon-align",
+]
+
+[[package]]
+name = "proteon-search"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "cudarc",
+ "memmap2",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

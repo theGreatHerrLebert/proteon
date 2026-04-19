@@ -1,6 +1,6 @@
 """Oracle tests: I/O validation.
 
-Compare ferritin vs Biopython vs Gemmi on atom counts, coordinates,
+Compare proteon vs Biopython vs Gemmi on atom counts, coordinates,
 B-factors, elements, and other metadata for multiple PDB files.
 
 Standard files: strict equality across all three tools.
@@ -21,7 +21,7 @@ pytest.importorskip("gemmi")
 from .conftest import (  # noqa: E402  (after importorskip by design)
     available_files,
     extract_biopython,
-    extract_ferritin,
+    extract_proteon,
     extract_gemmi,
 )
 
@@ -40,7 +40,7 @@ def pdb_file(request):
 def all_three(pdb_file):
     """Load structure with all three tools."""
     name, path = pdb_file
-    f = extract_ferritin(path)
+    f = extract_proteon(path)
     g = extract_gemmi(path)
     b = extract_biopython(path)
     return name, f, g, b
@@ -55,37 +55,37 @@ class TestCounts:
     def test_model_count_gemmi(self, all_three):
         name, f, g, b = all_three
         assert f.model_count == g.model_count, \
-            f"{name}: ferritin={f.model_count} vs gemmi={g.model_count}"
+            f"{name}: proteon={f.model_count} vs gemmi={g.model_count}"
 
     def test_model_count_biopython(self, all_three):
         name, f, g, b = all_three
         assert f.model_count == b.model_count, \
-            f"{name}: ferritin={f.model_count} vs biopython={b.model_count}"
+            f"{name}: proteon={f.model_count} vs biopython={b.model_count}"
 
     def test_chain_count(self, all_three):
         name, f, g, b = all_three
         assert f.chain_count == g.chain_count == b.chain_count, \
-            f"{name}: ferritin={f.chain_count} gemmi={g.chain_count} bio={b.chain_count}"
+            f"{name}: proteon={f.chain_count} gemmi={g.chain_count} bio={b.chain_count}"
 
     def test_chain_ids(self, all_three):
         name, f, g, b = all_three
         assert f.chain_ids == g.chain_ids, \
-            f"{name}: ferritin={f.chain_ids} vs gemmi={g.chain_ids}"
+            f"{name}: proteon={f.chain_ids} vs gemmi={g.chain_ids}"
 
     def test_atom_count_gemmi(self, all_three):
         name, f, g, b = all_three
         assert f.atom_count == g.atom_count, \
-            f"{name}: ferritin={f.atom_count} vs gemmi={g.atom_count}"
+            f"{name}: proteon={f.atom_count} vs gemmi={g.atom_count}"
 
     def test_atom_count_biopython(self, all_three):
         name, f, g, b = all_three
         assert f.atom_count == b.atom_count, \
-            f"{name}: ferritin={f.atom_count} vs biopython={b.atom_count}"
+            f"{name}: proteon={f.atom_count} vs biopython={b.atom_count}"
 
     def test_residue_count_gemmi(self, all_three):
         name, f, g, b = all_three
         assert f.residue_count == g.residue_count, \
-            f"{name}: ferritin={f.residue_count} vs gemmi={g.residue_count}"
+            f"{name}: proteon={f.residue_count} vs gemmi={g.residue_count}"
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ class TestMetadata:
 
 class TestInternalConsistency:
     def test_coords_array(self, pdb_file):
-        from ferritin_connector import py_io
+        from proteon_connector import py_io
         name, path = pdb_file
         pdb = py_io.load(path)
         coords = pdb.coords
@@ -176,7 +176,7 @@ class TestInternalConsistency:
             )
 
     def test_bfactors_array(self, pdb_file):
-        from ferritin_connector import py_io
+        from proteon_connector import py_io
         name, path = pdb_file
         pdb = py_io.load(path)
         bf = pdb.b_factors
@@ -185,7 +185,7 @@ class TestInternalConsistency:
             assert abs(bf[i] - atoms[i].b_factor) < 1e-10
 
     def test_atom_names_list(self, pdb_file):
-        from ferritin_connector import py_io
+        from proteon_connector import py_io
         name, path = pdb_file
         pdb = py_io.load(path)
         names = pdb.atom_names

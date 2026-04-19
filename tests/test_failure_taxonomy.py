@@ -10,8 +10,8 @@ non-canonical labels.
 
 import pytest
 
-import ferritin
-from ferritin.failure_taxonomy import (
+import proteon
+from proteon.failure_taxonomy import (
     ALL_FAILURE_CLASSES,
     INTERNAL_PIPELINE_ERROR,
     MINIMIZATION_NONCONVERGENCE,
@@ -40,7 +40,7 @@ class TestCanonicalList:
         }
 
     def test_constants_surface_at_package_level(self):
-        assert ferritin.ALL_FAILURE_CLASSES == ALL_FAILURE_CLASSES
+        assert proteon.ALL_FAILURE_CLASSES == ALL_FAILURE_CLASSES
 
 
 class TestClassify:
@@ -114,7 +114,7 @@ class TestClassify:
 
 class TestFailureRecordValidation:
     def test_canonical_class_accepted(self):
-        ferritin.FailureRecord(
+        proteon.FailureRecord(
             record_id="x",
             failure_class=MISSING_REQUIRED_ATOMS,
             message="",
@@ -122,7 +122,7 @@ class TestFailureRecordValidation:
 
     def test_noncanonical_class_rejected(self):
         with pytest.raises(ValueError, match="not in the canonical"):
-            ferritin.FailureRecord(
+            proteon.FailureRecord(
                 record_id="x",
                 failure_class="kinda_sorta_broken",
                 message="",

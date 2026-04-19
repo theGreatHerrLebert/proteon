@@ -1,6 +1,6 @@
 """Shared fixtures and helpers for oracle tests.
 
-Oracle tests compare ferritin output against Biopython and Gemmi
+Oracle tests compare proteon output against Biopython and Gemmi
 to validate correctness of I/O, hierarchy, and metadata extraction.
 """
 
@@ -73,7 +73,7 @@ class AtomRecord:
 @dataclass
 class StructureSummary:
     """Comparable summary extracted from any tool."""
-    source: str  # "ferritin", "biopython", "gemmi"
+    source: str  # "proteon", "biopython", "gemmi"
     model_count: int
     chain_count: int
     residue_count: int
@@ -87,8 +87,8 @@ class StructureSummary:
 # ---------------------------------------------------------------------------
 
 
-def extract_ferritin(path: str) -> StructureSummary:
-    from ferritin_connector import py_io
+def extract_proteon(path: str) -> StructureSummary:
+    from proteon_connector import py_io
     pdb = py_io.load(path)
     atoms = []
     for a in pdb.atoms:
@@ -104,7 +104,7 @@ def extract_ferritin(path: str) -> StructureSummary:
             hetero=a.hetero,
         ))
     return StructureSummary(
-        source="ferritin",
+        source="proteon",
         model_count=pdb.model_count,
         chain_count=pdb.chain_count,
         residue_count=pdb.residue_count,

@@ -4,7 +4,7 @@
 
 ## energy_charmm
 
-### ferritin vs openmm_charmm36 (n=6 PDBs)
+### proteon vs openmm_charmm36 (n=6 PDBs)
 
 Totals: PASS=46 WARN=2 FAIL=0
 

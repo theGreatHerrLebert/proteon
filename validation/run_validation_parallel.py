@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Ferritin parallel validation suite.
+"""Proteon parallel validation suite.
 
-Batch-first design: loads all structures at once, then runs ferritin batch
+Batch-first design: loads all structures at once, then runs proteon batch
 operations (zero GIL, rayon parallelism), then validates results.
 
 Oracle comparisons (Biopython, Gemmi) run via multiprocessing.
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-import ferritin
+import proteon
 
 try:
     import gemmi
@@ -127,7 +127,7 @@ def phase_load(files, n_threads):
     """Phase 1: Load all structures in parallel."""
     print(f"  Loading {len(files)} structures...", end=" ", flush=True)
     t0 = time.time()
-    results = ferritin.batch_load_tolerant(files, n_threads=n_threads)
+    results = proteon.batch_load_tolerant(files, n_threads=n_threads)
     elapsed = time.time() - t0
     n_loaded = len(results)
     print(f"{n_loaded}/{len(files)} loaded in {elapsed:.1f}s "
@@ -135,38 +135,38 @@ def phase_load(files, n_threads):
     return results
 
 
-def phase_ferritin_batch(structures, n_threads):
-    """Phase 2: Run all ferritin batch operations."""
+def phase_proteon_batch(structures, n_threads):
+    """Phase 2: Run all proteon batch operations."""
     results = {}
 
     # DSSP (before hydrogen placement)
     print("  Batch DSSP...", end=" ", flush=True)
     t0 = time.time()
-    results["dssp"] = ferritin.batch_dssp(structures, n_threads=n_threads)
+    results["dssp"] = proteon.batch_dssp(structures, n_threads=n_threads)
     print(f"{time.time() - t0:.1f}s")
 
     # SASA
     print("  Batch SASA...", end=" ", flush=True)
     t0 = time.time()
-    results["sasa"] = np.asarray(ferritin.batch_total_sasa(structures, n_threads=n_threads, radii="protor"))
+    results["sasa"] = np.asarray(proteon.batch_total_sasa(structures, n_threads=n_threads, radii="protor"))
     print(f"{time.time() - t0:.1f}s")
 
     # H-bonds
     print("  Batch H-bonds...", end=" ", flush=True)
     t0 = time.time()
-    results["hbonds"] = ferritin.batch_backbone_hbonds(structures, n_threads=n_threads)
+    results["hbonds"] = proteon.batch_backbone_hbonds(structures, n_threads=n_threads)
     print(f"{time.time() - t0:.1f}s")
 
     # Dihedrals
     print("  Batch dihedrals...", end=" ", flush=True)
     t0 = time.time()
-    results["dihedrals"] = ferritin.batch_dihedrals(structures, n_threads=n_threads)
+    results["dihedrals"] = proteon.batch_dihedrals(structures, n_threads=n_threads)
     print(f"{time.time() - t0:.1f}s")
 
     # Place hydrogens
     print("  Batch place hydrogens...", end=" ", flush=True)
     t0 = time.time()
-    results["hydrogens"] = ferritin.batch_place_peptide_hydrogens(
+    results["hydrogens"] = proteon.batch_place_peptide_hydrogens(
         structures, n_threads=n_threads
     )
     print(f"{time.time() - t0:.1f}s")
@@ -174,13 +174,13 @@ def phase_ferritin_batch(structures, n_threads):
     # DSSP after hydrogen placement
     print("  Batch DSSP (post-H)...", end=" ", flush=True)
     t0 = time.time()
-    results["dssp_post_h"] = ferritin.batch_dssp(structures, n_threads=n_threads)
+    results["dssp_post_h"] = proteon.batch_dssp(structures, n_threads=n_threads)
     print(f"{time.time() - t0:.1f}s")
 
     # Idempotency: place again — should add 0
     print("  Batch idempotency check...", end=" ", flush=True)
     t0 = time.time()
-    results["hydrogens_2nd"] = ferritin.batch_place_peptide_hydrogens(
+    results["hydrogens_2nd"] = proteon.batch_place_peptide_hydrogens(
         structures, n_threads=n_threads
     )
     print(f"{time.time() - t0:.1f}s")
@@ -261,7 +261,7 @@ def validate_all(files, indices, structures, batch_results, oracle_results):
 
         # --- Loading oracle (Gemmi) ---
         r = {"test": "loading_oracle", "status": "pass", "details": {
-            "ferritin": {"atoms": structure.atom_count, "chains": structure.chain_count}
+            "proteon": {"atoms": structure.atom_count, "chains": structure.chain_count}
         }}
         if idx in oracle_results.get("gemmi_counts", {}):
             gm = oracle_results["gemmi_counts"][idx]
@@ -279,7 +279,7 @@ def validate_all(files, indices, structures, batch_results, oracle_results):
         # --- SASA ---
         fe_sasa = float(batch_results["sasa"][pos])
         r = {"test": "sasa", "status": "pass", "details": {
-            "ferritin_total": round(fe_sasa, 1),
+            "proteon_total": round(fe_sasa, 1),
             "n_atoms": structure.atom_count,
         }}
         # Compare against all available SASA oracles
@@ -396,8 +396,8 @@ def validate_all(files, indices, structures, batch_results, oracle_results):
         # --- Select ---
         r = {"test": "select", "status": "pass", "details": {}}
         try:
-            ca_mask = ferritin.select(structure, "CA")
-            all_mask = ferritin.select(structure, "all")
+            ca_mask = proteon.select(structure, "CA")
+            all_mask = proteon.select(structure, "all")
             r["details"]["n_ca"] = int(ca_mask.sum())
             if all_mask.sum() != structure.atom_count:
                 r["status"] = "fail"
@@ -439,9 +439,9 @@ def run_validation(pdb_dir, n_structures, output_file, n_threads, n_workers):
     structures = [s for _, s in loaded]
     n_loaded = len(structures)
 
-    # Phase 2: Batch ferritin operations
+    # Phase 2: Batch proteon operations
     print(f"\nPhase 2: Batch operations ({n_loaded} structures)")
-    batch_results = phase_ferritin_batch(structures, n_threads)
+    batch_results = phase_proteon_batch(structures, n_threads)
 
     # Phase 3: Oracle comparisons
     print(f"\nPhase 3: Oracle comparisons")
@@ -476,7 +476,7 @@ def run_validation(pdb_dir, n_structures, output_file, n_threads, n_workers):
         print(f"    Max relative diff:    {np.max(diffs):.4f} ({np.max(diffs)*100:.2f}%)")
         print(f"    Within 1%: {np.sum(diffs < 0.01)}/{len(diffs)}")
         print(f"    Within 5%: {np.sum(diffs < 0.05)}/{len(diffs)}")
-        print(f"    Note: both ferritin and FreeSASA use ProtOr radii.")
+        print(f"    Note: both proteon and FreeSASA use ProtOr radii.")
 
     # Hydrogen summary
     h_added = [batch_results["hydrogens"][i][0] for i in range(n_loaded)]
@@ -518,12 +518,12 @@ def run_validation(pdb_dir, n_structures, output_file, n_threads, n_workers):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ferritin parallel validation suite")
+    parser = argparse.ArgumentParser(description="Proteon parallel validation suite")
     parser.add_argument("--n-structures", type=int, default=5000)
     parser.add_argument("--pdb-dir", default="validation/pdbs_10k/")
     parser.add_argument("--output", default="validation/results_5k_parallel.json")
     parser.add_argument("--n-threads", type=int, default=None,
-                        help="Rayon threads for ferritin (None = all cores)")
+                        help="Rayon threads for proteon (None = all cores)")
     parser.add_argument("--n-workers", type=int, default=8,
                         help="Process pool workers for oracle comparisons")
     args = parser.parse_args()

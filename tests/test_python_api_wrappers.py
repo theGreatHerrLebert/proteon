@@ -1,15 +1,15 @@
 """Smoke tests for the Python-wrapper modules.
 
 The existing `test_geometry.py`, `test_analysis.py`, etc. call
-`from ferritin_connector import py_geometry` and invoke the PyO3 Rust
+`from proteon_connector import py_geometry` and invoke the PyO3 Rust
 classes directly — that exercises the Rust code, but never touches the
-one-line Python wrapper functions in `ferritin/geometry.py`,
-`ferritin/dssp.py`, `ferritin/hydrogens.py`, etc. The behavior is
+one-line Python wrapper functions in `proteon/geometry.py`,
+`proteon/dssp.py`, `proteon/hydrogens.py`, etc. The behavior is
 safely tested (via the connector path); the shim lines at the Python
 public-API boundary are not.
 
 This file closes that gap with a direct smoke-test per public wrapper
-function: "if a user calls `ferritin.rmsd(x, y)` from their script,
+function: "if a user calls `proteon.rmsd(x, y)` from their script,
 does the wrapper forward correctly to the Rust backend?"
 
 No attempt at algorithmic depth — those assertions live in the
@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import ferritin
+import proteon
 
 TEST_PDBS = os.path.join(os.path.dirname(__file__), "..", "test-pdbs")
 CRAMBIN = os.path.join(TEST_PDBS, "1crn.pdb")
@@ -43,46 +43,46 @@ HHB = os.path.join(SHARED_PDBS, "4hhb.pdb")
 
 
 class TestGeometryWrappers:
-    """Cover ferritin.kabsch_superpose / rmsd / rmsd_no_super /
+    """Cover proteon.kabsch_superpose / rmsd / rmsd_no_super /
     apply_transform / assign_secondary_structure / tm_score."""
 
     @pytest.fixture
     def coords(self):
-        return np.asarray(ferritin.load(UBIQ).coords, dtype=np.float64)
+        return np.asarray(proteon.load(UBIQ).coords, dtype=np.float64)
 
     def test_kabsch_superpose_self_rmsd_zero(self, coords):
-        rmsd, rot, trans = ferritin.kabsch_superpose(coords, coords)
+        rmsd, rot, trans = proteon.kabsch_superpose(coords, coords)
         assert rmsd == pytest.approx(0.0, abs=1e-10)
         # Rotation on identical coords is the identity.
         np.testing.assert_allclose(rot, np.eye(3), atol=1e-8)
 
     def test_rmsd_self_zero(self, coords):
-        assert ferritin.rmsd(coords, coords) == pytest.approx(0.0, abs=1e-10)
+        assert proteon.rmsd(coords, coords) == pytest.approx(0.0, abs=1e-10)
 
     def test_rmsd_no_super_nonzero_after_translation(self, coords):
         translated = coords + np.array([1.0, 0.0, 0.0])
         # rmsd_no_super does NOT superpose — a pure translation shows up.
-        rmsd = ferritin.rmsd_no_super(coords, translated)
+        rmsd = proteon.rmsd_no_super(coords, translated)
         assert rmsd == pytest.approx(1.0, rel=1e-6)
         # rmsd (with superposition) should collapse to zero.
-        assert ferritin.rmsd(coords, translated) == pytest.approx(0.0, abs=1e-8)
+        assert proteon.rmsd(coords, translated) == pytest.approx(0.0, abs=1e-8)
 
     def test_apply_transform_identity(self, coords):
-        out = ferritin.apply_transform(
+        out = proteon.apply_transform(
             coords, np.eye(3), np.zeros(3),
         )
         np.testing.assert_allclose(out, coords, atol=1e-12)
 
     def test_apply_transform_known_translation(self, coords):
         delta = np.array([1.5, -2.0, 0.5])
-        out = ferritin.apply_transform(coords, np.eye(3), delta)
+        out = proteon.apply_transform(coords, np.eye(3), delta)
         # Each row should differ from the corresponding input row by
         # the same translation vector.
         diff = out - coords
         np.testing.assert_allclose(diff, np.broadcast_to(delta, diff.shape), atol=1e-8)
 
     def test_assign_secondary_structure_returns_string(self, coords):
-        ss = ferritin.assign_secondary_structure(coords)
+        ss = proteon.assign_secondary_structure(coords)
         assert isinstance(ss, str)
         assert len(ss) == coords.shape[0]
         # Characters should all be from the {H, E, T, C} alphabet.
@@ -92,7 +92,7 @@ class TestGeometryWrappers:
         # Trivial self-alignment: invmap[j] = j for every residue.
         n = coords.shape[0]
         invmap = np.arange(n, dtype=np.int32)
-        score, n_aligned, rmsd, _rot, _trans = ferritin.tm_score(
+        score, n_aligned, rmsd, _rot, _trans = proteon.tm_score(
             coords, coords, invmap,
         )
         assert score == pytest.approx(1.0, abs=1e-6)
@@ -106,31 +106,31 @@ class TestGeometryWrappers:
 
 
 class TestDsspWrappers:
-    """Cover ferritin.dssp / dssp_array / batch_dssp / load_and_dssp."""
+    """Cover proteon.dssp / dssp_array / batch_dssp / load_and_dssp."""
 
     def test_dssp_returns_string(self):
-        s = ferritin.load(CRAMBIN)
-        ss = ferritin.dssp(s)
+        s = proteon.load(CRAMBIN)
+        ss = proteon.dssp(s)
         assert isinstance(ss, str)
         assert len(ss) == 46  # crambin amino acids
         assert set(ss).issubset(set("HGIEBTSC"))
 
     def test_dssp_array_matches_string(self):
-        s = ferritin.load(CRAMBIN)
-        ss_str = ferritin.dssp(s)
-        ss_arr = ferritin.dssp_array(s)
+        s = proteon.load(CRAMBIN)
+        ss_str = proteon.dssp(s)
+        ss_arr = proteon.dssp_array(s)
         assert ss_arr.shape == (len(ss_str),)
         # ASCII codes per residue.
         assert "".join(chr(c) for c in ss_arr) == ss_str
 
     def test_batch_dssp_matches_single(self):
-        structures = [ferritin.load(CRAMBIN), ferritin.load(UBIQ)]
-        batch = ferritin.batch_dssp(structures, n_threads=1)
-        singles = [ferritin.dssp(s) for s in structures]
+        structures = [proteon.load(CRAMBIN), proteon.load(UBIQ)]
+        batch = proteon.batch_dssp(structures, n_threads=1)
+        singles = [proteon.dssp(s) for s in structures]
         assert batch == singles
 
     def test_load_and_dssp_returns_index_string_tuples(self):
-        results = ferritin.load_and_dssp([CRAMBIN, UBIQ], n_threads=1)
+        results = proteon.load_and_dssp([CRAMBIN, UBIQ], n_threads=1)
         assert len(results) == 2
         for idx, ss in results:
             assert isinstance(idx, int)
@@ -146,20 +146,20 @@ class TestDsspWrappers:
 
 
 class TestHydrogensWrappers:
-    """Cover ferritin.place_peptide_hydrogens / place_all_hydrogens /
+    """Cover proteon.place_peptide_hydrogens / place_all_hydrogens /
     place_general_hydrogens / reconstruct_fragments /
     batch_place_peptide_hydrogens."""
 
     def test_place_peptide_hydrogens_returns_counts(self):
-        s = ferritin.load(CRAMBIN)
-        added, skipped = ferritin.place_peptide_hydrogens(s)
+        s = proteon.load(CRAMBIN)
+        added, skipped = proteon.place_peptide_hydrogens(s)
         assert isinstance(added, int)
         assert isinstance(skipped, int)
         assert added + skipped > 0
 
     def test_place_peptide_hydrogens_with_coords_returns_tuple(self):
-        s = ferritin.load(CRAMBIN)
-        (added, skipped), coords = ferritin.place_peptide_hydrogens(
+        s = proteon.load(CRAMBIN)
+        (added, skipped), coords = proteon.place_peptide_hydrogens(
             s, return_coords=True,
         )
         assert isinstance(coords, np.ndarray)
@@ -167,9 +167,9 @@ class TestHydrogensWrappers:
         assert coords.shape[0] == added
 
     def test_place_peptide_hydrogens_idempotent(self):
-        s = ferritin.load(CRAMBIN)
-        a1, _ = ferritin.place_peptide_hydrogens(s)
-        a2, _ = ferritin.place_peptide_hydrogens(s)
+        s = proteon.load(CRAMBIN)
+        a1, _ = proteon.place_peptide_hydrogens(s)
+        a2, _ = proteon.place_peptide_hydrogens(s)
         # Second call adds nothing — contract promised in the docstring.
         assert a2 == 0
         assert a1 > 0
@@ -177,32 +177,32 @@ class TestHydrogensWrappers:
     def test_place_all_hydrogens_adds_more_than_peptide_only(self):
         # place_all = backbone + sidechain. Starting from a fresh load,
         # place_all should add strictly more H than place_peptide would.
-        s_all = ferritin.load(CRAMBIN)
-        added_all, _ = ferritin.place_all_hydrogens(s_all)
+        s_all = proteon.load(CRAMBIN)
+        added_all, _ = proteon.place_all_hydrogens(s_all)
 
-        s_peptide = ferritin.load(CRAMBIN)
-        added_peptide, _ = ferritin.place_peptide_hydrogens(s_peptide)
+        s_peptide = proteon.load(CRAMBIN)
+        added_peptide, _ = proteon.place_peptide_hydrogens(s_peptide)
 
         assert added_all > added_peptide
 
     def test_place_general_hydrogens_returns_counts(self):
-        s = ferritin.load(CRAMBIN)
-        added, skipped = ferritin.place_general_hydrogens(s)
+        s = proteon.load(CRAMBIN)
+        added, skipped = proteon.place_general_hydrogens(s)
         assert isinstance(added, int)
         assert isinstance(skipped, int)
         assert added > 0
 
     def test_reconstruct_fragments_returns_int(self):
-        s = ferritin.load(CRAMBIN)
-        n_added = ferritin.reconstruct_fragments(s)
+        s = proteon.load(CRAMBIN)
+        n_added = proteon.reconstruct_fragments(s)
         # Crambin has complete heavy atoms, so likely 0 added — but the
         # return type contract is what we're pinning here.
         assert isinstance(n_added, int)
         assert n_added >= 0
 
     def test_batch_place_peptide_hydrogens_parallel(self):
-        structures = [ferritin.load(CRAMBIN), ferritin.load(UBIQ)]
-        results = ferritin.batch_place_peptide_hydrogens(
+        structures = [proteon.load(CRAMBIN), proteon.load(UBIQ)]
+        results = proteon.batch_place_peptide_hydrogens(
             structures, n_threads=1,
         )
         assert len(results) == 2
@@ -220,31 +220,31 @@ class TestAlignWrappers:
     """Cover the Python-facing align entry points and result classes.
 
     `test_alignment.py` / `test_mmalign.py` go through
-    `ferritin_connector.py_align_funcs` directly — they exercise the
+    `proteon_connector.py_align_funcs` directly — they exercise the
     Rust core but never touch the Python-side `AlignResult` /
     `SoiAlignResult` / `FlexAlignResult` / `MMAlignResult` property
-    wrappers or the public `ferritin.tm_align` / `soi_align` /
+    wrappers or the public `proteon.tm_align` / `soi_align` /
     `flex_align` / `mm_align` dispatch functions.
     """
 
     @pytest.fixture(scope="class")
     def pair(self):
-        return ferritin.load(CRAMBIN), ferritin.load(UBIQ)
+        return proteon.load(CRAMBIN), proteon.load(UBIQ)
 
     @pytest.fixture(scope="class")
     def triples(self):
         """Three-structure list for one-to-many / many-to-many tests."""
         return [
-            ferritin.load(CRAMBIN),
-            ferritin.load(UBIQ),
-            ferritin.load(CRAMBIN),
+            proteon.load(CRAMBIN),
+            proteon.load(UBIQ),
+            proteon.load(CRAMBIN),
         ]
 
     # --- TM-align + AlignResult properties --------------------------------
 
     def test_tm_align_result_properties(self, pair):
         a, b = pair
-        r = ferritin.tm_align(a, b)
+        r = proteon.tm_align(a, b)
         # Every declared property on AlignResult — touching each one
         # covers the `self._ptr.X` forwarding line in the wrapper.
         assert 0.0 <= r.tm_score_chain1 <= 1.0
@@ -266,19 +266,19 @@ class TestAlignWrappers:
 
     def test_tm_align_fast_mode(self, pair):
         a, b = pair
-        r = ferritin.tm_align(a, b, fast=True)
+        r = proteon.tm_align(a, b, fast=True)
         assert r.n_aligned > 0
 
     def test_tm_align_one_to_many(self, pair, triples):
         a, _ = pair
-        results = ferritin.tm_align_one_to_many(a, triples, n_threads=1)
+        results = proteon.tm_align_one_to_many(a, triples, n_threads=1)
         assert len(results) == 3
         for r in results:
             assert r.n_aligned > 0
 
     def test_tm_align_many_to_many(self, pair):
         a, b = pair
-        results = ferritin.tm_align_many_to_many([a], [a, b], n_threads=1)
+        results = proteon.tm_align_many_to_many([a], [a, b], n_threads=1)
         # Cartesian product: 1 × 2 = 2.
         assert len(results) == 2
         for qi, ti, r in results:
@@ -290,7 +290,7 @@ class TestAlignWrappers:
 
     def test_soi_align_result_properties(self, pair):
         a, b = pair
-        r = ferritin.soi_align(a, b)
+        r = proteon.soi_align(a, b)
         assert 0.0 <= r.tm_score_chain1 <= 1.0
         assert 0.0 <= r.tm_score_chain2 <= 1.0
         assert r.rmsd >= 0.0
@@ -305,19 +305,19 @@ class TestAlignWrappers:
 
     def test_soi_align_one_to_many(self, pair, triples):
         a, _ = pair
-        results = ferritin.soi_align_one_to_many(a, triples, n_threads=1)
+        results = proteon.soi_align_one_to_many(a, triples, n_threads=1)
         assert len(results) == 3
 
     def test_soi_align_many_to_many(self, pair):
         a, b = pair
-        results = ferritin.soi_align_many_to_many([a], [a, b], n_threads=1)
+        results = proteon.soi_align_many_to_many([a], [a, b], n_threads=1)
         assert len(results) == 2
 
     # --- FlexAlign + FlexAlignResult properties ---------------------------
 
     def test_flex_align_result_properties(self, pair):
         a, b = pair
-        r = ferritin.flex_align(a, b)
+        r = proteon.flex_align(a, b)
         assert 0.0 <= r.tm_score_chain1 <= 1.0
         assert 0.0 <= r.tm_score_chain2 <= 1.0
         assert r.rmsd >= 0.0
@@ -334,12 +334,12 @@ class TestAlignWrappers:
 
     def test_flex_align_one_to_many(self, pair, triples):
         a, _ = pair
-        results = ferritin.flex_align_one_to_many(a, triples, n_threads=1)
+        results = proteon.flex_align_one_to_many(a, triples, n_threads=1)
         assert len(results) == 3
 
     def test_flex_align_many_to_many(self, pair):
         a, b = pair
-        results = ferritin.flex_align_many_to_many([a], [a, b], n_threads=1)
+        results = proteon.flex_align_many_to_many([a], [a, b], n_threads=1)
         assert len(results) == 2
 
     # --- MM-align + MMAlignResult / ChainPairResult -----------------------
@@ -348,12 +348,12 @@ class TestAlignWrappers:
     def hhb(self):
         if not os.path.exists(HHB):
             pytest.skip(f"4hhb.pdb not available at {HHB}")
-        return ferritin.load(HHB)
+        return proteon.load(HHB)
 
     def test_mm_align_result_properties(self, hhb):
         """Self-align hemoglobin to itself; exercises the MMAlignResult +
         ChainPairResult Python wrappers end-to-end."""
-        r = ferritin.mm_align(hhb, hhb)
+        r = proteon.mm_align(hhb, hhb)
         # MMAlignResult properties.
         assert r.total_score >= 0.0
         assignments = r.chain_assignments
@@ -375,11 +375,11 @@ class TestAlignWrappers:
         assert r.get_py_ptr() is not None
 
     def test_mm_align_one_to_many(self, hhb):
-        results = ferritin.mm_align_one_to_many(hhb, [hhb, hhb], n_threads=1)
+        results = proteon.mm_align_one_to_many(hhb, [hhb, hhb], n_threads=1)
         assert len(results) == 2
         for r in results:
             assert r.total_score >= 0.0
 
     def test_mm_align_many_to_many(self, hhb):
-        results = ferritin.mm_align_many_to_many([hhb], [hhb, hhb], n_threads=1)
+        results = proteon.mm_align_many_to_many([hhb], [hhb, hhb], n_threads=1)
         assert len(results) == 2

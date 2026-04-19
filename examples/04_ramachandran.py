@@ -14,14 +14,14 @@ If matplotlib is available, generates a Ramachandran plot saved as
 ramachandran.png.
 """
 
-import ferritin
+import proteon
 import numpy as np
 
 # ---------------------------------------------------------------------------
 # 1. Compute backbone dihedrals
 # ---------------------------------------------------------------------------
-structure = ferritin.load("test-pdbs/1crn.pdb")
-phi, psi, omega = ferritin.backbone_dihedrals(structure)
+structure = proteon.load("test-pdbs/1crn.pdb")
+phi, psi, omega = proteon.backbone_dihedrals(structure)
 
 print("=== Backbone Dihedrals: Crambin (1CRN) ===")
 print(f"  Residues: {len(phi)}")
@@ -77,8 +77,8 @@ print()
 # ---------------------------------------------------------------------------
 print("=== Secondary Structure Correlation ===")
 
-ca_coords = ferritin.extract_ca_coords(structure)
-ss = ferritin.assign_secondary_structure(ca_coords)
+ca_coords = proteon.extract_ca_coords(structure)
+ss = proteon.assign_secondary_structure(ca_coords)
 print(f"  SS assignment: {ss}")
 print()
 
@@ -86,7 +86,7 @@ print()
 print(f"  {'Res#':>4s}  {'SS':>2s}  {'Rama':>8s}  {'Phi':>7s}  {'Psi':>7s}")
 print(f"  {'----':>4s}  {'--':>2s}  {'--------':>8s}  {'---':>7s}  {'---':>7s}")
 
-df = ferritin.to_dataframe(structure)
+df = proteon.to_dataframe(structure)
 ca_df = df[df.atom_name.str.strip() == "CA"].reset_index(drop=True)
 
 for i in range(min(20, len(phi))):
@@ -130,8 +130,8 @@ print(f"  {'Structure':>20s}  {'Res':>4s}  {'Alpha%':>6s}  {'Beta%':>6s}  {'Othe
 print(f"  {'--------':>20s}  {'---':>4s}  {'------':>6s}  {'------':>6s}  {'------':>6s}")
 
 for path, name in files:
-    s = ferritin.load(path)
-    p, ps, _ = ferritin.backbone_dihedrals(s)
+    s = proteon.load(path)
+    p, ps, _ = proteon.backbone_dihedrals(s)
     regs = [classify_ramachandran(a, b) for a, b in zip(p, ps)]
     c = Counter(regs)
     n = len(p)

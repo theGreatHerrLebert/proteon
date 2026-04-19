@@ -34,49 +34,49 @@ from time import perf_counter as _time_perf
 from typing import List as _List
 
 # ---------------------------------------------------------------------------
-# ferritin baseline
+# proteon baseline
 # ---------------------------------------------------------------------------
 
 try:
-    import ferritin as _ferritin
-    _FERRITIN_OK = True
+    import proteon as _proteon
+    _PROTEON_OK = True
     try:
-        _FERRITIN_VERSION = "ferritin " + _metadata.version("ferritin")
+        _PROTEON_VERSION = "proteon " + _metadata.version("proteon")
     except Exception:
-        _FERRITIN_VERSION = "ferritin (unknown version)"
+        _PROTEON_VERSION = "proteon (unknown version)"
 except ImportError as e:
-    _FERRITIN_OK = False
-    _FERRITIN_VERSION = ""
-    _FERRITIN_IMPORT_ERROR = str(e)
+    _PROTEON_OK = False
+    _PROTEON_VERSION = ""
+    _PROTEON_IMPORT_ERROR = str(e)
 
 
-if _FERRITIN_OK:
+if _PROTEON_OK:
 
-    @register("sasa", "ferritin")
-    def ferritin(pdb_path: str) -> RunnerResult:
-        """Compute SASA via ferritin.total_sasa + ferritin.residue_sasa.
+    @register("sasa", "proteon")
+    def proteon(pdb_path: str) -> RunnerResult:
+        """Compute SASA via proteon.total_sasa + proteon.residue_sasa.
 
         Uses radii="protor" to match FreeSASA's NACCESS-style table. Probe
         radius defaults to 1.4 Å (water), n_points defaults to 960 (matches
-        ferritin's batch_total_sasa default).
+        proteon's batch_total_sasa default).
         """
-        s, _ = time_call(_ferritin.load, pdb_path)
+        s, _ = time_call(_proteon.load, pdb_path)
         total, elapsed_total = time_call(
-            _ferritin.total_sasa, s, radii="protor"
+            _proteon.total_sasa, s, radii="protor"
         )
         per_res_arr, elapsed_res = time_call(
-            _ferritin.residue_sasa, s, radii="protor"
+            _proteon.residue_sasa, s, radii="protor"
         )
 
         # Build the per-residue list keyed for downstream join.
         residues = list(s.residues)
         per_residue = []
         if len(residues) != len(per_res_arr):
-            # Length mismatch — should not happen if ferritin's API is consistent.
+            # Length mismatch — should not happen if proteon's API is consistent.
             return RunnerResult(
                 op="sasa",
-                impl="ferritin",
-                impl_version=_FERRITIN_VERSION,
+                impl="proteon",
+                impl_version=_PROTEON_VERSION,
                 pdb_id="",
                 pdb_path=pdb_path,
                 elapsed_s=elapsed_total + elapsed_res,
@@ -99,8 +99,8 @@ if _FERRITIN_OK:
 
         return RunnerResult(
             op="sasa",
-            impl="ferritin",
-            impl_version=_FERRITIN_VERSION,
+            impl="proteon",
+            impl_version=_PROTEON_VERSION,
             pdb_id="",  # filled in by the driver
             pdb_path=pdb_path,
             elapsed_s=elapsed_total + elapsed_res,
@@ -114,15 +114,15 @@ if _FERRITIN_OK:
             },
         )
 
-    @register_batch("sasa", "ferritin")
-    def ferritin_batch(pdb_paths: _List[str]) -> _List[RunnerResult]:
-        """Batched ferritin SASA runner.
+    @register_batch("sasa", "proteon")
+    def proteon_batch(pdb_paths: _List[str]) -> _List[RunnerResult]:
+        """Batched proteon SASA runner.
 
-        Loads all structures in parallel via ferritin.batch_load_tolerant,
+        Loads all structures in parallel via proteon.batch_load_tolerant,
         then calls batch_total_sasa once across the whole list. This gives
         the in-Rust rayon parallelism a whole chunk of work rather than
         spinning up a pool for every structure. Per-residue SASA is still
-        computed per structure because ferritin.residue_sasa is
+        computed per structure because proteon.residue_sasa is
         single-structure.
 
         Wall time for the batched path should scale as
@@ -131,7 +131,7 @@ if _FERRITIN_OK:
         t_total = _time_perf()
         # Phase 1: parallel load (indices of successful loads returned in
         # (i, structure) tuples by batch_load_tolerant)
-        loaded = _ferritin.batch_load_tolerant(pdb_paths, n_threads=-1)
+        loaded = _proteon.batch_load_tolerant(pdb_paths, n_threads=-1)
         load_index = {i: s for i, s in loaded}
 
         # Phase 2: batch total SASA across all successfully-loaded structs
@@ -139,7 +139,7 @@ if _FERRITIN_OK:
         successful_idx = [i for i in range(len(pdb_paths)) if i in load_index]
         successful_structs = [load_index[i] for i in successful_idx]
         if successful_structs:
-            total_sasa_arr = _ferritin.batch_total_sasa(
+            total_sasa_arr = _proteon.batch_total_sasa(
                 successful_structs, n_threads=-1, radii="protor"
             )
         else:
@@ -151,7 +151,7 @@ if _FERRITIN_OK:
         for i, pdb_path in enumerate(pdb_paths):
             if i not in load_index:
                 results.append(RunnerResult(
-                    op="sasa", impl="ferritin", impl_version=_FERRITIN_VERSION,
+                    op="sasa", impl="proteon", impl_version=_PROTEON_VERSION,
                     pdb_id="", pdb_path=pdb_path, elapsed_s=0.0,
                     status="error",
                     error="batch_load_tolerant failed for this file",
@@ -163,12 +163,12 @@ if _FERRITIN_OK:
             pos = successful_idx.index(i)
             total = float(total_sasa_arr[pos])
             # Per-residue (still single-structure call, cheap)
-            per_res_arr = _ferritin.residue_sasa(s, radii="protor")
+            per_res_arr = _proteon.residue_sasa(s, radii="protor")
             residues = list(s.residues)
             per_residue = []
             if len(residues) != len(per_res_arr):
                 results.append(RunnerResult(
-                    op="sasa", impl="ferritin", impl_version=_FERRITIN_VERSION,
+                    op="sasa", impl="proteon", impl_version=_PROTEON_VERSION,
                     pdb_id="", pdb_path=pdb_path, elapsed_s=0.0,
                     status="error",
                     error=(f"residue count mismatch: {len(residues)} vs {len(per_res_arr)}"),
@@ -187,7 +187,7 @@ if _FERRITIN_OK:
             # (reasonable approximation; sub-phase timing is complicated
             # and the user cares about total wall anyway)
             results.append(RunnerResult(
-                op="sasa", impl="ferritin", impl_version=_FERRITIN_VERSION,
+                op="sasa", impl="proteon", impl_version=_PROTEON_VERSION,
                 pdb_id="", pdb_path=pdb_path,
                 elapsed_s=0.0,  # per-structure not meaningful in batched mode
                 status="ok", error=None,
@@ -226,31 +226,31 @@ if _FREESASA_OK:
     def freesasa(pdb_path: str) -> RunnerResult:
         """Compute SASA via the freesasa Python package.
 
-        Matches ferritin's defaults as closely as possible:
+        Matches proteon's defaults as closely as possible:
 
-        - Include HETATM atoms (ferritin loads them; freesasa default skips).
+        - Include HETATM atoms (proteon loads them; freesasa default skips).
           This is the single biggest contributor to the agreement: 1pgb alone
-          has 24 waters that ferritin counts and stock freesasa doesn't.
+          has 24 waters that proteon counts and stock freesasa doesn't.
         - Use the ProtOr classifier explicitly (FreeSASA default is OONS-like
-          Lee-Richards; ferritin's `radii="protor"` should match ProtOr).
-        - Use the Shrake-Rupley algorithm with 960 points (matches ferritin's
+          Lee-Richards; proteon's `radii="protor"` should match ProtOr).
+        - Use the Shrake-Rupley algorithm with 960 points (matches proteon's
           default).
-        - Probe radius 1.4 Å (matches ferritin default).
+        - Probe radius 1.4 Å (matches proteon default).
 
         Per-residue results are keyed by (chain, resi, icode) tuples and
-        normalized to the same shape as the ferritin runner so the aggregator
+        normalized to the same shape as the proteon runner so the aggregator
         can join them directly.
         """
         options = {
-            "hetatm": True,          # include HETATM to match ferritin
-            "hydrogen": False,       # ferritin-loaded crystal files have no H
-            "join-models": False,    # first model only, same as ferritin
+            "hetatm": True,          # include HETATM to match proteon
+            "hydrogen": False,       # proteon-loaded crystal files have no H
+            "join-models": False,    # first model only, same as proteon
             # skip-unknown: skip atoms that freesasa can't classify instead
             # of trying to include them as generic atoms. Without this,
             # freesasa segfaults in C on PDBs containing e.g. cobalt,
             # uranium, or exotic heme variants (we hit this on 1 of 100
             # sampled PDBs from the 50K corpus). skip-unknown causes a
-            # small atom-count drift vs ferritin on HETATM-heavy
+            # small atom-count drift vs proteon on HETATM-heavy
             # structures, but the per-residue agreement on standard
             # protein atoms stays intact.
             "skip-unknown": True,
@@ -319,7 +319,7 @@ if _FREESASA_OK:
     # Why this exists: on the 100-PDB scaling demo, FreeSASA segfaulted in
     # C (EXIT=139) somewhere in the per-structure loop. The same loop ran
     # cleanly in a standalone freesasa-only script, so the suspect is a
-    # C-state / GIL interaction with ferritin's rayon pool inherited via
+    # C-state / GIL interaction with proteon's rayon pool inherited via
     # the same Python process. `skip-unknown=True` does not fix it.
     #
     # Fix: wrap each freesasa() call in its own short-lived worker process
@@ -366,7 +366,7 @@ if _FREESASA_OK:
         Pool size is capped at 8 because (a) FreeSASA is fast enough that
         the Amdahl's bottleneck is process spawn overhead, not concurrent
         SASA work, and (b) the driver is typically running in parallel
-        with the ferritin batch on the same node and we don't want to
+        with the proteon batch on the same node and we don't want to
         oversubscribe a 120-core box across runners.
         """
         import multiprocessing as _mp
@@ -395,7 +395,7 @@ if _FREESASA_OK:
                         payload={},
                     ))
         # Stamp aggregate wall time on the first ok result for reporting,
-        # mirroring the ferritin_batch convention.
+        # mirroring the proteon_batch convention.
         if out and out[0].status == "ok":
             out[0].elapsed_s = _time_perf() - t_total
         return out

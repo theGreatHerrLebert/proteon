@@ -1,5 +1,5 @@
 Stage 3 FULL: 47183 PDBs, chunks of 500, 50 steps, GPU + 128 cores
-[ferritin-gpu] CUDA initialized: NVIDIA GeForce RTX 5090 (CC 12.0)
+[proteon-gpu] CUDA initialized: NVIDIA GeForce RTX 5090 (CC 12.0)
   [  500/47183] elapsed=   62.0s eta= 5787.1s ok=486 neg=484 neg%=99.6 chunk=58409ms
   [ 1000/47183] elapsed=  124.4s eta= 5744.5s ok=975 neg=969 neg%=99.4 chunk=58838ms
   [ 1500/47183] elapsed=  191.0s eta= 5818.0s ok=1462 neg=1452 neg%=99.3 chunk=63400ms

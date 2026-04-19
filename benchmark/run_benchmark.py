@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Ferritin comprehensive benchmark on large corpus.
+"""Proteon comprehensive benchmark on large corpus.
 
-Benchmarks all major ferritin features on N structures:
+Benchmarks all major proteon features on N structures:
 - Loading (PDB/mmCIF)
 - SASA (Shrake-Rupley, ProtOr)
 - DSSP (Kabsch-Sander)
@@ -41,7 +41,7 @@ def timed(name, fn, *args, **kwargs):
 
 
 def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000):
-    import ferritin
+    import proteon
 
     # Collect input files
     files = sorted(Path(pdb_dir).glob("*.pdb")) + sorted(Path(pdb_dir).glob("*.cif"))
@@ -82,7 +82,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
 
         # Load (batch_load_tolerant returns (index, structure) tuples)
         t0 = time.perf_counter()
-        loaded = ferritin.batch_load_tolerant(chunk_files, n_threads=n_threads)
+        loaded = proteon.batch_load_tolerant(chunk_files, n_threads=n_threads)
         dt = time.perf_counter() - t0
         # Preserve the file path alongside each loaded structure so the
         # per-structure prepare dump can label rows with PDB IDs.
@@ -90,7 +90,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
         structures = [s for _, s in loaded_with_files]
         structure_files = [f for f, _ in loaded_with_files]
         # Skip structures > 25K atoms for now (giants dominate runtime)
-        # We proved ferritin handles 2M-atom structures — just too slow for batch
+        # We proved proteon handles 2M-atom structures — just too slow for batch
         n_before = len(structures)
         keep = [(f, s) for f, s in zip(structure_files, structures) if s.atom_count < 25000]
         structures = [s for _, s in keep]
@@ -107,7 +107,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
         # SASA
         log(f"  SASA starting...")
         t0 = time.perf_counter()
-        sv = ferritin.batch_total_sasa(structures, n_threads=n_threads, radii="protor")
+        sv = proteon.batch_total_sasa(structures, n_threads=n_threads, radii="protor")
         dt = time.perf_counter() - t0
         log(f"  SASA: {dt:.1f}s")
         all_timings["sasa"]["elapsed"] += dt
@@ -116,7 +116,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
         # DSSP
         log(f"  DSSP starting...")
         t0 = time.perf_counter()
-        ferritin.batch_dssp(structures, n_threads=n_threads)
+        proteon.batch_dssp(structures, n_threads=n_threads)
         dt = time.perf_counter() - t0
         log(f"  DSSP: {dt:.1f}s")
         all_timings["dssp"]["elapsed"] += dt
@@ -124,7 +124,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
         # Dihedrals
         log(f"  Dihedrals starting...")
         t0 = time.perf_counter()
-        ferritin.batch_dihedrals(structures, n_threads=n_threads)
+        proteon.batch_dihedrals(structures, n_threads=n_threads)
         dt = time.perf_counter() - t0
         log(f"  Dihedrals: {dt:.1f}s")
         all_timings["dihedrals"]["elapsed"] += dt
@@ -132,7 +132,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
         # H-bonds
         log(f"  H-bonds starting...")
         t0 = time.perf_counter()
-        ferritin.batch_backbone_hbonds(structures, n_threads=n_threads)
+        proteon.batch_backbone_hbonds(structures, n_threads=n_threads)
         dt = time.perf_counter() - t0
         log(f"  H-bonds: {dt:.1f}s")
         all_timings["hbonds"]["elapsed"] += dt
@@ -140,7 +140,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
         # H placement
         log(f"  Hydrogens starting...")
         t0 = time.perf_counter()
-        h_res = ferritin.batch_place_peptide_hydrogens(structures, n_threads=n_threads)
+        h_res = proteon.batch_place_peptide_hydrogens(structures, n_threads=n_threads)
         dt = time.perf_counter() - t0
         log(f"  Hydrogens: {dt:.1f}s")
         all_timings["hydrogens"]["elapsed"] += dt
@@ -153,7 +153,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
             t0 = time.perf_counter()
             for s in structures[:n_energy]:
                 try:
-                    e = ferritin.compute_energy(s, units="kJ/mol")
+                    e = proteon.compute_energy(s, units="kJ/mol")
                     energies.append(e["total"])
                     all_timings["energy"]["n_computed"] += 1
                 except Exception:
@@ -168,7 +168,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
             log(f"  Prepare starting ({n_prep} structures)...")
             t0 = time.perf_counter()
             try:
-                reports = ferritin.batch_prepare(
+                reports = proteon.batch_prepare(
                     structures[:n_prep], reconstruct=False, hydrogens="backbone",
                     minimize=True, minimize_steps=200, minimize_method="lbfgs",
                     n_threads=n_threads,
@@ -179,8 +179,8 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
                     1 for r in reports if r.skipped_no_protein
                 )
                 # Per-structure dump for diagnosing convergence flap.
-                if os.environ.get("FERRITIN_DUMP_PREPARE"):
-                    dump_path = os.environ["FERRITIN_DUMP_PREPARE"]
+                if os.environ.get("PROTEON_DUMP_PREPARE"):
+                    dump_path = os.environ["PROTEON_DUMP_PREPARE"]
                     dump = []
                     for f, r in zip(structure_files[:n_prep], reports):
                         dump.append(dict(
@@ -241,7 +241,7 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ferritin benchmark")
+    parser = argparse.ArgumentParser(description="Proteon benchmark")
     parser.add_argument("--pdb-dir", required=True, help="Directory with PDB files")
     parser.add_argument("--n", type=int, default=50000, help="Max structures")
     parser.add_argument("--threads", type=int, default=0, help="Threads (0=all)")

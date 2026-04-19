@@ -1,5 +1,5 @@
 {
-  "format": "ferritin.structure_supervision.v0",
+  "format": "proteon.structure_supervision.v0",
   "count": 0,
   "examples_file": "examples.jsonl",
   "tensor_fields": []

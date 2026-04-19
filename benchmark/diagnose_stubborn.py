@@ -9,8 +9,8 @@ Per-structure data is dumped to JSON for follow-up analysis.
 
 Run on monster3:
     python benchmark/diagnose_stubborn.py \\
-        --pdb-dir /globalscratch/dateschn/ferritin-benchmark/pdbs_50k \\
-        --out /globalscratch/dateschn/ferritin-benchmark/stubborn_diagnosis.json
+        --pdb-dir /globalscratch/dateschn/proteon-benchmark/pdbs_50k \\
+        --out /globalscratch/dateschn/proteon-benchmark/stubborn_diagnosis.json
 """
 
 import argparse
@@ -52,7 +52,7 @@ def main():
                         help="Step budget for second pass on non-converged")
     args = parser.parse_args()
 
-    import ferritin
+    import proteon
 
     print(f"Collecting sample from {args.pdb_dir}...", flush=True)
     files = collect_sample(args.pdb_dir)
@@ -60,7 +60,7 @@ def main():
 
     # Load and apply the atom-count filter (< 25K atoms), keep pdb_id -> struct
     # n_threads=-1 means "all cores"; 0 would incorrectly mean single-threaded.
-    loaded = ferritin.batch_load_tolerant(files, n_threads=-1)
+    loaded = proteon.batch_load_tolerant(files, n_threads=-1)
     pairs = []
     for i, s in loaded:
         if s.atom_count < 25000:
@@ -72,7 +72,7 @@ def main():
     print(f"=== Round 1: victory-lap config (200 steps, tol=0.1) ===", flush=True)
     structs = [s for _, s in pairs]
     t0 = time.perf_counter()
-    reports = ferritin.batch_prepare(
+    reports = proteon.batch_prepare(
         structs, reconstruct=False, hydrogens="backbone",
         minimize=True, minimize_steps=200, minimize_method="lbfgs",
         gradient_tolerance=0.1, n_threads=-1,
@@ -102,13 +102,13 @@ def main():
     for pid, _ in pairs:
         if pid in nonconv_pdb_ids:
             path = next(f for f in files if Path(f).stem == pid)
-            s = ferritin.load(path)
+            s = proteon.load(path)
             fresh_pairs.append((pid, s))
 
     if fresh_pairs:
         fresh_structs = [s for _, s in fresh_pairs]
         t0 = time.perf_counter()
-        reports2 = ferritin.batch_prepare(
+        reports2 = proteon.batch_prepare(
             fresh_structs, reconstruct=False, hydrogens="backbone",
             minimize=True, minimize_steps=args.max_steps_extended, minimize_method="lbfgs",
             gradient_tolerance=0.1, n_threads=-1,

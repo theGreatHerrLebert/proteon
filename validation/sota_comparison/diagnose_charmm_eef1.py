@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Diagnose the ferritin CHARMM19+EEF1 wrong-sign-total finding.
+"""Diagnose the proteon CHARMM19+EEF1 wrong-sign-total finding.
 
-Tier-2 weak oracle (commit 8f979f4) flagged that ferritin's
+Tier-2 weak oracle (commit 8f979f4) flagged that proteon's
 charmm19_eef1 totals are POSITIVE on every v1 PDB (1crn +1849, 1ubq
 +5591, ...) while OpenMM CHARMM36+OBC2 totals are NEGATIVE. The bug
 appears concentrated in the EEF1 solvation term — fer_solv is positive
@@ -42,10 +42,10 @@ import argparse
 import sys
 import os
 
-import ferritin
+import proteon
 
 # Default test structure: 1crn from the v1 SOTA reference set.
-DEFAULT_PDB = "/globalscratch/dateschn/ferritin-benchmark/sota_pdbs/1crn.pdb"
+DEFAULT_PDB = "/globalscratch/dateschn/proteon-benchmark/sota_pdbs/1crn.pdb"
 
 # Component keys for CHARMM19+EEF1
 COMPONENTS = (
@@ -60,12 +60,12 @@ COMPONENTS = (
 
 
 def _find_charmm_ini():
-    """Locate ferritin-connector/data/charmm19_eef1.ini in the repo."""
+    """Locate proteon-connector/data/charmm19_eef1.ini in the repo."""
     here = os.path.dirname(os.path.abspath(__file__))
-    # validation/sota_comparison/ → repo root → ferritin-connector/data/...
+    # validation/sota_comparison/ → repo root → proteon-connector/data/...
     candidates = [
-        os.path.join(here, "..", "..", "ferritin-connector", "data", "charmm19_eef1.ini"),
-        os.path.join(here, "..", "..", "..", "ferritin-connector", "data", "charmm19_eef1.ini"),
+        os.path.join(here, "..", "..", "proteon-connector", "data", "charmm19_eef1.ini"),
+        os.path.join(here, "..", "..", "..", "proteon-connector", "data", "charmm19_eef1.ini"),
     ]
     for c in candidates:
         if os.path.isfile(c):
@@ -111,7 +111,7 @@ def _parse_charmm_ini(path):
 
 def canonical_eef1_self_solvation(structure):
     """Walk every residue:atom in `structure`, look up its CHARMM type and
-    dg_ref independently of ferritin's energy kernel, and return the
+    dg_ref independently of proteon's energy kernel, and return the
     canonical Σ dg_ref over heavy atoms.
 
     Returns a dict with keys: hits, misses, miss_examples, sum_kcal,
@@ -136,7 +136,7 @@ def canonical_eef1_self_solvation(structure):
         for atom in residue.atoms:
             aname = (atom.name or "").strip()
             element = (atom.element or "").strip().upper()
-            # eef1_energy() in ferritin skips hydrogens
+            # eef1_energy() in proteon skips hydrogens
             if element in ("H", "D"):
                 continue
             key = f"{rname}:{aname}"
@@ -209,7 +209,7 @@ def main():
     # ------------------------------------------------------------------
     # Step 1: raw structure, no H, no minimize, compute_energy
     # ------------------------------------------------------------------
-    s_raw = ferritin.load(args.pdb)
+    s_raw = proteon.load(args.pdb)
     print(f"\nLoaded {args.pdb}: {s_raw.atom_count} atoms")
     try:
         n_residues = sum(1 for _ in s_raw.residues)
@@ -217,7 +217,7 @@ def main():
         n_residues = "?"
     print(f"  residues: {n_residues}")
 
-    e_raw = ferritin.compute_energy(s_raw, ff="charmm19_eef1", units="kJ/mol")
+    e_raw = proteon.compute_energy(s_raw, ff="charmm19_eef1", units="kJ/mol")
     print_energy("STEP 1: RAW (no H, no minimization)", e_raw)
     raw_solv_sign = "POSITIVE (BUG)" if e_raw["solvation"] > 0 else "negative (canonical)"
     print(f"\n    => solvation sign on raw structure: {raw_solv_sign}")
@@ -234,8 +234,8 @@ def main():
     # ------------------------------------------------------------------
     # Step 2: H placed but no minimization
     # ------------------------------------------------------------------
-    s_h = ferritin.load(args.pdb)
-    reports_h = ferritin.batch_prepare(
+    s_h = proteon.load(args.pdb)
+    reports_h = proteon.batch_prepare(
         [s_h],
         reconstruct=False,
         hydrogens="all",
@@ -244,14 +244,14 @@ def main():
         ff="charmm19_eef1",
     )
     print(f"\n  After H placement: {s_h.atom_count} atoms (was {s_raw.atom_count})")
-    e_h = ferritin.compute_energy(s_h, ff="charmm19_eef1", units="kJ/mol")
+    e_h = proteon.compute_energy(s_h, ff="charmm19_eef1", units="kJ/mol")
     print_energy("STEP 2: H placed, NO minimization", e_h)
 
     # ------------------------------------------------------------------
     # Step 3: H + 200 LBFGS steps
     # ------------------------------------------------------------------
-    s_min = ferritin.load(args.pdb)
-    reports_min = ferritin.batch_prepare(
+    s_min = proteon.load(args.pdb)
+    reports_min = proteon.batch_prepare(
         [s_min],
         reconstruct=False,
         hydrogens="all",
@@ -267,12 +267,12 @@ def main():
           f"converged={r.converged})")
     print(f"  initial_energy: {r.initial_energy:>+14.3f} kJ/mol")
     print(f"  final_energy:   {r.final_energy:>+14.3f} kJ/mol")
-    e_min = ferritin.compute_energy(s_min, ff="charmm19_eef1", units="kJ/mol")
+    e_min = proteon.compute_energy(s_min, ff="charmm19_eef1", units="kJ/mol")
     print_energy("  re-evaluated post-minimization", e_min)
 
     # ------------------------------------------------------------------
     # Step 3.5: canonical EEF1 expectation, computed independently
-    # of ferritin's energy kernel by reading the .ini file directly.
+    # of proteon's energy kernel by reading the .ini file directly.
     # This tells us what the correct value SHOULD be.
     # ------------------------------------------------------------------
     print()
@@ -282,14 +282,14 @@ def main():
     canonical = canonical_eef1_self_solvation(s_raw)
     print(f"\n  This walks every residue:atom in 1crn, looks up the CHARMM type")
     print(f"  via [ChargesAndTypeNames], looks up the dg_ref via [EEF1Solvation],")
-    print(f"  and sums. Bypasses ferritin's energy kernel completely.\n")
+    print(f"  and sums. Bypasses proteon's energy kernel completely.\n")
     print(f"  hits   (atom found in both tables):  {canonical['hits']}")
     print(f"  misses (atom not found / no dg_ref): {canonical['misses']}")
     print(f"  expected Σ dg_ref: {canonical['sum_kcal']:>+12.3f} kcal/mol")
     print(f"  expected Σ dg_ref: {canonical['sum_kj']:>+12.3f} kJ/mol")
-    print(f"  ferritin actual:   {e_raw['solvation']:>+12.3f} kJ/mol")
+    print(f"  proteon actual:   {e_raw['solvation']:>+12.3f} kJ/mol")
     diff = e_raw['solvation'] - canonical['sum_kj']
-    print(f"  difference (ferritin - canonical): {diff:>+12.3f} kJ/mol")
+    print(f"  difference (proteon - canonical): {diff:>+12.3f} kJ/mol")
     print()
     if canonical['miss_examples']:
         print("  Sample missed atoms (first 10):")
@@ -304,8 +304,8 @@ def main():
     # ------------------------------------------------------------------
     # Step 4: comparison with raw AMBER96 on the same input (sanity)
     # ------------------------------------------------------------------
-    s_amber = ferritin.load(args.pdb)
-    e_amber = ferritin.compute_energy(s_amber, ff="amber96", units="kJ/mol")
+    s_amber = proteon.load(args.pdb)
+    e_amber = proteon.compute_energy(s_amber, ff="amber96", units="kJ/mol")
     print_energy("STEP 4: AMBER96 on the same raw structure (control)", e_amber)
     print("\n  (AMBER96 has no solvation term, so 'solvation' should be 0 or None.)")
 

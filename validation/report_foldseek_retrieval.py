@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Diagnose Foldseek-vs-ferritin retrieval benchmark outputs."""
+"""Diagnose Foldseek-vs-proteon retrieval benchmark outputs."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _thresholds(data: dict[str, Any]) -> list[str]:
 
 def _recall(row: dict[str, Any], threshold: str, method: str) -> float | None:
     threshold_row = row.get("thresholds", {}).get(threshold, {})
-    key = "recall_at_k" if method == "foldseek" else "ferritin_recall_at_k"
+    key = "recall_at_k" if method == "foldseek" else "proteon_recall_at_k"
     value = threshold_row.get(key)
     return None if value is None else float(value)
 
@@ -38,28 +38,28 @@ def _recall(row: dict[str, Any], threshold: str, method: str) -> float | None:
 def _classify_top1(row: dict[str, Any]) -> str:
     truth = _source(row.get("best_truth_nonself"))
     foldseek = _source(row.get("foldseek_top_nonself"))
-    ferritin = _source(row.get("ferritin_top_nonself"))
+    proteon = _source(row.get("proteon_top_nonself"))
     if truth is None:
         return "no_truth"
     foldseek_exact = foldseek == truth
-    ferritin_exact = ferritin == truth
-    if foldseek_exact and ferritin_exact:
+    proteon_exact = proteon == truth
+    if foldseek_exact and proteon_exact:
         return "both_exact"
     if foldseek_exact:
         return "foldseek_only"
-    if ferritin_exact:
-        return "ferritin_only"
+    if proteon_exact:
+        return "proteon_only"
     return "both_miss"
 
 
 def _classify_recall(row: dict[str, Any], threshold: str, *, epsilon: float) -> str:
     foldseek = _recall(row, threshold, "foldseek")
-    ferritin = _recall(row, threshold, "ferritin")
-    if foldseek is None or ferritin is None:
+    proteon = _recall(row, threshold, "proteon")
+    if foldseek is None or proteon is None:
         return "missing"
-    delta = ferritin - foldseek
+    delta = proteon - foldseek
     if delta > epsilon:
-        return "ferritin_better"
+        return "proteon_better"
     if delta < -epsilon:
         return "foldseek_better"
     return "tie"
@@ -89,16 +89,16 @@ def summarize(data: dict[str, Any], *, primary_threshold: str | None = None, eps
     threshold_summary = {}
     for threshold in thresholds:
         foldseek_values = [_recall(row, threshold, "foldseek") for row in rows]
-        ferritin_values = [_recall(row, threshold, "ferritin") for row in rows]
+        proteon_values = [_recall(row, threshold, "proteon") for row in rows]
         paired = [
-            (float(foldseek), float(ferritin))
-            for foldseek, ferritin in zip(foldseek_values, ferritin_values)
-            if foldseek is not None and ferritin is not None
+            (float(foldseek), float(proteon))
+            for foldseek, proteon in zip(foldseek_values, proteon_values)
+            if foldseek is not None and proteon is not None
         ]
         threshold_summary[threshold] = {
             "foldseek_mean": round(mean(foldseek for foldseek, _ in paired), 4) if paired else None,
-            "ferritin_mean": round(mean(ferritin for _, ferritin in paired), 4) if paired else None,
-            "ferritin_minus_foldseek": round(mean(ferritin - foldseek for foldseek, ferritin in paired), 4) if paired else None,
+            "proteon_mean": round(mean(proteon for _, proteon in paired), 4) if paired else None,
+            "proteon_minus_foldseek": round(mean(proteon - foldseek for foldseek, proteon in paired), 4) if paired else None,
             "counts": dict(Counter(
                 _classify_recall(row, threshold, epsilon=epsilon)
                 for row in rows
@@ -108,27 +108,27 @@ def summarize(data: dict[str, Any], *, primary_threshold: str | None = None, eps
     query_diagnostics = []
     for row in rows:
         foldseek_recall = _recall(row, primary_threshold, "foldseek") if primary_threshold else None
-        ferritin_recall = _recall(row, primary_threshold, "ferritin") if primary_threshold else None
-        delta = None if foldseek_recall is None or ferritin_recall is None else ferritin_recall - foldseek_recall
+        proteon_recall = _recall(row, primary_threshold, "proteon") if primary_threshold else None
+        delta = None if foldseek_recall is None or proteon_recall is None else proteon_recall - foldseek_recall
         truth = _source(row.get("best_truth_nonself"))
         query_diagnostics.append({
             "query": row.get("query"),
             "truth": truth,
             "truth_tm_score": None if not row.get("best_truth_nonself") else row["best_truth_nonself"].get("tm_score"),
             "foldseek_top": _source(row.get("foldseek_top_nonself")),
-            "ferritin_top": _source(row.get("ferritin_top_nonself")),
+            "proteon_top": _source(row.get("proteon_top_nonself")),
             "top1_class": _classify_top1(row),
             "foldseek_recall": foldseek_recall,
-            "ferritin_recall": ferritin_recall,
-            "ferritin_minus_foldseek": delta,
+            "proteon_recall": proteon_recall,
+            "proteon_minus_foldseek": delta,
             "truth_rank_in_foldseek_trace": _rank_of_source(row.get("foldseek_top_hits", []), truth),
-            "truth_rank_in_ferritin_trace": _rank_of_source(row.get("ferritin_top_hits", []), truth),
+            "truth_rank_in_proteon_trace": _rank_of_source(row.get("proteon_top_hits", []), truth),
         })
 
     query_diagnostics.sort(
         key=lambda row: (
-            0 if row["ferritin_minus_foldseek"] is not None else 1,
-            row["ferritin_minus_foldseek"] if row["ferritin_minus_foldseek"] is not None else 0.0,
+            0 if row["proteon_minus_foldseek"] is not None else 1,
+            row["proteon_minus_foldseek"] if row["proteon_minus_foldseek"] is not None else 0.0,
             str(row["query"]),
         )
     )
@@ -144,8 +144,8 @@ def summarize(data: dict[str, Any], *, primary_threshold: str | None = None, eps
         "top1_counts": dict(top1_counts),
         "recall_counts": dict(recall_counts),
         "threshold_summary": threshold_summary,
-        "worst_ferritin_queries": query_diagnostics[:10],
-        "best_ferritin_queries": list(reversed(query_diagnostics[-10:])),
+        "worst_proteon_queries": query_diagnostics[:10],
+        "best_proteon_queries": list(reversed(query_diagnostics[-10:])),
         "truth_skip_metadata_known": truth_skip_metadata_known,
         "n_skipped_truth_candidates": (
             sum(len(items) for items in skipped_truth.values())
@@ -157,9 +157,9 @@ def summarize(data: dict[str, Any], *, primary_threshold: str | None = None, eps
             if truth_skip_metadata_known
             else None
         ),
-        "skipped_ferritin_queries": data.get("skipped_ferritin_queries", {}),
+        "skipped_proteon_queries": data.get("skipped_proteon_queries", {}),
         "has_candidate_traces": any(
-            "foldseek_top_hits" in row or "ferritin_top_hits" in row
+            "foldseek_top_hits" in row or "proteon_top_hits" in row
             for row in rows
         ),
     }
@@ -174,7 +174,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
         return str(value)
 
     lines = [
-        "# Foldseek vs ferritin Retrieval Diagnostics",
+        "# Foldseek vs proteon Retrieval Diagnostics",
         "",
         "## Headline",
         "",
@@ -187,16 +187,16 @@ def render_markdown(summary: dict[str, Any]) -> str:
             if summary["truth_skip_metadata_known"]
             else "unknown; benchmark reused a truth cache without skip metadata"
         ),
-        f"- Skipped ferritin queries: {len(summary['skipped_ferritin_queries'])}",
+        f"- Skipped proteon queries: {len(summary['skipped_proteon_queries'])}",
         "",
         "## Recall By Threshold",
         "",
-        "| TM threshold | Foldseek mean | ferritin mean | ferritin - Foldseek |",
+        "| TM threshold | Foldseek mean | proteon mean | proteon - Foldseek |",
         "|---:|---:|---:|---:|",
     ]
     for threshold, row in summary["threshold_summary"].items():
         lines.append(
-            f"| {threshold} | {row['foldseek_mean']} | {row['ferritin_mean']} | {row['ferritin_minus_foldseek']} |"
+            f"| {threshold} | {row['foldseek_mean']} | {row['proteon_mean']} | {row['proteon_minus_foldseek']} |"
         )
 
     lines.extend([
@@ -204,7 +204,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "## Top-1 Classes",
         "",
     ])
-    for key in ["both_exact", "foldseek_only", "ferritin_only", "both_miss", "no_truth"]:
+    for key in ["both_exact", "foldseek_only", "proteon_only", "both_miss", "no_truth"]:
         lines.append(f"- {key}: {summary['top1_counts'].get(key, 0)}")
 
     lines.extend([
@@ -212,35 +212,35 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "## Primary Recall Classes",
         "",
     ])
-    for key in ["foldseek_better", "ferritin_better", "tie", "missing"]:
+    for key in ["foldseek_better", "proteon_better", "tie", "missing"]:
         lines.append(f"- {key}: {summary['recall_counts'].get(key, 0)}")
 
     lines.extend([
         "",
-        "## Worst ferritin Deltas",
+        "## Worst proteon Deltas",
         "",
-        "| Query | Truth | Truth TM | Foldseek top | ferritin top | Foldseek recall | ferritin recall | Delta | ferritin truth rank |",
+        "| Query | Truth | Truth TM | Foldseek top | proteon top | Foldseek recall | proteon recall | Delta | proteon truth rank |",
         "|---|---|---:|---|---|---:|---:|---:|---:|",
     ])
-    for row in summary["worst_ferritin_queries"]:
+    for row in summary["worst_proteon_queries"]:
         lines.append(
-            "| {query} | {truth} | {truth_tm_score} | {foldseek_top} | {ferritin_top} | "
-            "{foldseek_recall} | {ferritin_recall} | {ferritin_minus_foldseek} | {truth_rank_in_ferritin_trace} |".format(
+            "| {query} | {truth} | {truth_tm_score} | {foldseek_top} | {proteon_top} | "
+            "{foldseek_recall} | {proteon_recall} | {proteon_minus_foldseek} | {truth_rank_in_proteon_trace} |".format(
                 **{key: fmt(value) for key, value in row.items()}
             )
         )
 
     lines.extend([
         "",
-        "## Best ferritin Deltas",
+        "## Best proteon Deltas",
         "",
-        "| Query | Truth | Truth TM | Foldseek top | ferritin top | Foldseek recall | ferritin recall | Delta | ferritin truth rank |",
+        "| Query | Truth | Truth TM | Foldseek top | proteon top | Foldseek recall | proteon recall | Delta | proteon truth rank |",
         "|---|---|---:|---|---|---:|---:|---:|---:|",
     ])
-    for row in summary["best_ferritin_queries"]:
+    for row in summary["best_proteon_queries"]:
         lines.append(
-            "| {query} | {truth} | {truth_tm_score} | {foldseek_top} | {ferritin_top} | "
-            "{foldseek_recall} | {ferritin_recall} | {ferritin_minus_foldseek} | {truth_rank_in_ferritin_trace} |".format(
+            "| {query} | {truth} | {truth_tm_score} | {foldseek_top} | {proteon_top} | "
+            "{foldseek_recall} | {proteon_recall} | {proteon_minus_foldseek} | {truth_rank_in_proteon_trace} |".format(
                 **{key: fmt(value) for key, value in row.items()}
             )
         )

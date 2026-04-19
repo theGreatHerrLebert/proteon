@@ -1,6 +1,6 @@
 # Oracle tests
 
-Everything in this directory compares ferritin output against an **independent,
+Everything in this directory compares proteon output against an **independent,
 externally-implemented tool** and fails if the two disagree beyond a documented
 tolerance. That is the single discipline that makes the validation claims in
 [`devdocs/ORACLE.md`](../../devdocs/ORACLE.md) and
@@ -38,12 +38,12 @@ import pytest
 
 @pytest.mark.oracle("openmm")
 def test_amber_matches_openmm_on_crambin():
-    ours = ferritin.compute_energy(s, ff="amber96", nonbonded_cutoff=1e6, units="kJ/mol")
+    ours = proteon.compute_energy(s, ff="amber96", nonbonded_cutoff=1e6, units="kJ/mol")
     theirs = openmm_amber96_energy(s, nonbonded="NoCutoff")
 
     for component in ENERGY_COMPONENTS:
         assert abs(ours[component] - theirs[component]) / abs(theirs[component] + 1e-9) < 0.002, (
-            f"{component}: ferritin={ours[component]:+.4f} openmm={theirs[component]:+.4f}"
+            f"{component}: proteon={ours[component]:+.4f} openmm={theirs[component]:+.4f}"
         )
 ```
 
@@ -60,7 +60,7 @@ Four conventions:
    values and the component/name so that a failure in CI tells you what
    diverged, not just "Booleans differed".
 4. **If the oracle is slow to install, gate it.** Use `pytest.importorskip` or
-   an env var (`FERRITIN_SEARCH_REQUIRE_ORACLE=1` for MMseqs2) so dev loops
+   an env var (`PROTEON_SEARCH_REQUIRE_ORACLE=1` for MMseqs2) so dev loops
    stay fast; CI turns the gate on explicitly.
 
 ## Running
@@ -96,10 +96,10 @@ upstream binaries.
 | [FreeSASA](https://freesasa.github.io) | `pip install freesasa` | Imported directly; no config |
 | [OpenMM](https://openmm.org) | `pip install openmm` (or `conda install -c conda-forge openmm`) | Imported via `pytest.importorskip("openmm")` |
 | [USAlign](https://github.com/pylelab/USalign) | `git clone && make`, put `USalign` on `$PATH` | Set `USALIGN_BIN=/path/to/USalign` if not on `$PATH` |
-| [MMseqs2](https://github.com/soedinglab/MMseqs2) | `conda install -c bioconda mmseqs2`, or the pinned binary release (see `.github/workflows/test.yml` `MMSEQS_VERSION`) | Set `FERRITIN_SEARCH_MMSEQS_BIN=/path/to/mmseqs` and `FERRITIN_SEARCH_REQUIRE_ORACLE=1` to gate |
+| [MMseqs2](https://github.com/soedinglab/MMseqs2) | `conda install -c bioconda mmseqs2`, or the pinned binary release (see `.github/workflows/test.yml` `MMSEQS_VERSION`) | Set `PROTEON_SEARCH_MMSEQS_BIN=/path/to/mmseqs` and `PROTEON_SEARCH_REQUIRE_ORACLE=1` to gate |
 | [BALL](https://github.com/hildebrandtlab/BiochemicalAlgorithms.jl) (Julia) | `julia --project=<path>` and `Pkg.add("BiochemicalAlgorithms")` | `ball_energy_raw.jl` / `ball_energy_oracle.jl` shell out; see the scripts in this directory |
 | [BALL C++](https://github.com/BALL-Project/ball) (`libBALL.so`) | Build from source (`cmake + make`); no pip/conda distribution. Used for the CHARMM19 oracle because the SIP Python bindings don't build cleanly on current toolchains. | Standalone C++ binaries under `validation/ball_cpp/` link `libBALL.so` and emit JSON; tests read those |
-| [GROMACS](https://www.gromacs.org) | `conda install -c bioconda gromacs`, `apt install gromacs`, or [build from source](https://manual.gromacs.org/current/install-guide/) | `gmx` / `gmx_mpi` binary on `$PATH`; referenced from `validation/tm_fold_preservation_gromacs.py` as a fold-preservation comparator against ferritin's CHARMM19+EEF1 minimizer |
+| [GROMACS](https://www.gromacs.org) | `conda install -c bioconda gromacs`, `apt install gromacs`, or [build from source](https://manual.gromacs.org/current/install-guide/) | `gmx` / `gmx_mpi` binary on `$PATH`; referenced from `validation/tm_fold_preservation_gromacs.py` as a fold-preservation comparator against proteon's CHARMM19+EEF1 minimizer |
 | [pydssp](https://github.com/ShintaroMinami/PyDSSP) | `pip install pydssp` | Imported via `pytest.importorskip("pydssp")`; independent NumPy/PyTorch reimplementation of Kabsch-Sander used by `test_dssp_oracle.py` |
 | [reduce](https://github.com/rlabduke/reduce) | `git clone && cmake -S reduce -B reduce/build && make -C reduce/build` | Set `REDUCE_BIN=/path/to/reduce/build/reduce_src/reduce` (and `REDUCE_DB=/path/to/reduce/reduce_wwPDB_het_dict.txt` if the dictionary isn't at the default `/usr/local/` location). The test skips cleanly if `REDUCE_BIN` isn't set. |
 
@@ -117,10 +117,10 @@ because no test actually uses them yet. Contributions welcome.
 | Tool | Would cover | Why it's the right oracle |
 |---|---|---|
 | [DSSP](https://swift.cmbi.umcn.nl/gv/dssp/) (`mkdssp` binary, C++) | Full 8-class secondary structure assignment | Kabsch & Sander's own reference implementation. pydssp already pins the 3-class call (see installed table); `mkdssp` would additionally pin the helix-flavor (H vs G vs I) and isolated-bridge (B vs E) distinctions that pydssp collapses. Needs a source build — no pip/conda/apt package that ships the current reference. |
-| [MolProbity](http://molprobity.biochem.duke.edu) | Clash detection, rotamer outliers, Ramachandran quality | Community-standard structure-validation suite. Bundles reduce + probe. Useful once ferritin starts producing prepped structures at scale — sanity-check that ferritin-prepped PDBs pass MolProbity at the same rate as OpenMM- or BALL-prepped ones. |
-| [PDB2PQR](https://pdb2pqr.readthedocs.io) | Protonation states, pKa assignment, charge/radius parameters | Standard upstream for electrostatics prep. A natural oracle for anything ferritin does with charges at non-default pH or on titratable residues. |
+| [MolProbity](http://molprobity.biochem.duke.edu) | Clash detection, rotamer outliers, Ramachandran quality | Community-standard structure-validation suite. Bundles reduce + probe. Useful once proteon starts producing prepped structures at scale — sanity-check that proteon-prepped PDBs pass MolProbity at the same rate as OpenMM- or BALL-prepped ones. |
+| [PDB2PQR](https://pdb2pqr.readthedocs.io) | Protonation states, pKa assignment, charge/radius parameters | Standard upstream for electrostatics prep. A natural oracle for anything proteon does with charges at non-default pH or on titratable residues. |
 
-Each of these is a real gap — the component exists in ferritin, the oracle
+Each of these is a real gap — the component exists in proteon, the oracle
 exists in the wild, nobody has wired them up. When one gets wired in, move
 the row up into the main install table and delete it from here.
 
@@ -131,15 +131,15 @@ placement comparison further:
 - **Methyl rotamers** (ALA/VAL/LEU/ILE/THR/MET CH₃): both tools place a
   valid CH₃ but at different 3-fold orientations; average residual ~0.5 Å
   after optimal matching. Closing this would need an MD-level rotamer
-  search in ferritin that matches reduce's H-bond scoring.
+  search in proteon that matches reduce's H-bond scoring.
 - **sp2 amide NH₂** (ASN HD21/HD22, GLN HE21/HE22, ARG NE/NH1/NH2):
   in-plane placement convention differs by ~120° even after `-NOFLIP`,
   producing ~1.2 Å residuals. A pair-convention-agnostic test would need
   a separate comparison mode.
 - **Rotatable polar H** (SER/THR/TYR OH, CYS SH, LYS NH3+, N-terminal
-  NH3+): reduce optimizes rotamer via H-bond scoring; ferritin places at
+  NH3+): reduce optimizes rotamer via H-bond scoring; proteon places at
   template default. 1.5–2 Å residuals are structural, not bugs — closing
-  requires ferritin gaining rotatable-H optimization.
+  requires proteon gaining rotatable-H optimization.
 
 ## Adding a new oracle
 

@@ -1,0 +1,34 @@
+[package]
+name = "proteon-search"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "MMseqs2-compatible sequence search engine: DB I/O, k-mer prefilter, gapped alignment, MSA feature generation"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# CUDA-accelerated search paths. Builds in cudarc and the gpu/ module;
+# at runtime, kernels dispatch to GPU only when a usable device is
+# detected via `OnceLock`-cached probe. Silent CPU fallback if not.
+# Mirrors the pattern proteon-connector::forcefield::gpu uses for the
+# energy + SASA kernels.
+cuda = ["dep:cudarc"]
+
+[dependencies]
+anyhow = "1"
+thiserror = "1"
+memmap2 = "0.9"
+cudarc = { version = "0.19", features = ["std", "driver", "nvrtc", "cuda-12050"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"

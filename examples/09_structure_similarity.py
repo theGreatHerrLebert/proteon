@@ -4,7 +4,7 @@
 Contrastive learning: train a model that maps protein structures to
 an embedding space where structurally similar proteins are close.
 
-Uses ferritin's TM-align to compute pairwise TM-scores as ground truth
+Uses proteon's TM-align to compute pairwise TM-scores as ground truth
 similarity labels, then trains a Siamese GCN to predict similarity
 from graph features alone.
 
@@ -30,7 +30,7 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, global_mean_pool
 
-import ferritin
+import proteon
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -47,21 +47,21 @@ pdb_files = sorted(glob.glob(os.path.join(pdb_dir, "*.pdb")))[:50]
 print(f"\n{len(pdb_files)} PDB files")
 
 t0 = time.time()
-loaded = ferritin.batch_load_tolerant(pdb_files, n_threads=-1)
+loaded = proteon.batch_load_tolerant(pdb_files, n_threads=-1)
 structures = {i: s for i, s in loaded}
 print(f"  {len(structures)} loaded in {time.time()-t0:.2f}s")
 
 
 def structure_to_graph(s):
     """Build graph for embedding."""
-    ca = ferritin.extract_ca_coords(s)
+    ca = proteon.extract_ca_coords(s)
     n = len(ca)
     if n < 10:
         return None
 
-    phi, psi, _ = ferritin.backbone_dihedrals(s)
-    rsa = ferritin.relative_sasa(s)
-    ss = ferritin.dssp(s)
+    phi, psi, _ = proteon.backbone_dihedrals(s)
+    rsa = proteon.relative_sasa(s)
+    ss = proteon.dssp(s)
 
     def fit(arr, n):
         arr = np.nan_to_num(np.asarray(arr).flatten(), nan=0.0).astype(np.float32)
@@ -81,7 +81,7 @@ def structure_to_graph(s):
         fit(rsa, n), ss_oh
     ])  # 13 features
 
-    cm = ferritin.contact_map(ca, cutoff=10.0)
+    cm = proteon.contact_map(ca, cutoff=10.0)
     rows, cols = np.where(np.triu(cm, k=1))
     edge_index = np.stack([
         np.concatenate([rows, cols]),
@@ -107,7 +107,7 @@ for idx, s in structures.items():
         struct_list.append((idx, s))
 print(f"  {len(idx_to_graph)} graphs in {time.time()-t0:.2f}s")
 
-# --- Compute pairwise TM-scores with ferritin ---
+# --- Compute pairwise TM-scores with proteon ---
 print("\n--- Computing pairwise TM-scores ---")
 n_structs = min(len(struct_list), 30)  # limit for speed
 struct_subset = struct_list[:n_structs]
@@ -115,7 +115,7 @@ subset_structures = [s for _, s in struct_subset]
 subset_indices = [i for i, _ in struct_subset]
 
 t0 = time.time()
-all_results = ferritin.tm_align_many_to_many(
+all_results = proteon.tm_align_many_to_many(
     subset_structures, subset_structures, n_threads=-1, fast=True
 )
 t_align = time.time() - t0
