@@ -1,7 +1,7 @@
 //! PyO3 bindings for structural alphabet encoding.
 
-use proteon_align::search::alphabet::{encode_structure, BackboneAtoms};
 use numpy::{IntoPyArray, PyArray1, PyArrayMethods};
+use proteon_align::search::alphabet::{encode_structure, BackboneAtoms};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rayon::prelude::*;

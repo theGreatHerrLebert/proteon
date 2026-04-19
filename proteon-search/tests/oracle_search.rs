@@ -87,10 +87,7 @@ fn find_mmseqs() -> Option<PathBuf> {
 /// `PROTEON_SEARCH_QUERY_FASTA`, legacy `PROTEON_SEARCH_EXAMPLE_FASTA`,
 /// vendored fixture.
 fn find_query_fasta() -> Option<PathBuf> {
-    for var in [
-        "PROTEON_SEARCH_QUERY_FASTA",
-        "PROTEON_SEARCH_EXAMPLE_FASTA",
-    ] {
+    for var in ["PROTEON_SEARCH_QUERY_FASTA", "PROTEON_SEARCH_EXAMPLE_FASTA"] {
         if let Ok(explicit) = std::env::var(var) {
             let p = PathBuf::from(explicit);
             return if p.exists() {
@@ -257,8 +254,8 @@ fn proteon_search_recall_matches_upstream() {
         "PROTEON_SEARCH_REQUIRE_ORACLE is set but no mmseqs binary found \
          (set PROTEON_SEARCH_MMSEQS_BIN to its path)",
     );
-    let query_fasta = find_query_fasta()
-        .expect("PROTEON_SEARCH_REQUIRE_ORACLE is set but query FASTA not found");
+    let query_fasta =
+        find_query_fasta().expect("PROTEON_SEARCH_REQUIRE_ORACLE is set but query FASTA not found");
     let target_fasta = find_target_fasta(&query_fasta).expect("target FASTA not found");
 
     let workdir = tempdir().unwrap();

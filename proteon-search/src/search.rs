@@ -764,9 +764,7 @@ impl SearchEngine {
             ) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!(
-                        "[proteon-search] GPU warp multitile SW failed; CPU fallback: {e:#}"
-                    );
+                    eprintln!("[proteon-search] GPU warp multitile SW failed; CPU fallback: {e:#}");
                     return self.search_cpu(query, prefilter_hits);
                 }
             }

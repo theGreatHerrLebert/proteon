@@ -89,9 +89,7 @@ impl PssmSwWarpKernel {
                 match Self::compile(ctx) {
                     Ok(k) => Some(k),
                     Err(e) => {
-                        eprintln!(
-                            "[proteon-search-gpu] pssm_sw_warp kernel compile failed: {e:#}"
-                        );
+                        eprintln!("[proteon-search-gpu] pssm_sw_warp kernel compile failed: {e:#}");
                         None
                     }
                 }
