@@ -11,7 +11,12 @@ Fast structure loading, alignment, analysis, search, and preparation from Python
     >>> df = ferritin.to_dataframe(s)
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("ferritin")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
 
 from .arrow import (
     from_arrow,

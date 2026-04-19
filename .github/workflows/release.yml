@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   release:
     types: [published]
 
@@ -50,12 +51,11 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          # -i 3.12 -i 3.13 is needed so maturin picks up both supported
-          # interpreters. Inside the manylinux docker container used for
-          # linux targets the default `python3` search finds e.g. 3.8 and
-          # fails our requires-python >= 3.12; enumerating the two we
-          # support produces two wheels per target.
-          args: --release --out dist --manifest-path ferritin-connector/Cargo.toml -i 3.12 -i 3.13
+          # -i 3.11 -i 3.12 -i 3.13 is needed so maturin picks up every
+          # supported interpreter. Inside the manylinux docker container
+          # used for linux targets the default `python3` search can find
+          # older interpreters we do not support, so enumerate the grid.
+          args: --release --out dist --manifest-path ferritin-connector/Cargo.toml -i 3.11 -i 3.12 -i 3.13
           manylinux: ${{ matrix.manylinux || 'auto' }}
 
       - name: Upload wheels
@@ -98,12 +98,59 @@ jobs:
           name: wheels-ferritin
           path: packages/ferritin/dist/*
 
+  verify-distributions:
+    name: Verify distributions (Python ${{ matrix.python-version }})
+    needs: [build-connector, build-connector-sdist, build-ferritin]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-connector-*
+          merge-multiple: true
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-ferritin
+          path: dist/
+      - name: Install verification tools
+        run: python -m pip install --upgrade pip twine
+      - name: Check distribution metadata
+        run: twine check dist/*
+      - name: Install built artifacts
+        run: |
+          PYTAG="$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')"
+          CONN_WHEEL="$(ls dist/ferritin_connector-*-${PYTAG}-${PYTAG}-*x86_64*.whl | head -n 1)"
+          FERRITIN_WHEEL="$(ls dist/ferritin-*.whl | head -n 1)"
+          test -n "$CONN_WHEEL"
+          test -n "$FERRITIN_WHEEL"
+          python -m pip install "$CONN_WHEEL" "$FERRITIN_WHEEL"
+      - name: Smoke import
+        run: |
+          python - <<'PY'
+          import importlib.metadata as metadata
+          import ferritin
+          import ferritin_connector
+
+          assert ferritin.__version__ == metadata.version("ferritin")
+          assert metadata.version("ferritin-connector")
+          print("ferritin", ferritin.__version__)
+          print("connector", ferritin_connector.__name__)
+          PY
+
   # =========================================================================
   # Publish to PyPI
   # =========================================================================
   publish-connector:
     name: Publish ferritin-connector to PyPI
-    needs: [build-connector, build-connector-sdist]
+    if: github.event_name == 'release'
+    needs: [build-connector, build-connector-sdist, verify-distributions]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -122,7 +169,8 @@ jobs:
 
   publish-ferritin:
     name: Publish ferritin to PyPI
-    needs: [build-ferritin, publish-connector]
+    if: github.event_name == 'release'
+    needs: [build-ferritin, publish-connector, verify-distributions]
     runs-on: ubuntu-latest
     environment:
       name: pypi
