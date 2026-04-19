@@ -1,12 +1,14 @@
 """Proteon — Rust-first structural bioinformatics toolkit.
 
-Fast structure loading, alignment, analysis, search, and preparation from Python.
+Fast structure loading, alignment, analysis, and preparation from Python, plus
+an experimental structural search stack.
 
 The top-level ``proteon`` namespace is a curated convenience surface for the
 most common workflows. More specialized or format-specific APIs remain available
 from their submodules, e.g. ``proteon.sequence_export`` or
 ``proteon.supervision_export``. Underscore-prefixed names and non-exported
-internals are not part of the stable top-level contract.
+internals are not part of the stable top-level contract. Search-related APIs
+are available here, but should currently be treated as experimental.
 
     >>> import proteon
     >>> s = proteon.load("1crn.pdb")

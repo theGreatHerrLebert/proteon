@@ -132,6 +132,14 @@ Proteon exists for two reasons. First, it is the tool I wanted to have: fast, co
 structural computation with consistent interfaces and validated building blocks, without forcing a
 platform or workflow. Second, it is a testbed, a place to explore what responsible software development looks like in a world where code can be generated rapidly, systems grow faster than they can be inspected line by line, and complexity is no longer limited by implementation effort.
 
+That broad framing still needs a concrete product doctrine, otherwise the repo turns into an
+everything-project. The stable center is not "all of structural bioinformatics." It is a trusted
+structural compute kernel: loading, alignment, geometry, preparation, and the validation machinery
+needed to trust those results. The search stack belongs here as well, but as an experimental
+Foldseek-style retrieval effort built on top of that kernel, not yet as a mature product. That
+distinction matters because it keeps the repo honest about where the validation is strongest and
+where active product discovery is still happening.
+
 The question is no longer whether we use these tools. The question is how we build systems that
 remain trustworthy under these conditions.
 

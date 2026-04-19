@@ -1,12 +1,13 @@
 # Proteon
 
-Rust-first structural bioinformatics toolkit for loading, aligning, analyzing, searching, and preparing macromolecular structures.
+Rust-first structural bioinformatics toolkit for loading, aligning, analyzing, and preparing macromolecular structures, with an experimental Foldseek-style search stack.
 
 ## TL;DR
 
 - Proteon is a **library**, not a platform. No service, no database, no scheduler.
 - It gives you **fast structure I/O and heavy compute** from Rust, with Python and CLI entry points.
-- Core jobs already wired in: **PDB/mmCIF loading, TM-align/US-align family alignment, SASA, DSSP, H-bonds, geometry, search, and structure preparation/minimization**.
+- Core jobs already wired in: **PDB/mmCIF loading, TM-align/US-align family alignment, SASA, DSSP, H-bonds, geometry, and structure preparation/minimization**.
+- Proteon also ships an **experimental structural search stack** aimed at becoming its Foldseek-style retrieval layer, but that part of the repo is still pre-product.
 - Outputs stay interoperable: **NumPy, Arrow, Parquet, pandas/polars-friendly tables**.
 - The repo also contains **dataset/release utilities** for sequence and structure-supervision pipelines.
 
@@ -85,7 +86,9 @@ real demand.
 
 ## Persisted Search DBs
 
-For structural-alphabet search, the default persisted path is:
+Structural-alphabet search is available today, but it is still **experimental**.
+The current API is useful for local prototyping and benchmarks, not yet a mature
+search product. For the default persisted path:
 
 ```python
 import proteon
@@ -124,7 +127,7 @@ hits = proteon.search(
 | Structural alignment | `tm_align`, `soi_align`, `flex_align`, `mm_align`, one-to-many and many-to-many variants |
 | Structure analysis | SASA, DSSP, backbone dihedrals, H-bonds, contact maps, distance matrices, RMSD/TM-score |
 | Preparation | hydrogen placement, minimization, `prepare`, batch preparation |
-| Search | structural-alphabet encoding, database build/load/save, search primitives |
+| Search | experimental structural-alphabet encoding, database build/load/save, search primitives |
 | Data export | NumPy-backed access, DataFrame export, Arrow IPC, Parquet |
 | Dataset tooling | sequence examples, training examples, corpus manifests, supervision releases |
 
@@ -145,6 +148,12 @@ Proteon takes a different shape:
 - **columnar export for downstream analytics/ML**
 
 That makes it useful both as a daily research library and as a compute kernel inside larger pipelines.
+
+The sharper thesis is this:
+
+- Proteon's durable reason to exist is as a **trusted structural compute kernel** with strong oracle-backed validation and a clean Python boundary.
+- The search stack is an **experimental Foldseek-style effort** built on top of that kernel.
+- Search matters, but it should be treated as an area of active product discovery until retrieval quality, indexing, and benchmarks are strong enough to stand on their own.
 
 ## When To Use It
 
@@ -180,7 +189,7 @@ annotate the full public API uniformly.
 
 API tiers:
 
-- Top-level `proteon.*`: curated convenience surface for common loading, alignment, analysis, search, and preparation workflows. `proteon.__all__` defines this surface explicitly.
+- Top-level `proteon.*`: curated convenience surface for common loading, alignment, analysis, preparation, and selected search workflows. `proteon.__all__` defines this surface explicitly. Search-related APIs are currently experimental even when exposed from the top level.
 - Advanced submodules: use direct submodule imports like `proteon.sequence_export`, `proteon.sequence_release`, `proteon.supervision_export`, `proteon.supervision_dataset`, `proteon.corpus_release`, `proteon.corpus_validation`, or `proteon.msa_backend` when you need format-specific or pipeline-builder control.
 - Advanced dataset/release helpers are intentionally not available from the top-level namespace.
 - Internal surfaces: underscore-prefixed names and non-exported helpers are not stable API.

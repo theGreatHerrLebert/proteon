@@ -3,7 +3,8 @@
 Python bindings to the proteon structural bioinformatics toolkit (Rust core +
 pdbtbx I/O). Thin wrapper over `proteon-connector`, opinionated surface for
 corpus generation, structure preparation, alignment, SASA/DSSP, hydrogen
-placement, MSA/template retrieval, and supervision-tensor export.
+placement, MSA/template retrieval, supervision-tensor export, and an
+experimental structural search stack.
 
 ## Quickstart: generate a training corpus in 5 lines
 
@@ -138,6 +139,10 @@ pip install -e ../packages/proteon/
 ```
 
 ## Search DB serving
+
+The structural search APIs are **experimental**. They are intended for local
+prototyping, corpus plumbing, and benchmarks while Proteon's Foldseek-style
+retrieval layer is still being hardened.
 
 Persisted search DBs now default to writing both:
 
