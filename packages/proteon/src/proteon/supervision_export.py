@@ -52,6 +52,8 @@ STRUCTURE_FIELDS: Tuple[Tuple[str, Tuple[int, ...], type, str], ...] = (
     ("atom14_gt_exists", (14,), np.float32, "atom14_gt_exists"),
     ("atom14_atom_exists", (14,), np.float32, "atom14_atom_exists"),
     ("atom14_atom_is_ambiguous", (14,), np.float32, "atom14_atom_is_ambiguous"),
+    ("atom14_alt_gt_positions", (14, 3), np.float32, "atom14_alt_gt_positions"),
+    ("atom14_alt_gt_exists", (14,), np.float32, "atom14_alt_gt_exists"),
     ("residx_atom14_to_atom37", (14,), np.int32, "residx_atom14_to_atom37"),
     ("residx_atom37_to_atom14", (37,), np.int32, "residx_atom37_to_atom14"),
     ("pseudo_beta", (3,), np.float32, "pseudo_beta"),

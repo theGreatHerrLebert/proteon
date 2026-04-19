@@ -36,6 +36,7 @@ class SequenceExample:
     msa: Optional[NDArray[np.int32]] = None
     deletion_matrix: Optional[NDArray[np.float32]] = None
     msa_mask: Optional[NDArray[np.float32]] = None
+    msa_profile: Optional[NDArray[np.float32]] = None
     template_mask: Optional[NDArray[np.float32]] = None
 
 
@@ -64,7 +65,10 @@ def build_sequence_example(
 
     msa_arr = _encode_msa(msa, len(residues))
     deletion_arr = _normalize_deletion_matrix(deletion_matrix, msa_arr.shape[0] if msa_arr is not None else 0, len(residues))
-    msa_mask = None if msa_arr is None else np.ones(msa_arr.shape, dtype=np.float32)
+    msa_mask_arr = None if msa_arr is None else np.ones(msa_arr.shape, dtype=np.float32)
+    msa_profile_arr = None
+    if msa_arr is not None and msa_mask_arr is not None:
+        msa_profile_arr = compute_msa_profile(msa_arr, msa_mask_arr)
     template_mask_arr = None
     if template_mask is not None:
         template_mask_arr = np.asarray(template_mask, dtype=np.float32)
@@ -82,7 +86,8 @@ def build_sequence_example(
         seq_mask=seq_mask,
         msa=msa_arr,
         deletion_matrix=deletion_arr,
-        msa_mask=msa_mask,
+        msa_mask=msa_mask_arr,
+        msa_profile=msa_profile_arr,
         template_mask=template_mask_arr,
     )
 
@@ -121,6 +126,32 @@ def batch_build_sequence_examples(
         )
         for i, structure in enumerate(structures)
     ]
+
+
+def compute_msa_profile(
+    msa: NDArray[np.int32],
+    msa_mask: NDArray[np.float32],
+    *,
+    n_classes: int = 22,
+) -> NDArray[np.float32]:
+    """Compute per-column amino acid frequency profile from an MSA.
+
+    Returns shape (L, n_classes) float32 array where profile[j, k] is
+    the fraction of non-gap, non-masked rows at position j that have
+    residue type k. Gap index (21) gets its own column so downstream
+    models can distinguish "no coverage" from "all gaps".
+    """
+    n_seqs, length = msa.shape
+    profile = np.zeros((length, n_classes), dtype=np.float32)
+    for j in range(length):
+        col = msa[:, j]
+        col_mask = msa_mask[:, j]
+        total = col_mask.sum()
+        if total < 1e-6:
+            continue
+        for k in range(n_classes):
+            profile[j, k] = ((col == k) * col_mask).sum() / total
+    return profile
 
 
 def _encode_msa(msa: Optional[Sequence[str]], length: int) -> Optional[NDArray[np.int32]]:

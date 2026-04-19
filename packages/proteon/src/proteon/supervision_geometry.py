@@ -66,6 +66,8 @@ def extract_atom14(residues, atom37: Dict[str, NDArray]) -> Dict[str, NDArray]:
             mask[i, a14] = atom37["mask"][i, a37]
             if atom_name in swap or atom_name in swap.values():
                 ambiguous[i, a14] = 1.0
+    alt = compute_atom14_alt(residues, positions, mask)
+
     return {
         "positions": positions,
         "mask": mask,
@@ -73,7 +75,39 @@ def extract_atom14(residues, atom37: Dict[str, NDArray]) -> Dict[str, NDArray]:
         "to_atom37": to_atom37,
         "from_atom37": from_atom37,
         "ambiguous": ambiguous,
+        "alt_positions": alt["alt_positions"],
+        "alt_mask": alt["alt_mask"],
     }
+
+
+def compute_atom14_alt(
+    residues,
+    positions: NDArray,
+    mask: NDArray,
+) -> Dict[str, NDArray]:
+    """Compute alternate atom14 positions by swapping symmetric atom pairs.
+
+    For non-ambiguous residues, alt = original. For ASP/GLU/PHE/TYR,
+    the swap pairs from RESIDUE_ATOM_RENAMING_SWAPS are exchanged.
+    """
+    alt_positions = positions.copy()
+    alt_mask = mask.copy()
+    for i, residue in enumerate(residues):
+        resname = (residue.name or "UNK").strip().upper()
+        swap = RESIDUE_ATOM_RENAMING_SWAPS.get(resname, {})
+        if not swap:
+            continue
+        atom14_names = atom14_names_or_unk(resname)
+        name_to_idx = {name: idx for idx, name in enumerate(atom14_names) if name}
+        for src, dst in swap.items():
+            src_idx = name_to_idx.get(src)
+            dst_idx = name_to_idx.get(dst)
+            if src_idx is not None and dst_idx is not None:
+                alt_positions[i, src_idx] = positions[i, dst_idx]
+                alt_positions[i, dst_idx] = positions[i, src_idx]
+                alt_mask[i, src_idx] = mask[i, dst_idx]
+                alt_mask[i, dst_idx] = mask[i, src_idx]
+    return {"alt_positions": alt_positions, "alt_mask": alt_mask}
 
 
 def compute_pseudo_beta(residues, atom37: Dict[str, NDArray]):

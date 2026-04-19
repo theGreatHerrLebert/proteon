@@ -30,6 +30,7 @@ from .supervision_backend import (
     rust_supervision_available,
 )
 from .supervision_geometry import (
+    compute_atom14_alt,
     compute_backbone_torsions,
     compute_chi_angles,
     compute_pseudo_beta,
@@ -98,6 +99,8 @@ class StructureSupervisionExample:
     residx_atom14_to_atom37: Optional[NDArray[np.int32]] = None
     residx_atom37_to_atom14: Optional[NDArray[np.int32]] = None
     atom14_atom_is_ambiguous: Optional[NDArray[np.float32]] = None
+    atom14_alt_gt_positions: Optional[NDArray[np.float32]] = None
+    atom14_alt_gt_exists: Optional[NDArray[np.float32]] = None
 
     pseudo_beta: Optional[NDArray[np.float32]] = None
     pseudo_beta_mask: Optional[NDArray[np.float32]] = None
@@ -175,13 +178,18 @@ def build_structure_supervision_example(
             "mask": np.asarray(tensors["all_atom_mask"]),
             "exists": np.asarray(tensors["atom37_atom_exists"]),
         }
+        a14_pos = np.asarray(tensors["atom14_gt_positions"])
+        a14_mask = np.asarray(tensors["atom14_gt_exists"])
+        alt = compute_atom14_alt(residues, a14_pos, a14_mask)
         atom14 = {
-            "positions": np.asarray(tensors["atom14_gt_positions"]),
-            "mask": np.asarray(tensors["atom14_gt_exists"]),
+            "positions": a14_pos,
+            "mask": a14_mask,
             "exists": np.asarray(tensors["atom14_atom_exists"]),
             "to_atom37": np.asarray(tensors["residx_atom14_to_atom37"]),
             "from_atom37": np.asarray(tensors["residx_atom37_to_atom14"]),
             "ambiguous": np.asarray(tensors["atom14_atom_is_ambiguous"]),
+            "alt_positions": alt["alt_positions"],
+            "alt_mask": alt["alt_mask"],
         }
         pseudo_beta = np.asarray(tensors["pseudo_beta"])
         pseudo_beta_mask = np.asarray(tensors["pseudo_beta_mask"])
@@ -231,6 +239,8 @@ def build_structure_supervision_example(
         residx_atom14_to_atom37=atom14["to_atom37"],
         residx_atom37_to_atom14=atom14["from_atom37"],
         atom14_atom_is_ambiguous=atom14["ambiguous"],
+        atom14_alt_gt_positions=atom14["alt_positions"],
+        atom14_alt_gt_exists=atom14["alt_mask"],
         pseudo_beta=pseudo_beta,
         pseudo_beta_mask=pseudo_beta_mask,
         phi=backbone["phi"],
@@ -247,6 +257,17 @@ def build_structure_supervision_example(
         rigidgroups_group_is_ambiguous=rigidgroups["ambiguous"],
         quality=_quality_from_prep_report(prep_report),
     )
+
+
+def _batch_alt_positions(residues, batch_tensors, i, length):
+    """Compute atom14 alt positions for one example in a Rust batch."""
+    a14_pos = np.asarray(batch_tensors["atom14_gt_positions"])[i, :length].astype(np.float32, copy=False)
+    a14_mask = np.asarray(batch_tensors["atom14_gt_exists"])[i, :length].astype(np.float32, copy=False)
+    alt = compute_atom14_alt(residues, a14_pos, a14_mask)
+    return {
+        "atom14_alt_gt_positions": alt["alt_positions"],
+        "atom14_alt_gt_exists": alt["alt_mask"],
+    }
 
 
 def batch_build_structure_supervision_examples(
@@ -300,6 +321,7 @@ def batch_build_structure_supervision_examples(
                     residx_atom14_to_atom37=np.asarray(batch_tensors["residx_atom14_to_atom37"])[i, :length].astype(np.int32, copy=False),
                     residx_atom37_to_atom14=np.asarray(batch_tensors["residx_atom37_to_atom14"])[i, :length].astype(np.int32, copy=False),
                     atom14_atom_is_ambiguous=np.asarray(batch_tensors["atom14_atom_is_ambiguous"])[i, :length].astype(np.float32, copy=False),
+                    **_batch_alt_positions(residues, batch_tensors, i, length),
                     pseudo_beta=np.asarray(batch_tensors["pseudo_beta"])[i, :length].astype(np.float32, copy=False),
                     pseudo_beta_mask=np.asarray(batch_tensors["pseudo_beta_mask"])[i, :length].astype(np.float32, copy=False),
                     phi=np.asarray(batch_tensors["phi"])[i, :length].astype(np.float32, copy=False),

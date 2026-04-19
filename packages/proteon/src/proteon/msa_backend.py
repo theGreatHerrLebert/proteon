@@ -343,6 +343,9 @@ def build_sequence_example_with_msa(
     deletion_arr = np.asarray(msa_dict["deletion_matrix"], dtype=np.float32)
     msa_mask_arr = np.asarray(msa_dict["msa_mask"], dtype=np.float32)
 
+    from .sequence_example import compute_msa_profile
+    msa_profile_arr = compute_msa_profile(msa_arr, msa_mask_arr)
+
     return SequenceExample(
         record_id=base.record_id,
         source_id=base.source_id,
@@ -357,5 +360,6 @@ def build_sequence_example_with_msa(
         msa=msa_arr,
         deletion_matrix=deletion_arr,
         msa_mask=msa_mask_arr,
+        msa_profile=msa_profile_arr,
         template_mask=base.template_mask,
     )
