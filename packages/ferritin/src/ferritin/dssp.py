@@ -22,7 +22,7 @@ from numpy.typing import NDArray
 try:
     import ferritin_connector
     _dssp = ferritin_connector.py_dssp
-except ImportError:
+except ImportError:  # pragma: no cover
     _dssp = None
 
 

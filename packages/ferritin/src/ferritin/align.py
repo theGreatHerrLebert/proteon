@@ -16,7 +16,7 @@ try:
     import ferritin_connector
 
     _align = ferritin_connector.py_align_funcs
-except ImportError:
+except ImportError:  # pragma: no cover
     _align = None
 
 

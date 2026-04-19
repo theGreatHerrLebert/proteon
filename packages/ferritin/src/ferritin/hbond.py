@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 try:
     import ferritin_connector
     _hbond = ferritin_connector.py_hbond
-except ImportError:
+except ImportError:  # pragma: no cover
     _hbond = None
 
 

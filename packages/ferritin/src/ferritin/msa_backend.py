@@ -29,7 +29,7 @@ try:
     import ferritin_connector
 
     _msa = getattr(ferritin_connector, "py_msa", None)
-except ImportError:
+except ImportError:  # pragma: no cover
     _msa = None
 
 

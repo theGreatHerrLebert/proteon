@@ -23,7 +23,7 @@ try:
     import ferritin_connector
 
     _sasa = ferritin_connector.py_sasa
-except ImportError:
+except ImportError:  # pragma: no cover
     _sasa = None
 
 

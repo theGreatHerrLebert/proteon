@@ -15,7 +15,7 @@ try:
     import ferritin_connector
 
     _geo = ferritin_connector.py_geometry
-except ImportError:
+except ImportError:  # pragma: no cover
     _geo = None
 
 

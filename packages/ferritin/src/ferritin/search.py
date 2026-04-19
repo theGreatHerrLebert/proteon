@@ -23,7 +23,7 @@ try:
     import ferritin_connector
 
     _search = ferritin_connector.py_search
-except ImportError:
+except ImportError:  # pragma: no cover
     _search = None
 
 from .io import batch_load_tolerant

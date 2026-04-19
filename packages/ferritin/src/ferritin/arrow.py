@@ -32,7 +32,7 @@ try:
     import ferritin_connector
 
     _arrow = ferritin_connector.py_arrow
-except ImportError:
+except ImportError:  # pragma: no cover
     _arrow = None
 
 

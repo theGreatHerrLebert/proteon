@@ -18,7 +18,7 @@ try:
     import ferritin_connector
     _add_h = ferritin_connector.py_add_hydrogens
     _ff = ferritin_connector.py_forcefield
-except ImportError:
+except ImportError:  # pragma: no cover
     _add_h = None
     _ff = None
 

@@ -17,7 +17,7 @@ try:
     import ferritin_connector
 
     _pdb_mod = ferritin_connector.py_pdb
-except ImportError:
+except ImportError:  # pragma: no cover
     _pdb_mod = None
 
 

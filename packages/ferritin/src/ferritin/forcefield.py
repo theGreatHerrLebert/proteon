@@ -31,7 +31,7 @@ from typing import Optional
 try:
     import ferritin_connector
     _ff = ferritin_connector.py_forcefield
-except ImportError:
+except ImportError:  # pragma: no cover
     _ff = None
 
 

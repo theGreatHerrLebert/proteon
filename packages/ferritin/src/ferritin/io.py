@@ -17,7 +17,7 @@ try:
     import ferritin_connector
 
     _io = ferritin_connector.py_io
-except ImportError:
+except ImportError:  # pragma: no cover
     _io = None
 
 

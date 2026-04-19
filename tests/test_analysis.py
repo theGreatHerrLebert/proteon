@@ -238,6 +238,85 @@ class TestBackboneDihedrals:
         assert np.all(np.abs(valid_omega) > 140)
 
 
+class TestBackboneDihedralsPythonFallback:
+    """The public `backbone_dihedrals` goes through the Rust connector
+    when it's available; `_backbone_dihedrals_python` is the pure-Python
+    fallback kept for array-only usage. The Rust path dominates in
+    practice, so the fallback is easy to let rot — these tests pin its
+    output against the Rust path so a divergence surfaces as a
+    diagnostic CI failure rather than a silent "mysterious results
+    only when Rust disabled" bug report.
+    """
+
+    def test_matches_rust_on_crambin(self):
+        from ferritin.analysis import _backbone_dihedrals_python
+
+        s = load_crambin()
+        phi_rust, psi_rust, omega_rust = ferritin.backbone_dihedrals(s)
+        phi_py, psi_py, omega_py = _backbone_dihedrals_python(s)
+
+        # Same residue-count output.
+        assert phi_py.shape == phi_rust.shape
+        # Valid (non-NaN) positions agree to float precision on both paths.
+        for label, rust_arr, py_arr in [
+            ("phi", phi_rust, phi_py),
+            ("psi", psi_rust, psi_py),
+            ("omega", omega_rust, omega_py),
+        ]:
+            mask = ~np.isnan(rust_arr) & ~np.isnan(py_arr)
+            assert mask.sum() > 0, f"{label}: no valid positions to compare"
+            assert np.allclose(rust_arr[mask], py_arr[mask]), (
+                f"{label}: Rust vs Python fallback diverges on crambin"
+            )
+
+    def test_matches_rust_on_ubiquitin(self):
+        from ferritin.analysis import _backbone_dihedrals_python
+
+        s = load_ubiquitin()
+        phi_rust, psi_rust, omega_rust = ferritin.backbone_dihedrals(s)
+        phi_py, psi_py, omega_py = _backbone_dihedrals_python(s)
+
+        assert phi_py.shape == phi_rust.shape
+        for rust_arr, py_arr in [
+            (phi_rust, phi_py),
+            (psi_rust, psi_py),
+            (omega_rust, omega_py),
+        ]:
+            mask = ~np.isnan(rust_arr) & ~np.isnan(py_arr)
+            assert np.allclose(rust_arr[mask], py_arr[mask])
+
+    def test_termini_nan(self):
+        """N-terminal phi and omega are undefined (no preceding
+        residue) and C-terminal psi is undefined (no following
+        residue). Fallback must return NaN at those positions,
+        matching the Rust convention."""
+        from ferritin.analysis import _backbone_dihedrals_python
+
+        s = load_crambin()
+        phi, psi, omega = _backbone_dihedrals_python(s)
+        # N-terminal residue: phi needs C_{i-1} (doesn't exist) and
+        # omega needs CA_{i-1}, C_{i-1} (don't exist). Both NaN.
+        assert np.isnan(phi[0])
+        assert np.isnan(omega[0])
+        # C-terminal residue: psi needs N_{i+1} (doesn't exist).
+        assert np.isnan(psi[-1])
+
+    def test_empty_structure_returns_empty_arrays(self):
+        """Guards the `if not all_phi: return empty, empty, empty`
+        branch — a structure with zero amino-acid residues (e.g. water
+        or ligand only) must yield empty float64 arrays, not crash."""
+        from ferritin.analysis import _backbone_dihedrals_python
+
+        class _EmptyStructure:
+            chains = []
+
+        phi, psi, omega = _backbone_dihedrals_python(_EmptyStructure())
+        assert phi.shape == (0,)
+        assert psi.shape == (0,)
+        assert omega.shape == (0,)
+        assert phi.dtype == np.float64
+
+
 # ===========================================================================
 # centroid & radius_of_gyration
 # ===========================================================================

@@ -80,16 +80,17 @@ jobs:
           # (library-parity) tests together. Heavy oracle measurements live
           # in validation/ and are run off-CI per release.
           #
-          # Coverage floor: 80%. Current baseline (2026-04-19) is 82% across
-          # 4,333 statements, 934 passing tests. The 2pp margin absorbs
-          # day-to-day churn (new modules, refactors) without tripping on
-          # minor churn; a PR that drops coverage below 80% is real signal
-          # — either raise the floor after adding tests, or the new code
-          # needs tests.
+          # Coverage floor: 85%. Current baseline (2026-04-19) is 87%
+          # across 4,302 statements, 975 passing tests (measured with the
+          # full suite including @pytest.mark.slow tests — same shape CI
+          # runs here). The 2pp margin absorbs day-to-day churn without
+          # tripping on refactors; a PR that drops coverage meaningfully
+          # is real signal — either add tests or, if the PR intentionally
+          # raised the baseline, bump --cov-fail-under in the same commit.
           pytest tests/ -v --tb=short \
             --cov=ferritin \
             --cov-report=term \
-            --cov-fail-under=80
+            --cov-fail-under=85
 
   # Enforces the byte-exact round-trip promise of the ferritin-search DB I/O
   # layer by provisioning a PINNED upstream MMseqs2 release and running the

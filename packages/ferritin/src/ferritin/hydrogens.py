@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 try:
     import ferritin_connector
     _add_h = ferritin_connector.py_add_hydrogens
-except ImportError:
+except ImportError:  # pragma: no cover
     _add_h = None
 
 

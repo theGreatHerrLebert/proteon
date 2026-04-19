@@ -34,7 +34,7 @@ try:
     import ferritin_connector
 
     _analysis = ferritin_connector.py_analysis
-except ImportError:
+except ImportError:  # pragma: no cover
     _analysis = None
 
 

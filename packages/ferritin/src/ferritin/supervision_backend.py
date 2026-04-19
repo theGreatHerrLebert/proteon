@@ -13,7 +13,7 @@ try:
     import ferritin_connector
 
     _supervision = getattr(ferritin_connector, "py_supervision", None)
-except ImportError:
+except ImportError:  # pragma: no cover
     _supervision = None
 
 
