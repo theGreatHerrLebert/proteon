@@ -91,8 +91,8 @@ enforced with `--strict-markers`, so an unregistered marker fails CI.
 See [`tests/README.md`](tests/README.md) for the full marker/fixture
 reference and the test-suite registry pattern.
 
-CI enforces an **85% Python line-coverage floor** via `pytest-cov`
-(current baseline 87% across 4,302 statements, 975 passing tests).
+CI enforces an **87% Python line-coverage floor** via `pytest-cov`
+(current baseline 89% across 4,302 statements, 988 passing tests).
 If your PR drops below, CI fails — either add tests or, if you
 intentionally raised the floor by landing well-tested code, bump
 `--cov-fail-under` in `.github/workflows/test.yml` as part of the PR.

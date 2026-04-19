@@ -31,6 +31,10 @@ import ferritin
 TEST_PDBS = os.path.join(os.path.dirname(__file__), "..", "test-pdbs")
 CRAMBIN = os.path.join(TEST_PDBS, "1crn.pdb")
 UBIQ = os.path.join(TEST_PDBS, "1ubq.pdb")
+# Multi-chain complex for MM-align wrapper tests — lives in the sibling
+# test-pdbs/ directory, same layout the existing tests/test_mmalign.py uses.
+SHARED_PDBS = os.path.join(os.path.dirname(__file__), "..", "..", "test-pdbs")
+HHB = os.path.join(SHARED_PDBS, "4hhb.pdb")
 
 
 # ===========================================================================
@@ -205,3 +209,177 @@ class TestHydrogensWrappers:
         for added, skipped in results:
             assert isinstance(added, int)
             assert isinstance(skipped, int)
+
+
+# ===========================================================================
+# align.py
+# ===========================================================================
+
+
+class TestAlignWrappers:
+    """Cover the Python-facing align entry points and result classes.
+
+    `test_alignment.py` / `test_mmalign.py` go through
+    `ferritin_connector.py_align_funcs` directly — they exercise the
+    Rust core but never touch the Python-side `AlignResult` /
+    `SoiAlignResult` / `FlexAlignResult` / `MMAlignResult` property
+    wrappers or the public `ferritin.tm_align` / `soi_align` /
+    `flex_align` / `mm_align` dispatch functions.
+    """
+
+    @pytest.fixture(scope="class")
+    def pair(self):
+        return ferritin.load(CRAMBIN), ferritin.load(UBIQ)
+
+    @pytest.fixture(scope="class")
+    def triples(self):
+        """Three-structure list for one-to-many / many-to-many tests."""
+        return [
+            ferritin.load(CRAMBIN),
+            ferritin.load(UBIQ),
+            ferritin.load(CRAMBIN),
+        ]
+
+    # --- TM-align + AlignResult properties --------------------------------
+
+    def test_tm_align_result_properties(self, pair):
+        a, b = pair
+        r = ferritin.tm_align(a, b)
+        # Every declared property on AlignResult — touching each one
+        # covers the `self._ptr.X` forwarding line in the wrapper.
+        assert 0.0 <= r.tm_score_chain1 <= 1.0
+        assert 0.0 <= r.tm_score_chain2 <= 1.0
+        assert r.rmsd >= 0.0
+        assert r.n_aligned > 0
+        assert 0.0 <= r.seq_identity <= 1.0
+        rot = r.rotation_matrix
+        trans = r.translation
+        assert rot is not None and trans is not None
+        # Aligned sequences are same-length strings (gaps padded).
+        assert isinstance(r.aligned_seq_x, str)
+        assert isinstance(r.aligned_seq_y, str)
+        assert len(r.aligned_seq_x) == len(r.aligned_seq_y)
+        # __repr__ path
+        assert isinstance(repr(r), str)
+        # Wrapper-object contract.
+        assert r.get_py_ptr() is not None
+
+    def test_tm_align_fast_mode(self, pair):
+        a, b = pair
+        r = ferritin.tm_align(a, b, fast=True)
+        assert r.n_aligned > 0
+
+    def test_tm_align_one_to_many(self, pair, triples):
+        a, _ = pair
+        results = ferritin.tm_align_one_to_many(a, triples, n_threads=1)
+        assert len(results) == 3
+        for r in results:
+            assert r.n_aligned > 0
+
+    def test_tm_align_many_to_many(self, pair):
+        a, b = pair
+        results = ferritin.tm_align_many_to_many([a], [a, b], n_threads=1)
+        # Cartesian product: 1 × 2 = 2.
+        assert len(results) == 2
+        for qi, ti, r in results:
+            assert isinstance(qi, int)
+            assert isinstance(ti, int)
+            assert r.tm_score_chain1 >= 0.0
+
+    # --- SOI-align + SoiAlignResult properties ----------------------------
+
+    def test_soi_align_result_properties(self, pair):
+        a, b = pair
+        r = ferritin.soi_align(a, b)
+        assert 0.0 <= r.tm_score_chain1 <= 1.0
+        assert 0.0 <= r.tm_score_chain2 <= 1.0
+        assert r.rmsd >= 0.0
+        assert r.n_aligned > 0
+        assert 0.0 <= r.seq_identity <= 1.0
+        assert r.rotation_matrix is not None
+        assert r.translation is not None
+        assert isinstance(r.aligned_seq_x, str)
+        assert isinstance(r.aligned_seq_y, str)
+        assert isinstance(repr(r), str)
+        assert r.get_py_ptr() is not None
+
+    def test_soi_align_one_to_many(self, pair, triples):
+        a, _ = pair
+        results = ferritin.soi_align_one_to_many(a, triples, n_threads=1)
+        assert len(results) == 3
+
+    def test_soi_align_many_to_many(self, pair):
+        a, b = pair
+        results = ferritin.soi_align_many_to_many([a], [a, b], n_threads=1)
+        assert len(results) == 2
+
+    # --- FlexAlign + FlexAlignResult properties ---------------------------
+
+    def test_flex_align_result_properties(self, pair):
+        a, b = pair
+        r = ferritin.flex_align(a, b)
+        assert 0.0 <= r.tm_score_chain1 <= 1.0
+        assert 0.0 <= r.tm_score_chain2 <= 1.0
+        assert r.rmsd >= 0.0
+        assert r.n_aligned > 0
+        assert 0.0 <= r.seq_identity <= 1.0
+        # FlexAlign-specific: hinge_count + Kx3x3 rotation / Kx3
+        # translation arrays.
+        assert r.hinge_count >= 0
+        assert r.rotation_matrices is not None
+        assert r.translations is not None
+        assert isinstance(r.aligned_seq_x, str)
+        assert isinstance(r.aligned_seq_y, str)
+        assert isinstance(repr(r), str)
+
+    def test_flex_align_one_to_many(self, pair, triples):
+        a, _ = pair
+        results = ferritin.flex_align_one_to_many(a, triples, n_threads=1)
+        assert len(results) == 3
+
+    def test_flex_align_many_to_many(self, pair):
+        a, b = pair
+        results = ferritin.flex_align_many_to_many([a], [a, b], n_threads=1)
+        assert len(results) == 2
+
+    # --- MM-align + MMAlignResult / ChainPairResult -----------------------
+
+    @pytest.fixture(scope="class")
+    def hhb(self):
+        if not os.path.exists(HHB):
+            pytest.skip(f"4hhb.pdb not available at {HHB}")
+        return ferritin.load(HHB)
+
+    def test_mm_align_result_properties(self, hhb):
+        """Self-align hemoglobin to itself; exercises the MMAlignResult +
+        ChainPairResult Python wrappers end-to-end."""
+        r = ferritin.mm_align(hhb, hhb)
+        # MMAlignResult properties.
+        assert r.total_score >= 0.0
+        assignments = r.chain_assignments
+        assert isinstance(assignments, list)
+        # Every chain-pair carries its per-chain scores — these are the
+        # ChainPairResult property accesses we want to cover.
+        for pair in r.chain_pairs:
+            assert isinstance(pair.query_chain, int)
+            assert isinstance(pair.target_chain, int)
+            assert pair.tm_score >= 0.0
+            assert pair.rmsd >= 0.0
+            assert pair.n_aligned >= 0
+            assert isinstance(pair.aligned_seq_x, str)
+            assert isinstance(pair.aligned_seq_y, str)
+            # Wrapper-object contract.
+            assert pair.get_py_ptr() is not None
+        # __repr__ path on MMAlignResult.
+        assert isinstance(repr(r), str)
+        assert r.get_py_ptr() is not None
+
+    def test_mm_align_one_to_many(self, hhb):
+        results = ferritin.mm_align_one_to_many(hhb, [hhb, hhb], n_threads=1)
+        assert len(results) == 2
+        for r in results:
+            assert r.total_score >= 0.0
+
+    def test_mm_align_many_to_many(self, hhb):
+        results = ferritin.mm_align_many_to_many([hhb], [hhb, hhb], n_threads=1)
+        assert len(results) == 2
