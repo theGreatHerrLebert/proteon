@@ -21,15 +21,16 @@ local, and release validation runs, split by what runs where:
   biopython/gemmi, SASA vs FreeSASA.
 - **Release-quality slice** (pip-installable but heavier — OpenMM alone
   is ~500 MB — or source-built): OpenMM, reduce, TMalign, USAlign,
-  GROMACS, BALL Julia (BiochemicalAlgorithms.jl). These are **not**
-  installed in CI. They power the 1000-PDB parity benchmarks under
-  `validation/` (OpenMM), the hydrogen-placement parity tests
+  GROMACS, BALL C++, BALL Julia (BiochemicalAlgorithms.jl). These are
+  **not** installed in CI. They power the 1000-PDB parity benchmarks
+  under `validation/` (OpenMM), the hydrogen-placement parity tests
   (reduce), monomer TM-align spot-checks and port debugging (TMalign),
   the pairwise alignment benchmark harness (`validation/bench_alignment.py`,
   via USAlign's tabular output), the fold-preservation / triangulated
-  AMBER96 comparison runs (GROMACS), and the per-release crambin
-  reference regen (BALL Julia). Install them on your own machine to
-  reproduce the published numbers or regenerate a reference.
+  AMBER96 comparison runs (GROMACS), the CHARMM-side standalone oracle
+  binaries under `validation/ball_cpp/` (BALL C++), and the per-release
+  crambin reference regen (BALL Julia). Install them on your own
+  machine to reproduce the published numbers or regenerate a reference.
 
 MMseqs2 and Foldseek are also used for search/retrieval validation, but
 their install flow lives with the search-specific docs and workflows
@@ -54,6 +55,7 @@ last section.
 | TMalign | 20220412 | source build, see below |
 | USAlign | 20260329 | source build, see below |
 | GROMACS | 2026.1 | source build / package install, see below |
+| BALL C++ (`libBALL.so`) | commit `d85d2dd` | source build, see below |
 | BALL Julia (BiochemicalAlgorithms.jl) | commit `99e4acb` | `Pkg.instantiate()`, see below |
 | Julia | 1.11.5 | https://julialang.org/downloads/ |
 
@@ -232,6 +234,32 @@ Smoke test:
 ```bash
 $GMX --version
 # expect: GROMACS version: 2026.1
+```
+
+## Install — BALL C++ (`libBALL.so`, CHARMM oracle path)
+
+Proteon still uses BALL's C++ library for some CHARMM-side oracle work
+because the old SIP Python bindings do not build cleanly on current
+toolchains. The standalone binaries under `validation/ball_cpp/` link
+against `libBALL.so` and emit JSON for comparison.
+
+```bash
+cd $HOME/src
+git clone https://github.com/BALL-Project/ball.git
+cd ball
+git checkout d85d2dd84   # local oracle checkout
+mkdir -p build && cd build
+cmake ..
+make -j$(nproc)
+
+export BALL_CPP_ROOT="$HOME/src/ball/build"
+export LD_LIBRARY_PATH="$BALL_CPP_ROOT/lib:${LD_LIBRARY_PATH:-}"
+```
+
+Smoke test:
+
+```bash
+test -f "$BALL_CPP_ROOT/lib/libBALL.so" && echo "libBALL.so ok"
 ```
 
 ## Install — BALL Julia (BiochemicalAlgorithms.jl)
