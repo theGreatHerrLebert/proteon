@@ -17,7 +17,9 @@ internals are not part of the stable top-level contract.
     >>> df = proteon.to_dataframe(s)
 """
 
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version
+import warnings
 
 try:
     __version__ = version("proteon")
@@ -92,18 +94,7 @@ from .hydrogens import (
     place_peptide_hydrogens,
     reconstruct_fragments,
 )
-from .prepare import (
-    PrepReport,
-    batch_prepare,
-    load_and_prepare,
-    prepare,
-)
-from .prepared_manifest import (
-    PreparedStructureRecord,
-    build_prepared_structure_records,
-    load_prepared_structure_manifest,
-    write_prepared_structure_manifest,
-)
+from .prepare import PrepReport, batch_prepare, load_and_prepare, prepare
 from .dssp import (
     batch_dssp,
     dssp,
@@ -150,56 +141,13 @@ from .msa_backend import (
     rust_msa_available,
     search_and_build_msa,
 )
-from .templates import (
-    TEMPLATE_GAP_INDEX,
-    TemplateFeatures,
-    build_template_features,
-)
-from .training_example import (
-    TRAINING_EXPORT_FORMAT,
-    iter_training_examples,
-    load_training_examples,
-)
+from .templates import TEMPLATE_GAP_INDEX, TemplateFeatures, build_template_features
 from .sequence_example import (
     SequenceExample,
     batch_build_sequence_examples,
     build_sequence_example,
 )
-from .msa_io import (
-    load_msas_from_dir,
-    parse_a3m_file,
-    parse_a3m_text,
-)
-from .sequence_export import (
-    SEQUENCE_EXPORT_FORMAT,
-    SEQUENCE_PARQUET_SCHEMA_VERSION,
-    SequenceParquetWriter,
-    export_sequence_examples,
-    iter_sequence_examples,
-    load_sequence_examples,
-)
-from .sequence_release import (
-    SequenceReleaseManifest,
-    build_sequence_dataset,
-    build_sequence_release,
-)
-from .training_example import (
-    TrainingExample,
-    TrainingReleaseManifest,
-    build_training_release,
-    join_training_examples,
-)
-from .corpus_release import (
-    CorpusReleaseManifest,
-    build_corpus_release_manifest,
-    load_corpus_release_manifest,
-)
-from .corpus_validation import (
-    CorpusValidationReport,
-    ValidationIssue,
-    validate_corpus_release,
-)
-from .corpus_smoke import build_local_corpus_smoke_release
+from .msa_io import load_msas_from_dir, parse_a3m_file, parse_a3m_text
 from .io import (
     LoadRescueResult,
     batch_load,
@@ -220,11 +168,6 @@ from .supervision import (
     batch_build_structure_supervision_examples,
     build_structure_supervision_example,
 )
-from .supervision_export import (
-    SUPERVISION_EXPORT_FORMAT,
-    export_structure_supervision_examples,
-    load_structure_supervision_examples,
-)
 from .failure_taxonomy import (
     ALL_FAILURE_CLASSES,
     classify_exception,
@@ -237,15 +180,6 @@ from .loader_failure_analysis import (
     summarize_loader_failures,
     summaries_to_markdown,
 )
-from .supervision_release import (
-    FailureRecord,
-    StructureSupervisionReleaseManifest,
-    build_structure_supervision_release,
-    load_failure_records,
-)
-from .supervision_dataset import build_structure_supervision_dataset
-from .supervision_dataset import build_structure_supervision_dataset_from_prepared
-
 # Explicitly govern the top-level ``proteon`` namespace. New exports should be
 # added deliberately here instead of leaking in implicitly via imports.
 _ARROW_API = (
@@ -330,13 +264,6 @@ _PREPARE_API = (
     "prepare",
 )
 
-_PREPARED_MANIFEST_API = (
-    "PreparedStructureRecord",
-    "build_prepared_structure_records",
-    "load_prepared_structure_manifest",
-    "write_prepared_structure_manifest",
-)
-
 _DSSP_API = (
     "batch_dssp",
     "dssp",
@@ -396,41 +323,12 @@ _TEMPLATE_API = (
 )
 
 _SEQUENCE_API = (
-    "TRAINING_EXPORT_FORMAT",
-    "iter_training_examples",
-    "load_training_examples",
     "SequenceExample",
     "batch_build_sequence_examples",
     "build_sequence_example",
     "load_msas_from_dir",
     "parse_a3m_file",
     "parse_a3m_text",
-    "SEQUENCE_EXPORT_FORMAT",
-    "SEQUENCE_PARQUET_SCHEMA_VERSION",
-    "SequenceParquetWriter",
-    "export_sequence_examples",
-    "iter_sequence_examples",
-    "load_sequence_examples",
-    "SequenceReleaseManifest",
-    "build_sequence_dataset",
-    "build_sequence_release",
-)
-
-_TRAINING_API = (
-    "TrainingExample",
-    "TrainingReleaseManifest",
-    "build_training_release",
-    "join_training_examples",
-)
-
-_CORPUS_API = (
-    "CorpusReleaseManifest",
-    "build_corpus_release_manifest",
-    "load_corpus_release_manifest",
-    "CorpusValidationReport",
-    "ValidationIssue",
-    "validate_corpus_release",
-    "build_local_corpus_smoke_release",
 )
 
 _IO_API = (
@@ -460,15 +358,6 @@ _SUPERVISION_API = (
     "StructureSupervisionExample",
     "batch_build_structure_supervision_examples",
     "build_structure_supervision_example",
-    "SUPERVISION_EXPORT_FORMAT",
-    "export_structure_supervision_examples",
-    "load_structure_supervision_examples",
-    "FailureRecord",
-    "StructureSupervisionReleaseManifest",
-    "build_structure_supervision_release",
-    "load_failure_records",
-    "build_structure_supervision_dataset",
-    "build_structure_supervision_dataset_from_prepared",
 )
 
 _FAILURE_API = (
@@ -492,7 +381,6 @@ __all__ = (
     *_HBOND_API,
     *_HYDROGEN_API,
     *_PREPARE_API,
-    *_PREPARED_MANIFEST_API,
     *_DSSP_API,
     *_GEOMETRY_API,
     *_SASA_API,
@@ -501,10 +389,114 @@ __all__ = (
     *_MSA_API,
     *_TEMPLATE_API,
     *_SEQUENCE_API,
-    *_TRAINING_API,
-    *_CORPUS_API,
     *_IO_API,
     *_STRUCTURE_API,
     *_SUPERVISION_API,
     *_FAILURE_API,
 )
+
+_ADVANCED_DATASET_ALIASES = {
+    "PreparedStructureRecord": (".prepared_manifest", "PreparedStructureRecord"),
+    "build_prepared_structure_records": (
+        ".prepared_manifest",
+        "build_prepared_structure_records",
+    ),
+    "load_prepared_structure_manifest": (
+        ".prepared_manifest",
+        "load_prepared_structure_manifest",
+    ),
+    "write_prepared_structure_manifest": (
+        ".prepared_manifest",
+        "write_prepared_structure_manifest",
+    ),
+    "SEQUENCE_EXPORT_FORMAT": (".sequence_export", "SEQUENCE_EXPORT_FORMAT"),
+    "SEQUENCE_PARQUET_SCHEMA_VERSION": (
+        ".sequence_export",
+        "SEQUENCE_PARQUET_SCHEMA_VERSION",
+    ),
+    "SequenceParquetWriter": (".sequence_export", "SequenceParquetWriter"),
+    "export_sequence_examples": (".sequence_export", "export_sequence_examples"),
+    "iter_sequence_examples": (".sequence_export", "iter_sequence_examples"),
+    "load_sequence_examples": (".sequence_export", "load_sequence_examples"),
+    "SequenceReleaseManifest": (".sequence_release", "SequenceReleaseManifest"),
+    "build_sequence_dataset": (".sequence_release", "build_sequence_dataset"),
+    "build_sequence_release": (".sequence_release", "build_sequence_release"),
+    "TRAINING_EXPORT_FORMAT": (".training_example", "TRAINING_EXPORT_FORMAT"),
+    "iter_training_examples": (".training_example", "iter_training_examples"),
+    "load_training_examples": (".training_example", "load_training_examples"),
+    "TrainingExample": (".training_example", "TrainingExample"),
+    "TrainingReleaseManifest": (".training_example", "TrainingReleaseManifest"),
+    "build_training_release": (".training_example", "build_training_release"),
+    "join_training_examples": (".training_example", "join_training_examples"),
+    "CorpusReleaseManifest": (".corpus_release", "CorpusReleaseManifest"),
+    "build_corpus_release_manifest": (
+        ".corpus_release",
+        "build_corpus_release_manifest",
+    ),
+    "load_corpus_release_manifest": (
+        ".corpus_release",
+        "load_corpus_release_manifest",
+    ),
+    "CorpusValidationReport": (
+        ".corpus_validation",
+        "CorpusValidationReport",
+    ),
+    "ValidationIssue": (".corpus_validation", "ValidationIssue"),
+    "validate_corpus_release": (
+        ".corpus_validation",
+        "validate_corpus_release",
+    ),
+    "build_local_corpus_smoke_release": (
+        ".corpus_smoke",
+        "build_local_corpus_smoke_release",
+    ),
+    "SUPERVISION_EXPORT_FORMAT": (
+        ".supervision_export",
+        "SUPERVISION_EXPORT_FORMAT",
+    ),
+    "export_structure_supervision_examples": (
+        ".supervision_export",
+        "export_structure_supervision_examples",
+    ),
+    "load_structure_supervision_examples": (
+        ".supervision_export",
+        "load_structure_supervision_examples",
+    ),
+    "FailureRecord": (".supervision_release", "FailureRecord"),
+    "StructureSupervisionReleaseManifest": (
+        ".supervision_release",
+        "StructureSupervisionReleaseManifest",
+    ),
+    "build_structure_supervision_release": (
+        ".supervision_release",
+        "build_structure_supervision_release",
+    ),
+    "load_failure_records": (".supervision_release", "load_failure_records"),
+    "build_structure_supervision_dataset": (
+        ".supervision_dataset",
+        "build_structure_supervision_dataset",
+    ),
+    "build_structure_supervision_dataset_from_prepared": (
+        ".supervision_dataset",
+        "build_structure_supervision_dataset_from_prepared",
+    ),
+}
+
+
+def __getattr__(name):
+    target = _ADVANCED_DATASET_ALIASES.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = target
+    module = import_module(module_name, __name__)
+    value = getattr(module, attr_name)
+    warnings.warn(
+        f"`proteon.{name}` is an advanced dataset/release API and is no longer "
+        f"part of the curated top-level surface; import it from "
+        f"`proteon{module_name}` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    globals()[name] = value
+    return value

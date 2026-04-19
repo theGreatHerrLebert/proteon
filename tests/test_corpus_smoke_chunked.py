@@ -19,6 +19,7 @@ import pytest
 pytest.importorskip("pyarrow")
 
 import proteon
+import proteon.corpus_smoke as corpus_smoke
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = [
@@ -35,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 
 def _build(tmp, chunk_size):
     out = tmp / ("chunked" if chunk_size else "single")
-    return proteon.build_local_corpus_smoke_release(
+    return corpus_smoke.build_local_corpus_smoke_release(
         [str(p) for p in FIXTURES],
         out,
         release_id="chunked-equiv",
@@ -112,7 +113,7 @@ def test_chunked_records_chunk_size_in_corpus_manifest(tmp_path: Path):
 
 def test_chunk_size_none_is_single_shot_path(tmp_path: Path):
     """chunk_size=None is the default, matches historical behavior."""
-    out = proteon.build_local_corpus_smoke_release(
+    out = corpus_smoke.build_local_corpus_smoke_release(
         [str(FIXTURES[0])],
         tmp_path / "single",
         release_id="default-single",
@@ -154,7 +155,7 @@ def test_chunked_provenance_covers_supervision_only_successes(tmp_path: Path, mo
     # corpus_smoke itself.
     monkeypatch.setattr(_seq_mod, "build_sequence_example", _selective_sequence_failure)
 
-    root = proteon.build_local_corpus_smoke_release(
+    root = corpus_smoke.build_local_corpus_smoke_release(
         [str(p) for p in FIXTURES],
         tmp_path / "out",
         release_id="chunked-seq-fail",

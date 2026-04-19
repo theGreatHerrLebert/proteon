@@ -7,6 +7,10 @@ import numpy as np
 import pytest
 
 import proteon
+from proteon import prepared_manifest as prep_manifest
+from proteon import supervision_dataset as sup_dataset
+from proteon import supervision_export as sup_export
+from proteon import supervision_release as sup_release
 
 
 def _atom(name, xyz):
@@ -187,12 +191,12 @@ class TestStructureSupervisionExample:
         examples = proteon.batch_build_structure_supervision_examples(
             [_fake_structure("A"), _fake_structure("B")]
         )
-        out_dir = proteon.export_structure_supervision_examples(examples, tmp_path / "supervision")
+        out_dir = sup_export.export_structure_supervision_examples(examples, tmp_path / "supervision")
 
         manifest = (out_dir / "manifest.json").read_text(encoding="utf-8")
-        assert proteon.SUPERVISION_EXPORT_FORMAT in manifest
+        assert sup_export.SUPERVISION_EXPORT_FORMAT in manifest
 
-        loaded = proteon.load_structure_supervision_examples(out_dir)
+        loaded = sup_export.load_structure_supervision_examples(out_dir)
         assert len(loaded) == 2
         assert loaded[0].sequence == "GSF"
         assert loaded[1].sequence == "GSF"
@@ -213,7 +217,7 @@ class TestStructureSupervisionExample:
         examples = proteon.batch_build_structure_supervision_examples(
             [_fake_structure("A")]
         )
-        out_dir = proteon.export_structure_supervision_examples(
+        out_dir = sup_export.export_structure_supervision_examples(
             examples, tmp_path / "supervision"
         )
         manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -224,25 +228,25 @@ class TestStructureSupervisionExample:
         assert manifest["tensor_file"] == "tensors.parquet"
 
         # Good path: default load verifies and succeeds.
-        proteon.load_structure_supervision_examples(out_dir)
+        sup_export.load_structure_supervision_examples(out_dir)
 
         # Tamper the tensor file; default load must raise with a
         # checksum-mismatch error before any parquet parsing attempts.
         parquet_path.write_bytes(b"corrupt")
         with pytest.raises(ValueError, match="checksum mismatch"):
-            proteon.load_structure_supervision_examples(out_dir)
+            sup_export.load_structure_supervision_examples(out_dir)
 
     def test_release_builder_writes_manifest_and_failures(self, tmp_path):
         examples = proteon.batch_build_structure_supervision_examples([_fake_structure("A")])
         failures = [
-            proteon.FailureRecord(
+            sup_release.FailureRecord(
                 record_id="bad:1",
                 failure_class="missing_required_atoms",
                 message="missing CA atom",
                 source_id="bad",
             )
         ]
-        release_dir = proteon.build_structure_supervision_release(
+        release_dir = sup_release.build_structure_supervision_release(
             examples,
             tmp_path / "release",
             release_id="demo-v0",
@@ -259,12 +263,12 @@ class TestStructureSupervisionExample:
         assert manifest["code_rev"] == "abc123"
         assert manifest["provenance"]["source_manifest"] == "raw-v1"
 
-        loaded_failures = proteon.load_failure_records(release_dir / "failures.jsonl")
+        loaded_failures = sup_release.load_failure_records(release_dir / "failures.jsonl")
         assert len(loaded_failures) == 1
         assert loaded_failures[0].failure_class == "missing_required_atoms"
 
     def test_dataset_builder_captures_failures_and_writes_release(self, tmp_path):
-        release_dir = proteon.build_structure_supervision_dataset(
+        release_dir = sup_dataset.build_structure_supervision_dataset(
             [_fake_structure("A"), _bad_structure()],
             tmp_path / "dataset_release",
             release_id="dataset-v0",
@@ -278,11 +282,11 @@ class TestStructureSupervisionExample:
         assert manifest["count_failures"] == 1
         assert manifest["release_id"] == "dataset-v0"
 
-        examples = proteon.load_structure_supervision_examples(release_dir / "examples")
+        examples = sup_export.load_structure_supervision_examples(release_dir / "examples")
         assert len(examples) == 1
         assert examples[0].record_id == "good:A"
 
-        failures = proteon.load_failure_records(release_dir / "failures.jsonl")
+        failures = sup_release.load_failure_records(release_dir / "failures.jsonl")
         assert len(failures) == 1
         assert failures[0].record_id == "bad:Z"
         assert failures[0].failure_class == "missing_required_atoms"
@@ -295,7 +299,7 @@ class TestStructureSupervisionExample:
             minimizer_steps=7,
             converged=True,
         )
-        root = proteon.build_structure_supervision_dataset_from_prepared(
+        root = sup_dataset.build_structure_supervision_dataset_from_prepared(
             [_fake_structure("A")],
             [prep],
             tmp_path / "prepared_bridge",
@@ -306,26 +310,26 @@ class TestStructureSupervisionExample:
             provenance={"source_manifest": "prepared-demo"},
         )
 
-        prepared_rows = proteon.load_prepared_structure_manifest(root / "prepared_structures.jsonl")
+        prepared_rows = prep_manifest.load_prepared_structure_manifest(root / "prepared_structures.jsonl")
         assert len(prepared_rows) == 1
         assert prepared_rows[0].record_id == "fake:A"
         assert prepared_rows[0].atoms_reconstructed == 2
         assert prepared_rows[0].hydrogens_added == 3
 
-        examples = proteon.load_structure_supervision_examples(root / "supervision_release" / "examples")
+        examples = sup_export.load_structure_supervision_examples(root / "supervision_release" / "examples")
         assert len(examples) == 1
         assert examples[0].record_id == "fake:A"
 
     def test_release_builder_allows_failure_only_release(self, tmp_path):
         failures = [
-            proteon.FailureRecord(
+            sup_release.FailureRecord(
                 record_id="bad:A",
                 failure_class="missing_required_atoms",
                 message="missing CA atom",
                 source_id="bad",
             )
         ]
-        release_dir = proteon.build_structure_supervision_release(
+        release_dir = sup_release.build_structure_supervision_release(
             [],
             tmp_path / "release_fail_only",
             release_id="fail-only-v0",
@@ -335,5 +339,5 @@ class TestStructureSupervisionExample:
         manifest = json.loads((release_dir / "release_manifest.json").read_text(encoding="utf-8"))
         assert manifest["count_examples"] == 0
         assert manifest["count_failures"] == 1
-        examples = proteon.load_structure_supervision_examples(release_dir / "examples")
+        examples = sup_export.load_structure_supervision_examples(release_dir / "examples")
         assert examples == []

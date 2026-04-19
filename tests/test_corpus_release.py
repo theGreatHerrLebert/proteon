@@ -4,6 +4,11 @@ import json
 from types import SimpleNamespace
 
 import proteon
+from proteon import corpus_release as corpus_release_mod
+from proteon import corpus_validation as corpus_validation_mod
+from proteon import sequence_release as seq_release
+from proteon import supervision_dataset as sup_dataset
+from proteon import training_example as train_example
 
 
 def _atom(name, xyz):
@@ -41,31 +46,31 @@ class TestCorpusRelease:
         structures = [_fake_structure("A")]
         prep = proteon.PrepReport(hydrogens_added=2, converged=True)
 
-        prepared_root = proteon.build_structure_supervision_dataset_from_prepared(
+        prepared_root = sup_dataset.build_structure_supervision_dataset_from_prepared(
             structures,
             [prep],
             tmp_path / "prepared_root",
             release_id="struc-v0",
             record_ids=["fake:A"],
         )
-        seq_release = proteon.build_sequence_dataset(
+        seq_rel = seq_release.build_sequence_dataset(
             structures,
             tmp_path / "seq_release",
             release_id="seq-v0",
             record_ids=["fake:A"],
         )
-        train_release = proteon.build_training_release(
-            seq_release,
+        train_release = train_example.build_training_release(
+            seq_rel,
             prepared_root / "supervision_release",
             tmp_path / "train_release",
             release_id="train-v0",
             split_assignments={"fake:A": "train"},
         )
-        corpus_root = proteon.build_corpus_release_manifest(
+        corpus_root = corpus_release_mod.build_corpus_release_manifest(
             tmp_path / "corpus_release",
             release_id="corpus-v0",
             prepared_manifest=prepared_root / "prepared_structures.jsonl",
-            sequence_release=seq_release,
+            sequence_release=seq_rel,
             structure_release=prepared_root / "supervision_release",
             training_release=train_release,
             prep_policy_version="prep-v1",
@@ -73,7 +78,7 @@ class TestCorpusRelease:
             provenance={"source_manifest": "raw-v1"},
         )
 
-        manifest = proteon.load_corpus_release_manifest(corpus_root / "corpus_release_manifest.json")
+        manifest = corpus_release_mod.load_corpus_release_manifest(corpus_root / "corpus_release_manifest.json")
         assert manifest.release_id == "corpus-v0"
         assert manifest.count_prepared == 1
         assert manifest.count_sequence_examples == 1
@@ -87,7 +92,7 @@ class TestCorpusRelease:
         raw = json.loads((corpus_root / "corpus_release_manifest.json").read_text(encoding="utf-8"))
         assert raw["sequence_release"].endswith("seq_release")
 
-        report = proteon.validate_corpus_release(
+        report = corpus_validation_mod.validate_corpus_release(
             corpus_root / "corpus_release_manifest.json",
             out_path=corpus_root / "validation_report.json",
         )
@@ -108,13 +113,13 @@ class TestCorpusRelease:
             encoding="utf-8",
         )
 
-        corpus_root = proteon.build_corpus_release_manifest(
+        corpus_root = corpus_release_mod.build_corpus_release_manifest(
             out,
             release_id="corpus-v0",
             rescued_inputs_manifest=rescued_path,
             overwrite=True,
         )
 
-        manifest = proteon.load_corpus_release_manifest(corpus_root / "corpus_release_manifest.json")
+        manifest = corpus_release_mod.load_corpus_release_manifest(corpus_root / "corpus_release_manifest.json")
         assert manifest.count_rescued_inputs == 2
         assert manifest.rescued_inputs_manifest == str(rescued_path)

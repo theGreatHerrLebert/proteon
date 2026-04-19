@@ -5,6 +5,9 @@ from types import SimpleNamespace
 
 import numpy as np
 import proteon
+from proteon import sequence_export as seq_export
+from proteon import sequence_release as seq_release
+from proteon import supervision_release as sup_release
 
 
 def _atom(name, xyz):
@@ -54,11 +57,11 @@ class TestSequenceExample:
             msas=[["GSF"], None],
             deletion_matrices=[[[0, 0, 0]], None],
         )
-        out_dir = proteon.export_sequence_examples(examples, tmp_path / "sequence")
+        out_dir = seq_export.export_sequence_examples(examples, tmp_path / "sequence")
         manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
-        assert manifest["format"] == proteon.SEQUENCE_EXPORT_FORMAT
+        assert manifest["format"] == seq_export.SEQUENCE_EXPORT_FORMAT
 
-        loaded = proteon.load_sequence_examples(out_dir)
+        loaded = seq_export.load_sequence_examples(out_dir)
         assert len(loaded) == 2
         assert loaded[0].sequence == "GSF"
         assert loaded[0].msa.shape == (1, 3)
@@ -71,20 +74,20 @@ class TestSequenceExample:
         import pytest
 
         examples = proteon.batch_build_sequence_examples([_fake_structure("A")])
-        out_dir = proteon.export_sequence_examples(examples, tmp_path / "sequence")
+        out_dir = seq_export.export_sequence_examples(examples, tmp_path / "sequence")
         manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
         tensor_path = out_dir / manifest["tensor_file"]
         assert tensor_path.name == "tensors.parquet"
         expected = hashlib.sha256(tensor_path.read_bytes()).hexdigest()
         assert manifest["tensor_sha256"] == expected
 
-        proteon.load_sequence_examples(out_dir)  # verifies and succeeds
+        seq_export.load_sequence_examples(out_dir)  # verifies and succeeds
         tensor_path.write_bytes(b"x")
         with pytest.raises(ValueError, match="checksum mismatch"):
-            proteon.load_sequence_examples(out_dir)
+            seq_export.load_sequence_examples(out_dir)
 
     def test_sequence_release_builder_captures_failures(self, tmp_path):
-        root = proteon.build_sequence_dataset(
+        root = seq_release.build_sequence_dataset(
             [_fake_structure("A"), _bad_structure()],
             tmp_path / "sequence_release",
             release_id="seq-v0",
@@ -95,21 +98,21 @@ class TestSequenceExample:
         manifest = json.loads((root / "release_manifest.json").read_text(encoding="utf-8"))
         assert manifest["count_examples"] == 1
         assert manifest["count_failures"] == 1
-        loaded = proteon.load_sequence_examples(root / "examples")
+        loaded = seq_export.load_sequence_examples(root / "examples")
         assert len(loaded) == 1
-        failures = proteon.load_failure_records(root / "failures.jsonl")
+        failures = sup_release.load_failure_records(root / "failures.jsonl")
         assert len(failures) == 1
         assert failures[0].stage == "sequence_example"
 
     def test_sequence_release_allows_failure_only_release(self, tmp_path):
-        failure = proteon.FailureRecord(
+        failure = sup_release.FailureRecord(
             record_id="bad:A",
             stage="sequence_example",
             failure_class="missing_required_atoms",
             message="missing CA atom",
             source_id="bad",
         )
-        root = proteon.build_sequence_release(
+        root = seq_release.build_sequence_release(
             [],
             tmp_path / "sequence_fail_only",
             release_id="seq-fail-only-v0",
@@ -119,4 +122,4 @@ class TestSequenceExample:
         manifest = json.loads((root / "release_manifest.json").read_text(encoding="utf-8"))
         assert manifest["count_examples"] == 0
         assert manifest["count_failures"] == 1
-        assert proteon.load_sequence_examples(root / "examples") == []
+        assert seq_export.load_sequence_examples(root / "examples") == []

@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import proteon
+import proteon.corpus_smoke as corpus_smoke
 
 
 def main() -> None:
@@ -24,7 +24,7 @@ def main() -> None:
     ap.add_argument("--n-threads", type=int, default=None, help="Thread count")
     args = ap.parse_args()
 
-    out = proteon.build_local_corpus_smoke_release(
+    out = corpus_smoke.build_local_corpus_smoke_release(
         [Path(p) for p in args.paths],
         Path(args.out),
         release_id=args.release_id,

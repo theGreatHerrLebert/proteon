@@ -22,6 +22,8 @@ pytest.importorskip("pyarrow")
 import pyarrow.parquet as pq
 
 import proteon
+import proteon.corpus_smoke as corpus_smoke
+from proteon import sequence_export as seq_export
 
 
 class FakeMsaEngine:
@@ -74,7 +76,7 @@ pytestmark = pytest.mark.skipif(
 def test_corpus_smoke_forwards_msa_engine_into_sequence_parquet(tmp_path: Path):
     """MSA lives in the sequence release (training joins only scalars + structure)."""
     engine = FakeMsaEngine()
-    out = proteon.build_local_corpus_smoke_release(
+    out = corpus_smoke.build_local_corpus_smoke_release(
         [str(FIXTURE)],
         tmp_path / "corpus",
         release_id="smoke-msa-wiring",
@@ -99,7 +101,7 @@ def test_corpus_smoke_forwards_msa_engine_into_sequence_parquet(tmp_path: Path):
 
 def test_corpus_smoke_without_engine_writes_null_msa(tmp_path: Path):
     """Control: no engine passed → MSA column is null per row (not empty slab)."""
-    out = proteon.build_local_corpus_smoke_release(
+    out = corpus_smoke.build_local_corpus_smoke_release(
         [str(FIXTURE)],
         tmp_path / "corpus",
         release_id="smoke-no-msa",
@@ -113,14 +115,14 @@ def test_corpus_smoke_without_engine_writes_null_msa(tmp_path: Path):
 def test_corpus_smoke_loads_sequence_msa_via_public_api(tmp_path: Path):
     """`load_sequence_examples` exposes MSA end-to-end when an engine is present."""
     engine = FakeMsaEngine()
-    out = proteon.build_local_corpus_smoke_release(
+    out = corpus_smoke.build_local_corpus_smoke_release(
         [str(FIXTURE)],
         tmp_path / "corpus",
         release_id="smoke-msa-api",
         msa_engine=engine,
         msa_max_seqs=16,
     )
-    examples = proteon.load_sequence_examples(out / "sequence" / "examples")
+    examples = seq_export.load_sequence_examples(out / "sequence" / "examples")
     assert len(examples) == 1
     ex = examples[0]
     assert ex.msa is not None and ex.msa.shape == (3, ex.length)
@@ -149,13 +151,13 @@ def test_corpus_smoke_reads_msa_dir_a3m(tmp_path: Path):
     a3m = f">query\n{query}\n>hit\n-{query[1:]}\n"
     (msa_dir / f"{FIXTURE.stem}.a3m").write_text(a3m)
 
-    out = proteon.build_local_corpus_smoke_release(
+    out = corpus_smoke.build_local_corpus_smoke_release(
         [str(FIXTURE)],
         tmp_path / "corpus",
         release_id="smoke-msa-dir",
         msa_dir=msa_dir,
     )
-    examples = proteon.load_sequence_examples(out / "sequence" / "examples")
+    examples = seq_export.load_sequence_examples(out / "sequence" / "examples")
     assert len(examples) == 1
     ex = examples[0]
     assert ex.msa is not None and ex.msa.shape == (2, ex.length)
@@ -176,14 +178,14 @@ def test_corpus_smoke_msa_dir_missing_file_falls_back_to_engine(tmp_path: Path):
     (msa_dir / f"{FIXTURE.stem}.a3m").write_text(f">q\n{query}\n")
 
     engine = FakeMsaEngine()
-    out = proteon.build_local_corpus_smoke_release(
+    out = corpus_smoke.build_local_corpus_smoke_release(
         [str(FIXTURE)],
         tmp_path / "corpus",
         release_id="smoke-msa-mixed",
         msa_dir=msa_dir,
         msa_engine=engine,
     )
-    examples = proteon.load_sequence_examples(out / "sequence" / "examples")
+    examples = seq_export.load_sequence_examples(out / "sequence" / "examples")
     ex = examples[0]
     # Explicit a3m has depth=1 (just the query), engine would produce depth=3.
     assert ex.msa.shape[0] == 1, (
@@ -195,7 +197,7 @@ def test_corpus_smoke_msa_dir_strict_raises_on_missing(tmp_path: Path):
     msa_dir = tmp_path / "msas"
     msa_dir.mkdir()  # intentionally empty
     with pytest.raises(FileNotFoundError, match="no MSA file"):
-        proteon.build_local_corpus_smoke_release(
+        corpus_smoke.build_local_corpus_smoke_release(
             [str(FIXTURE)],
             tmp_path / "corpus",
             release_id="smoke-msa-strict",

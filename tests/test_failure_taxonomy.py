@@ -11,6 +11,7 @@ non-canonical labels.
 import pytest
 
 import proteon
+from proteon import supervision_release as sup_release
 from proteon.failure_taxonomy import (
     ALL_FAILURE_CLASSES,
     INTERNAL_PIPELINE_ERROR,
@@ -114,7 +115,7 @@ class TestClassify:
 
 class TestFailureRecordValidation:
     def test_canonical_class_accepted(self):
-        proteon.FailureRecord(
+        sup_release.FailureRecord(
             record_id="x",
             failure_class=MISSING_REQUIRED_ATOMS,
             message="",
@@ -122,7 +123,7 @@ class TestFailureRecordValidation:
 
     def test_noncanonical_class_rejected(self):
         with pytest.raises(ValueError, match="not in the canonical"):
-            proteon.FailureRecord(
+            sup_release.FailureRecord(
                 record_id="x",
                 failure_class="kinda_sorta_broken",
                 message="",

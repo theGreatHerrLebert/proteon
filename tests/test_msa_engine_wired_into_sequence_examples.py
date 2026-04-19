@@ -29,6 +29,8 @@ import pytest
 
 import proteon
 from proteon import io as _proteon_io
+from proteon import sequence_export as seq_export
+from proteon import sequence_release as seq_release
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = {
@@ -128,7 +130,7 @@ class TestReleaseBuilderWithEngine:
         structures = _load_all()
         engine = _build_engine(structures)
 
-        out_dir = proteon.build_sequence_dataset(
+        out_dir = seq_release.build_sequence_dataset(
             structures,
             tmp_path / "seq_engine",
             release_id="msa-engine-v0",
@@ -139,7 +141,7 @@ class TestReleaseBuilderWithEngine:
         )
         assert (out_dir / "release_manifest.json").exists()
 
-        loaded = proteon.load_sequence_examples(out_dir / "examples")
+        loaded = seq_export.load_sequence_examples(out_dir / "examples")
         assert len(loaded) == 3
         for ex in loaded:
             assert ex.msa is not None and ex.msa.shape[0] >= 1, (
@@ -158,7 +160,7 @@ class TestReleaseBuilderWithEngine:
             ["MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"],
             ["RPDFCLEPPYTGPCKARIIRYFYNAKAGLCQTFVYGGCRAKRNNFKSAEDCMRTCGGA"],
         ]
-        out_dir = proteon.build_sequence_dataset(
+        out_dir = seq_release.build_sequence_dataset(
             structures,
             tmp_path / "seq_explicit",
             release_id="explicit-v0",
@@ -167,5 +169,5 @@ class TestReleaseBuilderWithEngine:
             msas=explicit_msa,
             overwrite=True,
         )
-        loaded = proteon.load_sequence_examples(out_dir / "examples")
+        loaded = seq_export.load_sequence_examples(out_dir / "examples")
         assert all(ex.msa is not None and ex.msa.shape[0] == 1 for ex in loaded)

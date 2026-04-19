@@ -123,7 +123,7 @@ def test_build_local_corpus_smoke_release_orchestrates_pipeline(tmp_path, monkey
     monkeypatch.setattr(corpus_smoke, "build_sequence_dataset", fake_build_sequence_dataset)
     monkeypatch.setattr(corpus_smoke, "build_training_release", fake_build_training_release)
 
-    root = proteon.build_local_corpus_smoke_release(
+    root = corpus_smoke.build_local_corpus_smoke_release(
         [tmp_path / "one.pdb", tmp_path / "two.pdb"],
         tmp_path / "smoke",
         release_id="smoke-v0",
@@ -204,7 +204,7 @@ def test_partial_ingestion_emits_failure_records(tmp_path, monkeypatch):
     monkeypatch.setattr(corpus_smoke, "build_sequence_dataset", fake_sequence)
     monkeypatch.setattr(corpus_smoke, "build_training_release", fake_training)
 
-    root = proteon.build_local_corpus_smoke_release(
+    root = corpus_smoke.build_local_corpus_smoke_release(
         [tmp_path / "one.pdb", tmp_path / "two.pdb", tmp_path / "three.pdb"],
         tmp_path / "partial_smoke",
         release_id="smoke-partial-v0",
@@ -299,7 +299,7 @@ def test_rescue_load_writes_rescued_input_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr(corpus_smoke, "build_sequence_dataset", fake_sequence)
     monkeypatch.setattr(corpus_smoke, "build_training_release", fake_training)
 
-    root = proteon.build_local_corpus_smoke_release(
+    root = corpus_smoke.build_local_corpus_smoke_release(
         [tmp_path / "one.pdb"],
         tmp_path / "rescued_smoke",
         release_id="smoke-rescue-v0",

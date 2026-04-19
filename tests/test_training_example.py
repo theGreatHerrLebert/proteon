@@ -8,6 +8,9 @@ import numpy as np
 import pytest
 
 import proteon
+from proteon import sequence_release as seq_release
+from proteon import supervision_dataset as sup_dataset
+from proteon import training_example as train_example
 
 
 def _atom(name, xyz):
@@ -43,22 +46,22 @@ def _fake_structure(chain_id="A"):
 class TestTrainingExample:
     def test_join_training_release_from_sequence_and_structure(self, tmp_path):
         structures = [_fake_structure("A")]
-        seq_release = proteon.build_sequence_dataset(
+        seq_rel = seq_release.build_sequence_dataset(
             structures,
             tmp_path / "seq_release",
             release_id="seq-v0",
             record_ids=["fake:A"],
         )
         prep = proteon.PrepReport(hydrogens_added=2, converged=True)
-        struc_release_root = proteon.build_structure_supervision_dataset_from_prepared(
+        struc_release_root = sup_dataset.build_structure_supervision_dataset_from_prepared(
             structures,
             [prep],
             tmp_path / "struc_release_root",
             release_id="struc-v0",
             record_ids=["fake:A"],
         )
-        train_release = proteon.build_training_release(
-            seq_release,
+        train_release = train_example.build_training_release(
+            seq_rel,
             struc_release_root / "supervision_release",
             tmp_path / "train_release",
             release_id="train-v0",
@@ -84,22 +87,22 @@ class TestTrainingExample:
         produce a training.parquet, checksum it into the manifest, and
         roundtrip cleanly via load_training_examples."""
         structures = [_fake_structure("A"), _fake_structure("B")]
-        seq_release = proteon.build_sequence_dataset(
+        seq_rel = seq_release.build_sequence_dataset(
             structures,
             tmp_path / "seq",
             release_id="seq-v0",
             record_ids=["fake:A", "fake:B"],
         )
         preps = [proteon.PrepReport(hydrogens_added=0, converged=True) for _ in structures]
-        struc_root = proteon.build_structure_supervision_dataset_from_prepared(
+        struc_root = sup_dataset.build_structure_supervision_dataset_from_prepared(
             structures,
             preps,
             tmp_path / "struc_root",
             release_id="struc-v0",
             record_ids=["fake:A", "fake:B"],
         )
-        train = proteon.build_training_release(
-            seq_release,
+        train = train_example.build_training_release(
+            seq_rel,
             struc_root / "supervision_release",
             tmp_path / "train",
             release_id="train-v0",
@@ -129,7 +132,7 @@ class TestTrainingExample:
         assert weights == pytest.approx([1.0, 0.5])
 
         # 3. load_training_examples round-trips via the Parquet path.
-        reloaded = proteon.load_training_examples(train)
+        reloaded = train_example.load_training_examples(train)
         assert len(reloaded) == 2
         by_id = {ex.record_id: ex for ex in reloaded}
         assert set(by_id) == {"fake:A", "fake:B"}
@@ -146,23 +149,23 @@ class TestTrainingExample:
         # 4. Tamper the parquet and assert load rejects by default.
         parquet_path.write_bytes(b"corrupt")
         with pytest.raises(ValueError, match="checksum mismatch"):
-            proteon.load_training_examples(train)
+            train_example.load_training_examples(train)
 
     def test_export_tensors_false_leaves_pointer_only_release(self, tmp_path):
         """`export_tensors=False` keeps the pointer-only behaviour.
         Manifest has no parquet_file; loading falls back to re-joining
         via the child releases."""
         structures = [_fake_structure("A")]
-        seq_release = proteon.build_sequence_dataset(
+        seq_rel = seq_release.build_sequence_dataset(
             structures, tmp_path / "seq", release_id="seq-v0", record_ids=["fake:A"]
         )
         preps = [proteon.PrepReport(hydrogens_added=0, converged=True)]
-        struc_root = proteon.build_structure_supervision_dataset_from_prepared(
+        struc_root = sup_dataset.build_structure_supervision_dataset_from_prepared(
             structures, preps, tmp_path / "struc_root",
             release_id="struc-v0", record_ids=["fake:A"],
         )
-        train = proteon.build_training_release(
-            seq_release,
+        train = train_example.build_training_release(
+            seq_rel,
             struc_root / "supervision_release",
             tmp_path / "train",
             release_id="train-v0",
@@ -174,6 +177,6 @@ class TestTrainingExample:
         manifest = json.loads((train / "release_manifest.json").read_text(encoding="utf-8"))
         assert manifest["parquet_file"] is None
 
-        reloaded = proteon.load_training_examples(train)
+        reloaded = train_example.load_training_examples(train)
         assert len(reloaded) == 1
         assert reloaded[0].sequence is not None

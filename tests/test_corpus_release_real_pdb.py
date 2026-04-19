@@ -25,6 +25,7 @@ import pytest
 
 import proteon
 from proteon import io as _proteon_io
+from proteon import supervision_export as sup_export
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CRAMBIN_PDB = REPO_ROOT / "test-pdbs" / "1crn.pdb"
@@ -152,7 +153,7 @@ class TestExportRoundtripOnRealCrambin:
             [structure], record_ids=["1crn:A"]
         )
 
-        out_dir = proteon.export_structure_supervision_examples(
+        out_dir = sup_export.export_structure_supervision_examples(
             examples, tmp_path / "supervision_1crn"
         )
         manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -161,7 +162,7 @@ class TestExportRoundtripOnRealCrambin:
         assert "tensor_sha256" in manifest
         assert len(manifest["tensor_sha256"]) == 64  # SHA-256 hex
 
-        loaded = proteon.load_structure_supervision_examples(out_dir)
+        loaded = sup_export.load_structure_supervision_examples(out_dir)
         assert len(loaded) == 1
         assert loaded[0].sequence == examples[0].sequence
         np.testing.assert_array_equal(
