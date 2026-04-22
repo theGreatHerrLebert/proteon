@@ -6,7 +6,7 @@ Rust-first structural bioinformatics toolkit for loading, aligning, analyzing, a
 
 - Proteon is a **library**, not a platform. No service, no database, no scheduler.
 - It gives you **fast structure I/O and heavy compute** from Rust, with Python and CLI entry points.
-- Core jobs already wired in: **PDB/mmCIF loading, TM-align/US-align family alignment, SASA, DSSP, H-bonds, geometry, and structure preparation/minimization**.
+- Core jobs already wired in: **PDB/mmCIF loading, SASA, DSSP, H-bonds, geometry, and structure preparation/minimization**.
 - Proteon also ships an **experimental structural search stack** aimed at becoming its Foldseek-style retrieval layer, but that part of the repo is still pre-product.
 - Outputs stay interoperable: **NumPy, Arrow, Parquet, pandas/polars-friendly tables**.
 - The repo also contains **dataset/release utilities** for sequence and structure-supervision pipelines.
