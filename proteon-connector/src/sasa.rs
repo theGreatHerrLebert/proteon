@@ -274,11 +274,20 @@ impl CellList {
 /// # Returns
 /// Per-atom SASA in Angstroms², length N.
 /// Minimum atom count to auto-dispatch SASA to GPU.
-/// Below this, the GPU kernel launch overhead dominates the compute gain.
-/// At 500 atoms with 960 test points, the GPU starts winning on the
-/// RTX 5090 (~2k CUDA cores saturated).
+///
+/// Per-structure CUDA kernel-launch + H2D/D2H overhead is ~50 ms regardless
+/// of structure size, while the CPU Shrake-Rupley path is ~4 ms per
+/// 1,000-atom structure and rayons cleanly across a batch. The breakeven
+/// lives well into the tens of thousands of atoms, so we reserve the GPU
+/// path for genuinely large complexes. A lower threshold silently
+/// regresses batch throughput on small-protein corpora by ~10× (measured
+/// on pdbs_50k: 4.4 ms/struct CPU vs 52 ms/struct GPU-dispatched).
+///
+/// For a batched GPU kernel that amortizes launch overhead across many
+/// small structures, lower this back down — but only after the batched
+/// path exists.
 #[cfg(feature = "cuda")]
-const SASA_GPU_THRESHOLD: usize = 500;
+const SASA_GPU_THRESHOLD: usize = 10_000;
 
 pub fn shrake_rupley(coords: &[[f64; 3]], radii: &[f64], probe: f64, n_points: usize) -> Vec<f64> {
     let n_atoms = coords.len();

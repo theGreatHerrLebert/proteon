@@ -67,7 +67,13 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
         "hbonds": {"elapsed": 0},
         "hydrogens": {"elapsed": 0, "total_h": 0},
         "energy": {"elapsed": 0, "n_computed": 0},
-        "prepare": {"elapsed": 0, "n_prepared": 0, "n_converged": 0, "n_skipped_no_protein": 0},
+        "prepare": {
+            "elapsed": 0,
+            "n_prepared": 0,
+            "n_converged": 0,
+            "n_negative_energy": 0,
+            "n_skipped_no_protein": 0,
+        },
     }
     sasa_values = []
     energies = []
@@ -175,6 +181,17 @@ def run_benchmark(pdb_dir, n_structures, n_threads, output_file, chunk_size=5000
                 )
                 all_timings["prepare"]["n_prepared"] = n_prep
                 all_timings["prepare"]["n_converged"] = sum(1 for r in reports if r.converged)
+                # Primary correctness invariant post-2026-04-11 CHARMM19
+                # heavy-atom-relax default (commit f9adc4f). Negative total
+                # energy means the minimizer produced a physically sensible
+                # result; converged=True additionally requires hitting
+                # gradient_tolerance within minimize_steps, which needs
+                # ~1000 steps for raw PDBs under CHARMM19+EEF1 and is
+                # therefore a looser signal than energy sign.
+                all_timings["prepare"]["n_negative_energy"] = sum(
+                    1 for r in reports
+                    if r.final_energy is not None and r.final_energy < 0
+                )
                 all_timings["prepare"]["n_skipped_no_protein"] = sum(
                     1 for r in reports if r.skipped_no_protein
                 )
