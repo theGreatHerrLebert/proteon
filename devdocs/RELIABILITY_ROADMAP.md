@@ -99,12 +99,13 @@ Current weaknesses:
 
 Proteon’s boundary-layer docstrings can carry short structured notes for AI-assisted callers, but they should be treated as part of the interface contract, not as free-form commentary.
 
-Allowed prefixes:
+Allowed prefixes (one bullet per category per block):
 
-- `WATCH`
-- `PREFER`
-- `COST`
-- `INVARIANT`
+- `WATCH` — interpretation trap or asymmetry the caller will hit.
+- `PREFER` — actionable steering toward a better entry point or flag.
+- `COST` — concrete scaling, memory, or latency cost the caller should price in.
+- `INVARIANT` — a guaranteed property of the output a caller can rely on. Not an
+  internal-architecture statement; "X is Rust-backed" is not an INVARIANT.
 
 Rules:
 
@@ -115,6 +116,9 @@ Rules:
    scaling, asymmetry, idempotency, interpretation traps, safer batch alternatives, or memory cost.
 5. Any note that describes a guarantee or important behavioral caveat should be backed by tests, a stable invariant, or both.
 6. README claims about Agent Notes should match the real coverage in the codebase.
+7. At most three bullets per block, and at most one bullet per category per
+   block. Two `PREFER:`s in one block means one of them is documentation, not
+   advice — fold it into the regular docstring or drop it.
 
 ---
 
