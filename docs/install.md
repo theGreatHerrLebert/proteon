@@ -30,9 +30,9 @@ pip install maturin
 maturin develop --release
 ```
 
-For active development you can use the in-tree venv at
-`/scratch/TMAlign/proteon/.venv` (Python 3.12) which already has `proteon`
-installed; activate it before running tests or examples.
+For everyday work, install proteon into a virtualenv (`python -m venv .venv
+&& source .venv/bin/activate`) so the maturin-built extension stays isolated
+from your system Python.
 
 ## CUDA build
 

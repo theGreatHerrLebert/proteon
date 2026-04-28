@@ -20,13 +20,18 @@ no usable device is detected.
 import proteon
 
 s = proteon.load("1crn.pdb")
-s = proteon.add_hydrogens(s, mode="all")
+proteon.place_all_hydrogens(s)   # backbone + sidechain, modifies in place
 
 energy = proteon.compute_energy(s)
-print(energy.total, energy.bonded, energy.vdw, energy.electrostatic)
+# energy is a dict with: total, bond_stretch, angle_bend, torsion,
+# improper_torsion, vdw, electrostatic, solvation (+ topology counts)
+print(energy["total"], energy["vdw"], energy["electrostatic"])
 
 minimized = proteon.minimize_hydrogens(s)
 ```
+
+For backbone-only H placement use `place_peptide_hydrogens(s)`; for ligands
+or non-standard residues use `place_general_hydrogens(s)`.
 
 ## GPU availability
 

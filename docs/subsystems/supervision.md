@@ -13,10 +13,23 @@ the contract between the two paths.
 ```python
 import proteon
 
-structures = proteon.batch_load(["1crn.pdb", "1ubq.pdb"], n_threads=-1)
-prepared   = proteon.batch_prepare(structures, n_threads=-1)
-batch      = proteon.batch_supervision(prepared, n_threads=-1)
+structures   = proteon.batch_load(["1crn.pdb", "1ubq.pdb"], n_threads=-1)
+prep_reports = proteon.batch_prepare(structures, n_threads=-1)  # mutates in place
+
+examples = proteon.batch_build_structure_supervision_examples(
+    structures,
+    prep_reports=prep_reports,   # optional but recommended
+)
 ```
+
+`batch_prepare` returns a list of `PrepReport` (energies, convergence flags,
+hydrogen counts) and mutates the input structures in place. Pass both the
+structures and the reports into the supervision builder so quality metadata
+flows through.
+
+`examples` is a list of `StructureSupervisionExample`, ready to be exported
+to Parquet / Arrow for geometric-DL training pipelines. Single-structure
+entry point: `proteon.build_structure_supervision_example(structure)`.
 
 ## API reference
 

@@ -25,14 +25,19 @@ Substitute `soi_align`, `flex_align`, `mm_align` for the other flavors.
 import proteon
 
 a = proteon.load("1crn.pdb")
-b = proteon.load("2igh.pdb")
+b = proteon.load("1ubq.pdb")
 
 result = proteon.tm_align(a, b)
 print(f"TM-score (chain1): {result.tm_score_chain1:.4f}")
 print(f"TM-score (chain2): {result.tm_score_chain2:.4f}")
 print(f"RMSD:              {result.rmsd:.2f} Å")
-print(f"Aligned length:    {result.aligned_length}")
+print(f"Aligned residues:  {result.n_aligned}")
+print(f"Sequence identity: {result.seq_identity:.3f}")
 ```
+
+`AlignResult` exposes `tm_score_chain1`, `tm_score_chain2`, `rmsd`,
+`n_aligned`, `seq_identity`, `rotation_matrix`, `translation`, plus the
+gapped alignment strings `aligned_seq_x` and `aligned_seq_y`.
 
 ## Choosing a method
 

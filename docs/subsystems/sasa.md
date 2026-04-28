@@ -12,11 +12,12 @@ import proteon
 
 s = proteon.load("1crn.pdb")
 
-per_atom = proteon.sasa(s)               # array, len == n_atoms
-per_res  = proteon.sasa_per_residue(s)
-total    = proteon.total_sasa(s)
+per_atom = proteon.atom_sasa(s)          # array, len == n_atoms
+per_res  = proteon.residue_sasa(s)       # per-residue sums
+rsa      = proteon.relative_sasa(s)      # residue SASA / max for residue type
+total    = proteon.total_sasa(s)         # scalar
 
-# Batch
+# Batch (total only — fastest path)
 structures = proteon.batch_load(["1crn.pdb", "1ubq.pdb"], n_threads=-1)
 totals = proteon.batch_total_sasa(structures, n_threads=-1)
 ```
