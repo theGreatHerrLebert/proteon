@@ -5,6 +5,15 @@ a canonical reference implementation. The numbers below are reproducible
 from `tests/oracle/` if the corresponding fixtures are installed (see
 [Oracle setup](ORACLE_SETUP.md)).
 
+!!! info "Why this page exists"
+    What follows is **evidence** in the sense of [evident][evident] — the
+    framework that names the shift from "I trust this because I authored
+    it" to "I trust this because I have sufficient evidence,
+    understanding, or guarantees." The oracle table below is proteon's
+    answer to that question for the components it ships.
+
+  [evident]: https://github.com/theGreatHerrLebert/evident
+
 ## Headline numbers
 
 | Component | Oracle | Result |
