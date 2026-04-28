@@ -184,6 +184,28 @@ C++ TMalign/USalign are compiled with `-ffast-math`. Rust does not allow this. T
 - OBC GB vs OpenMM: ≤5% GB / ≤1% total on crambin; GPU matches CPU to 1e-11
 - Fold preservation (1000 PDBs): proteon CHARMM19+EEF1 median TM=0.9945, 30× faster than OpenMM CHARMM36+OBC2
 
+## CI / branch protection
+
+`main` is gated by both classic branch protection and a ruleset. All 8 Tests
+jobs (`Lint`, `Version Sync`, `Rust (ubuntu-latest)`, `CLI smoke
+(ubuntu-latest)`, `MMseqs2 byte-exact round-trip oracle`, `Python 3.11 / 3.12 /
+3.13 (ubuntu-latest)`) must be green before any change reaches `main` —
+including direct pushes, not just PR merges. The Tests workflow takes ~17
+minutes, so back-to-back direct pushes will block on each other.
+
+Two ways to keep velocity under the gate:
+
+1. **PR-only flow** (recommended) — open a PR, let checks accumulate while you
+   work on the next branch.
+2. **Local pre-push gate** — run `scripts/preflight.sh` (~30 s, fast tier) or
+   `scripts/preflight.sh --full` (~15 min, full CI mirror) before pushing, so
+   the post-push wait is the only one you eat.
+
+Admin emergency override is available on PR merges only
+(`bypass_mode: pull_request` on ruleset `15659866`); direct pushes cannot
+bypass. Escape hatch if the gate becomes a problem:
+`gh api -X DELETE repos/theGreatHerrLebert/proteon/rulesets/15659866`.
+
 ## MSRV
 
 Rust 1.75+ (workspace), 1.67+ (pdbtbx)
