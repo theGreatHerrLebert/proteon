@@ -47,3 +47,7 @@ gpu-poc/target/
 
 # Session handoff notes — local working doc, not a repo artifact.
 NEXT_STEPS.md
+
+# MkDocs build output + locally-staged rustdoc.
+/site/
+/docs/rust/

@@ -1,0 +1,76 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build site (mkdocs + cargo doc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install mkdocs deps
+        run: pip install -r docs/requirements.txt
+
+      # mkdocstrings imports the proteon package to read docstrings.
+      # We install it without the connector so the import resolves; missing
+      # native bits degrade to "no doc" gracefully (handled in proteon/__init__.py).
+      - name: Install proteon (pure-Python, no PyO3 build)
+        run: |
+          pip install --no-build-isolation -e packages/proteon || \
+            echo "::warning::proteon install failed; mkdocstrings will skip submodules that import proteon_connector"
+
+      # proteon-connector is a PyO3 cdylib and currently fails to rustdoc
+      # cleanly without a libpython link. Excluded here; its public surface
+      # is documented at the Python-wrapper level on this site instead.
+      - name: Build rustdoc
+        run: |
+          cargo doc --workspace --no-deps --exclude proteon-connector
+          mkdir -p docs/rust
+          rsync -a --delete target/doc/ docs/rust/
+
+      # Not --strict yet: most wrapper modules have summary docstrings using
+      # an em-dash list that griffe doesn't parse cleanly, plus a handful of
+      # missing parameter annotations. Track that as a follow-up; for now the
+      # scaffold should build green.
+      - name: Build mkdocs site
+        run: mkdocs build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
