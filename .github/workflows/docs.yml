@@ -35,13 +35,9 @@ jobs:
       - name: Install mkdocs deps
         run: pip install -r docs/requirements.txt
 
-      # mkdocstrings imports the proteon package to read docstrings.
-      # We install it without the connector so the import resolves; missing
-      # native bits degrade to "no doc" gracefully (handled in proteon/__init__.py).
-      - name: Install proteon (pure-Python, no PyO3 build)
-        run: |
-          pip install --no-build-isolation -e packages/proteon || \
-            echo "::warning::proteon install failed; mkdocstrings will skip submodules that import proteon_connector"
+      # mkdocstrings + griffe use static analysis on `paths: packages/proteon/src`
+      # (configured in mkdocs.yml), so we don't need to install the proteon
+      # package or its PyO3 connector to render the API reference.
 
       # proteon-connector is a PyO3 cdylib and currently fails to rustdoc
       # cleanly without a libpython link. Excluded here; its public surface
