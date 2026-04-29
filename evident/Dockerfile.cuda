@@ -108,6 +108,15 @@ RUN wget -q "https://github.com/soedinglab/MMseqs2/releases/download/${MMSEQS_VE
     ln -s /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs && \
     rm /tmp/mmseqs.tar.gz
 
+# Newer CMake (3.28+) for libmcfp. Bookworm's apt cmake is 3.25.1.
+# Kept in lockstep with :slim.
+ARG CMAKE_VERSION=3.30.5
+RUN wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" -O /tmp/cmake.tar.gz && \
+    tar -xzf /tmp/cmake.tar.gz -C /opt && \
+    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake" /usr/local/bin/cmake && \
+    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/ctest" /usr/local/bin/ctest && \
+    rm /tmp/cmake.tar.gz
+
 # mkdssp (PDB-REDO/dssp) build chain — kept in lockstep with :slim.
 RUN git clone --depth 1 https://github.com/mhekkel/libmcfp.git && \
     cmake -S libmcfp -B libmcfp/build -DCMAKE_BUILD_TYPE=Release && \

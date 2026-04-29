@@ -126,6 +126,16 @@ RUN wget -q "https://github.com/soedinglab/MMseqs2/releases/download/${MMSEQS_VE
     ln -s /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs && \
     rm /tmp/mmseqs.tar.gz
 
+# Newer CMake. libmcfp's CMakeLists requires CMake 3.28+; bookworm
+# ships 3.25.1 which fails configure. Pin to a Kitware binary release
+# rather than apt repos — same shape as the MMseqs2 download above.
+ARG CMAKE_VERSION=3.30.5
+RUN wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" -O /tmp/cmake.tar.gz && \
+    tar -xzf /tmp/cmake.tar.gz -C /opt && \
+    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake" /usr/local/bin/cmake && \
+    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/ctest" /usr/local/bin/ctest && \
+    rm /tmp/cmake.tar.gz
+
 # mkdssp (DSSP C++ reference, PDB-REDO/dssp). Closes the 8-class DSSP
 # gap claim's oracle install; the asserting test that uses it is
 # tracked separately. Build chain: libmcfp → libcifpp → dssp. CCD
