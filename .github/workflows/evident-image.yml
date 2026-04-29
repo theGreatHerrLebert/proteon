@@ -98,13 +98,21 @@ jobs:
           echo "tags=${TAGS}" >> "${GITHUB_OUTPUT}"
           echo "Tags: ${TAGS}"
 
-      - name: Build and push image
+      - name: Build image (load to local daemon)
+        # `load: true` exports the built image into the local docker
+        # daemon (via tarball under the docker-container driver) so
+        # the smoke step below can run it before any GHCR push. This
+        # is the key ordering: build -> load -> smoke -> push, with
+        # the push gated on smoke success. A failing native-wheel
+        # smoke now blocks publication of :main / :latest / :v...
+        # rather than discovering the regression after consumers
+        # already pulled the bad tag.
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ${{ matrix.variant.dockerfile }}
-          # PRs validate the build only; main / tag / dispatch push.
-          push: ${{ github.event_name != 'pull_request' }}
+          load: true
+          push: false
           tags: ${{ steps.tags.outputs.tags }}
           # Per-variant cache scope so slim and cuda don't churn each
           # other's layer cache despite sharing the builder + oracle
@@ -118,21 +126,20 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ github.event.repository.updated_at }}
 
-      - name: Smoke-test pulled image
-        # Skipped on pull_request (no image pushed). Both variants run
-        # the same smoke; the cuda variant does NOT need a GPU here
-        # because the import smoke loads the proteon native cdylib —
-        # cudarc dlopens libcuda lazily and the import succeeds even
-        # when no GPU is present. That is the test that catches a
-        # builder/runtime glibc mismatch on the cuda image, which a
-        # GPU-only smoke would have left undetected.
-        if: github.event_name != 'pull_request'
+      - name: Smoke-test built image
+        # Runs on EVERY event, including pull_request — the image is
+        # in the local daemon regardless of whether we will push. Both
+        # variants run the same smoke; the cuda variant does NOT need
+        # a GPU here because cudarc dlopens libcuda lazily and the
+        # import succeeds without a GPU. That is the test that
+        # catches a builder/runtime glibc mismatch on the cuda image
+        # at the cdylib load step, which a GPU-only smoke would have
+        # left undetected.
         env:
           TAG_PREFIX: ${{ matrix.variant.tag_prefix }}
         run: |
           IMAGE_BASE="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/proteon-evident"
           TAG="${TAG_PREFIX}sha-${GITHUB_SHA::7}"
-          docker pull "${IMAGE_BASE}:${TAG}"
           docker run --rm "${IMAGE_BASE}:${TAG}" validate evident/evident.yaml
           docker run --rm "${IMAGE_BASE}:${TAG}" list evident/evident.yaml
           # Native-wheel import smoke. proteon_connector is the
@@ -142,3 +149,15 @@ jobs:
           # cdylib load failure (per reference_pyo3_coverage_trap).
           docker run --rm --entrypoint=python3 "${IMAGE_BASE}:${TAG}" \
               -c "import proteon_connector; import proteon; print('proteon native wheel ok')"
+
+      - name: Push image (only after smoke passes)
+        # Skipped on pull_request — fork PRs lack package:write and
+        # PR builds intentionally do not publish. The image is
+        # already tagged in the local daemon from the load-true build
+        # above, so this step is a pure registry push, not a rebuild.
+        if: github.event_name != 'pull_request'
+        run: |
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.tags }}"
+          for tag in "${TAGS[@]}"; do
+            docker push "$tag"
+          done
