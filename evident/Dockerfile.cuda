@@ -53,7 +53,6 @@ COPY proteon-arrow       ./proteon-arrow/
 COPY proteon-search      ./proteon-search/
 COPY proteon-bin         ./proteon-bin/
 COPY proteon-connector   ./proteon-connector/
-COPY proteon-vina        ./proteon-vina/
 COPY packages            ./packages/
 COPY validation          ./validation/
 COPY README.md LICENSE THIRD_PARTY_NOTICES.md VERSION ./

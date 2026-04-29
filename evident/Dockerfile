@@ -69,7 +69,6 @@ COPY proteon-arrow       ./proteon-arrow/
 COPY proteon-search      ./proteon-search/
 COPY proteon-bin         ./proteon-bin/
 COPY proteon-connector   ./proteon-connector/
-COPY proteon-vina        ./proteon-vina/
 COPY packages            ./packages/
 # proteon-align includes a small validation/ data file at compile time
 # (alphabet_vqvae_rust.txt) via include!(..). The builder stage needs
