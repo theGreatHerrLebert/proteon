@@ -74,10 +74,25 @@ RUN /opt/build-venv/bin/python -m build --wheel \
     && ls -la /wheels
 
 # ---------------------------------------------------------------------------
-# Stage 2: Oracle binaries — IDENTICAL to :slim. Kept in lockstep so
-# divergence between the two tags is limited to the runtime stage.
+# Stage 2: Oracle binaries — built on the SAME glibc as the CUDA runtime.
+#
+# The :slim variant builds oracles on debian:bookworm-slim (glibc 2.36)
+# and runs on python:3.11-slim-bookworm (also glibc 2.36) — that match
+# is what makes the slim binaries portable. This image's runtime is
+# nvidia/cuda:12.5.0-runtime-ubuntu22.04 (jammy, glibc 2.35), so
+# building oracles on bookworm and copying them in would leave them
+# linked against GLIBC_2.36 symbols that don't exist on jammy and the
+# binaries would fail to load. Build on ubuntu:22.04 so the oracle
+# binaries match the runtime's glibc exactly.
+#
+# The Rust builder stage above (rust:1.88-slim-bookworm, glibc 2.36)
+# carries an analogous theoretical risk for the proteon-connector
+# cdylib, but the wheel produced by maturin --release uses Rust's
+# narrower glibc surface in practice and has not been observed to
+# fail on jammy. Documented as a follow-up rather than addressed
+# here so the builder + slim image stay on a single Rust toolchain.
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim AS oracles
+FROM ubuntu:22.04 AS oracles
 
 ENV DEBIAN_FRONTEND=noninteractive
 

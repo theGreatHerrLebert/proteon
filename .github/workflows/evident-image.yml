@@ -20,6 +20,7 @@ on:
   pull_request:
     paths:
       - "evident/Dockerfile"
+      - "evident/Dockerfile.cuda"
       - "evident/tools/**"
       - "evident/evident.yaml"
       - "evident/claims/**"
@@ -36,14 +37,36 @@ permissions:
 
 jobs:
   build-and-push:
-    name: Build and push proteon-evident
+    # Matrix over the two image variants. The slim variant carries the
+    # GHCR-published default tag (:main / :sha-... / :v...); the cuda
+    # variant pushes only on main / tag / dispatch with a cuda- prefix
+    # so a broken CUDA Dockerfile cannot merge without CI exercising
+    # it, but consumers without an NVIDIA runtime are unaffected.
+    name: Build proteon-evident (${{ matrix.variant.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - name: slim
+            dockerfile: evident/Dockerfile
+            tag_prefix: ""
+            smoke: true
+          - name: cuda
+            dockerfile: evident/Dockerfile.cuda
+            tag_prefix: "cuda-"
+            # cuda smoke test would need a GPU runner; skip on the
+            # default ubuntu-latest runner. Build success is the only
+            # signal CI provides for the cuda image.
+            smoke: false
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Validate EVIDENT manifest before building image
+        # Run once per matrix cell so a manifest regression fails both
+        # variants symmetrically; the work is sub-second.
         run: |
           python3 -m pip install --quiet pyyaml
           python3 evident/tools/validate_manifest.py evident/evident.yaml
@@ -63,17 +86,19 @@ jobs:
 
       - name: Compute image tags
         id: tags
+        env:
+          TAG_PREFIX: ${{ matrix.variant.tag_prefix }}
         run: |
           # GHCR demands lowercase repo paths.
           IMAGE_BASE="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/proteon-evident"
-          TAGS="${IMAGE_BASE}:sha-${GITHUB_SHA::7}"
+          TAGS="${IMAGE_BASE}:${TAG_PREFIX}sha-${GITHUB_SHA::7}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
-            TAGS="${TAGS},${IMAGE_BASE}:${VERSION},${IMAGE_BASE}:latest"
+            TAGS="${TAGS},${IMAGE_BASE}:${TAG_PREFIX}${VERSION},${IMAGE_BASE}:${TAG_PREFIX}latest"
           elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
-            TAGS="${TAGS},${IMAGE_BASE}:main"
+            TAGS="${TAGS},${IMAGE_BASE}:${TAG_PREFIX}main"
           else
-            TAGS="${TAGS},${IMAGE_BASE}:dispatch-${GITHUB_RUN_ID}"
+            TAGS="${TAGS},${IMAGE_BASE}:${TAG_PREFIX}dispatch-${GITHUB_RUN_ID}"
           fi
           echo "tags=${TAGS}" >> "${GITHUB_OUTPUT}"
           echo "Tags: ${TAGS}"
@@ -82,14 +107,15 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: evident/Dockerfile
+          file: ${{ matrix.variant.dockerfile }}
           # PRs validate the build only; main / tag / dispatch push.
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.tags.outputs.tags }}
-          # Inline cache for repeat builds; the Rust + oracle layers
-          # change far less often than the proteon source.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Per-variant cache scope so slim and cuda don't churn each
+          # other's layer cache despite sharing the builder + oracle
+          # stage Dockerfile prefix.
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
           # Annotate the image with the source SHA so a reviewer can
           # walk back from the GHCR digest to the producing commit
           # without consulting the workflow run.
@@ -98,14 +124,16 @@ jobs:
             org.opencontainers.image.created=${{ github.event.repository.updated_at }}
 
       - name: Smoke-test pulled image
-        # Skipped on pull_request because no image was pushed.
-        # Confirms the manifest still validates from inside the image,
-        # so a build that breaks evident at runtime is caught before
-        # the image is consumed downstream.
-        if: github.event_name != 'pull_request'
+        # Skipped on pull_request (no image pushed) and on the cuda
+        # variant (would need a GPU runner). Confirms the manifest
+        # still validates from inside the image, so a build that
+        # breaks evident at runtime is caught before downstream use.
+        if: github.event_name != 'pull_request' && matrix.variant.smoke
+        env:
+          TAG_PREFIX: ${{ matrix.variant.tag_prefix }}
         run: |
           IMAGE_BASE="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/proteon-evident"
-          TAG="sha-${GITHUB_SHA::7}"
+          TAG="${TAG_PREFIX}sha-${GITHUB_SHA::7}"
           docker pull "${IMAGE_BASE}:${TAG}"
           docker run --rm "${IMAGE_BASE}:${TAG}" validate evident/evident.yaml
           docker run --rm "${IMAGE_BASE}:${TAG}" list evident/evident.yaml
