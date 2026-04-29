@@ -51,14 +51,9 @@ jobs:
           - name: slim
             dockerfile: evident/Dockerfile
             tag_prefix: ""
-            smoke: true
           - name: cuda
             dockerfile: evident/Dockerfile.cuda
             tag_prefix: "cuda-"
-            # cuda smoke test would need a GPU runner; skip on the
-            # default ubuntu-latest runner. Build success is the only
-            # signal CI provides for the cuda image.
-            smoke: false
 
     steps:
       - name: Check out repository
@@ -124,11 +119,14 @@ jobs:
             org.opencontainers.image.created=${{ github.event.repository.updated_at }}
 
       - name: Smoke-test pulled image
-        # Skipped on pull_request (no image pushed) and on the cuda
-        # variant (would need a GPU runner). Confirms the manifest
-        # still validates from inside the image, so a build that
-        # breaks evident at runtime is caught before downstream use.
-        if: github.event_name != 'pull_request' && matrix.variant.smoke
+        # Skipped on pull_request (no image pushed). Both variants run
+        # the same smoke; the cuda variant does NOT need a GPU here
+        # because the import smoke loads the proteon native cdylib —
+        # cudarc dlopens libcuda lazily and the import succeeds even
+        # when no GPU is present. That is the test that catches a
+        # builder/runtime glibc mismatch on the cuda image, which a
+        # GPU-only smoke would have left undetected.
+        if: github.event_name != 'pull_request'
         env:
           TAG_PREFIX: ${{ matrix.variant.tag_prefix }}
         run: |
@@ -137,3 +135,10 @@ jobs:
           docker pull "${IMAGE_BASE}:${TAG}"
           docker run --rm "${IMAGE_BASE}:${TAG}" validate evident/evident.yaml
           docker run --rm "${IMAGE_BASE}:${TAG}" list evident/evident.yaml
+          # Native-wheel import smoke. proteon_connector is the
+          # PyO3 cdylib (Cargo.toml [lib] name = "proteon_connector");
+          # importing it directly catches the case where the proteon
+          # Python wrapper has an ImportError fallback that masks a
+          # cdylib load failure (per reference_pyo3_coverage_trap).
+          docker run --rm --entrypoint=python3 "${IMAGE_BASE}:${TAG}" \
+              -c "import proteon_connector; import proteon; print('proteon native wheel ok')"

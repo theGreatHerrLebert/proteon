@@ -16,33 +16,61 @@
 # Why a separate Dockerfile rather than a target in evident/Dockerfile:
 # the runtime base differs (nvidia/cuda Ubuntu 22.04 vs python:3.11-slim
 # Debian bookworm), and inheriting the slim runtime would either lose
-# the CUDA libs or duplicate them. The builder + oracles stages are
-# kept in lockstep with the slim Dockerfile by construction.
+# the CUDA libs or duplicate them. All three stages of THIS file are
+# pinned to ubuntu:22.04-glibc binaries (jammy, glibc 2.35) so the
+# proteon-connector cdylib and the oracle binaries link against the
+# same glibc the runtime stage provides — building on bookworm and
+# copying into jammy would fail with missing-GLIBC_2.36 symbols at
+# import / exec time. The slim image keeps its bookworm-everywhere
+# story; this image keeps a jammy-everywhere one.
 #
 # CUDA version: 12.5.0 to match cudarc 0.19's cuda-12050 feature.
 # Bumping cudarc requires bumping the base image tag here too.
 
 # ---------------------------------------------------------------------------
-# Stage 1: Rust builder — same toolchain as :slim, but with --features cuda.
-# cudarc loads libcuda at runtime via dlopen, so the builder does NOT need
-# a CUDA SDK at this stage.
+# Stage 1: Rust builder.
+#
+# Built on ubuntu:22.04 — the SAME glibc as the runtime stage below
+# (nvidia/cuda:12.5.0-runtime-ubuntu22.04 is jammy, glibc 2.35). This
+# matters because the proteon-connector wheel is a PyO3 cdylib that
+# links to host glibc; building on a newer glibc (e.g. bookworm 2.36)
+# and copying the wheel into a jammy runtime would fail to load with
+# a missing-GLIBC_2.36-symbol error at import time.
+#
+# Rust comes from rustup rather than the official rust:1.88 image
+# because that image is debian-based and reintroduces the glibc
+# mismatch. Python 3.11 (the wheel ABI target) comes from the
+# deadsnakes PPA since jammy's default python3 is 3.10. cudarc loads
+# libcuda at runtime via dlopen, so the builder does NOT need a CUDA
+# SDK; the runtime stage forwards host libcuda through the NVIDIA
+# Container Runtime.
 # ---------------------------------------------------------------------------
-# Rust 1.88+ required: cudarc's transitive dep libloading@0.9.0 bumped
-# its MSRV to 1.88. Bump in lockstep with evident/Dockerfile so the
-# slim and cuda tags share a builder toolchain.
-FROM rust:1.88-slim-bookworm AS builder
+FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH=/root/.cargo/bin:/opt/build-venv/bin:${PATH}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-dev python3-venv python3-pip \
-        build-essential pkg-config \
-        ca-certificates git \
-    && rm -rf /var/lib/apt/lists/*
+        software-properties-common \
+        ca-certificates curl gnupg \
+        build-essential pkg-config git \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-dev python3.11-venv \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 100
 
-RUN python3 -m venv /opt/build-venv && \
+# Rust 1.88+ required: cudarc's transitive dep libloading@0.9.0 bumped
+# its MSRV to 1.88. Pinned profile=minimal — no rustfmt/clippy, no
+# rust-docs; the builder only needs cargo + rustc.
+ARG RUST_VERSION=1.88.0
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain "${RUST_VERSION}" --profile minimal
+
+RUN python3.11 -m venv /opt/build-venv && \
     /opt/build-venv/bin/pip install --no-cache-dir maturin build
 
 WORKDIR /src
@@ -74,23 +102,15 @@ RUN /opt/build-venv/bin/python -m build --wheel \
     && ls -la /wheels
 
 # ---------------------------------------------------------------------------
-# Stage 2: Oracle binaries — built on the SAME glibc as the CUDA runtime.
+# Stage 2: Oracle binaries — built on the SAME glibc as the runtime.
 #
-# The :slim variant builds oracles on debian:bookworm-slim (glibc 2.36)
-# and runs on python:3.11-slim-bookworm (also glibc 2.36) — that match
-# is what makes the slim binaries portable. This image's runtime is
-# nvidia/cuda:12.5.0-runtime-ubuntu22.04 (jammy, glibc 2.35), so
-# building oracles on bookworm and copying them in would leave them
-# linked against GLIBC_2.36 symbols that don't exist on jammy and the
-# binaries would fail to load. Build on ubuntu:22.04 so the oracle
-# binaries match the runtime's glibc exactly.
-#
-# The Rust builder stage above (rust:1.88-slim-bookworm, glibc 2.36)
-# carries an analogous theoretical risk for the proteon-connector
-# cdylib, but the wheel produced by maturin --release uses Rust's
-# narrower glibc surface in practice and has not been observed to
-# fail on jammy. Documented as a follow-up rather than addressed
-# here so the builder + slim image stay on a single Rust toolchain.
+# Same reasoning as the builder above: the runtime is
+# nvidia/cuda:12.5.0-runtime-ubuntu22.04 (jammy, glibc 2.35). Building
+# oracles on debian:bookworm-slim (glibc 2.36) and copying them in
+# would leave them linked against GLIBC_2.36 symbols that don't exist
+# on jammy. ubuntu:22.04 keeps every binary in this image — Rust
+# cdylib, USAlign, reduce, mkdssp, libcifpp — on the same glibc the
+# runtime ships.
 # ---------------------------------------------------------------------------
 FROM ubuntu:22.04 AS oracles
 
