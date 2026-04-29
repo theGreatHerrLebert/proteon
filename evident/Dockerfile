@@ -8,11 +8,19 @@
 #
 # v1 oracle scope:
 #   - pip-installable: Biopython, Gemmi, FreeSASA, pydssp, OpenMM, pdbfixer
-#   - source-built:    USAlign, reduce
+#   - source-built:    USAlign, reduce, mkdssp (libmcfp + libcifpp + dssp)
 #   - binary release:  MMseqs2
+#   - apt:             GROMACS (~2023.x; the manifest's release-tier
+#                      median-TM number was produced against custom-built
+#                      2026.1 — that divergence is honest and queryable
+#                      through last_verified.value once replay populates it)
 #
-# Skipped in v1 (size / build complexity); land in a future :full tag:
-#   - GROMACS (large), BALL Julia, mkdssp, CUDA
+# Companion image evident/Dockerfile.cuda adds GPU support (cudarc +
+# proteon-search/cuda kernels) on the same builder + oracle stages.
+#
+# Still out of scope: BALL (Python bindings dead, standalone C++ build is
+# heavy; the forcefield_amber_ball claim documents the oracle but is not
+# replayable inside this image).
 #
 # Build (from proteon repo root):
 #   docker build -f evident/Dockerfile -t proteon-evident:dev .
@@ -23,7 +31,11 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Rust builder — compile the proteon Python wheel via maturin.
 # ---------------------------------------------------------------------------
-FROM rust:1.85-slim-bookworm AS builder
+# Rust 1.88+ required because cudarc's transitive dep libloading@0.9.0
+# bumped its MSRV to 1.88; the :slim image doesn't pull cudarc and
+# would compile fine on 1.85, but keeping the toolchain version in
+# lockstep with :cuda lets a single rebuild flow cover both tags.
+FROM rust:1.88-slim-bookworm AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -83,6 +95,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git ca-certificates \
         wget tar xz-utils \
+        libboost-program-options-dev libboost-iostreams-dev libboost-date-time-dev \
+        zlib1g-dev libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -107,6 +121,33 @@ RUN wget -q "https://github.com/soedinglab/MMseqs2/releases/download/${MMSEQS_VE
     tar -xzf /tmp/mmseqs.tar.gz -C /opt && \
     ln -s /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs && \
     rm /tmp/mmseqs.tar.gz
+
+# mkdssp (DSSP C++ reference, PDB-REDO/dssp). Closes the 8-class DSSP
+# gap claim's oracle install; the asserting test that uses it is
+# tracked separately. Build chain: libmcfp → libcifpp → dssp. CCD
+# download is disabled (-DCIFPP_DOWNLOAD_CCD=OFF) because PDB input
+# does not need the chemistry-component dictionary; mmCIF input would.
+RUN git clone --depth 1 https://github.com/mhekkel/libmcfp.git && \
+    cmake -S libmcfp -B libmcfp/build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build libmcfp/build -j"$(nproc)" && \
+    cmake --install libmcfp/build && \
+    rm -rf libmcfp
+
+RUN git clone --depth 1 https://github.com/PDB-REDO/libcifpp.git && \
+    cmake -S libcifpp -B libcifpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCIFPP_DOWNLOAD_CCD=OFF \
+        -DCIFPP_INSTALL_UPDATE_SCRIPT=OFF \
+        -DBUILD_TESTING=OFF && \
+    cmake --build libcifpp/build -j"$(nproc)" && \
+    cmake --install libcifpp/build && \
+    rm -rf libcifpp
+
+RUN git clone --depth 1 https://github.com/PDB-REDO/dssp.git && \
+    cmake -S dssp -B dssp/build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && \
+    cmake --build dssp/build -j"$(nproc)" && \
+    install -m 0755 dssp/build/mkdssp /usr/local/bin/mkdssp && \
+    rm -rf dssp
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime — slim Python image with proteon + oracles + CLI.
@@ -151,6 +192,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 libstdc++6 \
         gcc python3-dev \
         gromacs \
+        libboost-program-options1.74.0 libboost-iostreams1.74.0 libboost-date-time1.74.0 \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -161,6 +203,14 @@ COPY --from=oracles /usr/local/share/reduce_wwPDB_het_dict.txt \
                                                   /usr/local/share/reduce_wwPDB_het_dict.txt
 COPY --from=oracles /opt/mmseqs                   /opt/mmseqs
 COPY --from=oracles /usr/local/bin/mmseqs         /usr/local/bin/mmseqs
+COPY --from=oracles /usr/local/bin/mkdssp         /usr/local/bin/mkdssp
+# libcifpp shared library — mkdssp links against it dynamically, so
+# the runtime needs both the .so and the libcifpp data files. Copying
+# the whole /usr/local/{lib,share}/cifpp prefix keeps the install
+# layout consistent with the cmake --install that ran in stage 2.
+COPY --from=oracles /usr/local/lib/libcifpp.so*   /usr/local/lib/
+COPY --from=oracles /usr/local/share/libcifpp     /usr/local/share/libcifpp
+RUN ldconfig
 
 # Pip oracles + the proteon wheel from stage 1.
 COPY --from=builder /wheels /tmp/wheels
