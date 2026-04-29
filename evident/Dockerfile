@@ -18,9 +18,14 @@
 # Companion image evident/Dockerfile.cuda adds GPU support (cudarc +
 # proteon-search/cuda kernels) on the same builder + oracle stages.
 #
-# Still out of scope: BALL (Python bindings dead, standalone C++ build is
-# heavy; the forcefield_amber_ball claim documents the oracle but is not
-# replayable inside this image).
+# Out of scope: live BALL Julia regeneration. The forcefield_amber_ball
+# claim's test (tests/oracle/test_ball_energy.py) carries a frozen
+# BALL_CRAMBIN_RAW reference dict from a 2026-04-18 BALL run, so the
+# claim IS replayable in this image — it imports only proteon. What's
+# out of scope is regenerating that reference (BALL Python bindings are
+# dead; ball_energy_raw.jl needs Julia + BiochemicalAlgorithms.jl);
+# staleness of the frozen numbers is documented in the claim's
+# failure_modes and tracked manually until a v1.1 image carries Julia.
 #
 # Build (from proteon repo root):
 #   docker build -f evident/Dockerfile -t proteon-evident:dev .
