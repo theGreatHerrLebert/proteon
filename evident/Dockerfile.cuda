@@ -114,13 +114,25 @@ RUN /opt/build-venv/bin/python -m build --wheel \
 # ---------------------------------------------------------------------------
 FROM ubuntu:22.04 AS oracles
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    CC=gcc-13 \
+    CXX=g++-13
 
+# ubuntu-toolchain-r/test PPA carries gcc-13 / g++-13 / libstdc++-13.
+# libcifpp HEAD uses C++20 <format>, available only in libstdc++-13+;
+# jammy's default g++-11 fails to compile it. Runtime stage below
+# pulls the same libstdc++6 from this PPA so the binaries can load.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake git ca-certificates \
-        wget tar xz-utils \
+        software-properties-common \
+        ca-certificates gnupg \
+    && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        git wget tar xz-utils make pkg-config \
         libboost-program-options-dev libboost-iostreams-dev libboost-date-time-dev \
         zlib1g-dev libeigen3-dev \
+        gcc-13 g++-13 libstdc++-13-dev \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -205,10 +217,17 @@ LABEL org.opencontainers.image.title="proteon-evident-cuda" \
 # Plus runtime libs: gcc/python3.11-dev for freesasa sdist build,
 # gromacs for the AMBER96 fold-preservation claim, libgomp1/libstdc++6
 # for the source-built oracles.
+#
+# libstdc++6 must come from ubuntu-toolchain-r/test (same PPA as the
+# oracles stage's gcc-13) so the runtime carries the libstdc++-13
+# GLIBCXX_3.4.32+ symbols the C++20-<format>-using libcifpp.so was
+# linked against. Without this PPA, jammy's default libstdc++6
+# (g++-11 era) lacks those symbols and mkdssp fails to load.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
         ca-certificates wget gnupg \
     && add-apt-repository -y ppa:deadsnakes/ppa \
+    && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3.11 python3.11-dev python3.11-venv \
         gcc \

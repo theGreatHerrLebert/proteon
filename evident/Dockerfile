@@ -94,13 +94,26 @@ RUN /opt/build-venv/bin/python -m build --wheel \
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS oracles
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    CC=gcc-13 \
+    CXX=g++-13
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake git ca-certificates \
+# bookworm-backports for gcc-13 / g++-13 / libstdc++-13. libcifpp HEAD
+# uses C++20 <format>, which is libstdc++-13+ only; bookworm's default
+# g++-12 fails to compile it. The runtime stage below also installs
+# libstdc++6 from backports so the resulting binaries can load there.
+RUN echo "deb http://deb.debian.org/debian bookworm-backports main" \
+        > /etc/apt/sources.list.d/backports.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates \
         wget tar xz-utils \
         libboost-program-options-dev libboost-iostreams-dev libboost-date-time-dev \
         zlib1g-dev libeigen3-dev \
+        make pkg-config \
+    && apt-get install -y --no-install-recommends -t bookworm-backports \
+        gcc-13 g++-13 \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -202,12 +215,20 @@ LABEL org.opencontainers.image.title="proteon-evident" \
 # resolve to apt's version, and the cited median-TM number may
 # shift slightly. That divergence is honest and queryable through
 # last_verified.value once replay populates it.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgomp1 libstdc++6 \
+# Pull libstdc++6 from bookworm-backports — mkdssp / libcifpp.so were
+# built against libstdc++-13 (C++20 <format>) in the oracles stage and
+# need GLIBCXX_3.4.32+ symbols at load time, which bookworm's default
+# libstdc++-12 lacks.
+RUN echo "deb http://deb.debian.org/debian bookworm-backports main" \
+        > /etc/apt/sources.list.d/backports.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
         gcc python3-dev \
         gromacs \
         libboost-program-options1.74.0 libboost-iostreams1.74.0 libboost-date-time1.74.0 \
         ca-certificates \
+    && apt-get install -y --no-install-recommends -t bookworm-backports \
+        libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy oracle binaries from stage 2.
