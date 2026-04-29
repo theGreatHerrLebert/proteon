@@ -1,0 +1,233 @@
+# Proteon EVIDENT reproducibility image — CUDA variant.
+#
+# Mirrors evident/Dockerfile (the :slim image) but:
+#   1. Builds proteon-connector with --features cuda so the GPU code
+#      paths compile in (cudarc + proteon-search/cuda + the embedded
+#      .cu kernels compiled at runtime via NVRTC).
+#   2. Runs on top of nvidia/cuda:12.5.0-runtime-ubuntu22.04 so the
+#      runtime CUDA libs (libcudart, libnvrtc) are present and host
+#      libcuda is forwarded by `docker run --gpus all`.
+#
+# Build (from proteon repo root):
+#   docker build -f evident/Dockerfile.cuda -t proteon-evident:cuda .
+# Run (host needs nvidia-container-runtime):
+#   docker run --rm --gpus all proteon-evident:cuda evident list evident/evident.yaml
+#
+# Why a separate Dockerfile rather than a target in evident/Dockerfile:
+# the runtime base differs (nvidia/cuda Ubuntu 22.04 vs python:3.11-slim
+# Debian bookworm), and inheriting the slim runtime would either lose
+# the CUDA libs or duplicate them. The builder + oracles stages are
+# kept in lockstep with the slim Dockerfile by construction.
+#
+# CUDA version: 12.5.0 to match cudarc 0.19's cuda-12050 feature.
+# Bumping cudarc requires bumping the base image tag here too.
+
+# ---------------------------------------------------------------------------
+# Stage 1: Rust builder — same toolchain as :slim, but with --features cuda.
+# cudarc loads libcuda at runtime via dlopen, so the builder does NOT need
+# a CUDA SDK at this stage.
+# ---------------------------------------------------------------------------
+# Rust 1.88+ required: cudarc's transitive dep libloading@0.9.0 bumped
+# its MSRV to 1.88. Bump in lockstep with evident/Dockerfile so the
+# slim and cuda tags share a builder toolchain.
+FROM rust:1.88-slim-bookworm AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-dev python3-venv python3-pip \
+        build-essential pkg-config \
+        ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/build-venv && \
+    /opt/build-venv/bin/pip install --no-cache-dir maturin build
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY proteon-align       ./proteon-align/
+COPY proteon-io          ./proteon-io/
+COPY proteon-arrow       ./proteon-arrow/
+COPY proteon-search      ./proteon-search/
+COPY proteon-bin         ./proteon-bin/
+COPY proteon-connector   ./proteon-connector/
+COPY proteon-vina        ./proteon-vina/
+COPY packages            ./packages/
+COPY validation          ./validation/
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md VERSION ./
+
+# Wheel 1: proteon-connector with cuda feature on. Compiles in the
+# cudarc bindings, forwards proteon-search/cuda for GPU SW kernels,
+# and embeds the .cu source via include_str! for runtime NVRTC.
+RUN /opt/build-venv/bin/maturin build \
+        --release \
+        --out /wheels \
+        --manifest-path proteon-connector/Cargo.toml \
+        --features cuda
+
+# Wheel 2: proteon (pure-Python wrapper). Same as :slim — the Python
+# layer doesn't change between CPU and GPU builds; dispatch happens in
+# the connector at import time based on cudarc's runtime probe.
+RUN /opt/build-venv/bin/python -m build --wheel \
+        --outdir /wheels packages/proteon \
+    && ls -la /wheels
+
+# ---------------------------------------------------------------------------
+# Stage 2: Oracle binaries — IDENTICAL to :slim. Kept in lockstep so
+# divergence between the two tags is limited to the runtime stage.
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS oracles
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
+        wget tar xz-utils \
+        libboost-program-options-dev libboost-iostreams-dev libboost-date-time-dev \
+        zlib1g-dev libeigen3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN git clone --depth 1 https://github.com/pylelab/USAlign.git && \
+    cd USAlign && make USalign && \
+    install -m 0755 USalign /usr/local/bin/USalign && \
+    cd .. && rm -rf USAlign
+
+RUN git clone --depth 1 https://github.com/rlabduke/reduce.git && \
+    cmake -S reduce -B reduce/build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build reduce/build -j"$(nproc)" && \
+    install -m 0755 reduce/build/reduce_src/reduce /usr/local/bin/reduce && \
+    install -m 0644 reduce/reduce_wwPDB_het_dict.txt /usr/local/share/reduce_wwPDB_het_dict.txt && \
+    rm -rf reduce
+
+ARG MMSEQS_VERSION=15-6f452
+RUN wget -q "https://github.com/soedinglab/MMseqs2/releases/download/${MMSEQS_VERSION}/mmseqs-linux-avx2.tar.gz" -O /tmp/mmseqs.tar.gz && \
+    tar -xzf /tmp/mmseqs.tar.gz -C /opt && \
+    ln -s /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs && \
+    rm /tmp/mmseqs.tar.gz
+
+# mkdssp (PDB-REDO/dssp) build chain — kept in lockstep with :slim.
+RUN git clone --depth 1 https://github.com/mhekkel/libmcfp.git && \
+    cmake -S libmcfp -B libmcfp/build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build libmcfp/build -j"$(nproc)" && \
+    cmake --install libmcfp/build && \
+    rm -rf libmcfp
+
+RUN git clone --depth 1 https://github.com/PDB-REDO/libcifpp.git && \
+    cmake -S libcifpp -B libcifpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCIFPP_DOWNLOAD_CCD=OFF \
+        -DCIFPP_INSTALL_UPDATE_SCRIPT=OFF \
+        -DBUILD_TESTING=OFF && \
+    cmake --build libcifpp/build -j"$(nproc)" && \
+    cmake --install libcifpp/build && \
+    rm -rf libcifpp
+
+RUN git clone --depth 1 https://github.com/PDB-REDO/dssp.git && \
+    cmake -S dssp -B dssp/build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && \
+    cmake --build dssp/build -j"$(nproc)" && \
+    install -m 0755 dssp/build/mkdssp /usr/local/bin/mkdssp && \
+    rm -rf dssp
+
+# ---------------------------------------------------------------------------
+# Stage 3: CUDA runtime — NVIDIA's official 12.5.0 Ubuntu 22.04 base
+# carries libcudart and libnvrtc; libcuda is forwarded from the host
+# at run time via the NVIDIA Container Runtime (`docker run --gpus all`).
+# Python 3.11 lands via the deadsnakes PPA (Ubuntu 22.04 default is 3.10).
+# ---------------------------------------------------------------------------
+FROM nvidia/cuda:12.5.0-runtime-ubuntu22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    REDUCE_BIN=/usr/local/bin/reduce \
+    REDUCE_DB=/usr/local/share/reduce_wwPDB_het_dict.txt \
+    USALIGN_BIN=/usr/local/bin/USalign \
+    PROTEON_SEARCH_MMSEQS_BIN=/usr/local/bin/mmseqs \
+    GMX=/usr/bin/gmx \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+LABEL org.opencontainers.image.title="proteon-evident-cuda" \
+      org.opencontainers.image.description="Proteon (CUDA) + oracle stack + EVIDENT CLI for replaying GPU-enabled manifest claims" \
+      org.opencontainers.image.source="https://github.com/theGreatHerrLebert/proteon" \
+      org.opencontainers.image.licenses="MIT"
+
+# Python 3.11 via deadsnakes (matches the builder's wheel ABI).
+# Plus runtime libs: gcc/python3.11-dev for freesasa sdist build,
+# gromacs for the AMBER96 fold-preservation claim, libgomp1/libstdc++6
+# for the source-built oracles.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+        ca-certificates wget gnupg \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-dev python3.11-venv \
+        gcc \
+        gromacs \
+        libgomp1 libstdc++6 \
+        libboost-program-options1.74.0 libboost-iostreams1.74.0 libboost-date-time1.74.0 \
+    && wget -qO /tmp/get-pip.py https://bootstrap.pypa.io/get-pip.py \
+    && python3.11 /tmp/get-pip.py \
+    && rm /tmp/get-pip.py \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 100 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Oracle binaries from stage 2.
+COPY --from=oracles /usr/local/bin/USalign        /usr/local/bin/USalign
+COPY --from=oracles /usr/local/bin/reduce         /usr/local/bin/reduce
+COPY --from=oracles /usr/local/share/reduce_wwPDB_het_dict.txt \
+                                                  /usr/local/share/reduce_wwPDB_het_dict.txt
+COPY --from=oracles /opt/mmseqs                   /opt/mmseqs
+COPY --from=oracles /usr/local/bin/mmseqs         /usr/local/bin/mmseqs
+COPY --from=oracles /usr/local/bin/mkdssp         /usr/local/bin/mkdssp
+COPY --from=oracles /usr/local/lib/libcifpp.so*   /usr/local/lib/
+COPY --from=oracles /usr/local/share/libcifpp     /usr/local/share/libcifpp
+RUN ldconfig
+
+# Pip oracles + the proteon wheels from stage 1.
+COPY --from=builder /wheels /tmp/wheels
+RUN python3.11 -m pip install --no-cache-dir \
+        biopython \
+        gemmi \
+        freesasa \
+        pydssp \
+        openmm \
+        pdbfixer \
+        numpy \
+        pyyaml \
+        pytest \
+    && python3.11 -m pip install --no-cache-dir \
+        /tmp/wheels/proteon_connector-*.whl \
+        /tmp/wheels/proteon-*.whl \
+    && rm -rf /tmp/wheels
+
+WORKDIR /workspace/proteon
+COPY tests          ./tests/
+COPY test-pdbs      ./test-pdbs/
+COPY validation     ./validation/
+COPY evident        ./evident/
+COPY benchmark      ./benchmark/
+COPY devdocs        ./devdocs/
+COPY docs           ./docs/
+COPY README.md THIRD_PARTY_NOTICES.md LICENSE VERSION ./
+
+# Install the EVIDENT CLI from the vendored copy. Path differs from
+# :slim because Ubuntu's site-packages live under dist-packages, but
+# /usr/local/lib/python3.11/site-packages is on sys.path at the same
+# precedence so the validate_manifest module is importable.
+# Ubuntu's deadsnakes Python 3.11 uses dist-packages, not site-packages
+# (a Debian/Ubuntu convention). Without this, `import validate_manifest`
+# from inside evident.py fails with ModuleNotFoundError.
+RUN install -m 0755 /workspace/proteon/evident/tools/evident.py \
+                    /usr/local/bin/evident \
+    && install -m 0644 /workspace/proteon/evident/tools/validate_manifest.py \
+                    /usr/local/lib/python3.11/dist-packages/validate_manifest.py
+
+ENTRYPOINT ["evident"]
+CMD ["list", "evident/evident.yaml"]
