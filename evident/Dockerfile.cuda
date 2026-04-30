@@ -14,15 +14,16 @@
 #   docker run --rm --gpus all proteon-evident:cuda evident list evident/evident.yaml
 #
 # Why a separate Dockerfile rather than a target in evident/Dockerfile:
-# the runtime base differs (nvidia/cuda Ubuntu 22.04 vs python:3.11-slim
-# Debian bookworm), and inheriting the slim runtime would either lose
-# the CUDA libs or duplicate them. All three stages of THIS file are
-# pinned to ubuntu:22.04-glibc binaries (jammy, glibc 2.35) so the
-# proteon-connector cdylib and the oracle binaries link against the
-# same glibc the runtime stage provides — building on bookworm and
-# copying into jammy would fail with missing-GLIBC_2.36 symbols at
-# import / exec time. The slim image keeps its bookworm-everywhere
-# story; this image keeps a jammy-everywhere one.
+# the runtime base differs (nvidia/cuda Ubuntu 22.04 vs the slim
+# image's python:3.11-slim-trixie), and inheriting the slim runtime
+# would either lose the CUDA libs or duplicate them. All three stages
+# of THIS file are pinned to ubuntu:22.04-glibc binaries (jammy,
+# glibc 2.35) so the proteon-connector cdylib and the oracle binaries
+# link against the same glibc the runtime stage provides — building
+# on a newer-glibc base (slim's trixie at 2.41, or bookworm at 2.36)
+# and copying into jammy would fail with missing-GLIBC symbols at
+# import / exec time. Slim is trixie-everywhere; this image is
+# jammy-everywhere.
 #
 # CUDA version: 12.5.0 to match cudarc 0.19's cuda-12050 feature.
 # Bumping cudarc requires bumping the base image tag here too.
@@ -33,9 +34,9 @@
 # Built on ubuntu:22.04 — the SAME glibc as the runtime stage below
 # (nvidia/cuda:12.5.0-runtime-ubuntu22.04 is jammy, glibc 2.35). This
 # matters because the proteon-connector wheel is a PyO3 cdylib that
-# links to host glibc; building on a newer glibc (e.g. bookworm 2.36)
-# and copying the wheel into a jammy runtime would fail to load with
-# a missing-GLIBC_2.36-symbol error at import time.
+# links to host glibc; building on a newer glibc (slim's trixie at
+# 2.41, or bookworm at 2.36) and copying into jammy would fail to
+# load at import time with missing-GLIBC symbols.
 #
 # Rust comes from rustup rather than the official rust:1.88 image
 # because that image is debian-based and reintroduces the glibc
@@ -106,11 +107,11 @@ RUN /opt/build-venv/bin/python -m build --wheel \
 #
 # Same reasoning as the builder above: the runtime is
 # nvidia/cuda:12.5.0-runtime-ubuntu22.04 (jammy, glibc 2.35). Building
-# oracles on debian:bookworm-slim (glibc 2.36) and copying them in
-# would leave them linked against GLIBC_2.36 symbols that don't exist
-# on jammy. ubuntu:22.04 keeps every binary in this image — Rust
-# cdylib, USAlign, reduce, mkdssp, libcifpp — on the same glibc the
-# runtime ships.
+# oracles on a newer-glibc base (slim's trixie at 2.41) and copying
+# them in would leave them linked against GLIBC symbols that don't
+# exist on jammy. ubuntu:22.04 keeps every binary in this image —
+# Rust cdylib, USAlign, reduce, mkdssp, libcifpp — on the same glibc
+# the runtime ships.
 # ---------------------------------------------------------------------------
 FROM ubuntu:22.04 AS oracles
 
@@ -135,6 +136,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130 \
     && rm -rf /var/lib/apt/lists/*
 
+# Newer CMake (3.28+) for libmcfp. Jammy's apt cmake is 3.22, which
+# fails configure on libmcfp. Install Kitware's pinned binary tarball
+# BEFORE any cmake-using build below — same pattern as :slim's previous
+# bookworm story. Slim now lives on trixie which has cmake 3.31 in
+# apt and so dropped this block.
+ARG CMAKE_VERSION=3.30.5
+RUN wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" -O /tmp/cmake.tar.gz && \
+    tar -xzf /tmp/cmake.tar.gz -C /opt && \
+    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake" /usr/local/bin/cmake && \
+    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/ctest" /usr/local/bin/ctest && \
+    rm /tmp/cmake.tar.gz
+
 WORKDIR /build
 
 RUN git clone --depth 1 https://github.com/pylelab/USAlign.git && \
@@ -155,16 +168,10 @@ RUN wget -q "https://github.com/soedinglab/MMseqs2/releases/download/${MMSEQS_VE
     ln -s /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs && \
     rm /tmp/mmseqs.tar.gz
 
-# Newer CMake (3.28+) for libmcfp. Bookworm's apt cmake is 3.25.1.
-# Kept in lockstep with :slim.
-ARG CMAKE_VERSION=3.30.5
-RUN wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" -O /tmp/cmake.tar.gz && \
-    tar -xzf /tmp/cmake.tar.gz -C /opt && \
-    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake" /usr/local/bin/cmake && \
-    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/ctest" /usr/local/bin/ctest && \
-    rm /tmp/cmake.tar.gz
-
-# mkdssp (PDB-REDO/dssp) build chain — kept in lockstep with :slim.
+# mkdssp (PDB-REDO/dssp) build chain. Slim builds the same chain on
+# trixie's default cmake / gcc-14 toolchain; this image's jammy base
+# requires the Kitware cmake + gcc-13 PPA installed above to satisfy
+# the same C++20 <format> requirement.
 RUN git clone --depth 1 https://github.com/mhekkel/libmcfp.git && \
     cmake -S libmcfp -B libmcfp/build -DCMAKE_BUILD_TYPE=Release && \
     cmake --build libmcfp/build -j"$(nproc)" && \

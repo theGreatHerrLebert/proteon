@@ -10,13 +10,25 @@
 #   - pip-installable: Biopython, Gemmi, FreeSASA, pydssp, OpenMM, pdbfixer
 #   - source-built:    USAlign, reduce, mkdssp (libmcfp + libcifpp + dssp)
 #   - binary release:  MMseqs2
-#   - apt:             GROMACS (~2023.x; the manifest's release-tier
-#                      median-TM number was produced against custom-built
-#                      2026.1 — that divergence is honest and queryable
-#                      through last_verified.value once replay populates it)
+#   - apt:             GROMACS (the manifest's release-tier median-TM
+#                      number was produced against custom-built 2026.1 —
+#                      that divergence is honest and queryable through
+#                      last_verified.value once replay populates it)
+#
+# Base distribution: Debian trixie (debian 13) across builder, oracles,
+# and runtime stages. The earlier bookworm-everywhere story collapsed
+# under libcifpp HEAD's C++20 <format> need, which requires libstdc++-13+
+# — backports gymnastics on bookworm proved unreliable (gcc-13 is not
+# in bookworm-backports). Trixie ships gcc-14 / libstdc++-14 / cmake
+# 3.31 by default, so the oracle build chain works without any toolchain
+# workarounds. glibc 2.41 throughout — keeps the in-image cross-stage
+# story consistent; consumers running the image see a self-contained
+# environment regardless of host glibc.
 #
 # Companion image evident/Dockerfile.cuda adds GPU support (cudarc +
-# proteon-search/cuda kernels) on the same builder + oracle stages.
+# proteon-search/cuda kernels). It stays on jammy / glibc 2.35 because
+# NVIDIA's CUDA 12.5 runtime tags do not include trixie at the time of
+# writing — see that file's own header for the divergence rationale.
 #
 # Out of scope: live BALL Julia regeneration. The forcefield_amber_ball
 # claim's test (tests/oracle/test_ball_energy.py) carries a frozen
@@ -36,11 +48,12 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Rust builder — compile the proteon Python wheel via maturin.
 # ---------------------------------------------------------------------------
-# Rust 1.88+ required because cudarc's transitive dep libloading@0.9.0
-# bumped its MSRV to 1.88; the :slim image doesn't pull cudarc and
-# would compile fine on 1.85, but keeping the toolchain version in
-# lockstep with :cuda lets a single rebuild flow cover both tags.
-FROM rust:1.88-slim-bookworm AS builder
+# rust:1-slim-trixie tracks Rust stable on the trixie base — proteon's
+# MSRV is 1.75+ so any Rust >= that works. The slim image does not
+# pull cudarc, so the cudarc/libloading 1.88 MSRV constraint that
+# applies to the :cuda image does not apply here. The cuda Dockerfile
+# pins its own Rust version separately for that reason.
+FROM rust:1-slim-trixie AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -92,28 +105,19 @@ RUN /opt/build-venv/bin/python -m build --wheel \
 # Stage 2: Oracle binaries — build USAlign + reduce + fetch MMseqs2.
 # Kept separate so a runtime-stage cache miss doesn't force a Rust rebuild.
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim AS oracles
+FROM debian:trixie-slim AS oracles
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    CC=gcc-13 \
-    CXX=g++-13
+ENV DEBIAN_FRONTEND=noninteractive
 
-# bookworm-backports for gcc-13 / g++-13 / libstdc++-13. libcifpp HEAD
-# uses C++20 <format>, which is libstdc++-13+ only; bookworm's default
-# g++-12 fails to compile it. The runtime stage below also installs
-# libstdc++6 from backports so the resulting binaries can load there.
-RUN echo "deb http://deb.debian.org/debian bookworm-backports main" \
-        > /etc/apt/sources.list.d/backports.list \
-    && apt-get update && apt-get install -y --no-install-recommends \
-        git ca-certificates \
+# trixie ships gcc-14, libstdc++-14, and cmake 3.31 by default — all
+# the toolchain workarounds the bookworm build accumulated (gcc-13
+# from backports, Kitware cmake tarball, libstdc++6 backports in
+# runtime) collapse to a single apt install on trixie.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
         wget tar xz-utils \
         libboost-program-options-dev libboost-iostreams-dev libboost-date-time-dev \
         zlib1g-dev libeigen3-dev \
-        make pkg-config \
-    && apt-get install -y --no-install-recommends -t bookworm-backports \
-        gcc-13 g++-13 \
-    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130 \
-    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -138,16 +142,6 @@ RUN wget -q "https://github.com/soedinglab/MMseqs2/releases/download/${MMSEQS_VE
     tar -xzf /tmp/mmseqs.tar.gz -C /opt && \
     ln -s /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs && \
     rm /tmp/mmseqs.tar.gz
-
-# Newer CMake. libmcfp's CMakeLists requires CMake 3.28+; bookworm
-# ships 3.25.1 which fails configure. Pin to a Kitware binary release
-# rather than apt repos — same shape as the MMseqs2 download above.
-ARG CMAKE_VERSION=3.30.5
-RUN wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" -O /tmp/cmake.tar.gz && \
-    tar -xzf /tmp/cmake.tar.gz -C /opt && \
-    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake" /usr/local/bin/cmake && \
-    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/ctest" /usr/local/bin/ctest && \
-    rm /tmp/cmake.tar.gz
 
 # mkdssp (DSSP C++ reference, PDB-REDO/dssp). Closes the 8-class DSSP
 # gap claim's oracle install; the asserting test that uses it is
@@ -179,12 +173,11 @@ RUN git clone --depth 1 https://github.com/PDB-REDO/dssp.git && \
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime — slim Python image with proteon + oracles + CLI.
 # ---------------------------------------------------------------------------
-# Python 3.11 matches the builder stage (rust:1.85-slim-bookworm
-# ships Debian's default Python 3.11). proteon's requires-python
-# is >=3.11, so this is fully supported. To move to Python 3.12,
-# the builder stage must also be 3.12 (rebuild wheels) — not just
-# the runtime.
-FROM python:3.11-slim-bookworm AS runtime
+# python:3.11-slim-trixie matches the builder + oracles stages on the
+# trixie base. proteon's requires-python is >=3.11, so this is fully
+# supported. To move to Python 3.13 in a future image, also bump the
+# builder/oracles bases to keep the wheel ABI tag in lockstep.
+FROM python:3.11-slim-trixie AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -207,28 +200,26 @@ LABEL org.opencontainers.image.title="proteon-evident" \
 # from sdist during pip install, plus apt-installed gromacs for the
 # fold-preservation-amber-vs-gromacs claim.
 #
-# Version note: apt's gromacs on bookworm is ~2023.x. The manifest's
-# release-tier claim was originally produced against a custom-built
-# GROMACS 2026.1 at /scratch/TMAlign/gromacs-2026.1/build/bin/gmx.
-# When this image's `evident replay` runs the gromacs claim, the
-# manifest's pinned_versions[GROMACS] PENDING-PIN placeholder will
-# resolve to apt's version, and the cited median-TM number may
-# shift slightly. That divergence is honest and queryable through
-# last_verified.value once replay populates it.
-# Pull libstdc++6 from bookworm-backports — mkdssp / libcifpp.so were
-# built against libstdc++-13 (C++20 <format>) in the oracles stage and
-# need GLIBCXX_3.4.32+ symbols at load time, which bookworm's default
-# libstdc++-12 lacks.
-RUN echo "deb http://deb.debian.org/debian bookworm-backports main" \
-        > /etc/apt/sources.list.d/backports.list \
-    && apt-get update && apt-get install -y --no-install-recommends \
-        libgomp1 \
+# Version note: apt's gromacs on trixie is newer than bookworm's
+# (~2024.x vs ~2023.x). The manifest's release-tier claim was
+# produced against a custom-built GROMACS 2026.1 at
+# /scratch/TMAlign/gromacs-2026.1/build/bin/gmx; the apt version will
+# differ from that, and the cited median-TM number may shift
+# slightly when `evident replay` runs the gromacs claim. The
+# divergence is honest and queryable through last_verified.value
+# once replay populates it.
+#
+# trixie's default libstdc++6 is libstdc++-14, which carries the
+# GLIBCXX_3.4.33+ symbols mkdssp's libcifpp.so needs — no backports
+# install required here, unlike on the previous bookworm image.
+# Boost runtime libraries land at the trixie 1.83 series rather than
+# bookworm's 1.74; the package names track that.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 libstdc++6 \
         gcc python3-dev \
         gromacs \
-        libboost-program-options1.74.0 libboost-iostreams1.74.0 libboost-date-time1.74.0 \
+        libboost-program-options1.83.0 libboost-iostreams1.83.0 libboost-date-time1.83.0 \
         ca-certificates \
-    && apt-get install -y --no-install-recommends -t bookworm-backports \
-        libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy oracle binaries from stage 2.
