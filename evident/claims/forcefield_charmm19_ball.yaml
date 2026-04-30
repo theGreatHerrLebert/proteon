@@ -149,6 +149,15 @@ claims:
         wheel is unavailable — the slim EVIDENT image is expected to
         carry it after first PyPI publish lands.
     failure_modes:
+      - "BLOCKER as of 2026-04-30: proteon.compute_energy raises
+        NotImplementedError('nonbonded_cutoff override is only
+        implemented for ff=amber96') when called with
+        ff='charmm19_eef1' and nonbonded_cutoff=1e6. The whole BALL
+        parity comparison requires NoCutoff on both sides, so the
+        test currently module-skips with a clear reason. Implementing
+        the cutoff override for CHARMM19 in proteon-connector is the
+        prerequisite to activating this claim. Tracked separately
+        from the BALL-side oracle work."
       - Single fixture. Crambin only; a regression on non-standard
         residues, terminus handling, or large-loop conformations
         would not surface. A release-tier 1000-PDB version of this
