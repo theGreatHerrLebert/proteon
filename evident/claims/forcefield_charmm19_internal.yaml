@@ -1,0 +1,76 @@
+claims:
+  - id: proteon-charmm19-component-external-oracle-gap-reference
+    title: CHARMM19+EEF1 per-component validation today is internal-parity only; an external per-component oracle is a v1.1 gap
+    kind: reference
+    subsystem: forcefield.charmm19
+    case: claims/forcefield_charmm19_internal.md
+    source: ..
+    tier: ci
+    trust_strategy:
+      - validation
+      - understanding
+    claim: >
+      Proteon's CHARMM19+EEF1 implementation has two layers of validation
+      today, both internal: (a) per-component cross-path parity in
+      tests/test_cross_path_parity.py, which asserts NBL vs exact O(N^2)
+      agreement on bond_stretch, angle_bend, torsion, improper_torsion,
+      vdw, electrostatic, and solvation across four reference structures
+      (1crn, 1bpi, 1ubq, 1ake); and (b) whole-system fold preservation
+      across 1000 PDBs against OpenMM CHARMM36+OBC2 as a contextual SOTA
+      reference, asserted in proteon-fold-preservation-charmm-vs-openmm-release.
+      What does NOT exist is an external per-component oracle equivalent
+      to forcefield_amber_ball or forcefield_amber_openmm — i.e. a fixture
+      that pins each CHARMM19+EEF1 energy component against an independent
+      implementation of the same force field at NoCutoff. AMBER has this
+      via OpenMM (which ships AMBER96 natively) and BALL (independent
+      Julia AMBER96); CHARMM19 has neither, because OpenMM ships CHARMM36
+      not CHARMM19, and EEF1 is a CHARMM extension OpenMM does not
+      implement. This claim documents the gap so it shows up in coverage
+      queries and is not lost between the cross-path-parity and
+      fold-preservation claims.
+    evidence:
+      oracle:
+        - proteon-slow-path
+      command: pytest tests/test_cross_path_parity.py -k "charmm19_eef1" -v
+      artifact: pytest console output (CI-tier; no persisted artifact)
+    assumptions:
+      - The cross-path-parity claim's assumption set carries — 1e-6 kcal/mol
+        absolute floor, 1e-9 relative term, four-structure corpus spans
+        the NBL heuristic threshold. Internal parity gives a strong
+        guarantee that NBL and exact paths agree, but cannot detect a
+        symmetric formula bug present in both — that is the gap an
+        external oracle would close.
+      - The release-tier fold-preservation claim's contextual SOTA
+        (OpenMM CHARMM36+OBC2) covers whole-system behaviour but cannot
+        attribute a regression to a specific component. A 1% drift in
+        bond_stretch may be invisible in TM-score; a 5% drift in
+        electrostatic may be absorbed by the minimiser. Component-level
+        parity is the missing layer.
+      - A defensible CHARMM19 component oracle would source toppar_c19
+        files (CHARMM-GUI export or original CHARMM distribution),
+        load them in OpenMM via CharmmParameterSet, disable EEF1 in
+        proteon, and compare bond/angle/torsion/improper/vdw/electrostatic
+        components only. EEF1 itself has no external Python oracle and
+        would remain internal-only even after that work lands.
+      - Memory feedback_charmm_priority records that CHARMM is proteon's
+        production default, yet the existing component oracle covers
+        AMBER96 (production-secondary). This claim makes the inversion
+        visible at the manifest level rather than only in working memory.
+    failure_modes:
+      - No asserting test exists for the gap itself. This is a
+        kind=reference claim; it surfaces the missing oracle so coverage
+        queries can find it but does not verify CHARMM19 components
+        against any external authority.
+      - Cross-path parity at NoCutoff is a tight check (1e-6 kcal/mol),
+        but it is symmetric. The 2026-04-11 EEF1 sign bug was caught by
+        cross-path parity AFTER the bug was introduced into one path
+        only; a hypothetical bug introduced into both paths in lockstep
+        would have shipped invisibly. CHARMM19 is the force field where
+        this risk is concentrated, because OpenMM cannot serve as the
+        external second-implementation safety net it does for AMBER.
+      - When the gap closes, this reference claim should be retired
+        and replaced by a measurement claim
+        (forcefield_charmm19_openmm.yaml) mirroring the AMBER OpenMM
+        claim's structure — per-component tolerances, NoCutoff fixture,
+        EEF1 disabled in proteon for the comparison, EEF1 separately
+        guarded by cross-path parity and fold preservation.

@@ -95,3 +95,4 @@ include:
   - claims/dssp_8class.yaml
   - claims/sasa_freesasa.yaml
   - claims/acceleration_paths.yaml
+  - claims/forcefield_charmm19_internal.yaml
