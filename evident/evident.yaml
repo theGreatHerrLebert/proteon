@@ -25,6 +25,7 @@ vocabularies:
     - prep.hydrogens
     - align.tmalign
     - align.usalign
+    - geometry
     - forcefield.charmm19
     - forcefield.amber96
     - gb.obc
@@ -98,3 +99,4 @@ include:
   - claims/forcefield_charmm19_internal.yaml
   - claims/usalign_mm.yaml
   - claims/forcefield_charmm19_ball.yaml
+  - claims/geometry_rmsd_ball.yaml

@@ -1,0 +1,155 @@
+claims:
+  - id: proteon-rmsd-vs-ball-ci
+    title: Proteon Kabsch RMSD agrees with BALL RMSDMinimizer on crambin within numerical-precision tolerance
+    kind: measurement
+    subsystem: geometry
+    case: claims/geometry_rmsd_ball.md
+    source: ..
+    tier: ci
+    trust_strategy:
+      - validation
+    capabilities:
+      - alignment-rmsd-parity
+    inputs:
+      corpus: crambin-pair-fixture
+      n: 1
+      class: single-chain
+      fixture_path: test-pdbs/1crn.pdb
+    outputs:
+      kabsch_rmsd:
+        unit: A
+        description: >
+          C-alpha RMSD after optimal Kabsch superposition between
+          crambin and a 20-step ball.minimize_energy-relaxed crambin.
+          proteon reports this via proteon.geometry.rmsd; BALL reports
+          it via RMSDMinimizer::computeTransformation (Coutsalis et al.
+          eigenvalue method) over an AtomBijection in CA mode.
+      no_super_rmsd:
+        unit: A
+        description: >
+          C-alpha RMSD WITHOUT rigid-body alignment — direct coordinate
+          deviation. proteon.geometry.rmsd_no_super on identical paired
+          arrays vs ball.rmsd(..., superpose=False). No algorithmic
+          freedom on this metric — both reduce to
+          sqrt(mean(||x_i - y_i||^2)).
+    pinned_versions:
+      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      BALL: "PENDING-PIN-BALL-PY-0.1.0a3"
+      python: "3.12"
+    claim: >
+      For the crambin pair (1crn original vs ball-minimised),
+      proteon.geometry.rmsd and ball.rmsd(atoms="ca", superpose=True)
+      report Kabsch-aligned CA-RMSD that agrees within 1e-3 A absolute.
+      Equivalently for proteon.geometry.rmsd_no_super vs
+      ball.rmsd(superpose=False), with the tighter 1e-4 A tolerance
+      since the no-superpose path has no algorithmic freedom.
+      Self-RMSD (a structure compared with itself) is ~0 on both
+      sides as a sanity floor.
+    tolerances:
+      - metric: absolute_error
+        op: "<"
+        value: 0.001
+        output: kabsch_rmsd
+        prose: >
+          "|proteon - BALL| < 1e-3 A on Kabsch-aligned CA-RMSD."
+          Same algorithm (Kabsch via eigenvalue solve), independent
+          implementations; on a well-conditioned single-chain pair
+          they should agree to roughly machine precision. The 1e-3 A
+          band leaves margin for residue-ordering or preprocessing
+          edge cases without triggering on float noise.
+      - metric: absolute_error
+        op: "<"
+        value: 0.0001
+        output: no_super_rmsd
+        prose: >
+          "|proteon - BALL| < 1e-4 A on direct (non-superposed) RMSD."
+          Tighter than Kabsch because there is NO algorithmic freedom
+          here — the metric reduces to sqrt(mean(||x_i - y_i||^2))
+          on identical paired arrays, so any disagreement at this
+          magnitude means the two tools paired different atoms.
+      - metric: absolute_error
+        op: "<"
+        value: 0.000001
+        output: kabsch_rmsd
+        prose: >
+          Self-RMSD floor on the proteon side:
+          proteon.geometry.rmsd(coords, coords) < 1e-6 A. Sanity check
+          that proteon's Kabsch path bottoms out at zero on identical
+          input (measured ~4e-7 A on crambin's 46 CA atoms). A non-zero
+          value here points to an eigenvalue-solver instability or a
+          sign-convention bug in the optimal-rotation reconstruction.
+      - metric: absolute_error
+        op: "<"
+        value: 0.01
+        output: kabsch_rmsd
+        prose: >
+          Self-RMSD floor on the BALL side:
+          ball.rmsd(pdb, pdb, superpose=True) < 1e-2 A. BALL's
+          Coutsalis et al. eigenvalue solver does NOT bottom out at
+          zero on identical input — measured ~5.4e-3 A on crambin
+          (46 CAs), 4 orders of magnitude noisier than proteon's
+          path. The 1e-2 A band guards against a catastrophic
+          regression (BALL's solver diverges) without breaking on
+          the documented floor. The no-superpose path IS exactly
+          zero on identical input on both sides, exercised
+          separately.
+    evidence:
+      oracle:
+        - BALL
+      command: pytest tests/oracle/test_rmsd_ball_oracle.py::TestRmsdBallOracle -v
+      artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: automatic
+    last_verified:
+      commit: null
+      date: null
+      value: null
+      corpus_sha: null
+    assumptions:
+      - The BALL Python bindings (ball-py PyPI package, source
+        github.com/theGreatHerrLebert/ball) provide ball.rmsd(pdb_a,
+        pdb_b, atoms="ca", superpose=...) returning a dict with the
+        "rmsd" key. Added in ball-py 0.1.0a3 (PR 2 on the BALL
+        bindings repo). Earlier wheels lack this binding; the test
+        skips with a clear reason in that case.
+      - The fixture pair shares CA-atom residue order. Crambin (1crn)
+        is a single chain with contiguous numbering, and BALL's
+        AtomBijection.assignCAlphaAtoms enumerates CA atoms in the
+        same residue order proteon's "name CA" selection produces.
+        This holds for v0; multi-chain or alt-loc-bearing inputs
+        would need explicit pairing reconciliation.
+      - The minimised PDB used as the second structure is generated
+        on-the-fly via ball.minimize_energy with max_iter=20. This
+        couples the test to the existing ball.minimize_energy binding
+        (shipped in ball-py 0.1.0a2). A regression there would
+        cascade into a fixture-construction failure that this claim
+        cannot distinguish from an actual RMSD bug — but
+        ball.minimize_energy itself is exercised by the BALL smoke
+        suite, so the failure mode is at most a one-hop hop.
+      - ball-py is installed in the test environment. The test uses
+        pytest.importorskip("ball") + a hasattr(ball, "rmsd") guard
+        so it skips silently when the wheel is unavailable or
+        predates the rmsd binding.
+    failure_modes:
+      - Single fixture. Crambin only — a regression on multi-chain,
+        alt-loc, or non-protein inputs would not surface. A
+        release-tier 1000-PDB version paired with a structurally
+        diverse corpus is the natural follow-up; for v0 the
+        single-fixture floor is enough to gate against eigenvalue-
+        solver and pairing regressions.
+      - The fixture's "second structure" comes from ball.minimize_energy.
+        If ball.minimize_energy regresses (returns the input
+        unchanged, or corrupts the structure), test_kabsch_rmsd_agrees
+        will see a degenerate p_rmsd ≈ 0 and the explicit assertion
+        `assert p_rmsd > 0.0` fails with a clear message rather than
+        a silent pass on a trivial case. Adding a pre-minimised
+        fixture (e.g. test-pdbs/1crn_min.pdb) would decouple this
+        claim from the BALL minimizer entirely.
+      - corpus_sha is omitted; crambin in the source tree is pinned
+        by the proteon source SHA transitively, and the minimised
+        structure is reproducible from it via ball.minimize_energy
+        with max_iter=20.
+      - Kabsch eigenvalue-solver edge cases on near-degenerate point
+        clouds (e.g. linear-collinear CA chains, three-atom subsets)
+        are not exercised by crambin (46 well-distributed CAs).
+        Adding a degenerate-geometry fixture would tighten the floor;
+        out of scope for v0.
