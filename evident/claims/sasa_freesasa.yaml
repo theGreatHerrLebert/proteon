@@ -20,6 +20,7 @@ claims:
         - FreeSASA
       command: pytest tests/test_sasa.py -k freesasa -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: human
     assumptions:
       - The proposed test pattern (TestFreeSASAOracle in
         tests/test_sasa.py, or a new tests/oracle/test_sasa_freesasa_oracle.py)

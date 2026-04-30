@@ -42,6 +42,7 @@ claims:
         - Biopython
       command: pytest tests/test_sasa.py::TestBiopythonOracle -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: automatic
     last_verified:
       commit: null
       date: null
@@ -117,6 +118,7 @@ claims:
         python validation/run_validation.py --n-structures 1000
         --pdb-dir validation/pdbs/ --output validation/results.json
       artifact: validation/results.json
+    provenance: human
     last_verified:
       commit: null
       date: null

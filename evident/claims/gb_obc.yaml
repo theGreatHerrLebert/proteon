@@ -68,6 +68,7 @@ claims:
         - OpenMM
       command: python validation/amber96_obc_oracle.py
       artifact: stdout summary table (Δ total / Δ GB in kJ/mol and %)
+    provenance: human
     last_verified:
       commit: null
       date: null
