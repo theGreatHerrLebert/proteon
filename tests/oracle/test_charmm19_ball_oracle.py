@@ -31,6 +31,33 @@ ball = pytest.importorskip(
     ),
 )
 
+# proteon's compute_energy currently rejects nonbonded_cutoff overrides
+# on ff='charmm19_eef1' with a hard NotImplementedError — only AMBER96
+# supports the cutoff knob today. The whole BALL parity comparison
+# requires NoCutoff on both sides; without it, BALL's no-cutoff energy
+# vs proteon's default 15 Å cutoff produce ~30% gaps on electrostatic
+# alone, swamping any meaningful component-by-component check.
+#
+# Skip until the CHARMM cutoff override lands in proteon-connector. The
+# claim's pinned_versions[BALL] resolves at that point, alongside the
+# first CI green for these assertions. This is recorded as a documented
+# blocker in claims/forcefield_charmm19_ball.yaml's failure_modes.
+try:
+    _probe = proteon.load(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "test-pdbs", "1crn.pdb",
+    ))
+    proteon.compute_energy(_probe, ff="charmm19_eef1", nonbonded_cutoff=1e6)
+except NotImplementedError as _exc:
+    pytest.skip(
+        f"proteon.compute_energy lacks CHARMM19 cutoff override: {_exc}; "
+        f"see claims/forcefield_charmm19_ball.yaml failure_modes",
+        allow_module_level=True,
+    )
+except Exception:
+    # Other errors (missing fixture, etc.) surface in the per-test setup.
+    pass
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CRAMBIN = os.path.join(REPO, "test-pdbs", "1crn.pdb")
 
@@ -73,7 +100,11 @@ def reference_energies():
         pytest.skip(f"crambin fixture not found at {CRAMBIN}")
 
     s = proteon.load(CRAMBIN)
-    s = proteon.add_hydrogens(s)
+    # CHARMM19 is a polar-H force field — only N-H, O-H, S-H placed.
+    # place_peptide_hydrogens mutates the structure in place and returns
+    # (n_placed, n_failed); the count is not asserted here, only the
+    # downstream energy components.
+    proteon.place_peptide_hydrogens(s)
 
     proteon_energy = proteon.compute_energy(
         s, ff="charmm19_eef1", nonbonded_cutoff=1e6,

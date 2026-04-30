@@ -74,11 +74,17 @@ jobs:
           pip install maturin numpy pytest pytest-cov pandas pyarrow
           # Fast-slice oracle deps — pip-installable Python libraries used by
           # the library-parity tests under tests/oracle/ (biopython + gemmi
-          # for I/O parity, pydssp for DSSP parity, freesasa for SASA parity).
+          # for I/O parity, pydssp for DSSP parity, freesasa for SASA parity,
+          # ball-py for BALL force-field + RMSD oracles).
           # Heavier oracles (reduce binary, USAlign binary, BALL Julia,
           # OpenMM) skip cleanly when their binaries / env vars aren't set.
           # See docs/ORACLE_SETUP.md for the full setup recipe.
-          pip install biopython gemmi pydssp freesasa
+          #
+          # ball-py: pinned to a specific alpha while the surface
+          # stabilises. The wheel bundles BALL's data tree under
+          # share/BALL/ and auto-discovers it at module init via
+          # dladdr — no BALL_DATA_PATH env-var ceremony required.
+          pip install biopython gemmi pydssp freesasa "ball-py==0.1.0a4"
       - name: Build connector
         run: |
           source .venv/bin/activate
