@@ -65,6 +65,7 @@ claims:
         - OpenMM
       command: python validation/tm_fold_preservation.py && python validation/tm_fold_preservation_openmm.py
       artifact: /globalscratch/dateschn/proteon-benchmark/tm_fold_preservation_openmm.jsonl
+    provenance: human
     last_verified:
       commit: null
       date: null

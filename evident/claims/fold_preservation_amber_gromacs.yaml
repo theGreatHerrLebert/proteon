@@ -68,6 +68,7 @@ claims:
         - GROMACS
       command: python validation/tm_fold_preservation_amber.py && python validation/tm_fold_preservation_gromacs.py
       artifact: validation/gmx_fold_preservation/tm_fold_gromacs.jsonl
+    provenance: human
     last_verified:
       commit: null
       date: null

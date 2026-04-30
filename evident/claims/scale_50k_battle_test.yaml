@@ -83,6 +83,7 @@ claims:
         --out validation/stage3_50k_gpu_results.jsonl
         --log validation/stage3_50k_gpu.log
       artifact: validation/stage3_50k_gpu_results.jsonl
+    provenance: human
     last_verified:
       commit: null
       date: "2026-04-12"
