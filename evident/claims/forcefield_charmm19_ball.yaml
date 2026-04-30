@@ -1,0 +1,178 @@
+claims:
+  - id: proteon-charmm19-vs-ball-ci
+    title: Proteon CHARMM19+EEF1 energy components agree with BALL on crambin within per-component tolerances
+    kind: measurement
+    subsystem: forcefield.charmm19
+    case: claims/forcefield_charmm19_ball.md
+    source: ..
+    tier: ci
+    trust_strategy:
+      - validation
+    capabilities:
+      - forcefield-energy-component-parity
+    inputs:
+      corpus: crambin-fixture
+      n: 1
+      class: single-chain
+      fixture_path: test-pdbs/1crn.pdb
+    outputs:
+      bond_stretch:
+        unit: kJ/mol
+        description: Sum over harmonic bond-stretch terms (CHARMM19 parametrisation).
+      angle_bend:
+        unit: kJ/mol
+        description: Sum over harmonic angle-bend terms.
+      proper_torsion:
+        unit: kJ/mol
+        description: >
+          Sum over CHARMM19 proper-torsion (cosine series) terms only.
+          BALL's CharmmFF::getTorsionEnergy() returns proper + improper
+          summed; this output is the proper-only difference exposed by
+          ball.charmm_energy()'s split keys.
+      improper_torsion:
+        unit: kJ/mol
+        description: Sum over CHARMM19 improper-torsion terms.
+      vdw:
+        unit: kJ/mol
+        description: 12-6 Lennard-Jones non-bonded sum at NoCutoff.
+      electrostatic:
+        unit: kJ/mol
+        description: >
+          Coulomb non-bonded sum at NoCutoff. proteon reports nb minus
+          vdw; BALL exposes nonbonded directly via getNonbondedEnergy.
+      solvation:
+        unit: kJ/mol
+        description: >
+          EEF1 implicit-solvation term. The whole point of using BALL
+          here vs OpenMM — OpenMM's CHARMM force fields do not
+          implement EEF1, so this oracle layer is uniquely BALL.
+    pinned_versions:
+      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      BALL: "PENDING-PIN-BALL-PY-AT-FIRST-PUBLISH"
+      python: "3.12"
+    claim: >
+      For crambin (1crn) under proteon's CHARMM19+EEF1 force field at
+      NoCutoff, bonded and non-bonded energy components agree with
+      BALL's CharmmFF (use_eef1=true) within tolerances reflecting
+      the documented BALL-vs-proteon convention gaps. Specifically:
+      1% on bond_stretch and angle_bend, 2.5% on proper_torsion and
+      improper_torsion, 2.5% on vdw, 25% on electrostatic
+      (documenting the BALL convention gap inherited from the AMBER
+      side), and 5% on solvation (EEF1 itself is the term where
+      BALL is the canonical reference, so the band is tighter than
+      electrostatic).
+    tolerances:
+      - metric: relative_error
+        op: "<"
+        value: 0.01
+        output: bond_stretch
+        prose: "|proteon - BALL| / BALL < 1% on bond_stretch."
+      - metric: relative_error
+        op: "<"
+        value: 0.01
+        output: angle_bend
+        prose: "|proteon - BALL| / BALL < 1% on angle_bend."
+      - metric: relative_error
+        op: "<"
+        value: 0.025
+        output: proper_torsion
+        prose: >
+          |proteon - BALL| / BALL < 2.5% on proper_torsion. CHARMM19's
+          cosine series is sensitive to phase-angle and multiplicity
+          differences in the parameter file; the band matches the
+          AMBER+BALL claim's torsion tolerance.
+      - metric: relative_error
+        op: "<"
+        value: 0.025
+        output: improper_torsion
+        prose: >
+          |proteon - BALL| / BALL < 2.5% on improper_torsion. Wider
+          than bonded — improper params at chain termini are the
+          documented mismatch source (see ball-py's binding code for
+          the AddHydrogenProcessor stderr warnings on TYR-N etc.).
+      - metric: relative_error
+        op: "<"
+        value: 0.025
+        output: vdw
+        prose: "|proteon - BALL| / |BALL| < 2.5% on vdW at NoCutoff."
+      - metric: relative_error
+        op: "<"
+        value: 0.25
+        output: electrostatic
+        prose: >
+          |proteon - BALL| / |BALL| < 25% on electrostatic at
+          NoCutoff. Wide by design — the AMBER+BALL claim documents
+          BALL's ~20% divergence from OpenMM-canonical AMBER96 here;
+          the same partial-charge or 1-4 scaling convention gap
+          plausibly applies to CHARMM. The band catches a
+          catastrophic charge-set regression without breaking on the
+          known gap.
+      - metric: relative_error
+        op: "<"
+        value: 0.05
+        output: solvation
+        prose: >
+          |proteon - BALL| / |BALL| < 5% on EEF1 solvation. Tighter
+          than electrostatic because EEF1 is the term where BALL
+          itself is the canonical reference (no OpenMM equivalent).
+          Per the closed forcefield_charmm19_internal reference
+          claim, this is the layer that EVIDENT was missing for
+          CHARMM19's production-default story.
+    evidence:
+      oracle:
+        - BALL
+      command: pytest tests/oracle/test_charmm19_ball_oracle.py::TestCharmm19BallOracle -v
+      artifact: pytest console output (CI-tier; no persisted artifact)
+    last_verified:
+      commit: null
+      date: null
+      value: null
+      corpus_sha: null
+    assumptions:
+      - The BALL Python bindings (ball-py PyPI package, source
+        github.com/theGreatHerrLebert/ball) provide
+        ball.charmm_energy(pdb, use_eef1=True, nonbonded_cutoff=1e6)
+        returning a dict with the keys named in `outputs`. The
+        binding's ball/python/src/module.cpp documents the surface.
+      - BALL's AddHydrogenProcessor places hydrogens consistent with
+        proteon's. In practice hydrogen positions diverge slightly;
+        the test calls proteon.add_hydrogens upstream and passes
+        add_hydrogens=False to ball.charmm_energy so BOTH tools
+        operate on proteon's hydrogen placement. EEF1 itself is
+        relatively H-placement-insensitive at the 5% band.
+      - proteon's nonbonded_cutoff=1e6 and BALL's nonbonded_cutoff=1e6
+        produce mathematically identical no-cutoff long-range
+        evaluation; no Ewald, no reaction field.
+      - ball-py is installed in the test environment. The test uses
+        pytest.importorskip("ball") so it skips silently when the
+        wheel is unavailable — the slim EVIDENT image is expected to
+        carry it after first PyPI publish lands.
+    failure_modes:
+      - Single fixture. Crambin only; a regression on non-standard
+        residues, terminus handling, or large-loop conformations
+        would not surface. A release-tier 1000-PDB version of this
+        claim, paired with the existing OpenMM AMBER96 release
+        claim, is the natural follow-up.
+      - BALL is the canonical EEF1 oracle. EEF1 has no OpenMM
+        equivalent, so for that single component this claim IS the
+        external-oracle layer. A bug in BALL's EEF1 implementation
+        would propagate through this claim invisibly. Mitigation —
+        cross-check against the original CHARMM program's EEF1
+        output on a small fixture set, when available — is out of
+        scope for v0 of this claim.
+      - ball-py is a brand-new wheel at the time of this claim's
+        introduction. Pinned_versions[BALL] starts as
+        PENDING-PIN-BALL-PY-AT-FIRST-PUBLISH and resolves to the
+        first published version (0.1.0a0 or later) once the
+        cibuildwheel pipeline succeeds. Until then, the test
+        skips and the claim is not gated.
+      - corpus_sha is omitted; crambin in the source tree is pinned
+        by the proteon source SHA transitively.
+      - H placement is the most likely first divergence. BALL's
+        AddHydrogenProcessor and proteon's add_hydrogens differ in
+        ring/chiral handling on a few residue types. The
+        assumption above (proteon places H, BALL accepts as-is) is
+        the workaround; if BALL's setup() rejects proteon's H
+        positions on some atom types, this claim's tolerances will
+        need widening or a smaller fixture (e.g. a poly-Ala) to
+        isolate the H-placement noise from the energy comparison.
