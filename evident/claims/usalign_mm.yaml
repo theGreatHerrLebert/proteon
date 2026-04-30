@@ -1,0 +1,126 @@
+claims:
+  - id: proteon-usalign-mm-vs-cpp-ci
+    title: Proteon MM-align matches C++ USAlign -mm 1 on multi-chain fixtures
+    kind: measurement
+    subsystem: align.usalign
+    case: claims/usalign_mm.md
+    source: ..
+    tier: ci
+    trust_strategy:
+      - validation
+    capabilities:
+      - alignment-tmscore-parity
+      - alignment-rmsd-parity
+      - alignment-length-parity
+    inputs:
+      corpus: usalign-mm-3-pair-fixtures
+      n: 3
+      class: multi-chain
+    outputs:
+      total_tm_score:
+        unit: dimensionless
+        description: >
+          Whole-complex TM-score from MM-align. Proteon exposes this as
+          PyMMAlignResult.total_score; USAlign C++ emits it as the
+          per-complex TM column under -outfmt 2.
+      per_chain_rmsd:
+        unit: A
+        description: >
+          RMSD over the assigned chain pair. Compared per chain pair
+          rather than aggregated to keep the assertion attributable
+          to specific chains when it fails.
+      n_aligned_per_chain:
+        unit: residues
+        description: >
+          Number of residues in the aligned core, per chain pair.
+      chain_assignments:
+        unit: dimensionless
+        description: >
+          List of (query_chain_idx, target_chain_idx) tuples — the
+          chain-pairing decision made by the multi-chain alignment.
+    pinned_versions:
+      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      USAlign: "PENDING-PIN-USALIGN-COMMIT"
+      python: "3.12"
+    claim: >
+      For each of three reference multi-chain fixture pairs (1ake-self,
+      1cse-self, 1ake-vs-1cse), proteon's mm_align_pair reports a
+      whole-complex TM-score, per-chain RMSD, per-chain n_aligned,
+      and chain_assignments that match the canonical C++ USAlign
+      reference (`USalign -mm 1 -outfmt 2`) within tolerances reflecting
+      -ffast-math reordering and PDB-coordinate-precision-limited RMSD.
+    tolerances:
+      - metric: absolute_error
+        op: "<"
+        value: 0.0005
+        output: total_tm_score
+        prose: >
+          |proteon.total_score - cpp.tm_complex| < 5e-4 absolute. Same
+          floor as the single-chain tmalign claim — ffast-math
+          reordering on the C++ side limits the achievable agreement.
+      - metric: absolute_error
+        op: "<"
+        value: 0.05
+        output: per_chain_rmsd
+        prose: >
+          Per-chain RMSD within 0.05 A absolute. PDB-coordinate
+          precision is the floor.
+      - metric: absolute_error
+        op: "<="
+        value: 2
+        output: n_aligned_per_chain
+        prose: >
+          Per-chain n_aligned within +/- 2 residues. Allows
+          tie-breaking differences in the dynamic-programming path.
+      - output: chain_assignments
+        prose: >
+          Chain assignments must agree as sets — the order USAlign and
+          proteon report pairs in does NOT have to match, but the
+          set of (query, target) pairs does. A divergence here would
+          indicate a real multimer-assembly bug rather than numerical
+          drift.
+    evidence:
+      oracle:
+        - USAlign
+      command: pytest tests/oracle/test_usalign_mm_oracle.py -v
+      artifact: pytest console output (CI-tier; no persisted artifact)
+    last_verified:
+      commit: null
+      date: null
+      value: null
+      corpus_sha: null
+    assumptions:
+      - The USAlign C++ binary is on PATH or located at $USALIGN_BIN;
+        the test skips silently when neither is resolvable, so CI must
+        positively check that the binary is present.
+      - The three fixture pairs cover homodimer self-alignment (1ake),
+        heterodimer self-alignment (1cse), and different-multimer
+        cross-alignment (1ake-vs-1cse). Two are trivial (TM=1.0),
+        which catches infrastructure / convention bugs but not
+        numerical drift; the cross pair (TM ~0.3) provides the
+        numerical-drift signal.
+      - Multi-chain alignment in proteon goes through
+        proteon_connector.mm_align_pair, which extracts ChainData
+        from each PyPDB and runs the same SOI / mmalign machinery as
+        the proteon-bin/usalign CLI binary. The Python path is the
+        public API; the binary is not separately tested here.
+    failure_modes:
+      - Two of three pairs are self-alignments where TM=1.0 is
+        algorithmically forced. Numerical drift in the SOI / chain-
+        assignment heuristic would only surface on the
+        1ake-vs-1cse pair. Adding biologically related pairs (e.g.
+        a hemoglobin variant set) would strengthen the corpus.
+      - corpus_sha is unset; a regression that adds, removes, or
+        replaces a fixture could silently expand or shrink the
+        asserted set. Tightening would pin fixture SHAs or move all
+        fixtures inside the source tree.
+      - USAlign and proteon's mm-align share algorithmic ancestry
+        (both descend from Yang Zhang's MM-align). This is an
+        independent implementation, not an independent oracle —
+        same caveat as the single-chain tmalign claim. A second
+        comparator (DALI, FoldSeek-mm, or original MM-align C++)
+        would strengthen Rule 5 "Use Independent Validation".
+      - The chain_assignments tolerance is set-equality, not
+        order-preserving. If the order in which pairs are reported
+        carries downstream meaning in some consumer, that consumer
+        will need its own assertion.
