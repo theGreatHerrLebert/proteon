@@ -93,6 +93,7 @@ claims:
         - proteon-slow-path
       command: pytest tests/test_supervision_rust_parity.py -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: automatic
     last_verified:
       commit: null
       date: null

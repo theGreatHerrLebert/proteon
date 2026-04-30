@@ -64,6 +64,7 @@ claims:
         - reduce
       command: pytest tests/oracle/test_reduce_hydrogen_oracle.py::TestReduceHydrogenOracle -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: automatic
     last_verified:
       commit: null
       date: null

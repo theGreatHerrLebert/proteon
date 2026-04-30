@@ -25,6 +25,7 @@ claims:
         - reduce
       command: pytest tests/oracle -v
       artifact: validation/report.html
+    provenance: human
     assumptions:
       - Heavy release oracles may not run in fast CI.
       - Oracle disagreement is treated as a Proteon bug until a convention gap

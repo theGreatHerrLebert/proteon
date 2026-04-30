@@ -71,6 +71,7 @@ claims:
         - proteon-slow-path
       command: pytest tests/test_cross_path_parity.py -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: automatic
     last_verified:
       commit: null
       date: null

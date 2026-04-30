@@ -21,6 +21,7 @@ claims:
         - mkdssp
       command: pytest tests/oracle/test_dssp_mkdssp_oracle.py -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: human
     assumptions:
       - The proposed test path tests/oracle/test_dssp_mkdssp_oracle.py
         does NOT exist at the cited commit. The command is the target

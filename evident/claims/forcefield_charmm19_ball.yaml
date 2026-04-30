@@ -123,6 +123,7 @@ claims:
         - BALL
       command: pytest tests/oracle/test_charmm19_ball_oracle.py::TestCharmm19BallOracle -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: automatic
     last_verified:
       commit: null
       date: null

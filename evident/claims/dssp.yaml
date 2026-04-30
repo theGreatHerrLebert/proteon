@@ -89,6 +89,7 @@ claims:
         - pydssp
       command: pytest tests/oracle/test_dssp_oracle.py::TestDsspOracle -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: automatic
     last_verified:
       commit: null
       date: null

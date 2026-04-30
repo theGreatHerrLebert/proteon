@@ -81,6 +81,7 @@ claims:
         - MMseqs2
       command: python validation/msa_oracle.py
       artifact: validation/msa_oracle_report.json
+    provenance: automatic
     last_verified:
       commit: null
       date: null

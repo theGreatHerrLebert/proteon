@@ -33,6 +33,7 @@ claims:
         - proteon-slow-path
       command: pytest tests/test_cross_path_parity.py -k "charmm19_eef1" -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: human
     assumptions:
       - The cross-path-parity claim's assumption set carries — 1e-6 kcal/mol
         absolute floor, 1e-9 relative term, four-structure corpus spans

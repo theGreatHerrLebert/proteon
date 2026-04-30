@@ -64,6 +64,7 @@ claims:
         - OpenMM
       command: python validation/amber96_oracle.py
       artifact: /globalscratch/dateschn/proteon-benchmark/amber96_oracle.jsonl
+    provenance: human
     last_verified:
       commit: null
       date: null

@@ -22,6 +22,7 @@ claims:
         - proteon-slow-path
       command: pytest tests/test_cross_path_parity.py tests/test_supervision_rust_parity.py -k 'simd or rayon or threads' -v
       artifact: pytest console output (CI-tier; no persisted artifact)
+    provenance: human
     assumptions:
       - The proposed test parametrisations (-k simd, -k rayon, -k
         threads) do NOT exist at the cited commit. The command would
