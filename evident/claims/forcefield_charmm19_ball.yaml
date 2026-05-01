@@ -155,11 +155,11 @@ claims:
         AMBER96). Activating the test on crambin with shared
         polar-H placement (proteon places, BALL reads with
         add_hydrogens=False) reveals a clean two-tier picture:
-        bond_stretch (0.7%), angle_bend (0.8%), and EEF1 solvation
-        (0.7%) agree well within tolerance and gate live. Four
-        components diverge well past their bands and are xfail-marked
-        in tests/oracle/test_charmm19_ball_oracle.py with strict=False
-        so a future fix surfaces as xpass:
+        bond_stretch (0.7%), angle_bend (0.8%), EEF1 solvation
+        (0.7%), and vdw (< 0.01%) agree well within tolerance and
+        gate live. Three components remain divergent and are
+        xfail-marked in tests/oracle/test_charmm19_ball_oracle.py
+        with strict=False so a future fix surfaces as xpass:
           - proper_torsion: 218.2 vs 230.0 kJ/mol (~5.1% rel diff;
             was 610.84 i.e. 2.66x off before the [ResidueTorsions]
             filter landed). proteon previously enumerated every
@@ -197,13 +197,22 @@ claims:
                 harmonic_improper_energy_and_forces lands as #[allow(
                 dead_code)] scaffolding so the next-step fix is a
                 small surgical change.
-          - vdw: -834.3 vs -942.7 kJ/mol (11.5% rel diff; sign is now
-            correct after the [LennardJones14] table loader landed —
-            CHARMM ships separate 1-4 LJ params (smaller R, larger
-            epsilon) which proteon previously ignored, scaling regular
-            LJ by 1/scnb (AMBER convention) instead. Residual gap is
-            plausibly the inflated CH*E united-atom radii on
-            un-minimized geometry plus NBFIX overrides not yet loaded.)
+          - (vdw moved to PASSING tier 2026-05-01: -942.70 vs -942.71
+            kJ/mol, < 0.01% rel diff. Two-step fix: (1) [LennardJones14]
+            table loader (PR #19) brought the sign correct (was
+            sign-flipped before, then -834.3 vs -942.7 / 11.5% off),
+            (2) PHE/TYR para-diagonal LJ exclusion (CG-CZ, CD1-CE2,
+            CD2-CE1) closed the residual ~110 kJ/mol gap. The
+            exclusion comes from BALL's charmmNonBonded.C:547-565
+            ("Nasty: check for diagonal 1-4 interactions in
+            six-membered rings (PHE/TYR) - those interactions are
+            omitted") — proteon now mirrors that via CharmmParams's
+            opt-in to the new excludes_aromatic_ring_diagonals trait
+            method. Crambin has 9 such pairs (1 PHE + 2 TYR × 3
+            diagonals); each at ~2.7-2.8 Å contributes ~12-25 kJ/mol
+            of spurious LJ repulsion when not excluded. AMBER does
+            NOT use this exclusion so the trait default is false,
+            preserving AMBER96's existing 0.2% oracle gate.)
           - electrostatic: +195.7 vs -2711 kJ/mol (after the
             @E14FAC=0.4 1-4 scaling fix landed; was +5373 before so
             that fix closed ~5177 kJ/mol of the gap. Sign still

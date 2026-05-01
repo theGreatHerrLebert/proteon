@@ -61,6 +61,12 @@ pub struct Topology {
     pub excluded_pairs: HashSet<(usize, usize)>,
     /// 1-4 pairs (scaled nonbonded)
     pub pairs_14: HashSet<(usize, usize)>,
+    /// Pairs whose LJ contribution is zeroed but whose Coulomb /
+    /// solvation contributions are kept. Currently populated only for
+    /// CHARMM via the FF's `excludes_aromatic_ring_diagonals` opt-in,
+    /// holding the para-diagonal pairs in PHE/TYR rings (CG-CZ,
+    /// CD1-CE2, CD2-CE1) — see `charmmNonBonded.C:547-565`.
+    pub lj_excluded_pairs: HashSet<(usize, usize)>,
     /// Atoms that could not be assigned a force field type (residue:atom names)
     pub unassigned_atoms: Vec<String>,
 }
@@ -250,6 +256,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                 improper_torsions: Vec::new(),
                 excluded_pairs: HashSet::new(),
                 pairs_14: HashSet::new(),
+                lj_excluded_pairs: HashSet::new(),
                 unassigned_atoms: Vec::new(),
             }
         }
@@ -812,6 +819,41 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
         }
     }
 
+    // Step 6: PHE/TYR aromatic-ring para-diagonal LJ exclusions.
+    //
+    // CHARMM's `charmmNonBonded.C:547-565` zeroes the LJ A,B values for
+    // the three para-diagonal 1-4 pairs (CG-CZ, CD1-CE2, CD2-CE1) in
+    // PHE/TYR side chains while keeping their Coulomb contribution. The
+    // para distance is ~2.7-2.8 Å — well inside the LJ wall — so each
+    // missing exclusion adds ~12-25 kJ/mol of spurious repulsion. With
+    // 9 such pairs in crambin (1 PHE + 2 TYR × 3 pairs) the effect is
+    // ~110 kJ/mol, exactly matching the observed proteon-vs-BALL gap.
+    //
+    // Gated on `excludes_aromatic_ring_diagonals()` — CHARMM opts in,
+    // AMBER's default `false` keeps it identical to BALL's amber path.
+    let mut lj_excluded_pairs = HashSet::new();
+    if params.excludes_aromatic_ring_diagonals() {
+        const DIAGONALS: [(&str, &str); 3] = [("CG", "CZ"), ("CD1", "CE2"), ("CD2", "CE1")];
+        // Group atom indices by (residue_idx, atom_name) for quick lookup.
+        let mut by_residue: HashMap<usize, HashMap<&str, usize>> = HashMap::new();
+        for (idx, atom) in atoms.iter().enumerate() {
+            if atom.residue_name == "PHE" || atom.residue_name == "TYR" {
+                by_residue
+                    .entry(atom.residue_idx)
+                    .or_default()
+                    .insert(atom.atom_name.as_str(), idx);
+            }
+        }
+        for (_res_idx, name_to_idx) in by_residue {
+            for (n1, n2) in DIAGONALS {
+                if let (Some(&i), Some(&j)) = (name_to_idx.get(n1), name_to_idx.get(n2)) {
+                    let pair = (i.min(j), i.max(j));
+                    lj_excluded_pairs.insert(pair);
+                }
+            }
+        }
+    }
+
     Topology {
         atoms,
         bonds,
@@ -820,6 +862,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
         improper_torsions,
         excluded_pairs,
         pairs_14,
+        lj_excluded_pairs,
         unassigned_atoms,
     }
 }
@@ -828,6 +871,65 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
 mod tests {
     use super::*;
     use crate::forcefield::params;
+
+    #[test]
+    fn test_charmm_aromatic_diagonal_lj_exclusions_crambin() {
+        // Crambin has 1 PHE + 2 TYR. CharmmParams's
+        // excludes_aromatic_ring_diagonals() is true, so the
+        // topology should populate 9 LJ-excluded pairs (3 per ring:
+        // CG-CZ, CD1-CE2, CD2-CE1). AmberParams returns false, so
+        // the same input under AMBER must yield 0 such pairs —
+        // mirrors BALL: charmm zeroes them, amber doesn't.
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read("../test-pdbs/1crn.pdb")
+            .expect("read crambin");
+
+        let charmm = params::charmm19_eef1();
+        let topo_charmm = build_topology(&pdb, &charmm);
+        assert_eq!(
+            topo_charmm.lj_excluded_pairs.len(),
+            9,
+            "crambin under CHARMM should have 9 PHE/TYR para-diagonal LJ exclusions \
+             (1 PHE + 2 TYR × 3 diagonals)"
+        );
+        // Each excluded pair must also be in pairs_14 (it IS a real
+        // 1-4 topological pair) and must NOT be in excluded_pairs
+        // (we want Coulomb to keep firing).
+        for &pair in &topo_charmm.lj_excluded_pairs {
+            assert!(
+                topo_charmm.pairs_14.contains(&pair),
+                "lj_excluded pair {:?} should be in pairs_14",
+                pair
+            );
+            assert!(
+                !topo_charmm.excluded_pairs.contains(&pair),
+                "lj_excluded pair {:?} must NOT be in excluded_pairs (Coulomb stays on)",
+                pair
+            );
+            // Names must be one of the documented diagonals.
+            let n_a = &topo_charmm.atoms[pair.0].atom_name;
+            let n_b = &topo_charmm.atoms[pair.1].atom_name;
+            let mut names = [n_a.as_str(), n_b.as_str()];
+            names.sort();
+            assert!(
+                matches!(
+                    (names[0], names[1]),
+                    ("CD1", "CE2") | ("CD2", "CE1") | ("CG", "CZ")
+                ),
+                "unexpected LJ-excluded atom names: {:?}",
+                names
+            );
+        }
+
+        let amber = params::amber96();
+        let topo_amber = build_topology(&pdb, &amber);
+        assert_eq!(
+            topo_amber.lj_excluded_pairs.len(),
+            0,
+            "AMBER opts out of the carve-out; lj_excluded_pairs must stay empty"
+        );
+    }
 
     #[test]
     fn test_crambin_disulfides() {

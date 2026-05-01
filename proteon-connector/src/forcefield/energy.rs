@@ -258,12 +258,17 @@ fn compute_energy_impl(
                     .zip(params.get_lj(tj))
                     .map(|(a, b)| (a, b, 1.0))
             };
-            if let Some((lj_i, lj_j, scale_vdw)) = lj_pair {
-                let eps = (lj_i.epsilon * lj_j.epsilon).sqrt();
-                let rmin = lj_i.r + lj_j.r;
-                if eps > 1e-10 && rmin > 1e-10 {
-                    let sr6 = (rmin / r).powi(6);
-                    result.vdw += switch_val * scale_vdw * eps * (sr6 * sr6 - 2.0 * sr6);
+            // CHARMM aromatic-ring para-diagonal exclusion: zero LJ
+            // but keep electrostatic. See `Topology::lj_excluded_pairs`.
+            let lj_excluded = topo.lj_excluded_pairs.contains(&pair);
+            if !lj_excluded {
+                if let Some((lj_i, lj_j, scale_vdw)) = lj_pair {
+                    let eps = (lj_i.epsilon * lj_j.epsilon).sqrt();
+                    let rmin = lj_i.r + lj_j.r;
+                    if eps > 1e-10 && rmin > 1e-10 {
+                        let sr6 = (rmin / r).powi(6);
+                        result.vdw += switch_val * scale_vdw * eps * (sr6 * sr6 - 2.0 * sr6);
+                    }
                 }
             }
 
@@ -539,30 +544,35 @@ fn compute_energy_and_forces_impl(
                     .zip(params.get_lj(tj))
                     .map(|(a, b)| (a, b, 1.0))
             };
-            if let Some((lj_i, lj_j, scale_vdw)) = lj_pair {
-                let eps = (lj_i.epsilon * lj_j.epsilon).sqrt();
-                let rmin = lj_i.r + lj_j.r;
-                if eps > 1e-10 && rmin > 1e-10 {
-                    let sr = rmin * inv_r;
-                    let sr6 = sr.powi(6);
-                    let sr12 = sr6 * sr6;
-                    let e_lj = scale_vdw * eps * (sr12 - 2.0 * sr6);
-                    result.vdw += switch_val * e_lj;
+            // CHARMM aromatic-ring para-diagonal exclusion: zero LJ
+            // (energy + force) but keep electrostatic.
+            let lj_excluded = topo.lj_excluded_pairs.contains(&pair);
+            if !lj_excluded {
+                if let Some((lj_i, lj_j, scale_vdw)) = lj_pair {
+                    let eps = (lj_i.epsilon * lj_j.epsilon).sqrt();
+                    let rmin = lj_i.r + lj_j.r;
+                    if eps > 1e-10 && rmin > 1e-10 {
+                        let sr = rmin * inv_r;
+                        let sr6 = sr.powi(6);
+                        let sr12 = sr6 * sr6;
+                        let e_lj = scale_vdw * eps * (sr12 - 2.0 * sr6);
+                        result.vdw += switch_val * e_lj;
 
-                    // d(sw*E)/dr = sw * dE/dr + E * dsw/dr
-                    // dsw/dr = dsw/d(r²) * d(r²)/dr = dsw_dr2 * 2r
-                    let de_dr = scale_vdw * eps * (-12.0 * sr12 + 12.0 * sr6) * inv_r;
-                    let total_de_dr = switch_val * de_dr + e_lj * dsw_dr2 * 2.0 * r;
-                    let fx = total_de_dr * dx * inv_r;
-                    let fy = total_de_dr * dy * inv_r;
-                    let fz = total_de_dr * dz * inv_r;
+                        // d(sw*E)/dr = sw * dE/dr + E * dsw/dr
+                        // dsw/dr = dsw/d(r²) * d(r²)/dr = dsw_dr2 * 2r
+                        let de_dr = scale_vdw * eps * (-12.0 * sr12 + 12.0 * sr6) * inv_r;
+                        let total_de_dr = switch_val * de_dr + e_lj * dsw_dr2 * 2.0 * r;
+                        let fx = total_de_dr * dx * inv_r;
+                        let fy = total_de_dr * dy * inv_r;
+                        let fz = total_de_dr * dz * inv_r;
 
-                    forces[i][0] -= fx;
-                    forces[i][1] -= fy;
-                    forces[i][2] -= fz;
-                    forces[j][0] += fx;
-                    forces[j][1] += fy;
-                    forces[j][2] += fz;
+                        forces[i][0] -= fx;
+                        forces[i][1] -= fy;
+                        forces[i][2] -= fz;
+                        forces[j][0] += fx;
+                        forces[j][1] += fy;
+                        forces[j][2] += fz;
+                    }
                 }
             }
 
@@ -723,28 +733,33 @@ pub fn compute_energy_and_forces_nbl(
                 .zip(params.get_lj(tj))
                 .map(|(a, b)| (a, b, 1.0))
         };
-        if let Some((lj_i, lj_j, scale_vdw)) = lj_pair {
-            let eps = (lj_i.epsilon * lj_j.epsilon).sqrt();
-            let rmin = lj_i.r + lj_j.r;
-            if eps > 1e-10 && rmin > 1e-10 {
-                let sr = rmin * inv_r;
-                let sr6 = sr.powi(6);
-                let sr12 = sr6 * sr6;
-                let e_lj = scale_vdw * eps * (sr12 - 2.0 * sr6);
-                result.vdw += switch_val * e_lj;
+        // CHARMM aromatic-ring para-diagonal exclusion: zero LJ but
+        // keep electrostatic. See `Topology::lj_excluded_pairs`.
+        let lj_excluded = topo.lj_excluded_pairs.contains(&(i.min(j), i.max(j)));
+        if !lj_excluded {
+            if let Some((lj_i, lj_j, scale_vdw)) = lj_pair {
+                let eps = (lj_i.epsilon * lj_j.epsilon).sqrt();
+                let rmin = lj_i.r + lj_j.r;
+                if eps > 1e-10 && rmin > 1e-10 {
+                    let sr = rmin * inv_r;
+                    let sr6 = sr.powi(6);
+                    let sr12 = sr6 * sr6;
+                    let e_lj = scale_vdw * eps * (sr12 - 2.0 * sr6);
+                    result.vdw += switch_val * e_lj;
 
-                let de_dr = scale_vdw * eps * (-12.0 * sr12 + 12.0 * sr6) * inv_r;
-                let total_de_dr = switch_val * de_dr + e_lj * dsw_dr2 * 2.0 * r;
-                let fx = total_de_dr * dx * inv_r;
-                let fy = total_de_dr * dy * inv_r;
-                let fz = total_de_dr * dz * inv_r;
+                    let de_dr = scale_vdw * eps * (-12.0 * sr12 + 12.0 * sr6) * inv_r;
+                    let total_de_dr = switch_val * de_dr + e_lj * dsw_dr2 * 2.0 * r;
+                    let fx = total_de_dr * dx * inv_r;
+                    let fy = total_de_dr * dy * inv_r;
+                    let fz = total_de_dr * dz * inv_r;
 
-                forces[i][0] -= fx;
-                forces[i][1] -= fy;
-                forces[i][2] -= fz;
-                forces[j][0] += fx;
-                forces[j][1] += fy;
-                forces[j][2] += fz;
+                    forces[i][0] -= fx;
+                    forces[i][1] -= fy;
+                    forces[i][2] -= fz;
+                    forces[j][0] += fx;
+                    forces[j][1] += fy;
+                    forces[j][2] += fz;
+                }
             }
         }
 

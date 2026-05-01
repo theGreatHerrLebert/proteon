@@ -644,6 +644,7 @@ mod tests {
             improper_torsions: vec![],
             excluded_pairs: HashSet::new(),
             pairs_14: HashSet::new(),
+            lj_excluded_pairs: HashSet::new(),
             unassigned_atoms: vec![],
         }
     }

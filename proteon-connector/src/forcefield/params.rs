@@ -118,6 +118,21 @@ pub trait ForceField: Send + Sync {
         false
     }
 
+    /// Whether to zero the LJ interaction (but keep electrostatics) for
+    /// the para-diagonal 1-4 pairs in PHE/TYR aromatic rings —
+    /// CG↔CZ, CD1↔CE2, CD2↔CE1.
+    ///
+    /// CHARMM's nonbonded list explicitly handles this case at
+    /// `charmmNonBonded.C:547-565` ("Nasty: check for diagonal 1-4
+    /// interactions in six-membered rings (PHE/TYR) - those interactions
+    /// are omitted"). Without it, proteon over-counts ~110 kJ/mol of LJ
+    /// repulsion on crambin (3 PHE/TYR rings × 3 diagonals × ~12 kJ/mol).
+    /// AMBER's nonbonded list has no equivalent carve-out, so the
+    /// default is `false`.
+    fn excludes_aromatic_ring_diagonals(&self) -> bool {
+        false
+    }
+
     /// Nonbonded interaction cutoff (Å). Pairs beyond this distance are
     /// ignored in the LJ + Coulomb loops and the NBL builder.
     ///
@@ -1159,6 +1174,11 @@ impl ForceField for CharmmParams {
     }
     fn has_eef1(&self) -> bool {
         !self.eef1.is_empty()
+    }
+    /// CHARMM applies the PHE/TYR para-diagonal LJ exclusion. See trait
+    /// doc + `charmmNonBonded.C:547-565` for the convention.
+    fn excludes_aromatic_ring_diagonals(&self) -> bool {
+        true
     }
     /// CHARMM19+EEF1 canonical cutoff from BALL's param19_eef1.ini:
     /// `@CTOFNB=9.0`. EEF1 solvation makes the energy less sensitive
