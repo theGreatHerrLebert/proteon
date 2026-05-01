@@ -684,7 +684,29 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
         excluded_pairs.insert((angle.i.min(angle.k), angle.i.max(angle.k)));
     }
 
-    // Build torsions: for each bond j-k, find i bonded to j and l bonded to k
+    // Build torsions: for each bond j-k, find i bonded to j and l bonded to k.
+    //
+    // CHARMM filter: AmberParams's `is_canonical_torsion` default returns
+    // `true`, preserving AMBER's "every bonded 4-atom path is a torsion"
+    // semantics. CharmmParams overrides to consult `[ResidueTorsions]` —
+    // the 4-tuple is matched against the per-residue template, with
+    // cross-residue atom names prefixed `-`/`+` based on the offset from
+    // the anchor (= residue containing atom J, BALL's atom2 convention,
+    // see charmmTorsion.C:188). 1-4 pair list inclusion is gated by the
+    // same canonical check, so non-canonical paths (which proteon
+    // previously over-counted on CHARMM, contributing the observed 2.66×
+    // factor on crambin) also stop adding LJ/Coulomb 1-4 contributions.
+    let residue_prefix = |atom_res_idx: usize, anchor_res_idx: usize| -> Option<&'static str> {
+        if atom_res_idx == anchor_res_idx {
+            Some("")
+        } else if atom_res_idx + 1 == anchor_res_idx {
+            Some("-")
+        } else if atom_res_idx == anchor_res_idx + 1 {
+            Some("+")
+        } else {
+            None
+        }
+    };
     for bond in &bonds {
         let j = bond.i;
         let k = bond.j;
@@ -696,11 +718,53 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                 if l == j || l == i {
                     continue;
                 }
-                torsions.push(Torsion { i, j, k, l });
+                // 1-4 pair list is a TOPOLOGICAL fact (atoms separated
+                // by exactly 3 bonds), independent of whether this
+                // particular 4-atom path is a canonical FF torsion.
+                // Insert unconditionally so vdw / electrostatic 1-4
+                // scaling applies regardless of whether the torsion
+                // contributes to the proper-torsion energy.
                 let pair = (i.min(l), i.max(l));
                 if !excluded_pairs.contains(&pair) {
                     pairs_14.insert(pair);
                 }
+                // Torsion enumeration is filtered by the FF's
+                // canonical-torsion predicate. AMBER's default returns
+                // true (every 4-atom path is a torsion). CHARMM's
+                // override consults [ResidueTorsions] with anchor =
+                // residue containing atom J and `-`/`+` prefixes for
+                // cross-residue atoms.
+                let anchor_res_idx = atoms[j].residue_idx;
+                let anchor_res_name = &atoms[j].residue_name;
+                // Compute cross-residue prefixes when possible. For
+                // 4-atom paths whose residue spread is greater than
+                // ±1 (e.g. disulfide-bridge torsions on crambin's
+                // CYS pairs), the prefix is undefined — pass the
+                // raw atom names through. AMBER's default
+                // `is_canonical_torsion` returns true regardless, so
+                // those torsions are kept (correct). CHARMM's
+                // override won't match the unprefixed names against
+                // its `[ResidueTorsions]` template and will return
+                // false (acceptable for v0 — disulfide-bridge
+                // torsions in CHARMM use `=` prefixes which proteon
+                // does not yet emit).
+                let pi = residue_prefix(atoms[i].residue_idx, anchor_res_idx).unwrap_or("");
+                let pk = residue_prefix(atoms[k].residue_idx, anchor_res_idx).unwrap_or("");
+                let pl = residue_prefix(atoms[l].residue_idx, anchor_res_idx).unwrap_or("");
+                let name_a = format!("{}{}", pi, atoms[i].atom_name);
+                let name_c = format!("{}{}", pk, atoms[k].atom_name);
+                let name_d = format!("{}{}", pl, atoms[l].atom_name);
+                let canonical = params.is_canonical_torsion(
+                    anchor_res_name,
+                    &name_a,
+                    &atoms[j].atom_name,
+                    &name_c,
+                    &name_d,
+                );
+                if !canonical {
+                    continue;
+                }
+                torsions.push(Torsion { i, j, k, l });
             }
         }
     }

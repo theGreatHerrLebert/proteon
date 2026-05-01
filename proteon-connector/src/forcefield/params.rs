@@ -58,6 +58,27 @@ pub trait ForceField: Send + Sync {
     fn get_lj_14(&self, _atype: &str) -> Option<&LJParam> {
         None
     }
+    /// CHARMM-style filter: is this 4-atom path listed as a real
+    /// torsion in the residue's `[ResidueTorsions]` template?
+    ///
+    /// `anchor_residue` is the residue containing atom B (= the second
+    /// atom of the 4-tuple, by BALL's convention at
+    /// `charmmTorsion.C:188`). Names carry cross-residue prefixes:
+    /// `-X` for previous-residue atom, `+X` for next-residue, no
+    /// prefix for same residue.
+    ///
+    /// Default returns `true` (count all torsions, AMBER behavior).
+    /// `CharmmParams` overrides to consult `residue_torsions`.
+    fn is_canonical_torsion(
+        &self,
+        _anchor_residue: &str,
+        _name_a: &str,
+        _name_b: &str,
+        _name_c: &str,
+        _name_d: &str,
+    ) -> bool {
+        true
+    }
     fn scee(&self) -> f64;
     fn scnb(&self) -> f64;
     /// EEF1 solvation parameters (None for force fields without implicit solvent).
@@ -675,6 +696,30 @@ pub struct CharmmParams {
     /// for 1-4 pairs instead of `lj` scaled by `1/scnb`. Empty for
     /// AMBER-style parameter files. Loaded only by CharmmParams::from_ini.
     pub lj_14: HashMap<String, LJParam>,
+    /// Per-residue list of "canonical" 4-atom torsion paths from the
+    /// CHARMM `[ResidueTorsions]` parameter section.
+    ///
+    /// Outer key: residue name (e.g. `"ALA"`, `"ALA-N"`, `"ALA-C"`).
+    /// Inner: set of `(name_a, name_b, name_c, name_d)` tuples where
+    /// each name is the atom name with optional cross-residue prefix:
+    /// `-X` = previous residue's `X`, `+X` = next residue's `X`,
+    /// `=X` = disulfide partner's `X`. No prefix = same residue as the
+    /// anchor (= residue containing atom B).
+    ///
+    /// Why this matters: BALL CHARMM filters its torsion list against
+    /// this table — only 4-atom bonded paths listed here count toward
+    /// the proper-torsion energy. proteon previously enumerated every
+    /// 4-atom bonded path in the topology and applied torsion energy
+    /// to all of them, over-counting by ~2.66× on crambin (610.84 vs
+    /// BALL's 230.0 kJ/mol). With this filter the count drops to the
+    /// CHARMM-canonical subset.
+    ///
+    /// AMBER does NOT use this convention: every bonded 4-atom path is
+    /// a torsion in AMBER. AmberParams leaves this empty; the
+    /// `is_canonical_torsion` trait default returns `true` so AMBER's
+    /// behavior is unchanged.
+    pub residue_torsions:
+        HashMap<String, std::collections::HashSet<(String, String, String, String)>>,
     /// Optional runtime override for the nonbonded cutoff (Å). When
     /// `None`, the canonical CHARMM19+EEF1 cutoff (9 Å, from BALL's
     /// `param19_eef1.ini` `@CTOFNB=9.0`) is used. Override is intended
@@ -704,10 +749,16 @@ impl CharmmParams {
         // again to pick it up. Same row format as [LennardJones]:
         //   ver type R epsilon comment
         let mut lj_14: HashMap<String, LJParam> = HashMap::new();
+        // Per-residue list of canonical torsion 4-tuples. See the
+        // `residue_torsions` field doc for the table semantics.
+        let mut residue_torsions: HashMap<
+            String,
+            std::collections::HashSet<(String, String, String, String)>,
+        > = HashMap::new();
 
-        // Parse EEF1 solvation + LennardJones14 + CHARMM-specific
-        // @-directives (notably @E14FAC, the 1-4 electrostatic scaling)
-        // in one pass.
+        // Parse EEF1 solvation + LennardJones14 + ResidueTorsions
+        // sections plus CHARMM-specific @-directives (notably @E14FAC,
+        // the 1-4 electrostatic scaling) in one pass.
         let mut section = String::new();
         for line in content.lines() {
             let line = line.trim();
@@ -780,6 +831,24 @@ impl CharmmParams {
                         lj_14.insert(fields[1].to_string(), LJParam { r, epsilon: eps });
                     }
                 }
+            } else if section == "ResidueTorsions" {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                // format: ver name A B C D
+                // where A/B/C/D are atom names with optional `-`/`+`/`=`
+                // cross-residue prefixes. The residue name is the
+                // residue containing atom B (anchor).
+                if fields.len() >= 6 {
+                    let entry = (
+                        fields[2].to_string(),
+                        fields[3].to_string(),
+                        fields[4].to_string(),
+                        fields[5].to_string(),
+                    );
+                    residue_torsions
+                        .entry(fields[1].to_string())
+                        .or_default()
+                        .insert(entry);
+                }
             }
         }
 
@@ -796,6 +865,7 @@ impl CharmmParams {
             scnb: amber.scnb,
             eef1,
             lj_14,
+            residue_torsions,
             cutoff_override: None,
             switching_on_override: None,
         }
@@ -900,6 +970,31 @@ impl ForceField for CharmmParams {
     }
     fn get_lj_14(&self, atype: &str) -> Option<&LJParam> {
         self.lj_14.get(atype)
+    }
+    fn is_canonical_torsion(
+        &self,
+        anchor_residue: &str,
+        name_a: &str,
+        name_b: &str,
+        name_c: &str,
+        name_d: &str,
+    ) -> bool {
+        // CHARMM filter: only count this 4-atom path as a torsion if
+        // it is listed in `[ResidueTorsions]` for the anchor residue.
+        // The empty fallback (residue name not in the table) returns
+        // false — i.e. residues without a per-residue torsion template
+        // contribute zero torsion energy (mirrors BALL's behavior on
+        // non-templated residues; see charmmTorsion.C:261).
+        let Some(set) = self.residue_torsions.get(anchor_residue) else {
+            return false;
+        };
+        let key = (
+            name_a.to_string(),
+            name_b.to_string(),
+            name_c.to_string(),
+            name_d.to_string(),
+        );
+        set.contains(&key)
     }
     fn scee(&self) -> f64 {
         self.scee

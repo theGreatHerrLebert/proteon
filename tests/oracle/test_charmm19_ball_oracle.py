@@ -128,7 +128,7 @@ class TestCharmm19BallOracle:
     # xfail to xpass and surfaces immediately rather than masking.
 
     @pytest.mark.xfail(
-        reason="proteon CHARMM proper_torsion ~2.66× BALL on crambin (610.8 vs 230.0); see geometry_charmm19_ball.yaml failure_modes",
+        reason="proteon CHARMM proper_torsion 218.2 vs BALL 230.0 on crambin (~5.1% rel diff) after the [ResidueTorsions] filter landed; was 610.8 (165% off) before. Sign and magnitude are now in agreement; residual is just outside the 2.5% band, plausibly N-terminus-template differences (proteon uses 'THR' for residue 0 but BALL would use 'THR-N') or residual wildcard-fallback differences; see geometry_charmm19_ball.yaml failure_modes",
         strict=False,
     )
     def test_proper_torsion(self, reference_energies):

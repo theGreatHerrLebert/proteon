@@ -160,9 +160,15 @@ claims:
         components diverge well past their bands and are xfail-marked
         in tests/oracle/test_charmm19_ball_oracle.py with strict=False
         so a future fix surfaces as xpass:
-          - proper_torsion: 610.84 vs 230.0 kJ/mol (proteon ~2.66x
-            BALL); likely parameter-file vintage or summation includes
-            a term BALL splits separately
+          - proper_torsion: 218.2 vs 230.0 kJ/mol (~5.1% rel diff;
+            was 610.84 i.e. 2.66x off before the [ResidueTorsions]
+            filter landed). proteon previously enumerated every
+            4-atom bonded path as a torsion; BALL filters against the
+            per-residue [ResidueTorsions] template — proteon now
+            mirrors that. Residual 5.1% is plausibly N-terminus
+            template differences (proteon uses 'THR' for residue 0
+            but BALL would use 'THR-N') or residual wildcard-fallback
+            divergences; just outside the 2.5% band.
           - improper_torsion: 0.0 vs 39.7 kJ/mol (proteon does not
             compute CHARMM impropers; missing pass)
           - vdw: -834.3 vs -942.7 kJ/mol (11.5% rel diff; sign is now
