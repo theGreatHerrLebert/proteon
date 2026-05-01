@@ -245,26 +245,33 @@ def minimize_structure(
     gradient_tolerance: float = 0.1,
     method: str = "sd",
     units: str = "kJ/mol",
+    ff: str = "amber96",
 ) -> dict:
-    """Full energy minimization using AMBER96 force field.
+    """Full energy minimization.
 
     All atoms are free to move.
 
     Note:
-        Uses proteon's AMBER96 machinery. The single-point AMBER96 energy
-        components are oracle-validated against OpenMM at NoCutoff; this
-        helper runs under proteon's default production cutoff policy, so it
-        is not the canonical cross-tool oracle path. See ``compute_energy``
-        for the exact cutoff-policy caveat. For validated production use,
-        prepare structures with ``batch_prepare(ff="charmm19_eef1")`` (the
-        default).
+        AMBER96 single-point energies are oracle-validated against OpenMM
+        at NoCutoff. CHARMM19+EEF1 single-point energies are oracle-
+        validated against BALL on bond_stretch / angle_bend / EEF1
+        solvation; the proper/improper torsion and vdw/electrostatic
+        components have documented gaps tracked in
+        ``evident/claims/forcefield_charmm19_ball.yaml``. Both paths run
+        under proteon's default production cutoff policy here, so this
+        helper is not the canonical cross-tool oracle path — see
+        ``compute_energy`` for the exact cutoff-policy caveat.
 
     Args:
-        structure: A proteon Structure.
+        structure: A proteon Structure. For ``ff="charmm19_eef1"`` prepare
+            with ``place_peptide_hydrogens`` (polar-H only); for AMBER96
+            use ``add_hydrogens`` (all-atom).
         max_steps: Maximum optimization steps (default 1000).
         gradient_tolerance: Convergence criterion (default 0.1).
         method: "sd", "cg", or "lbfgs".
         units: Energy units — "kJ/mol" (default) or "kcal/mol".
+        ff: Force field — "amber96" (default), "amber96_obc", or
+            "charmm19_eef1".
 
     Returns:
         dict with: coords (Nx3), initial_energy, final_energy,
@@ -272,8 +279,10 @@ def minimize_structure(
     """
     u = _validate_units(units)
     _validate_method(method)
-    _maybe_warn_ff("amber96")
-    result = _ff.minimize_structure(_get_ptr(structure), max_steps, gradient_tolerance, method)
+    _maybe_warn_ff(ff)
+    result = _ff.minimize_structure(
+        _get_ptr(structure), max_steps, gradient_tolerance, method, ff
+    )
     return _convert_energy_dict(result, u)
 
 
