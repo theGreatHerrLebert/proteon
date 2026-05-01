@@ -44,6 +44,24 @@ pub trait ForceField: Send + Sync {
     fn get_torsion(&self, a: &str, b: &str, c: &str, d: &str) -> Option<&Vec<TorsionTerm>>;
     fn get_improper_torsion(&self, a: &str, b: &str, c: &str, d: &str)
         -> Option<&Vec<TorsionTerm>>;
+    /// CHARMM-style harmonic improper params: `E = k * (phi - phi0)²`.
+    /// Default returns `None` (AMBER uses cosine impropers via the
+    /// regular `get_improper_torsion`). The CHARMM INI format ships
+    /// these in `[ImproperTorsions]` with 7 columns
+    /// (`ver I J K L k phase`) — distinct from AMBER's 10-column
+    /// cosine entries (`ver I J K L n div V phi0 f`). proteon's AMBER
+    /// parser silently skipped CHARMM impropers because of the field-
+    /// count mismatch; this trait method routes the harmonic ones to
+    /// a separate energy-compute path.
+    fn get_harmonic_improper(
+        &self,
+        _a: &str,
+        _b: &str,
+        _c: &str,
+        _d: &str,
+    ) -> Option<&Vec<HarmonicImproperParam>> {
+        None
+    }
     fn is_improper_center(&self, residue: &str, atom: &str) -> bool;
     fn get_lj(&self, atype: &str) -> Option<&LJParam>;
     /// Special 1-4 LJ parameters, when the force field ships them as a
@@ -152,6 +170,16 @@ pub struct TorsionTerm {
 pub struct LJParam {
     pub r: f64,       // van der Waals radius (Å)
     pub epsilon: f64, // well depth (kcal/mol)
+}
+
+/// CHARMM-style harmonic improper torsion: `E = k * (phi - phi0)²`.
+/// AMBER impropers are cosine-series and use `TorsionTerm` instead.
+#[derive(Clone, Debug)]
+pub struct HarmonicImproperParam {
+    /// Force constant (kcal/mol/rad²)
+    pub k: f64,
+    /// Equilibrium phase (radians)
+    pub phi0: f64,
 }
 
 /// Complete AMBER force field parameter set.
@@ -720,6 +748,18 @@ pub struct CharmmParams {
     /// behavior is unchanged.
     pub residue_torsions:
         HashMap<String, std::collections::HashSet<(String, String, String, String)>>,
+    /// CHARMM-style harmonic improper torsion table.
+    ///
+    /// Keyed by `(I, J, K, L)` atom types. CHARMM's `[ImproperTorsions]`
+    /// section ships entries in the format `ver I J K L k phase` (7
+    /// fields) — distinct from AMBER's cosine-series impropers
+    /// (10 fields). proteon's shared AMBER INI parser previously
+    /// rejected CHARMM impropers entirely because the field count
+    /// didn't match; the energy contribution came out as `0` on every
+    /// CHARMM run. This separate table fixes that.
+    ///
+    /// Empty for AMBER (which has no harmonic impropers).
+    pub harmonic_impropers: HashMap<(String, String, String, String), Vec<HarmonicImproperParam>>,
     /// Optional runtime override for the nonbonded cutoff (Å). When
     /// `None`, the canonical CHARMM19+EEF1 cutoff (9 Å, from BALL's
     /// `param19_eef1.ini` `@CTOFNB=9.0`) is used. Override is intended
@@ -755,10 +795,22 @@ impl CharmmParams {
             String,
             std::collections::HashSet<(String, String, String, String)>,
         > = HashMap::new();
+        // CHARMM ships harmonic impropers (E = k*(phi-phi0)^2) under
+        // [ImproperTorsions] in the 7-column format `ver I J K L k phase`.
+        // The shared AMBER INI parser requires 10 columns (cosine-series),
+        // so it skipped every CHARMM improper row, producing
+        // improper_torsion_energy = 0 on every CHARMM run. Parse the
+        // 7-column format here into a separate harmonic table that the
+        // energy compute path consults via `get_harmonic_improper`.
+        let mut harmonic_impropers: HashMap<
+            (String, String, String, String),
+            Vec<HarmonicImproperParam>,
+        > = HashMap::new();
 
-        // Parse EEF1 solvation + LennardJones14 + ResidueTorsions
-        // sections plus CHARMM-specific @-directives (notably @E14FAC,
-        // the 1-4 electrostatic scaling) in one pass.
+        // Parse EEF1 solvation + LennardJones14 + ResidueTorsions +
+        // harmonic ImproperTorsions + ResidueImproperTorsions sections
+        // plus CHARMM-specific @-directives (notably @E14FAC, the 1-4
+        // electrostatic scaling) in one pass.
         let mut section = String::new();
         for line in content.lines() {
             let line = line.trim();
@@ -849,6 +901,49 @@ impl CharmmParams {
                         .or_default()
                         .insert(entry);
                 }
+            } else if section == "ImproperTorsions" {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                // CHARMM 7-column: ver I J K L k phase  (k in kcal/mol/rad²,
+                // phase in degrees). Comment column may follow.
+                // AMBER 10-column rows are NOT in CHARMM files; if they
+                // appear (a hybrid file in the future), the AmberParams
+                // parser stores them as cosine-series and this branch
+                // simply doesn't match the column count.
+                if fields.len() >= 7 {
+                    if let (Ok(k), Ok(phase_deg)) =
+                        (fields[5].parse::<f64>(), fields[6].parse::<f64>())
+                    {
+                        let key = (
+                            fields[1].to_string(),
+                            fields[2].to_string(),
+                            fields[3].to_string(),
+                            fields[4].to_string(),
+                        );
+                        harmonic_impropers
+                            .entry(key)
+                            .or_default()
+                            .push(HarmonicImproperParam {
+                                k,
+                                phi0: phase_deg.to_radians(),
+                            });
+                    }
+                }
+            } else if section == "ResidueImproperTorsions" {
+                // CHARMM 5-column: name central A B C  — names list the
+                // residue + the central atom + three bonded substituents.
+                // The shared AMBER parser keyed this section by
+                // `name.contains(':')` and so produced an empty
+                // residue_impropers set for CHARMM (whose format has no
+                // colon). Without that set populated, the topology
+                // builder skips every CHARMM improper at the
+                // `is_improper_center` gate and improper_torsion_energy
+                // comes out as 0 — even after we ship a parameter table
+                // for the impropers themselves.
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                if fields.len() >= 5 {
+                    let key = format!("{}:{}", fields[0], fields[1]);
+                    amber.residue_impropers.insert(key);
+                }
             }
         }
 
@@ -866,6 +961,7 @@ impl CharmmParams {
             eef1,
             lj_14,
             residue_torsions,
+            harmonic_impropers,
             cutoff_override: None,
             switching_on_override: None,
         }
@@ -960,6 +1056,62 @@ impl ForceField for CharmmParams {
                 self.improper_torsions
                     .get(&(a.clone(), b.clone(), c.clone(), w.clone()))
             })
+    }
+    fn get_harmonic_improper(
+        &self,
+        type_a: &str,
+        type_b: &str,
+        type_c: &str,
+        type_d: &str,
+    ) -> Option<&Vec<HarmonicImproperParam>> {
+        // CHARMM convention: A is the **central** atom; B, C, D are
+        // the 3 atoms bonded to it. Topology callers must pass the
+        // central atom as `type_a`. The data ships specific tuples
+        // like `C C CR1E CH2E` (sometimes with reversed neighbor
+        // orders), plus heavy use of double-wildcard entries like
+        // `C * * H` matching "central=C, one neighbor=H, the other
+        // two anything." The fallback cascade tries:
+        //   1. exact (a,b,c,d)
+        //   2. neighbor reorderings of the same triple
+        //   3. (a, *, *, d) double-wildcard (3 rotations of which
+        //      neighbor is specific; the other two are *).
+        let (a, w) = (type_a.to_string(), "*".to_string());
+        let neighbors = [type_b.to_string(), type_c.to_string(), type_d.to_string()];
+        // 6 neighbor permutations (each placed at slots B, C, D).
+        let perms: [(usize, usize, usize); 6] = [
+            (0, 1, 2),
+            (0, 2, 1),
+            (1, 0, 2),
+            (1, 2, 0),
+            (2, 0, 1),
+            (2, 1, 0),
+        ];
+        for (b_i, c_i, d_i) in perms {
+            let key = (
+                a.clone(),
+                neighbors[b_i].clone(),
+                neighbors[c_i].clone(),
+                neighbors[d_i].clone(),
+            );
+            if let Some(v) = self.harmonic_impropers.get(&key) {
+                return Some(v);
+            }
+        }
+        // Double-wildcard fallback: pick each neighbor in turn as the
+        // "specific" one; the other two slots are `*`. CHARMM's
+        // `C * * H` entry matches all three rotations.
+        for n in &neighbors {
+            for key in [
+                (a.clone(), w.clone(), w.clone(), n.clone()),
+                (a.clone(), n.clone(), w.clone(), w.clone()),
+                (a.clone(), w.clone(), n.clone(), w.clone()),
+            ] {
+                if let Some(v) = self.harmonic_impropers.get(&key) {
+                    return Some(v);
+                }
+            }
+        }
+        None
     }
     fn is_improper_center(&self, residue: &str, atom: &str) -> bool {
         let key = format!("{residue}:{atom}");

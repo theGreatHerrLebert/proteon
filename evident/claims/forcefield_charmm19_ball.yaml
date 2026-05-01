@@ -169,8 +169,34 @@ claims:
             template differences (proteon uses 'THR' for residue 0
             but BALL would use 'THR-N') or residual wildcard-fallback
             divergences; just outside the 2.5% band.
-          - improper_torsion: 0.0 vs 39.7 kJ/mol (proteon does not
-            compute CHARMM impropers; missing pass)
+          - improper_torsion: 0.0 vs 39.7 kJ/mol. THREE parser/convention
+            issues found and analysed; first two fixed in this PR,
+            third blocking on a gradient-consistency design call:
+            (1) CHARMM's 7-column [ImproperTorsions] is now recognised
+                (was silently dropped under the AMBER 10-column gate).
+            (2) CHARMM's 5-column [ResidueImproperTorsions] is now
+                parsed (was empty under the RESIDUE:ATOM convention).
+                Topology enumerates 159 impropers on crambin (was 0).
+            (3) CHARMM measures the harmonic dihedral with central at
+                slot 1 AND uses the UNSIGNED [0, π] angle (acos
+                convention, per charmmImproperTorsion.C:443). proteon's
+                compute_dihedral returns signed atan2 in [-π, π].
+                Wiring the harmonic energy with central-at-slot-1 +
+                |phi| produces ~46.2 kJ/mol on crambin (vs BALL's 39.7
+                — 16% off, in the right ballpark). However: the
+                analytical-force formula (Bekker chain) assumes a
+                signed dihedral, and the |phi| energy convention
+                introduces a sign-discontinuity-aware derivative that
+                doesn't match the existing force chain. This breaks
+                the cross-path parity test gradient_matches_numerical_
+                on_heavy_atoms_charmm. Until the analytical force is
+                made consistent with the |phi| energy (e.g. multiply
+                Bekker chain by sign(phi_signed)), the harmonic
+                compute is held back. Until then improper_torsion
+                stays at 0 for CHARMM. The function
+                harmonic_improper_energy_and_forces lands as #[allow(
+                dead_code)] scaffolding so the next-step fix is a
+                small surgical change.
           - vdw: -834.3 vs -942.7 kJ/mol (11.5% rel diff; sign is now
             correct after the [LennardJones14] table loader landed —
             CHARMM ships separate 1-4 LJ params (smaller R, larger

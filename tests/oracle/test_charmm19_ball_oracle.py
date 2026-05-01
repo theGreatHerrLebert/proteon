@@ -137,7 +137,7 @@ class TestCharmm19BallOracle:
         assert rel < 0.025, f"proper torsion relative diff {rel:.3%} exceeds 2.5%"
 
     @pytest.mark.xfail(
-        reason="proteon CHARMM improper_torsion = 0 (impropers not computed) vs BALL 39.7 on crambin; see geometry_charmm19_ball.yaml failure_modes",
+        reason="proteon CHARMM improper_torsion = 0 vs BALL 39.7 on crambin. Three issues found this PR (first two fixed): (1) parser now reads CHARMM's 7-column [ImproperTorsions]; (2) 5-column [ResidueImproperTorsions] is parsed correctly. Topology populates 159 impropers (was 0). (3) CHARMM measures the harmonic dihedral with central at slot 1 AND uses unsigned |phi| (acos), proteon's compute_dihedral returns signed atan2. Wiring with both fixes gives 46.2 kJ/mol on crambin (16% off BALL's 39.7), but breaks the cross-path gradient test because the |phi| energy's derivative isn't consistent with the existing Bekker analytical-force chain. Held back until a small surgical fix to the force chain (multiply by sign(phi_signed)) lands in the next PR. See geometry_charmm19_ball.yaml failure_modes",
         strict=False,
     )
     def test_improper_torsion(self, reference_energies):

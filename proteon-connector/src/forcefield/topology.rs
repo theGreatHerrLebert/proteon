@@ -795,7 +795,17 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
             let tk = &atoms[j].amber_type; // central atom
             let tj = &atoms[k].amber_type;
             let tl = &atoms[l].amber_type;
-            if params.get_improper_torsion(ti, tj, tk, tl).is_some() {
+            // Cosine impropers (AMBER) and harmonic impropers (CHARMM)
+            // use DIFFERENT atom-slot conventions in their parameter
+            // tables:
+            //   - AMBER cosine table keys central at slot 3 (matches
+            //     proteon's stored Torsion.k position).
+            //   - CHARMM harmonic table keys central at slot 1 — A is
+            //     central, B/C/D are the 3 neighbors.
+            // Pass each FF the convention it expects.
+            let has_cosine = params.get_improper_torsion(ti, tj, tk, tl).is_some();
+            let has_harmonic = params.get_harmonic_improper(tk, ti, tj, tl).is_some();
+            if has_cosine || has_harmonic {
                 improper_torsions.push(Torsion { i, j: k, k: j, l });
                 break; // only one improper per center atom per neighbor set
             }
