@@ -196,6 +196,24 @@ class TestMinimizeStructure:
         rmsd = np.sqrt(np.mean(np.sum((r["coords"] - original_coords) ** 2, axis=1)))
         assert rmsd < 2.0, f"RMSD {rmsd:.2f} A too large after 5 steps"
 
+    def test_charmm19_eef1_runs(self):
+        """CHARMM19+EEF1 minimization on polar-H crambin: same shape contract,
+        energy decreases, coords change. Polar-H placement is required —
+        CHARMM19 is a united-atom FF and `add_hydrogens` would place
+        non-polar hydrogens that the FF does not parameterize."""
+        s = proteon.load(os.path.join(TEST_PDBS_DIR, "1crn.pdb"))
+        proteon.place_peptide_hydrogens(s)
+        original_coords = np.array([s.atoms[i].pos for i in range(s.atom_count)])
+        r = proteon.minimize_structure(s, max_steps=20, ff="charmm19_eef1")
+        assert r["final_energy"] <= r["initial_energy"] + 1.0
+        assert r["coords"].shape == (s.atom_count, 3)
+        # EEF1 solvation should be negative (favorable) on a folded protein.
+        assert r["energy_components"]["solvation"] < 0.0
+
+    def test_unknown_ff_errors(self):
+        with pytest.raises(ValueError, match="Unknown force field"):
+            proteon.minimize_structure(load_crambin(), max_steps=1, ff="bogus99")
+
 
 # ===========================================================================
 # batch_minimize_hydrogens

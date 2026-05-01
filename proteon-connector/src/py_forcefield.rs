@@ -304,40 +304,89 @@ pub(crate) fn minimize_hydrogens(
     Ok(dict.into_any().unbind())
 }
 
-/// Full structure energy minimization using AMBER force field.
+/// Full structure energy minimization.
 ///
 /// Args:
 ///     pdb: Structure to minimize.
 ///     max_steps: Maximum optimization steps (default 1000).
 ///     gradient_tolerance: Convergence criterion in kcal/mol/A (default 0.1).
+///     method: Optimizer ("sd"/"cg"/"lbfgs", default "sd").
+///     ff: Force field — "amber96", "amber96_obc", or "charmm19_eef1"
+///         (default "amber96"). CHARMM19+EEF1 uses united-atom polar-H
+///         placement; pass a structure prepared with
+///         `place_peptide_hydrogens` rather than `add_hydrogens`.
 ///
 /// Returns dict with same format as minimize_hydrogens.
 #[pyfunction]
-#[pyo3(signature = (pdb, max_steps=1000, gradient_tolerance=0.1, method="sd"))]
+#[pyo3(signature = (pdb, max_steps=1000, gradient_tolerance=0.1, method="sd", ff="amber96"))]
 pub(crate) fn minimize_structure(
     py: Python<'_>,
     pdb: &PyPDB,
     max_steps: usize,
     gradient_tolerance: f64,
     method: &str,
+    ff: &str,
 ) -> PyResult<PyObject> {
-    let amber = params::amber96();
-    let topo = topology::build_topology(&pdb.inner, &amber);
-    let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-    let constrained = vec![false; coords.len()];
     let method = method.to_string();
-
-    let result = py.allow_threads(|| {
-        run_minimize(
-            &coords,
-            &topo,
-            &amber,
-            max_steps,
-            gradient_tolerance,
-            &constrained,
-            &method,
-        )
-    });
+    let result = match ff {
+        "charmm" | "charmm19" | "charmm19_eef1" => {
+            let charmm = params::charmm19_eef1();
+            let topo = topology::build_topology(&pdb.inner, &charmm);
+            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+            let constrained = vec![false; coords.len()];
+            py.allow_threads(|| {
+                run_minimize(
+                    &coords,
+                    &topo,
+                    &charmm,
+                    max_steps,
+                    gradient_tolerance,
+                    &constrained,
+                    &method,
+                )
+            })
+        }
+        "amber96_obc" | "amber96+obc" | "amber96_obc2" => {
+            let amber = params::amber96_obc();
+            let topo = topology::build_topology(&pdb.inner, &amber);
+            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+            let constrained = vec![false; coords.len()];
+            py.allow_threads(|| {
+                run_minimize(
+                    &coords,
+                    &topo,
+                    &amber,
+                    max_steps,
+                    gradient_tolerance,
+                    &constrained,
+                    &method,
+                )
+            })
+        }
+        "amber" | "amber96" => {
+            let amber = params::amber96();
+            let topo = topology::build_topology(&pdb.inner, &amber);
+            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+            let constrained = vec![false; coords.len()];
+            py.allow_threads(|| {
+                run_minimize(
+                    &coords,
+                    &topo,
+                    &amber,
+                    max_steps,
+                    gradient_tolerance,
+                    &constrained,
+                    &method,
+                )
+            })
+        }
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
+                     (aliases: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
+            )));
+        }
+    };
 
     let n = result.coords.len();
     let flat: Vec<f64> = result
