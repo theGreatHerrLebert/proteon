@@ -167,8 +167,12 @@ claims:
             compute CHARMM impropers; missing pass)
           - vdw: +618.8 vs -942.7 kJ/mol (sign-flipped; LJ formula or
             rmin-vs-sigma convention)
-          - electrostatic: +5373 vs -2711 kJ/mol (sign-flipped;
-            partial-charge sign convention)
+          - electrostatic: +195.7 vs -2711 kJ/mol (after the
+            @E14FAC=0.4 1-4 scaling fix landed; was +5373 before so
+            this fix closed ~5177 kJ/mol of the gap. Sign still
+            wrong; residual ~2900 kJ/mol most likely the N-terminus
+            NH3+ uncompensated charge — place_peptide_hydrogens
+            leaves residue 0's N at -1.35e with no balancing 3H+.)
         Each is a separate Rust-side investigation; not blocked by
         BALL availability anymore. The first 3 PASSING assertions
         already gate against bonded/solvation regressions live in CI.

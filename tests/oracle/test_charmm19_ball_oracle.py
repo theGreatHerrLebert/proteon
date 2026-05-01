@@ -155,7 +155,7 @@ class TestCharmm19BallOracle:
         assert rel < 0.025, f"vdW relative diff {rel:.3%} exceeds 2.5%"
 
     @pytest.mark.xfail(
-        reason="proteon CHARMM electrostatic is sign-flipped vs BALL (+5373 vs -2711 on crambin); see geometry_charmm19_ball.yaml failure_modes",
+        reason="proteon CHARMM electrostatic +195.7 vs BALL -2711 on crambin after the @E14FAC=0.4 1-4 scaling fix landed (was +5373 before, so this fix closed ~5177 kJ/mol of the gap). Sign still wrong; residual ~2900 kJ/mol most likely the N-terminus NH3+ uncompensated charge — place_peptide_hydrogens leaves residue 0's N at -1.35e with no balancing 3H+. See geometry_charmm19_ball.yaml failure_modes",
         strict=False,
     )
     def test_electrostatic(self, reference_energies):

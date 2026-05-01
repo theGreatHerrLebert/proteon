@@ -679,20 +679,39 @@ impl CharmmParams {
     /// Parse CHARMM parameters from BALL INI file content.
     pub fn from_ini(content: &str) -> Self {
         // Reuse the AMBER INI parser for bonded/nonbonded terms (same format)
-        let amber = AmberParams::from_ini(content);
+        let mut amber = AmberParams::from_ini(content);
         let mut eef1 = HashMap::new();
 
-        // Parse EEF1 solvation section
+        // Parse EEF1 solvation section + CHARMM-specific @-directives
+        // (notably @E14FAC, the 1-4 electrostatic scaling).
         let mut section = String::new();
         for line in content.lines() {
             let line = line.trim();
             if line.is_empty()
                 || line.starts_with(';')
-                || line.starts_with('@')
                 || line.starts_with("ver:")
                 || line.starts_with("key:")
                 || line.starts_with("value:")
             {
+                continue;
+            }
+            // CHARMM ships @E14FAC=0.4 as the 1-4 electrostatic
+            // *multiplier* (E_14 = q_i*q_j/r * E14FAC). proteon's energy
+            // code uses an AMBER-style *divisor* via `scee`
+            // (scale_es = 1/scee). Translate: scee = 1/E14FAC.
+            // Without this, proteon falls back to the AMBER scee=1.2
+            // default and over-scales 1-4 Coulomb by ~2× on CHARMM
+            // systems. AMBER files don't have @E14FAC so this branch is
+            // CHARMM-specific in practice.
+            if let Some(rest) = line.strip_prefix("@E14FAC=") {
+                if let Ok(v) = rest.parse::<f64>() {
+                    if v > 1e-10 {
+                        amber.scee = 1.0 / v;
+                    }
+                }
+                continue;
+            }
+            if line.starts_with('@') {
                 continue;
             }
             if line.starts_with('[') {

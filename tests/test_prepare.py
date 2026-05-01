@@ -59,7 +59,16 @@ class TestPrepare:
         assert coords_before.shape == coords_after.shape
         n_moved = (np.abs(coords_before - coords_after) > 1e-6).any(axis=1).sum()
         assert n_moved > 0, "Minimization should move some atoms"
-        assert report.initial_energy > 0
+        # Assertion intent: minimization saw a real non-degenerate
+        # initial state — not that the starting energy is positive.
+        # The "> 0" assertion held only because proteon's CHARMM
+        # over-counted torsions (crambin's pre-minimisation energy
+        # was always positive on the AMBER-style enumeration). With
+        # the [ResidueTorsions] filter the count is correct and
+        # pre-minimisation energy on a well-resolved fixture like
+        # crambin can come out negative — that's better physics, not
+        # a regression.
+        assert report.initial_energy != report.final_energy
         assert report.final_energy <= report.initial_energy
 
     def test_energy_decreases(self):
