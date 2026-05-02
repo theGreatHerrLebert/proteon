@@ -56,3 +56,11 @@ NEXT_STEPS.md
 validation/charmm19_eef1_ball_oracle.jsonl
 validation/amber96_oracle.jsonl
 validation/amber96_obc_oracle.jsonl
+
+# Corpus-oracle plot intermediates (PNGs are embedded base64 into the
+# HTML reports, no need to track them separately)
+validation/report/figures/10_corpus_*.png
+validation/report/figures/11_corpus_*.png
+validation/report/figures/12_corpus_*.png
+validation/report/figures/13_corpus_*.html
+evident/reports/_figures/
