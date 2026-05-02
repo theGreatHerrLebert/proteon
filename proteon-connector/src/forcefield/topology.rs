@@ -304,6 +304,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
     // terminal, the terminal variant wins (we don't carry a combined
     // CYS-S-N / CYS-S-C template). This differs from BALL, which only
     // applies CYS-S when explicitly flagged during preprocessing.
+    let mut disulfide_partner: HashMap<usize, usize> = HashMap::new();
     for i in 0..sg_positions.len() {
         for j in (i + 1)..sg_positions.len() {
             let (ri, pi) = &sg_positions[i];
@@ -318,6 +319,8 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                 residue_variants
                     .entry(*rj)
                     .or_insert_with(|| "CYS-S".to_string());
+                disulfide_partner.insert(*ri, *rj);
+                disulfide_partner.insert(*rj, *ri);
             }
         }
     }
@@ -742,7 +745,19 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                 // residue containing atom J and `-`/`+` prefixes for
                 // cross-residue atoms.
                 let anchor_res_idx = atoms[j].residue_idx;
-                let anchor_res_name = &atoms[j].residue_name;
+                // BALL's [ResidueTorsions] indexes by RESIDUE-VARIANT
+                // (THR-N for the N-terminal threonine, ASN-C for the
+                // C-terminal asparagine, CYS-S for disulfide cysteines).
+                // proteon's `residue_variants` map is built in step 0
+                // with exactly that information; use the variant here
+                // and fall back to the base name for interior residues
+                // (which BALL also indexes by base, e.g. "ALA"). Without
+                // this, the 3 N-terminal H's and the C-terminal OXT
+                // atoms participate in 4-atom paths that BALL counts as
+                // canonical torsions but proteon was rejecting.
+                let anchor_res_name = residue_variants
+                    .get(&anchor_res_idx)
+                    .map_or_else(|| atoms[j].residue_name.as_str(), |s| s.as_str());
                 // Compute cross-residue prefixes when possible. For
                 // 4-atom paths whose residue spread is greater than
                 // ±1 (e.g. disulfide-bridge torsions on crambin's
@@ -777,18 +792,145 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
     }
 
     // Step 5: Build improper torsions
-    // For each atom with exactly 3 bonds that is listed in ResidueImproperTorsions,
-    // generate improper torsion entries (central atom is position 3 in the 4-tuple).
+    //
+    // Two enumeration paths:
+    //
+    // (A) CHARMM explicit list. CharmmParams returns `Some(...)` from
+    //     `improper_paths_for_residue` for any residue listed in
+    //     `[ResidueImproperTorsions]`. Each entry is a 4-tuple
+    //     `(A, B, C, D)` where `A` is the central atom and `B/C/D` are
+    //     three named substituents (possibly with cross-residue
+    //     prefixes `-`/`+`/`=`). We resolve atom indices by name and
+    //     emit `Torsion { i: B, j: C, k: A, l: D }` so the stored
+    //     central is at slot K (proteon's convention) while the
+    //     compute path's BALL re-bind reaches the right atoms.
+    //
+    // (B) Heuristic fallback (AMBER). For each atom with exactly 3
+    //     bonds that is listed in `is_improper_center`, generate
+    //     permutations of its 3 neighbors and pick the first one for
+    //     which the parameter table has an entry. Identical to the
+    //     pre-CHARMM-explicit-list behavior.
     let mut improper_torsions = Vec::new();
-    for j in 0..n {
-        let nbrs = &neighbors[j];
+    let mut atom_lookup: HashMap<(usize, String), usize> = HashMap::new();
+    for (idx, atom) in atoms.iter().enumerate() {
+        atom_lookup.insert((atom.residue_idx, atom.atom_name.clone()), idx);
+    }
+
+    let resolve_atom = |center_res_idx: usize, name: &str| -> Option<usize> {
+        // Strip cross-residue prefix.
+        let bytes = name.as_bytes();
+        let (target_res, base) = match bytes.first() {
+            Some(b'-') => (
+                Some((center_res_idx as i32).checked_sub(1).filter(|v| *v >= 0)? as usize),
+                &name[1..],
+            ),
+            Some(b'+') => (Some(center_res_idx + 1), &name[1..]),
+            // Disulfide-partner '=' prefix: look up the partner residue
+            // index in the disulfide map. Only meaningful for CYS-S
+            // residues — for non-disulfide residues the lookup will
+            // return None and the path is silently skipped.
+            Some(b'=') => (disulfide_partner.get(&center_res_idx).copied(), &name[1..]),
+            _ => (Some(center_res_idx), name),
+        };
+        let target_res = target_res?;
+        // Try literal name first; on miss try digit-rotation alt names
+        // (BALL's `1HD2` template entry maps to proteon's `HD21` atom,
+        // and similar for `2HD2`/`HD22`, `1H`/`H1`, etc.). Without this,
+        // every BALL improper template that names a sidechain N-H atom
+        // (ASN ND2 1HD2 2HD2 CG, GLN NE2 1HE2 2HE2 CD, ARG NH1 1HH1
+        // 2HH1 CZ, ARG NH2 1HH2 2HH2 CZ) silently fails to enumerate
+        // the third improper neighbor and the topology drops the path.
+        // On crambin (2 ASN) that's 2 missing impropers ≈ 5 kJ/mol.
+        if let Some(&idx) = atom_lookup.get(&(target_res, base.to_string())) {
+            return Some(idx);
+        }
+        for alt in alt_h_name_candidates(base) {
+            if let Some(&idx) = atom_lookup.get(&(target_res, alt)) {
+                return Some(idx);
+            }
+        }
+        None
+    };
+
+    // Determine variant for each residue (terminal/disulfide), reusing
+    // the same map populated in step 0.
+    for (center_idx, center_atom) in atoms.iter().enumerate() {
+        let center_res_idx = center_atom.residue_idx;
+        let lookup_residue = residue_variants
+            .get(&center_res_idx)
+            .map_or_else(|| center_atom.residue_name.as_str(), |s| s.as_str());
+
+        // Explicit-list path (CHARMM). Look up BOTH the variant (e.g.,
+        // "THR-N") and the base ("THR") templates and union the
+        // entries. BALL's [ResidueImproperTorsions] tables for terminal
+        // and disulfide variants only re-list entries that DIFFER from
+        // the base — N-terminal THR's residue-specific table has only
+        // `THR-N C CA +N O` (the rest of THR's impropers are
+        // inherited unchanged from the base template). Without
+        // unioning, we'd miss most of the impropers on terminal +
+        // disulfide residues.
+        let mut emitted_for_residue = false;
+        let base_residue = center_atom.residue_name.as_str();
+        // Dedup by full ORDERED (B, C, D) tuple — different templates
+        // may share the same (sorted) neighbor set but list them in
+        // different ORDER, and ordering matters for the BALL improper
+        // formula (the dihedral axis is between B↔C, see
+        // charmmImproperTorsion.C:476). A sort-then-dedup over the
+        // unordered set would over-collapse and silently drop valid
+        // entries; using the ordered tuple is the right thing.
+        let mut seen: std::collections::HashSet<(usize, usize, usize)> =
+            std::collections::HashSet::new();
+        for residue_key in [lookup_residue, base_residue] {
+            let paths = match params.improper_paths_for_residue(residue_key) {
+                Some(p) => p,
+                None => continue,
+            };
+            emitted_for_residue = true;
+            for (a, b, c, d) in paths {
+                if a != &center_atom.atom_name {
+                    continue;
+                }
+                let ib = match resolve_atom(center_res_idx, b) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let ic = match resolve_atom(center_res_idx, c) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let id = match resolve_atom(center_res_idx, d) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if !seen.insert((ib, ic, id)) {
+                    continue;
+                }
+                improper_torsions.push(Torsion {
+                    i: ib,
+                    j: ic,
+                    k: center_idx,
+                    l: id,
+                });
+            }
+            // If we matched the variant, also walk the base template;
+            // otherwise the base lookup is the FIRST and only.
+            if residue_key == base_residue {
+                break;
+            }
+        }
+        if emitted_for_residue {
+            continue;
+        }
+
+        // Heuristic path (AMBER): fall back to "atom has 3 bonds and
+        // is in is_improper_center" with neighbor permutations.
+        let nbrs = &neighbors[center_idx];
         if nbrs.len() != 3 {
             continue;
         }
-        if !params.is_improper_center(&atoms[j].residue_name, &atoms[j].atom_name) {
+        if !params.is_improper_center(&center_atom.residue_name, &center_atom.atom_name) {
             continue;
         }
-        // Generate all permutations of the 3 neighbors as (a1, a2, center=j, a4)
         let (n0, n1, n2) = (nbrs[0], nbrs[1], nbrs[2]);
         for &(i, k, l) in &[
             (n0, n1, n2),
@@ -799,22 +941,19 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
             (n2, n1, n0),
         ] {
             let ti = &atoms[i].amber_type;
-            let tk = &atoms[j].amber_type; // central atom
             let tj = &atoms[k].amber_type;
+            let tk = &atoms[center_idx].amber_type;
             let tl = &atoms[l].amber_type;
-            // Cosine impropers (AMBER) and harmonic impropers (CHARMM)
-            // use DIFFERENT atom-slot conventions in their parameter
-            // tables:
-            //   - AMBER cosine table keys central at slot 3 (matches
-            //     proteon's stored Torsion.k position).
-            //   - CHARMM harmonic table keys central at slot 1 — A is
-            //     central, B/C/D are the 3 neighbors.
-            // Pass each FF the convention it expects.
             let has_cosine = params.get_improper_torsion(ti, tj, tk, tl).is_some();
             let has_harmonic = params.get_harmonic_improper(tk, ti, tj, tl).is_some();
             if has_cosine || has_harmonic {
-                improper_torsions.push(Torsion { i, j: k, k: j, l });
-                break; // only one improper per center atom per neighbor set
+                improper_torsions.push(Torsion {
+                    i,
+                    j: k,
+                    k: center_idx,
+                    l,
+                });
+                break;
             }
         }
     }

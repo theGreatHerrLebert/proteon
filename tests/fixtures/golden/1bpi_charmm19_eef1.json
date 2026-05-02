@@ -3,13 +3,13 @@
     "angle_bend": 445.1811102320021,
     "bond_stretch": 1142.2722140048338,
     "electrostatic": 1620.760531955627,
-    "improper_torsion": 0.0,
+    "improper_torsion": 100.58080703124672,
     "solvation": -2507.135517962203,
-    "torsion": 366.89100198394414,
+    "torsion": 379.94540734232476,
     "vdw": -938.2067619475896
   },
   "ff": "charmm19_eef1",
   "pdb": "1bpi",
-  "total": 129.76257826661433,
+  "total": 243.39779065624182,
   "units": "kJ/mol"
 }

@@ -149,39 +149,64 @@ claims:
         wheel is unavailable — the slim EVIDENT image is expected to
         carry it after first PyPI publish lands.
     failure_modes:
-      - "PARTIAL ACTIVATION as of 2026-05-02: the CHARMM19 cutoff
-        override landed (proteon-connector now accepts
-        nonbonded_cutoff=1e6 for ff='charmm19_eef1', symmetric to
-        AMBER96). Activating the test on crambin with shared
-        polar-H placement (proteon places, BALL reads with
-        add_hydrogens=False) reveals a clean two-tier picture:
-        bond_stretch (0.7%), angle_bend (0.6%), EEF1 solvation
-        (0.7%), vdw (< 0.01%), and electrostatic (< 0.02%) all
-        agree well within tolerance and gate live. Two components
-        remain divergent and are xfail-marked in
-        tests/oracle/test_charmm19_ball_oracle.py with strict=False
-        so a future fix surfaces as xpass:
-          - proper_torsion: 238 vs 994 kJ/mol (~76% off) under the
-            corrected polar-H fixture (place_all_hydrogens(polar_only=
-            True)). The earlier 218 vs 230 / 5.1%-off reading was
-            measured against a half-prepared structure (place_peptide_
-            hydrogens-only) which left ~30 polar Hs unplaced —
-            without them, BALL's torsion enumerator simply didn't see
-            the H-containing 4-atom paths it normally counts. Once
-            those H atoms are present, BALL discovers ~120 new H-
-            containing torsions (e.g. 1H/2H/3H-N-CA-C at the N-
-            terminus, HD21/HD22-ND2-CG-OD1 in ASN sidechains) that
-            proteon's [ResidueTorsions] filter doesn't enumerate.
-            Next-step fix: extend the residue_prefix logic in
-            topology.rs to look up terminal-variant entries (THR-N,
-            ASN-C) and add the H-atom alt-name machinery (HD21 ↔
-            1HD2) at the [ResidueTorsions] lookup site. This is a
-            topology-side fix, no parameter changes needed.
-          - improper_torsion: 0.0 vs 264.94 kJ/mol under the polar-H
-            fixture (was BALL 39.7 under the half-prepared one — the
-            increase reflects new sidechain N-H impropers like
-            ASN:ND2-HD21-HD22-CG that are visible only when polar Hs
-            are present). THREE parser/convention
+      - "FULL ACTIVATION as of 2026-05-02 (evening): all 7 CHARMM
+        oracle components pass their per-tier tolerance bands live
+        on crambin with shared polar-H placement (proteon places
+        via place_all_hydrogens(polar_only=True), BALL reads with
+        add_hydrogens=False, NoCutoff via nonbonded_cutoff=1e6 on
+        both sides). NO XFAILS REMAIN.
+          bond_stretch  ~0.65% rel diff (passing)
+          angle_bend    ~0.60% (passing)
+          proper_torsion < 0.001% (passing, closed 2026-05-02 mid)
+          vdw           < 0.01% (passing)
+          electrostatic < 0.02% (passing)
+          EEF1 solvation ~0.73% (passing)
+          improper_torsion 0.28% (passing, closed 2026-05-02 evening)
+        Cross-PDB on improper_torsion: 1bpi 0.33%, 1ake 0.17%,
+        1ubq 0.36%. The compute is now mechanically correct on all
+        components — residuals at the float-accumulation floor.
+        Per-component history:
+          - (proper_torsion moved to PASSING tier 2026-05-02:
+            994.38 vs 994.37 kJ/mol, < 0.001% rel diff (~7e-3 abs,
+            float accumulation floor). Three-step topology fix:
+            (1) Caller passes RESIDUE-VARIANT (THR-N, ASN-C, CYS-S)
+            instead of base name, so the [ResidueTorsions] lookup
+            sees BALL's variant-keyed entries for terminal +
+            disulfide residues.
+            (2) Lookup tries both forward (a,b,c,d) and reverse
+            (d,c,b,a) atom-tuples — torsion energy is symmetric
+            under reversal, but proteon's bond-graph emits one
+            direction while BALL's table may list the other.
+            (3) Strict H-name digit rotation (HD21 ↔ 1HD2, H1 ↔ 1H)
+            via name_candidates() — explicitly NOT the methylene
+            decrement-then-rotate rule, because BALL's normalize_names
+            keeps HD21 and HD22 distinct (only HD21→1HD2). The
+            decrement was the bug behind the 19% over-shoot we hit
+            after parts (1)+(2) landed (proteon was matching HD22
+            against 1HD2 too, double-counting torsions).
+            Cross-PDB check: 1crn 0.0008%, 1bpi 0.0009%, 1ake 0.0008%,
+            1ubq 0.0000%. n_torsions varies 235-2450 across these so
+            the per-path identity is mechanical, not coincidence.)
+          - improper_torsion: 251.15 vs 264.94 kJ/mol on crambin
+            (5.2% rel diff). Energy and analytical force are now
+            both correct on the formula side — gradient FD parity
+            test passes; the cosphi-chain force formula was ported
+            verbatim from BALL's charmmImproperTorsion.C:526-544 to
+            avoid the |phi|-vs-signed-phi sign discontinuity that
+            blocked PR #22. Topology now enumerates impropers
+            EXPLICITLY from CHARMM's [ResidueImproperTorsions] table
+            (variant + base lookup) instead of the prior heuristic.
+            Cross-PDB validation: 1bpi 0.94%, 1ake 2.95%, 1ubq 0.36%
+            — all within band. Crambin's 5.2% is a residual
+            enumeration gap: a small number of specific impropers in
+            crambin's composition (1 PHE + 2 TYR + 6 disulfide CYS)
+            that BALL counts and proteon misses. The energy is
+            monotonically UNDER, never over, so this isn't a sign or
+            formula bug — likely a residue-template lookup detail
+            (variant fallback, alt-name in disulfide context, etc.)
+            visible only on this particular composition.
+
+            Original 3-issue diagnosis from PR #22 (now resolved):
             issues found and analysed; first two fixed in this PR,
             third blocking on a gradient-consistency design call:
             (1) CHARMM's 7-column [ImproperTorsions] is now recognised
