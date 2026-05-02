@@ -190,16 +190,33 @@ def compare_one(pdb_path: str) -> dict:
 
 
 def main():
-    if not PDB_DIR.is_dir():
-        raise SystemExit(f"PDB corpus not found: {PDB_DIR}")
-
-    pdbs = sorted(p.name for p in PDB_DIR.glob("*.pdb"))
-    if not pdbs:
-        raise SystemExit(f"No .pdb files in {PDB_DIR}")
-
-    rng = random.Random(SEED)
-    rng.shuffle(pdbs)
-    sample = [str(PDB_DIR / name) for name in pdbs[:N]]
+    # Two corpus modes:
+    # 1. PROTEON_PDB_LIST=path/to/list.txt  — explicit pre-filtered list
+    #    (one absolute path per line). Use the protein_only_corpus.py
+    #    helper to generate this, dropping the ~25-30% non-protein
+    #    structures (nucleic acids etc.) that CHARMM19 can't handle.
+    # 2. PROTEON_PDB_DIR=path/to/dir/        — directory glob (legacy
+    #    1k-PDB mode). The runner does its own per-PDB nucleic-acid
+    #    skip via PDBFixer; useful for ad-hoc runs but slower at 50K.
+    pdb_list = os.environ.get("PROTEON_PDB_LIST")
+    if pdb_list:
+        list_path = Path(pdb_list)
+        if not list_path.is_file():
+            raise SystemExit(f"PDB list file not found: {list_path}")
+        with open(list_path) as f:
+            sample = [line.strip() for line in f if line.strip()]
+        sample = [p for p in sample if Path(p).is_file()]
+        sample = sample[:N]
+        print(f"Loaded {len(sample)} PDB paths from {list_path}", flush=True)
+    else:
+        if not PDB_DIR.is_dir():
+            raise SystemExit(f"PDB corpus not found: {PDB_DIR}")
+        pdbs = sorted(p.name for p in PDB_DIR.glob("*.pdb"))
+        if not pdbs:
+            raise SystemExit(f"No .pdb files in {PDB_DIR}")
+        rng = random.Random(SEED)
+        rng.shuffle(pdbs)
+        sample = [str(PDB_DIR / name) for name in pdbs[:N]]
 
     # Resume: if OUT already exists, load done PDBs and skip them.
     done_names: set[str] = set()
@@ -212,69 +229,69 @@ def main():
                     pass
         print(f"Resuming: {len(done_names)} PDBs already in {OUT}", flush=True)
     pending = [p for p in sample if Path(p).name not in done_names]
-    print(f"Sampled {len(sample)} PDBs (seed={SEED}); {len(pending)} pending", flush=True)
+    print(f"Total sample: {len(sample)} PDBs; {len(pending)} pending after resume", flush=True)
     if not pending:
         print("Nothing to do.", flush=True)
         return _summarize()
 
-    n_workers = int(os.environ.get("N_WORKERS", "48"))
-    chunk_size = int(os.environ.get("CHUNK_SIZE", "200"))
-    print(f"Using {n_workers} workers, chunk_size={chunk_size}", flush=True)
+    n_workers = int(os.environ.get("N_WORKERS", "32"))
+    print(f"Using {n_workers} workers (one task per worker process)", flush=True)
 
     t0 = time.perf_counter()
     n_ok = n_fail = n_skip = 0
     OUT.parent.mkdir(parents=True, exist_ok=True)
 
-    # Process in chunks so a worker crash (BrokenProcessPool) only loses
-    # in-flight work in that chunk, not the entire run. Each chunk gets a
-    # fresh pool. If a chunk's pool dies, mark its in-flight PDBs as
-    # 'fail' (segfault) and move on.
+    # Crash isolation via `max_tasks_per_child=1` (Python 3.11+; the
+    # proteon venv is 3.12 per CLAUDE.md). Each task runs in its OWN
+    # worker process, so a BALL segfault or malloc abort can only kill
+    # the worker that triggered it — the next task spawns a fresh one
+    # and the pool stays alive. This drops the chunked-pool design that
+    # PR #25 used; the chunked design lost an entire chunk's in-flight
+    # PDBs every time a single bad input crashed the pool.
+    #
+    # Per-fork overhead is ~50ms; for 50K PDBs at 32 workers it's ~80s
+    # of fork time spread across the run, dwarfed by the per-PDB
+    # compute cost (~0.4s).
+    #
+    # Hang protection (infinite-loop tasks that as_completed never
+    # yields) is NOT handled here. In the 1k-PDB run we saw 1-2 PDBs
+    # hang; the right fix is a watchdog subprocess per task (e.g. via
+    # `pebble.ProcessPool.schedule(timeout=...)`), but the segfault
+    # case (~14% of inputs) is the dominant failure mode and is
+    # handled cleanly by max_tasks_per_child=1 alone. Hangs can be
+    # killed manually or worked around by Ctrl-C-and-resume.
     with open(OUT, "a") as f:
-        for chunk_start in range(0, len(pending), chunk_size):
-            chunk = pending[chunk_start:chunk_start + chunk_size]
-            chunk_done_names: set[str] = set()
-            try:
-                with ProcessPoolExecutor(max_workers=n_workers) as pool:
-                    futs = {pool.submit(compare_one, p): p for p in chunk}
-                    for fut in as_completed(futs):
-                        try:
-                            rec = fut.result()
-                        except Exception as ex:
-                            pdb_path = futs[fut]
-                            rec = {
-                                "pdb": Path(pdb_path).name,
-                                "error": f"worker crash: {type(ex).__name__}: {str(ex)[:120]}",
-                            }
-                        f.write(json.dumps(rec) + "\n"); f.flush()
-                        chunk_done_names.add(rec["pdb"])
-                        if "rel_diff" in rec:
-                            n_ok += 1
-                        elif "skipped" in rec:
-                            n_skip += 1
-                        else:
-                            n_fail += 1
-                        progress = len(done_names) + n_ok + n_skip + n_fail
-                        if progress % 25 == 0:
-                            elapsed = time.perf_counter() - t0
-                            rate = (n_ok + n_skip + n_fail) / elapsed if elapsed > 0 else 0
-                            eta = (len(pending) - (n_ok + n_skip + n_fail)) / rate if rate > 0 else 0
-                            print(
-                                f"[{progress}/{len(sample)}] ok={n_ok} skip={n_skip} fail={n_fail}  "
-                                f"rate={rate:.2f}/s  eta={eta/60:.1f}min",
-                                flush=True,
-                            )
-            except Exception as ex:
-                # Pool died (e.g. segfault propagated). Mark unfinished as fail.
-                missing = [Path(p).name for p in chunk
-                           if Path(p).name not in chunk_done_names]
-                for name in missing:
-                    rec = {"pdb": name, "error": f"chunk pool crashed: {type(ex).__name__}"}
-                    f.write(json.dumps(rec) + "\n"); f.flush()
+        with ProcessPoolExecutor(
+            max_workers=n_workers, max_tasks_per_child=1
+        ) as pool:
+            futs = {pool.submit(compare_one, p): p for p in pending}
+            for fut in as_completed(futs):
+                pdb_path = futs[fut]
+                pdb_name = Path(pdb_path).name
+                try:
+                    rec = fut.result()
+                except Exception as ex:
+                    rec = {
+                        "pdb": pdb_name,
+                        "error": f"worker crash: {type(ex).__name__}: {str(ex)[:120]}",
+                    }
+                f.write(json.dumps(rec) + "\n"); f.flush()
+                if "rel_diff" in rec:
+                    n_ok += 1
+                elif "skipped" in rec:
+                    n_skip += 1
+                else:
                     n_fail += 1
-                print(
-                    f"chunk pool died ({type(ex).__name__}); marked {len(missing)} as failed",
-                    flush=True,
-                )
+                progress = len(done_names) + n_ok + n_skip + n_fail
+                if progress % 25 == 0:
+                    elapsed = time.perf_counter() - t0
+                    rate = (n_ok + n_skip + n_fail) / elapsed if elapsed > 0 else 0
+                    eta = (len(pending) - (n_ok + n_skip + n_fail)) / rate if rate > 0 else 0
+                    print(
+                        f"[{progress}/{len(sample)}] ok={n_ok} skip={n_skip} fail={n_fail}  "
+                        f"rate={rate:.2f}/s  eta={eta/60:.1f}min",
+                        flush=True,
+                    )
 
     elapsed = time.perf_counter() - t0
     print(
