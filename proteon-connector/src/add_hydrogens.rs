@@ -1196,8 +1196,15 @@ pub(crate) fn place_sidechain_hydrogens(
                 }
             }
 
-            // C-terminal: add OXT hydrogen
-            if last_aa == Some(residue_idx) {
+            // C-terminal carboxyl: add HXT only in all-atom mode.
+            // Under polar-H force fields (CHARMM19), the C-terminus
+            // is deprotonated (COO-, atom types O/OXT both `OC`); BALL's
+            // residue template has no HXT slot and rejects the atom
+            // ("cannot find Lennard Jones parameters for: ?-... HXT").
+            // The per-atom charges already encode the COO- assumption
+            // (each OXT/O carries -0.6e, balanced by C +0.55e), so the
+            // C-terminus emerges with the canonical net -1.0e.
+            if last_aa == Some(residue_idx) && !polar_only {
                 if let Some(&oxt_pos) = positions.get("OXT") {
                     if !existing_h.contains("HXT") && !existing_h.contains("HOXT") {
                         if let Some(&c_pos) = positions.get("C") {

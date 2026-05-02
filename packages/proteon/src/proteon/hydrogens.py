@@ -90,7 +90,7 @@ def batch_place_peptide_hydrogens(
     return _add_h.batch_place_peptide_hydrogens(ptrs, n_threads)
 
 
-def place_all_hydrogens(structure) -> Tuple[int, int]:
+def place_all_hydrogens(structure, polar_only: bool = False) -> Tuple[int, int]:
     """Place backbone + sidechain hydrogens on standard amino acids.
 
     Runs Phase 1 (backbone amide N-H) then Phase 2 (sidechain templates
@@ -99,11 +99,19 @@ def place_all_hydrogens(structure) -> Tuple[int, int]:
 
     Args:
         structure: A proteon Structure (modified in place).
+        polar_only: If True, only place hydrogens bonded to N/O/S
+            (guanidinium, amide, hydroxyl, thiol, imidazole, indole,
+            and the N-terminal NH3+). Use this for polar-H united-atom
+            force fields like CHARMM19+EEF1, where non-polar C-H atoms
+            are absorbed into united carbon types and would fail FF
+            type lookup. The C-terminal carboxylate is also kept
+            deprotonated (COO-) under this mode, matching CHARMM's
+            convention.
 
     Returns:
         (n_added, n_skipped) tuple.
     """
-    return _add_h.place_all_hydrogens(_get_ptr(structure))
+    return _add_h.place_all_hydrogens(_get_ptr(structure), polar_only)
 
 
 def place_general_hydrogens(structure, include_water: bool = False) -> Tuple[int, int]:

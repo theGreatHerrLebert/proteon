@@ -160,16 +160,27 @@ claims:
         gate live. Three components remain divergent and are
         xfail-marked in tests/oracle/test_charmm19_ball_oracle.py
         with strict=False so a future fix surfaces as xpass:
-          - proper_torsion: 218.2 vs 230.0 kJ/mol (~5.1% rel diff;
-            was 610.84 i.e. 2.66x off before the [ResidueTorsions]
-            filter landed). proteon previously enumerated every
-            4-atom bonded path as a torsion; BALL filters against the
-            per-residue [ResidueTorsions] template — proteon now
-            mirrors that. Residual 5.1% is plausibly N-terminus
-            template differences (proteon uses 'THR' for residue 0
-            but BALL would use 'THR-N') or residual wildcard-fallback
-            divergences; just outside the 2.5% band.
-          - improper_torsion: 0.0 vs 39.7 kJ/mol. THREE parser/convention
+          - proper_torsion: 238 vs 994 kJ/mol (~76% off) under the
+            corrected polar-H fixture (place_all_hydrogens(polar_only=
+            True)). The earlier 218 vs 230 / 5.1%-off reading was
+            measured against a half-prepared structure (place_peptide_
+            hydrogens-only) which left ~30 polar Hs unplaced —
+            without them, BALL's torsion enumerator simply didn't see
+            the H-containing 4-atom paths it normally counts. Once
+            those H atoms are present, BALL discovers ~120 new H-
+            containing torsions (e.g. 1H/2H/3H-N-CA-C at the N-
+            terminus, HD21/HD22-ND2-CG-OD1 in ASN sidechains) that
+            proteon's [ResidueTorsions] filter doesn't enumerate.
+            Next-step fix: extend the residue_prefix logic in
+            topology.rs to look up terminal-variant entries (THR-N,
+            ASN-C) and add the H-atom alt-name machinery (HD21 ↔
+            1HD2) at the [ResidueTorsions] lookup site. This is a
+            topology-side fix, no parameter changes needed.
+          - improper_torsion: 0.0 vs 264.94 kJ/mol under the polar-H
+            fixture (was BALL 39.7 under the half-prepared one — the
+            increase reflects new sidechain N-H impropers like
+            ASN:ND2-HD21-HD22-CG that are visible only when polar Hs
+            are present). THREE parser/convention
             issues found and analysed; first two fixed in this PR,
             third blocking on a gradient-consistency design call:
             (1) CHARMM's 7-column [ImproperTorsions] is now recognised
@@ -213,29 +224,57 @@ claims:
             of spurious LJ repulsion when not excluded. AMBER does
             NOT use this exclusion so the trait default is false,
             preserving AMBER96's existing 0.2% oracle gate.)
-          - electrostatic: +195.7 vs -2711 kJ/mol (after the
-            @E14FAC=0.4 1-4 scaling fix landed; was +5373 before so
-            that fix closed ~5177 kJ/mol of the gap. Sign still
-            wrong; residual ~2900 kJ/mol most likely the N-terminus
-            NH3+ uncompensated charge — place_peptide_hydrogens
-            leaves residue 0's N at -1.35e with no balancing 3H+.)
+          - electrostatic: -6938 vs -2466 kJ/mol (~2.81x too negative)
+            under the corrected polar-H fixture. Sign is now correct
+            — the previous "+195 vs -2711 kJ/mol" reading mixed two
+            distinct bugs: the test adapter computed BALL's
+            "electrostatic" as `nonbonded - vdw`, double-counting EEF1
+            solvation (BALL's `getNonbondedEnergy()` returns
+            `vdw + es + solv`, not just `vdw + es`); and the fixture
+            used `place_peptide_hydrogens` which left ~30 polar Hs
+            unplaced, leaving residue 0's NH3+ N at -1.35e with no
+            balancing H+ atoms. Both are fixed in this PR — the
+            adapter now subtracts solvation, and the fixture uses
+            `place_all_hydrogens(polar_only=True)` so the N-terminus
+            is properly NH3+ and the C-terminus stays COO-.
+
+            Residual 2.81x factor is unexplained. We've ruled out:
+            (1) per-atom charges — verified 0/396 mismatches against
+                the param19_eef1.ini [ChargesAndTypeNames] table,
+            (2) 1-4 pair classification — proteon's bond-graph
+                enumeration is algorithmically equivalent to BALL's
+                isVicinal traversal,
+            (3) @E14FAC=0.4 scaling — applied identically by both
+                tools,
+            (4) switching function — disabled for both at
+                nonbonded_cutoff=1e6 (sw≈1.0 for r << cutoff).
+            Open hypotheses: cross-residue 1-4 pair handling at the
+            disulfide bridges, BALL's residue-template-driven pair
+            list dropping ES contributions for some pair-types
+            proteon enumerates, or a polar-H position discrepancy
+            not visible at the per-atom-name level. Moving past the
+            sign-flip is meaningful progress but the 2.81x band
+            remains gated and the test stays xfail with strict=False.
         Each is a separate Rust-side investigation; not blocked by
         BALL availability anymore. The first 3 PASSING assertions
         already gate against bonded/solvation regressions live in CI.
 
-        3-way cross-check on the sign question (added 2026-05-01):
-        OpenMM-CHARMM36 + OBC2 on the same crambin fixture at NoCutoff
-        reports NonbondedForce = -2806.3 kJ/mol (LJ + Coulomb combined)
-        and CustomNonbondedForce = -1054.1 kJ/mol — both negative,
-        agreeing with BALL on sign. Proteon is the 1-of-3 outlier.
-        OpenMM uses CHARMM36 (different parameter generation than
-        CHARMM19), so the magnitudes are not directly comparable, but
-        the sign of vdw and electrostatic on a folded protein at
-        equilibrium geometry is a property of the FF formula not the
-        parameters — three independent implementations agreeing that
-        these terms are negative is decisive. Proteon's CHARMM Rust
-        code has a sign-convention bug in the LJ and/or partial-charge
-        loading that does not exist in proteon's AMBER96 path."
+        3-way magnitude triangulation (re-measured 2026-05-02 after
+        the polar-H fixture + adapter fixes landed):
+        on the same crambin starting structure at NoCutoff,
+          - proteon CHARMM19 (polar-H):  vdw+ES = -7928 kJ/mol
+          - BALL    CHARMM19 (polar-H):  vdw+ES = -3456 kJ/mol
+          - OpenMM  CHARMM36 (all-atom): NonbondedForce = -2353 kJ/mol
+        BALL/proteon = 0.436, OpenMM/proteon = 0.297, OpenMM/BALL =
+        0.681. CHARMM19 vs CHARMM36 differ in parameter generation so
+        the 47% OpenMM-vs-BALL spread is expected (consistent with the
+        documented ~20% AMBER96 BALL-vs-OpenMM spread); the 3.36x
+        proteon-vs-OpenMM factor is NOT consistent with that — proteon
+        is the clear outlier across both independent oracles.
+        Conclusion: the residual 2.81x factor against BALL is a
+        proteon bug, not BALL idiosyncrasy. Future PR's investigation
+        target is in proteon's electrostatic compute path
+        (energy.rs), not in shaving BALL-specific tolerances."
       - Single fixture. Crambin only; a regression on non-standard
         residues, terminus handling, or large-loop conformations
         would not surface. A release-tier 1000-PDB version of this

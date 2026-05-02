@@ -44,9 +44,14 @@ def _to_proteon_keys(charmm_dict: dict) -> dict:
     `improper_torsion` separately. This adapter returns a dict whose
     keys match proteon's, taking BALL's split keys.
 
-    BALL exposes `nonbonded` (vdw + electrostatic) and `vdw`
-    separately; proteon reports `vdw` and `electrostatic`. We
-    derive electrostatic = nonbonded - vdw.
+    BALL's `nonbonded` is the FULL nonbonded component energy as
+    reported by `CharmmFF::getNonbondedEnergy()` — i.e. the sum of
+    `vdw_energy_ + electrostatic_energy_ + solvation_energy_`
+    (`charmmNonBonded.C:1217`). To extract the pure Coulomb term we
+    subtract BOTH vdW and EEF1 solvation. (An earlier version of this
+    adapter just did `nonbonded - vdw` which silently double-counted
+    solvation in the "electrostatic" field, hiding ~1.4 kJ/mol of
+    real signal under thousands of kJ/mol of EEF1 noise.)
     """
     return {
         "bond_stretch":     charmm_dict["bond_stretch"],
@@ -54,7 +59,7 @@ def _to_proteon_keys(charmm_dict: dict) -> dict:
         "torsion":          charmm_dict["proper_torsion"],
         "improper_torsion": charmm_dict["improper_torsion"],
         "vdw":              charmm_dict["vdw"],
-        "electrostatic":    charmm_dict["nonbonded"] - charmm_dict["vdw"],
+        "electrostatic":    charmm_dict["nonbonded"] - charmm_dict["vdw"] - charmm_dict["solvation"],
         "solvation":        charmm_dict["solvation"],
         "total":            charmm_dict["total"],
     }
@@ -82,11 +87,20 @@ def reference_energies(tmp_path_factory):
         pytest.skip(f"crambin fixture not found at {CRAMBIN}")
 
     s = proteon.load(CRAMBIN)
-    # CHARMM19 is a polar-H force field — only N-H, O-H, S-H placed.
-    # place_peptide_hydrogens mutates the structure in place and returns
-    # (n_placed, n_failed); the count is not asserted here, only the
-    # downstream energy components.
-    proteon.place_peptide_hydrogens(s)
+    # CHARMM19 is a polar-H force field — backbone amide H + sidechain
+    # polar Hs (NH, OH, SH, guanidinium, imidazole, indole, NH3+ at the
+    # N-terminus). C-terminus stays deprotonated (COO-, no HXT).
+    #
+    # place_peptide_hydrogens alone is NOT enough: it places only
+    # backbone amide H, leaving the N-terminal NH3+ unprotonated
+    # (residue 0's N at -1.35e with no balancing H+) and the LYS/ARG/
+    # HIS sidechains unprotonated. With those polar H atoms missing,
+    # the system carries ~-10e of fictitious net charge and the
+    # electrostatic energy is sign-flipped vs BALL.
+    #
+    # place_all_hydrogens(polar_only=True) does the full polar-H job:
+    # backbone + sidechain + N-terminal NH3+, C-terminal stays COO-.
+    proteon.place_all_hydrogens(s, polar_only=True)
 
     work = tmp_path_factory.mktemp("charmm_ball_oracle")
     polar_h_pdb = str(work / "1crn_polarH.pdb")
@@ -128,7 +142,7 @@ class TestCharmm19BallOracle:
     # xfail to xpass and surfaces immediately rather than masking.
 
     @pytest.mark.xfail(
-        reason="proteon CHARMM proper_torsion 218.2 vs BALL 230.0 on crambin (~5.1% rel diff) after the [ResidueTorsions] filter landed; was 610.8 (165% off) before. Sign and magnitude are now in agreement; residual is just outside the 2.5% band, plausibly N-terminus-template differences (proteon uses 'THR' for residue 0 but BALL would use 'THR-N') or residual wildcard-fallback differences; see geometry_charmm19_ball.yaml failure_modes",
+        reason="proteon CHARMM proper_torsion 238 vs BALL 994 on crambin (~76% off) under the corrected polar-H fixture (place_all_hydrogens(polar_only=True)). Earlier readings of '218 vs 230 / 5.1%' came from the half-prepared fixture (place_peptide_hydrogens-only) which left N-terminal and sidechain polar H's unplaced — once those H atoms are present, BALL discovers many new H-containing 4-atom torsion paths (e.g. H1-N-CA-C at the N-terminus) that proteon's [ResidueTorsions] filter does not yet enumerate. The fix is in proteon's residue_prefix logic for terminal-variant entries (THR-N, ASN-C) and in the H-atom alt-name machinery for HD21/HD22 vs 1HD2/2HD2 at the [ResidueTorsions] lookup site. See geometry_charmm19_ball.yaml failure_modes",
         strict=False,
     )
     def test_proper_torsion(self, reference_energies):
@@ -137,7 +151,7 @@ class TestCharmm19BallOracle:
         assert rel < 0.025, f"proper torsion relative diff {rel:.3%} exceeds 2.5%"
 
     @pytest.mark.xfail(
-        reason="proteon CHARMM improper_torsion = 0 vs BALL 39.7 on crambin. Three issues found this PR (first two fixed): (1) parser now reads CHARMM's 7-column [ImproperTorsions]; (2) 5-column [ResidueImproperTorsions] is parsed correctly. Topology populates 159 impropers (was 0). (3) CHARMM measures the harmonic dihedral with central at slot 1 AND uses unsigned |phi| (acos), proteon's compute_dihedral returns signed atan2. Wiring with both fixes gives 46.2 kJ/mol on crambin (16% off BALL's 39.7), but breaks the cross-path gradient test because the |phi| energy's derivative isn't consistent with the existing Bekker analytical-force chain. Held back until a small surgical fix to the force chain (multiply by sign(phi_signed)) lands in the next PR. See geometry_charmm19_ball.yaml failure_modes",
+        reason="proteon CHARMM improper_torsion = 0 vs BALL 264.94 on crambin under the corrected polar-H fixture (was BALL 39.7 under the half-prepared fixture; the higher number reflects new sidechain N-H impropers like ASN:ND2-HD21-HD22-CG that are visible only with full polar-H placement). Parser + topology scaffolding from PR #22 is in place (CHARMM's 7-column [ImproperTorsions], 5-column [ResidueImproperTorsions]); the harmonic-improper energy compute is dead-code-gated until the unsigned-dihedral chain rule is reconciled with the existing Bekker analytical-force chain. See geometry_charmm19_ball.yaml failure_modes",
         strict=False,
     )
     def test_improper_torsion(self, reference_energies):
@@ -158,7 +172,7 @@ class TestCharmm19BallOracle:
         assert rel < 0.025, f"vdW relative diff {rel:.3%} exceeds 2.5%"
 
     @pytest.mark.xfail(
-        reason="proteon CHARMM electrostatic +195.7 vs BALL -2711 on crambin after the @E14FAC=0.4 1-4 scaling fix landed (was +5373 before, so this fix closed ~5177 kJ/mol of the gap). Sign still wrong; residual ~2900 kJ/mol most likely the N-terminus NH3+ uncompensated charge — place_peptide_hydrogens leaves residue 0's N at -1.35e with no balancing 3H+. See geometry_charmm19_ball.yaml failure_modes",
+        reason="proteon CHARMM electrostatic -6938 vs BALL -2466 on crambin (~2.81x too negative). Sign is now correct (was sign-flipped at +195 vs -2711 before this PR's polar-H fix landed). Per-atom charges verified to match BALL's parameter file exactly (0/396 mismatches), the bond-graph 1-4 pair enumeration is algorithmically equivalent to BALL's isVicinal traversal, and the @E14FAC=0.4 scaling is applied identically by both tools. The residual 2.81x factor's origin is not yet localized; candidate hypotheses include (1) cross-residue 1-4 pair classification differences across disulfide bonds, (2) BALL's residue templates dropping ES contributions for some pair-types proteon enumerates, or (3) a polar-H position discrepancy not visible per-atom-name. See geometry_charmm19_ball.yaml failure_modes for the current state of the diagnosis.",
         strict=False,
     )
     def test_electrostatic(self, reference_energies):
