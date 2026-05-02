@@ -20,6 +20,7 @@ on:
   pull_request:
     paths:
       - "evident/Dockerfile"
+      - "evident/Dockerfile.cuda"
       - "evident/tools/**"
       - "evident/evident.yaml"
       - "evident/claims/**"
@@ -36,14 +37,31 @@ permissions:
 
 jobs:
   build-and-push:
-    name: Build and push proteon-evident
+    # Matrix over the two image variants. The slim variant carries the
+    # GHCR-published default tag (:main / :sha-... / :v...); the cuda
+    # variant pushes only on main / tag / dispatch with a cuda- prefix
+    # so a broken CUDA Dockerfile cannot merge without CI exercising
+    # it, but consumers without an NVIDIA runtime are unaffected.
+    name: Build proteon-evident (${{ matrix.variant.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - name: slim
+            dockerfile: evident/Dockerfile
+            tag_prefix: ""
+          - name: cuda
+            dockerfile: evident/Dockerfile.cuda
+            tag_prefix: "cuda-"
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Validate EVIDENT manifest before building image
+        # Run once per matrix cell so a manifest regression fails both
+        # variants symmetrically; the work is sub-second.
         run: |
           python3 -m pip install --quiet pyyaml
           python3 evident/tools/validate_manifest.py evident/evident.yaml
@@ -63,33 +81,44 @@ jobs:
 
       - name: Compute image tags
         id: tags
+        env:
+          TAG_PREFIX: ${{ matrix.variant.tag_prefix }}
         run: |
           # GHCR demands lowercase repo paths.
           IMAGE_BASE="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/proteon-evident"
-          TAGS="${IMAGE_BASE}:sha-${GITHUB_SHA::7}"
+          TAGS="${IMAGE_BASE}:${TAG_PREFIX}sha-${GITHUB_SHA::7}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
-            TAGS="${TAGS},${IMAGE_BASE}:${VERSION},${IMAGE_BASE}:latest"
+            TAGS="${TAGS},${IMAGE_BASE}:${TAG_PREFIX}${VERSION},${IMAGE_BASE}:${TAG_PREFIX}latest"
           elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
-            TAGS="${TAGS},${IMAGE_BASE}:main"
+            TAGS="${TAGS},${IMAGE_BASE}:${TAG_PREFIX}main"
           else
-            TAGS="${TAGS},${IMAGE_BASE}:dispatch-${GITHUB_RUN_ID}"
+            TAGS="${TAGS},${IMAGE_BASE}:${TAG_PREFIX}dispatch-${GITHUB_RUN_ID}"
           fi
           echo "tags=${TAGS}" >> "${GITHUB_OUTPUT}"
           echo "Tags: ${TAGS}"
 
-      - name: Build and push image
+      - name: Build image (load to local daemon)
+        # `load: true` exports the built image into the local docker
+        # daemon (via tarball under the docker-container driver) so
+        # the smoke step below can run it before any GHCR push. This
+        # is the key ordering: build -> load -> smoke -> push, with
+        # the push gated on smoke success. A failing native-wheel
+        # smoke now blocks publication of :main / :latest / :v...
+        # rather than discovering the regression after consumers
+        # already pulled the bad tag.
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: evident/Dockerfile
-          # PRs validate the build only; main / tag / dispatch push.
-          push: ${{ github.event_name != 'pull_request' }}
+          file: ${{ matrix.variant.dockerfile }}
+          load: true
+          push: false
           tags: ${{ steps.tags.outputs.tags }}
-          # Inline cache for repeat builds; the Rust + oracle layers
-          # change far less often than the proteon source.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Per-variant cache scope so slim and cuda don't churn each
+          # other's layer cache despite sharing the builder + oracle
+          # stage Dockerfile prefix.
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
           # Annotate the image with the source SHA so a reviewer can
           # walk back from the GHCR digest to the producing commit
           # without consulting the workflow run.
@@ -97,15 +126,38 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ github.event.repository.updated_at }}
 
-      - name: Smoke-test pulled image
-        # Skipped on pull_request because no image was pushed.
-        # Confirms the manifest still validates from inside the image,
-        # so a build that breaks evident at runtime is caught before
-        # the image is consumed downstream.
-        if: github.event_name != 'pull_request'
+      - name: Smoke-test built image
+        # Runs on EVERY event, including pull_request — the image is
+        # in the local daemon regardless of whether we will push. Both
+        # variants run the same smoke; the cuda variant does NOT need
+        # a GPU here because cudarc dlopens libcuda lazily and the
+        # import succeeds without a GPU. That is the test that
+        # catches a builder/runtime glibc mismatch on the cuda image
+        # at the cdylib load step, which a GPU-only smoke would have
+        # left undetected.
+        env:
+          TAG_PREFIX: ${{ matrix.variant.tag_prefix }}
         run: |
           IMAGE_BASE="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/proteon-evident"
-          TAG="sha-${GITHUB_SHA::7}"
-          docker pull "${IMAGE_BASE}:${TAG}"
+          TAG="${TAG_PREFIX}sha-${GITHUB_SHA::7}"
           docker run --rm "${IMAGE_BASE}:${TAG}" validate evident/evident.yaml
           docker run --rm "${IMAGE_BASE}:${TAG}" list evident/evident.yaml
+          # Native-wheel import smoke. proteon_connector is the
+          # PyO3 cdylib (Cargo.toml [lib] name = "proteon_connector");
+          # importing it directly catches the case where the proteon
+          # Python wrapper has an ImportError fallback that masks a
+          # cdylib load failure (per reference_pyo3_coverage_trap).
+          docker run --rm --entrypoint=python3 "${IMAGE_BASE}:${TAG}" \
+              -c "import proteon_connector; import proteon; print('proteon native wheel ok')"
+
+      - name: Push image (only after smoke passes)
+        # Skipped on pull_request — fork PRs lack package:write and
+        # PR builds intentionally do not publish. The image is
+        # already tagged in the local daemon from the load-true build
+        # above, so this step is a pure registry push, not a rebuild.
+        if: github.event_name != 'pull_request'
+        run: |
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.tags }}"
+          for tag in "${TAGS[@]}"; do
+            docker push "$tag"
+          done

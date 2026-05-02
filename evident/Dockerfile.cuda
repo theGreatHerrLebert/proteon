@@ -1,0 +1,302 @@
+# Proteon EVIDENT reproducibility image — CUDA variant.
+#
+# Mirrors evident/Dockerfile (the :slim image) but:
+#   1. Builds proteon-connector with --features cuda so the GPU code
+#      paths compile in (cudarc + proteon-search/cuda + the embedded
+#      .cu kernels compiled at runtime via NVRTC).
+#   2. Runs on top of nvidia/cuda:12.5.0-runtime-ubuntu22.04 so the
+#      runtime CUDA libs (libcudart, libnvrtc) are present and host
+#      libcuda is forwarded by `docker run --gpus all`.
+#
+# Build (from proteon repo root):
+#   docker build -f evident/Dockerfile.cuda -t proteon-evident:cuda .
+# Run (host needs nvidia-container-runtime):
+#   docker run --rm --gpus all proteon-evident:cuda evident list evident/evident.yaml
+#
+# Why a separate Dockerfile rather than a target in evident/Dockerfile:
+# the runtime base differs (nvidia/cuda Ubuntu 22.04 vs the slim
+# image's python:3.11-slim-trixie), and inheriting the slim runtime
+# would either lose the CUDA libs or duplicate them. All three stages
+# of THIS file are pinned to ubuntu:22.04-glibc binaries (jammy,
+# glibc 2.35) so the proteon-connector cdylib and the oracle binaries
+# link against the same glibc the runtime stage provides — building
+# on a newer-glibc base (slim's trixie at 2.41, or bookworm at 2.36)
+# and copying into jammy would fail with missing-GLIBC symbols at
+# import / exec time. Slim is trixie-everywhere; this image is
+# jammy-everywhere.
+#
+# CUDA version: 12.5.0 to match cudarc 0.19's cuda-12050 feature.
+# Bumping cudarc requires bumping the base image tag here too.
+
+# ---------------------------------------------------------------------------
+# Stage 1: Rust builder.
+#
+# Built on ubuntu:22.04 — the SAME glibc as the runtime stage below
+# (nvidia/cuda:12.5.0-runtime-ubuntu22.04 is jammy, glibc 2.35). This
+# matters because the proteon-connector wheel is a PyO3 cdylib that
+# links to host glibc; building on a newer glibc (slim's trixie at
+# 2.41, or bookworm at 2.36) and copying into jammy would fail to
+# load at import time with missing-GLIBC symbols.
+#
+# Rust comes from rustup rather than the official rust:1.88 image
+# because that image is debian-based and reintroduces the glibc
+# mismatch. Python 3.11 (the wheel ABI target) comes from the
+# deadsnakes PPA since jammy's default python3 is 3.10. cudarc loads
+# libcuda at runtime via dlopen, so the builder does NOT need a CUDA
+# SDK; the runtime stage forwards host libcuda through the NVIDIA
+# Container Runtime.
+# ---------------------------------------------------------------------------
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH=/root/.cargo/bin:/opt/build-venv/bin:${PATH}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+        ca-certificates curl gnupg \
+        build-essential pkg-config git \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-dev python3.11-venv \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 100
+
+# Rust 1.88+ required: cudarc's transitive dep libloading@0.9.0 bumped
+# its MSRV to 1.88. Pinned profile=minimal — no rustfmt/clippy, no
+# rust-docs; the builder only needs cargo + rustc.
+ARG RUST_VERSION=1.88.0
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain "${RUST_VERSION}" --profile minimal
+
+RUN python3.11 -m venv /opt/build-venv && \
+    /opt/build-venv/bin/pip install --no-cache-dir maturin build
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY proteon-align       ./proteon-align/
+COPY proteon-io          ./proteon-io/
+COPY proteon-arrow       ./proteon-arrow/
+COPY proteon-search      ./proteon-search/
+COPY proteon-bin         ./proteon-bin/
+COPY proteon-connector   ./proteon-connector/
+COPY packages            ./packages/
+COPY validation          ./validation/
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md VERSION ./
+
+# Wheel 1: proteon-connector with cuda feature on. Compiles in the
+# cudarc bindings, forwards proteon-search/cuda for GPU SW kernels,
+# and embeds the .cu source via include_str! for runtime NVRTC.
+RUN /opt/build-venv/bin/maturin build \
+        --release \
+        --out /wheels \
+        --manifest-path proteon-connector/Cargo.toml \
+        --features cuda
+
+# Wheel 2: proteon (pure-Python wrapper). Same as :slim — the Python
+# layer doesn't change between CPU and GPU builds; dispatch happens in
+# the connector at import time based on cudarc's runtime probe.
+RUN /opt/build-venv/bin/python -m build --wheel \
+        --outdir /wheels packages/proteon \
+    && ls -la /wheels
+
+# ---------------------------------------------------------------------------
+# Stage 2: Oracle binaries — built on the SAME glibc as the runtime.
+#
+# Same reasoning as the builder above: the runtime is
+# nvidia/cuda:12.5.0-runtime-ubuntu22.04 (jammy, glibc 2.35). Building
+# oracles on a newer-glibc base (slim's trixie at 2.41) and copying
+# them in would leave them linked against GLIBC symbols that don't
+# exist on jammy. ubuntu:22.04 keeps every binary in this image —
+# Rust cdylib, USAlign, reduce, mkdssp, libcifpp — on the same glibc
+# the runtime ships.
+# ---------------------------------------------------------------------------
+FROM ubuntu:22.04 AS oracles
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CC=gcc-13 \
+    CXX=g++-13
+
+# ubuntu-toolchain-r/test PPA carries gcc-13 / g++-13 / libstdc++-13.
+# libcifpp HEAD uses C++20 <format>, available only in libstdc++-13+;
+# jammy's default g++-11 fails to compile it. Runtime stage below
+# pulls the same libstdc++6 from this PPA so the binaries can load.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+        ca-certificates gnupg \
+    && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        git wget tar xz-utils make pkg-config \
+        libboost-program-options-dev libboost-iostreams-dev libboost-date-time-dev \
+        zlib1g-dev libeigen3-dev \
+        gcc-13 g++-13 libstdc++-13-dev \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Newer CMake (3.28+) for libmcfp. Jammy's apt cmake is 3.22, which
+# fails configure on libmcfp. Install Kitware's pinned binary tarball
+# BEFORE any cmake-using build below — same pattern as :slim's previous
+# bookworm story. Slim now lives on trixie which has cmake 3.31 in
+# apt and so dropped this block.
+ARG CMAKE_VERSION=3.30.5
+RUN wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" -O /tmp/cmake.tar.gz && \
+    tar -xzf /tmp/cmake.tar.gz -C /opt && \
+    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake" /usr/local/bin/cmake && \
+    ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/ctest" /usr/local/bin/ctest && \
+    rm /tmp/cmake.tar.gz
+
+WORKDIR /build
+
+RUN git clone --depth 1 https://github.com/pylelab/USAlign.git && \
+    cd USAlign && make USalign && \
+    install -m 0755 USalign /usr/local/bin/USalign && \
+    cd .. && rm -rf USAlign
+
+RUN git clone --depth 1 https://github.com/rlabduke/reduce.git && \
+    cmake -S reduce -B reduce/build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build reduce/build -j"$(nproc)" && \
+    install -m 0755 reduce/build/reduce_src/reduce /usr/local/bin/reduce && \
+    install -m 0644 reduce/reduce_wwPDB_het_dict.txt /usr/local/share/reduce_wwPDB_het_dict.txt && \
+    rm -rf reduce
+
+ARG MMSEQS_VERSION=15-6f452
+RUN wget -q "https://github.com/soedinglab/MMseqs2/releases/download/${MMSEQS_VERSION}/mmseqs-linux-avx2.tar.gz" -O /tmp/mmseqs.tar.gz && \
+    tar -xzf /tmp/mmseqs.tar.gz -C /opt && \
+    ln -s /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs && \
+    rm /tmp/mmseqs.tar.gz
+
+# mkdssp (PDB-REDO/dssp) build chain. Slim builds the same chain on
+# trixie's default cmake / gcc-14 toolchain; this image's jammy base
+# requires the Kitware cmake + gcc-13 PPA installed above to satisfy
+# the same C++20 <format> requirement.
+RUN git clone --depth 1 https://github.com/mhekkel/libmcfp.git && \
+    cmake -S libmcfp -B libmcfp/build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build libmcfp/build -j"$(nproc)" && \
+    cmake --install libmcfp/build && \
+    rm -rf libmcfp
+
+RUN git clone --depth 1 https://github.com/PDB-REDO/libcifpp.git && \
+    cmake -S libcifpp -B libcifpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCIFPP_DOWNLOAD_CCD=OFF \
+        -DCIFPP_INSTALL_UPDATE_SCRIPT=OFF \
+        -DBUILD_TESTING=OFF && \
+    cmake --build libcifpp/build -j"$(nproc)" && \
+    cmake --install libcifpp/build && \
+    rm -rf libcifpp
+
+RUN git clone --depth 1 https://github.com/PDB-REDO/dssp.git && \
+    cmake -S dssp -B dssp/build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && \
+    cmake --build dssp/build -j"$(nproc)" && \
+    install -m 0755 dssp/build/mkdssp /usr/local/bin/mkdssp && \
+    rm -rf dssp
+
+# ---------------------------------------------------------------------------
+# Stage 3: CUDA runtime — NVIDIA's official 12.5.0 Ubuntu 22.04 base
+# carries libcudart and libnvrtc; libcuda is forwarded from the host
+# at run time via the NVIDIA Container Runtime (`docker run --gpus all`).
+# Python 3.11 lands via the deadsnakes PPA (Ubuntu 22.04 default is 3.10).
+# ---------------------------------------------------------------------------
+FROM nvidia/cuda:12.5.0-runtime-ubuntu22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    REDUCE_BIN=/usr/local/bin/reduce \
+    REDUCE_DB=/usr/local/share/reduce_wwPDB_het_dict.txt \
+    USALIGN_BIN=/usr/local/bin/USalign \
+    PROTEON_SEARCH_MMSEQS_BIN=/usr/local/bin/mmseqs \
+    GMX=/usr/bin/gmx \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+LABEL org.opencontainers.image.title="proteon-evident-cuda" \
+      org.opencontainers.image.description="Proteon (CUDA) + oracle stack + EVIDENT CLI for replaying GPU-enabled manifest claims" \
+      org.opencontainers.image.source="https://github.com/theGreatHerrLebert/proteon" \
+      org.opencontainers.image.licenses="MIT"
+
+# Python 3.11 via deadsnakes (matches the builder's wheel ABI).
+# Plus runtime libs: gcc/python3.11-dev for freesasa sdist build,
+# gromacs for the AMBER96 fold-preservation claim, libgomp1/libstdc++6
+# for the source-built oracles.
+#
+# libstdc++6 must come from ubuntu-toolchain-r/test (same PPA as the
+# oracles stage's gcc-13) so the runtime carries the libstdc++-13
+# GLIBCXX_3.4.32+ symbols the C++20-<format>-using libcifpp.so was
+# linked against. Without this PPA, jammy's default libstdc++6
+# (g++-11 era) lacks those symbols and mkdssp fails to load.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+        ca-certificates wget gnupg \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-dev python3.11-venv \
+        gcc \
+        gromacs \
+        libgomp1 libstdc++6 \
+        libboost-program-options1.74.0 libboost-iostreams1.74.0 libboost-date-time1.74.0 \
+    && wget -qO /tmp/get-pip.py https://bootstrap.pypa.io/get-pip.py \
+    && python3.11 /tmp/get-pip.py \
+    && rm /tmp/get-pip.py \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 100 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Oracle binaries from stage 2.
+COPY --from=oracles /usr/local/bin/USalign        /usr/local/bin/USalign
+COPY --from=oracles /usr/local/bin/reduce         /usr/local/bin/reduce
+COPY --from=oracles /usr/local/share/reduce_wwPDB_het_dict.txt \
+                                                  /usr/local/share/reduce_wwPDB_het_dict.txt
+COPY --from=oracles /opt/mmseqs                   /opt/mmseqs
+COPY --from=oracles /usr/local/bin/mmseqs         /usr/local/bin/mmseqs
+COPY --from=oracles /usr/local/bin/mkdssp         /usr/local/bin/mkdssp
+COPY --from=oracles /usr/local/lib/libcifpp.so*   /usr/local/lib/
+COPY --from=oracles /usr/local/share/libcifpp     /usr/local/share/libcifpp
+RUN ldconfig
+
+# Pip oracles + the proteon wheels from stage 1.
+COPY --from=builder /wheels /tmp/wheels
+RUN python3.11 -m pip install --no-cache-dir \
+        biopython \
+        gemmi \
+        freesasa \
+        pydssp \
+        openmm \
+        pdbfixer \
+        numpy \
+        pyyaml \
+        pytest \
+    && python3.11 -m pip install --no-cache-dir \
+        /tmp/wheels/proteon_connector-*.whl \
+        /tmp/wheels/proteon-*.whl \
+    && rm -rf /tmp/wheels
+
+WORKDIR /workspace/proteon
+COPY tests          ./tests/
+COPY test-pdbs      ./test-pdbs/
+COPY validation     ./validation/
+COPY evident        ./evident/
+COPY benchmark      ./benchmark/
+COPY devdocs        ./devdocs/
+COPY docs           ./docs/
+COPY README.md THIRD_PARTY_NOTICES.md LICENSE VERSION ./
+
+# Install the EVIDENT CLI from the vendored copy. Path differs from
+# :slim because Ubuntu's site-packages live under dist-packages, but
+# /usr/local/lib/python3.11/site-packages is on sys.path at the same
+# precedence so the validate_manifest module is importable.
+# Ubuntu's deadsnakes Python 3.11 uses dist-packages, not site-packages
+# (a Debian/Ubuntu convention). Without this, `import validate_manifest`
+# from inside evident.py fails with ModuleNotFoundError.
+RUN install -m 0755 /workspace/proteon/evident/tools/evident.py \
+                    /usr/local/bin/evident \
+    && install -m 0644 /workspace/proteon/evident/tools/validate_manifest.py \
+                    /usr/local/lib/python3.11/dist-packages/validate_manifest.py
+
+ENTRYPOINT ["evident"]
+CMD ["list", "evident/evident.yaml"]
