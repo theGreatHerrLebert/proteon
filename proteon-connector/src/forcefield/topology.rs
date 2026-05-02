@@ -742,7 +742,19 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                 // residue containing atom J and `-`/`+` prefixes for
                 // cross-residue atoms.
                 let anchor_res_idx = atoms[j].residue_idx;
-                let anchor_res_name = &atoms[j].residue_name;
+                // BALL's [ResidueTorsions] indexes by RESIDUE-VARIANT
+                // (THR-N for the N-terminal threonine, ASN-C for the
+                // C-terminal asparagine, CYS-S for disulfide cysteines).
+                // proteon's `residue_variants` map is built in step 0
+                // with exactly that information; use the variant here
+                // and fall back to the base name for interior residues
+                // (which BALL also indexes by base, e.g. "ALA"). Without
+                // this, the 3 N-terminal H's and the C-terminal OXT
+                // atoms participate in 4-atom paths that BALL counts as
+                // canonical torsions but proteon was rejecting.
+                let anchor_res_name = residue_variants
+                    .get(&anchor_res_idx)
+                    .map_or_else(|| atoms[j].residue_name.as_str(), |s| s.as_str());
                 // Compute cross-residue prefixes when possible. For
                 // 4-atom paths whose residue spread is greater than
                 // ±1 (e.g. disulfide-bridge torsions on crambin's

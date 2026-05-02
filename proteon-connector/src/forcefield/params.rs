@@ -1001,6 +1001,54 @@ impl CharmmParams {
     }
 }
 
+/// Build all the name spellings to try when looking up an atom in the
+/// CHARMM `[ResidueTorsions]` table.
+///
+/// The atom name may carry a single cross-residue prefix (`-`, `+`, `=`),
+/// which is preserved across all candidates. Only the trailing atom-name
+/// portion is alt-canonicalized, and ONLY via the digit-rotation rule
+/// (`H1` ↔ `1H`, `HD21` ↔ `1HD2`) — not via the methylene decrement-
+/// then-rotate rule that `topology::alt_h_name_candidates` also offers
+/// for atom-type lookup.
+///
+/// Why no decrement: BALL's [ResidueTorsions] never references methylene
+/// H atoms (the only H names that appear are `1H/2H/3H` for the N-
+/// terminal NH3+, plus the explicit `1HD2`/`2HD2`/`1HH1`/`2HH1`/...
+/// entries that are EXACTLY indexed). The decrement rule (HD22 → 1HD2)
+/// would over-match — proteon's HD22 atom is a different atom from the
+/// HD21 that maps to BALL's 1HD2 template, but the rule would mark
+/// both as canonical, double-counting torsions and inflating the
+/// proteon-vs-BALL gap (1186 → 994 measured, 19% over).
+fn name_candidates(name: &str) -> Vec<String> {
+    if name.is_empty() {
+        return vec![String::new()];
+    }
+    let (prefix, body) = match name.as_bytes()[0] {
+        b'-' | b'+' | b'=' => (&name[..1], &name[1..]),
+        _ => ("", name),
+    };
+    let mut out = vec![name.to_string()];
+    if body.is_empty() {
+        return out;
+    }
+    let bytes = body.as_bytes();
+    let first = bytes[0] as char;
+    let last = bytes[bytes.len() - 1] as char;
+    if first.is_ascii_digit() {
+        // BALL → PDB v3: `1HD2` → `HD21`.
+        let rest = &body[1..];
+        out.push(format!("{prefix}{rest}{first}"));
+    } else if last.is_ascii_digit() {
+        // PDB v3 → BALL: `HD21` → `1HD2`.
+        let head = &body[..body.len() - 1];
+        out.push(format!("{prefix}{last}{head}"));
+    } else if body == "H" {
+        // PDB v3 lone amide-H name → BALL N-terminal `1H`.
+        out.push(format!("{prefix}1H"));
+    }
+    out
+}
+
 impl ForceField for CharmmParams {
     fn get_atom_type(&self, residue: &str, atom: &str) -> Option<&AtomTypeEntry> {
         let key = format!("{residue}:{atom}");
@@ -1164,22 +1212,63 @@ impl ForceField for CharmmParams {
         name_c: &str,
         name_d: &str,
     ) -> bool {
-        // CHARMM filter: only count this 4-atom path as a torsion if
-        // it is listed in `[ResidueTorsions]` for the anchor residue.
-        // The empty fallback (residue name not in the table) returns
-        // false — i.e. residues without a per-residue torsion template
-        // contribute zero torsion energy (mirrors BALL's behavior on
-        // non-templated residues; see charmmTorsion.C:261).
-        let Some(set) = self.residue_torsions.get(anchor_residue) else {
-            return false;
+        // CHARMM filter: count this 4-atom path as a torsion only if
+        // it (or a name-equivalent variant) is listed in
+        // `[ResidueTorsions]` for the anchor residue.
+        //
+        // Two layers of name aliasing apply:
+        //
+        // 1. Residue variant: BALL's table indexes terminal-residue
+        //    torsions under the variant name (THR-N has `1H N CA C`;
+        //    THR does not). The caller passes the variant when
+        //    applicable. BALL's CharmmFF does NOT also fall back to the
+        //    base template when a variant exists — terminal-residue
+        //    variants are EXHAUSTIVE templates that re-enumerate every
+        //    canonical path including the ones inherited from the base.
+        //    We mirror that: variant-only lookup, no base fallback.
+        //
+        // 2. H-atom naming: BALL's [ResidueTorsions] uses leading-digit
+        //    H names (`1HD2`, `2H`, `3H`). proteon's polar-H placer
+        //    emits trailing-digit names (`HD21`, `H2`, `H3`). Use the
+        //    existing alt-H machinery to bridge both directions before
+        //    looking up.
+        //
+        // Without (1) the N-terminal NH3+ torsions don't resolve;
+        // without (2) the sidechain ND2/NE2/etc H-containing paths
+        // don't resolve. Both together close the unit-oracle proper-
+        // torsion gate from 76% off to within band on crambin.
+        let candidates_a = name_candidates(name_a);
+        let candidates_b = name_candidates(name_b);
+        let candidates_c = name_candidates(name_c);
+        let candidates_d = name_candidates(name_d);
+
+        let try_residue = |residue: &str| -> bool {
+            let Some(set) = self.residue_torsions.get(residue) else {
+                return false;
+            };
+            // Torsion energy is symmetric under reversal of the 4-atom
+            // path (cos(f·φ − phi0) = cos(f·(−φ) + phi0) up to a sign),
+            // so [ResidueTorsions] is direction-agnostic. proteon's
+            // bond-graph enumeration emits (i, j, k, l) following the
+            // bond.i / bond.j order, which doesn't necessarily match
+            // BALL's table order. Try both directions.
+            for a in &candidates_a {
+                for b in &candidates_b {
+                    for c in &candidates_c {
+                        for d in &candidates_d {
+                            if set.contains(&(a.clone(), b.clone(), c.clone(), d.clone()))
+                                || set.contains(&(d.clone(), c.clone(), b.clone(), a.clone()))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            false
         };
-        let key = (
-            name_a.to_string(),
-            name_b.to_string(),
-            name_c.to_string(),
-            name_d.to_string(),
-        );
-        set.contains(&key)
+
+        try_residue(anchor_residue)
     }
     fn scee(&self) -> f64 {
         self.scee

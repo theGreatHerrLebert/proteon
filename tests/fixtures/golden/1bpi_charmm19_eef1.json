@@ -5,11 +5,11 @@
     "electrostatic": 1620.760531955627,
     "improper_torsion": 0.0,
     "solvation": -2507.135517962203,
-    "torsion": 366.89100198394414,
+    "torsion": 379.94540734232476,
     "vdw": -938.2067619475896
   },
   "ff": "charmm19_eef1",
   "pdb": "1bpi",
-  "total": 129.76257826661433,
+  "total": 142.8169836249949,
   "units": "kJ/mol"
 }

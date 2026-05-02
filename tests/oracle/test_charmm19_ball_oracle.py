@@ -141,14 +141,25 @@ class TestCharmm19BallOracle:
     # failure_modes block. Strict=False so a future fix flips the
     # xfail to xpass and surfaces immediately rather than masking.
 
-    @pytest.mark.xfail(
-        reason="proteon CHARMM proper_torsion 238 vs BALL 994 on crambin (~76% off) under the corrected polar-H fixture (place_all_hydrogens(polar_only=True)). Earlier readings of '218 vs 230 / 5.1%' came from the half-prepared fixture (place_peptide_hydrogens-only) which left N-terminal and sidechain polar H's unplaced — once those H atoms are present, BALL discovers many new H-containing 4-atom torsion paths (e.g. H1-N-CA-C at the N-terminus) that proteon's [ResidueTorsions] filter does not yet enumerate. The fix is in proteon's residue_prefix logic for terminal-variant entries (THR-N, ASN-C) and in the H-atom alt-name machinery for HD21/HD22 vs 1HD2/2HD2 at the [ResidueTorsions] lookup site. See geometry_charmm19_ball.yaml failure_modes",
-        strict=False,
-    )
     def test_proper_torsion(self, reference_energies):
+        # Three CHARMM topology conventions land here:
+        # (1) [ResidueTorsions] is indexed by RESIDUE-VARIANT (THR-N,
+        #     ASN-C, CYS-S) — proteon now passes the variant when a
+        #     residue is N-terminal / C-terminal / disulfide-bonded.
+        # (2) The 4-atom path is direction-symmetric: BALL's table may
+        #     list (CG, CD, N, CA) while proteon enumerates the path as
+        #     (CA, N, CD, CG); we try both directions.
+        # (3) PDB v3 ↔ BALL H-name aliasing (HD21 ↔ 1HD2) via strict
+        #     digit-rotation only — NO methylene decrement (HD22 → 1HD2
+        #     would over-match because BALL's normalize_names step keeps
+        #     HD21 and HD22 distinct, only mapping HD21 to 1HD2).
+        # Match on crambin: 994.38 vs 994.37 kJ/mol (8e-3 abs diff,
+        # 0.0008% — at the float-accumulation floor). The 1% band is
+        # ~1000x looser than the measured residual, leaving room for
+        # parameter-file vintage or atom-ordering noise across PDBs.
         proteon_e, ball_e = reference_energies
         rel = abs(proteon_e["torsion"] - ball_e["torsion"]) / abs(ball_e["torsion"])
-        assert rel < 0.025, f"proper torsion relative diff {rel:.3%} exceeds 2.5%"
+        assert rel < 0.01, f"proper torsion relative diff {rel:.4%} exceeds 1%"
 
     @pytest.mark.xfail(
         reason="proteon CHARMM improper_torsion = 0 vs BALL 264.94 on crambin under the corrected polar-H fixture (was BALL 39.7 under the half-prepared fixture; the higher number reflects new sidechain N-H impropers like ASN:ND2-HD21-HD22-CG that are visible only with full polar-H placement). Parser + topology scaffolding from PR #22 is in place (CHARMM's 7-column [ImproperTorsions], 5-column [ResidueImproperTorsions]); the harmonic-improper energy compute is dead-code-gated until the unsigned-dihedral chain rule is reconciled with the existing Bekker analytical-force chain. See geometry_charmm19_ball.yaml failure_modes",
