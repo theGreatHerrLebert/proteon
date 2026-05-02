@@ -178,9 +178,10 @@ RUN git clone --depth 1 https://github.com/PDB-REDO/dssp.git && \
 # ---------------------------------------------------------------------------
 # python:3.11-slim-trixie matches the builder + oracles stages on the
 # trixie base. proteon's requires-python is >=3.11, so this is fully
-# supported. To move to Python 3.13 in a future image, also bump the
-# builder/oracles bases to keep the wheel ABI tag in lockstep.
-FROM python:3.11-slim-trixie AS runtime
+# supported. The builder stage uses trixie's default python3 (3.13),
+# producing cp313-cp313 wheels — the runtime base must match the
+# builder's wheel ABI tag, hence python:3.13.
+FROM python:3.13-slim-trixie AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -280,7 +281,7 @@ COPY README.md THIRD_PARTY_NOTICES.md LICENSE VERSION ./
 RUN install -m 0755 /workspace/proteon/evident/tools/evident.py \
                     /usr/local/bin/evident && \
     install -m 0644 /workspace/proteon/evident/tools/validate_manifest.py \
-                    /usr/local/lib/python3.11/site-packages/validate_manifest.py
+                    /usr/local/lib/python3.13/site-packages/validate_manifest.py
 
 # Default invocation: list all claims in the proteon manifest.
 ENTRYPOINT ["evident"]
