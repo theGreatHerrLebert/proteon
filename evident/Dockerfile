@@ -116,7 +116,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git ca-certificates \
         wget tar xz-utils \
+        python3 python3-dev \
         libboost-program-options-dev libboost-iostreams-dev libboost-date-time-dev \
+        libboost-python-dev \
+        libsqlite3-dev \
         zlib1g-dev libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
