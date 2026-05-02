@@ -133,6 +133,24 @@ pub trait ForceField: Send + Sync {
         false
     }
 
+    /// Whether the Coulomb term uses a distance-dependent dielectric
+    /// (ε = r → energy goes as 1/r²) instead of constant ε=1 (1/r).
+    ///
+    /// CHARMM19+EEF1 (Lazaridis & Karplus 1999) is **parameterized for
+    /// distance-dependent dielectric** — it's the implicit screening
+    /// the partial charges expect. BALL's `CharmmFF::Default::DISTANCE_
+    /// DEPENDENT_DIELECTRIC = true` (`charmm.C:52`) reflects that. Without
+    /// this, proteon's CHARMM electrostatic comes out ~2.8x too negative
+    /// vs BALL on crambin (constant ε attracts charges much more than ε=r).
+    ///
+    /// AMBER96 keeps constant dielectric (BALL's `AmberFF::Default::DDDC
+    /// = false`, `amber.C:43`), matching OpenMM's `NonbondedForce`
+    /// convention. The default `false` here preserves AMBER96's existing
+    /// 0.2% oracle parity to OpenMM.
+    fn uses_distance_dependent_dielectric(&self) -> bool {
+        false
+    }
+
     /// Nonbonded interaction cutoff (Å). Pairs beyond this distance are
     /// ignored in the LJ + Coulomb loops and the NBL builder.
     ///
@@ -1178,6 +1196,11 @@ impl ForceField for CharmmParams {
     /// CHARMM applies the PHE/TYR para-diagonal LJ exclusion. See trait
     /// doc + `charmmNonBonded.C:547-565` for the convention.
     fn excludes_aromatic_ring_diagonals(&self) -> bool {
+        true
+    }
+    /// CHARMM19+EEF1 is parameterized for ε ∝ r. Match BALL's default
+    /// (`charmm.C:52` `DISTANCE_DEPENDENT_DIELECTRIC = true`).
+    fn uses_distance_dependent_dielectric(&self) -> bool {
         true
     }
     /// CHARMM19+EEF1 canonical cutoff from BALL's param19_eef1.ini:

@@ -149,17 +149,18 @@ claims:
         wheel is unavailable — the slim EVIDENT image is expected to
         carry it after first PyPI publish lands.
     failure_modes:
-      - "PARTIAL ACTIVATION as of 2026-05-01: the CHARMM19 cutoff
+      - "PARTIAL ACTIVATION as of 2026-05-02: the CHARMM19 cutoff
         override landed (proteon-connector now accepts
         nonbonded_cutoff=1e6 for ff='charmm19_eef1', symmetric to
         AMBER96). Activating the test on crambin with shared
         polar-H placement (proteon places, BALL reads with
         add_hydrogens=False) reveals a clean two-tier picture:
-        bond_stretch (0.7%), angle_bend (0.8%), EEF1 solvation
-        (0.7%), and vdw (< 0.01%) agree well within tolerance and
-        gate live. Three components remain divergent and are
-        xfail-marked in tests/oracle/test_charmm19_ball_oracle.py
-        with strict=False so a future fix surfaces as xpass:
+        bond_stretch (0.7%), angle_bend (0.6%), EEF1 solvation
+        (0.7%), vdw (< 0.01%), and electrostatic (< 0.02%) all
+        agree well within tolerance and gate live. Two components
+        remain divergent and are xfail-marked in
+        tests/oracle/test_charmm19_ball_oracle.py with strict=False
+        so a future fix surfaces as xpass:
           - proper_torsion: 238 vs 994 kJ/mol (~76% off) under the
             corrected polar-H fixture (place_all_hydrogens(polar_only=
             True)). The earlier 218 vs 230 / 5.1%-off reading was
@@ -224,37 +225,36 @@ claims:
             of spurious LJ repulsion when not excluded. AMBER does
             NOT use this exclusion so the trait default is false,
             preserving AMBER96's existing 0.2% oracle gate.)
-          - electrostatic: -6938 vs -2466 kJ/mol (~2.81x too negative)
-            under the corrected polar-H fixture. Sign is now correct
-            — the previous "+195 vs -2711 kJ/mol" reading mixed two
-            distinct bugs: the test adapter computed BALL's
-            "electrostatic" as `nonbonded - vdw`, double-counting EEF1
-            solvation (BALL's `getNonbondedEnergy()` returns
-            `vdw + es + solv`, not just `vdw + es`); and the fixture
-            used `place_peptide_hydrogens` which left ~30 polar Hs
-            unplaced, leaving residue 0's NH3+ N at -1.35e with no
-            balancing H+ atoms. Both are fixed in this PR — the
-            adapter now subtracts solvation, and the fixture uses
-            `place_all_hydrogens(polar_only=True)` so the N-terminus
-            is properly NH3+ and the C-terminus stays COO-.
-
-            Residual 2.81x factor is unexplained. We've ruled out:
-            (1) per-atom charges — verified 0/396 mismatches against
-                the param19_eef1.ini [ChargesAndTypeNames] table,
-            (2) 1-4 pair classification — proteon's bond-graph
-                enumeration is algorithmically equivalent to BALL's
-                isVicinal traversal,
-            (3) @E14FAC=0.4 scaling — applied identically by both
-                tools,
-            (4) switching function — disabled for both at
-                nonbonded_cutoff=1e6 (sw≈1.0 for r << cutoff).
-            Open hypotheses: cross-residue 1-4 pair handling at the
-            disulfide bridges, BALL's residue-template-driven pair
-            list dropping ES contributions for some pair-types
-            proteon enumerates, or a polar-H position discrepancy
-            not visible at the per-atom-name level. Moving past the
-            sign-flip is meaningful progress but the 2.81x band
-            remains gated and the test stays xfail with strict=False.
+          - (electrostatic moved to PASSING tier 2026-05-02:
+            -2465.79 vs -2466.29 kJ/mol, < 0.02% rel diff. Three-step
+            fix: (1) test adapter was computing BALL's "electrostatic"
+            as `nonbonded - vdw`, silently double-counting EEF1
+            solvation since `getNonbondedEnergy()` returns
+            `vdw + es + solv`; the adapter now subtracts solvation.
+            (2) test fixture switched from `place_peptide_hydrogens`
+            (backbone-amide-H only, leaves ~-10.65e of fictitious
+            net charge with the N-terminal NH3+ N un-protonated) to
+            `place_all_hydrogens(polar_only=True)` (full polar-H
+            placement, system charge 0.0000e). (3) the kicker:
+            CHARMM19+EEF1 was parameterized for **distance-dependent
+            dielectric** (ε ∝ r → energy scales as 1/r²) per
+            Lazaridis & Karplus 1999 — that's the implicit screening
+            the partial charges expect. proteon was using constant
+            ε=1 (energy ∝ 1/r) like AMBER96 + OpenMM, attracting
+            charges ~3x more than the parameter set was tuned for.
+            BALL's `CharmmFF::Default::DISTANCE_DEPENDENT_DIELECTRIC
+            = true` (`charmm.C:52`) is the canonical convention.
+            proteon now consults a new
+            `ForceField::uses_distance_dependent_dielectric()`
+            trait method — `true` for CharmmParams, `false` for
+            AmberParams — preserving AMBER96's 0.2% OpenMM oracle
+            parity unchanged. Bug was invisible to internal cross-
+            path tests (NBL, FD-vs-analytical) because all paths
+            agreed in the same wrong way; only the BALL oracle
+            surfaced it. The 4-line patch in compute_energy_impl /
+            _and_forces_impl / _nbl already had the dist-dep code
+            path (originally for an old DD-dielectric escape hatch)
+            — it just needed wiring to the trait method.)
         Each is a separate Rust-side investigation; not blocked by
         BALL availability anymore. The first 3 PASSING assertions
         already gate against bonded/solvation regressions live in CI.

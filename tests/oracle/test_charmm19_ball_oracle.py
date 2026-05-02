@@ -171,18 +171,22 @@ class TestCharmm19BallOracle:
         rel = abs(proteon_e["vdw"] - ball_e["vdw"]) / abs(ball_e["vdw"])
         assert rel < 0.025, f"vdW relative diff {rel:.3%} exceeds 2.5%"
 
-    @pytest.mark.xfail(
-        reason="proteon CHARMM electrostatic -6938 vs BALL -2466 on crambin (~2.81x too negative). Sign is now correct (was sign-flipped at +195 vs -2711 before this PR's polar-H fix landed). Per-atom charges verified to match BALL's parameter file exactly (0/396 mismatches), the bond-graph 1-4 pair enumeration is algorithmically equivalent to BALL's isVicinal traversal, and the @E14FAC=0.4 scaling is applied identically by both tools. The residual 2.81x factor's origin is not yet localized; candidate hypotheses include (1) cross-residue 1-4 pair classification differences across disulfide bonds, (2) BALL's residue templates dropping ES contributions for some pair-types proteon enumerates, or (3) a polar-H position discrepancy not visible per-atom-name. See geometry_charmm19_ball.yaml failure_modes for the current state of the diagnosis.",
-        strict=False,
-    )
     def test_electrostatic(self, reference_energies):
-        # Wide by design — BALL diverges ~20% from OpenMM-canonical
-        # AMBER96 here on the AMBER+BALL claim; we expect a similar
-        # gap on CHARMM. The 25% band catches catastrophic charge-
-        # set regressions without breaking on the known divergence.
+        # CHARMM19+EEF1 distance-dependent dielectric (ε ∝ r → 1/r²) is
+        # the canonical convention from Lazaridis & Karplus 1999 — it's
+        # the implicit screening the partial charges expect. proteon now
+        # consults `ForceField::uses_distance_dependent_dielectric()`
+        # (true for CharmmParams, false for AmberParams) and the
+        # electrostatic matches BALL within 0.02% on crambin (-2465.79
+        # vs -2466.29 kJ/mol). Before this fix proteon was 2.81x too
+        # negative because constant ε attracts charges much more than
+        # ε=r — visible only via cross-tool oracle, not via internal
+        # cross-path tests (NBL/forces all agreed in the same wrong way).
+        # The 1% band is wide enough to absorb floating-point and atom-
+        # ordering noise without hiding a parameter regression.
         proteon_e, ball_e = reference_energies
         rel = abs(proteon_e["electrostatic"] - ball_e["electrostatic"]) / abs(ball_e["electrostatic"])
-        assert rel < 0.25, f"electrostatic relative diff {rel:.3%} exceeds 25%"
+        assert rel < 0.01, f"electrostatic relative diff {rel:.3%} exceeds 1%"
 
     def test_solvation_eef1(self, reference_energies):
         # EEF1 — BALL is the canonical reference here (no OpenMM
