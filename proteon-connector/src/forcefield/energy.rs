@@ -197,21 +197,48 @@ fn compute_energy_impl(
         let tj = &topo.atoms[torsion.j].amber_type;
         let tk = &topo.atoms[torsion.k].amber_type;
         let tl = &topo.atoms[torsion.l].amber_type;
-        let phi = compute_dihedral(
-            &coords[torsion.i],
-            &coords[torsion.j],
-            &coords[torsion.k],
-            &coords[torsion.l],
-        );
         if let Some(terms) = params.get_improper_torsion(ti, tj, tk, tl) {
+            let phi = compute_dihedral(
+                &coords[torsion.i],
+                &coords[torsion.j],
+                &coords[torsion.k],
+                &coords[torsion.l],
+            );
             for term in terms {
                 result.improper_torsion +=
                     (term.v / term.div) * (1.0 + (term.f * phi - term.phi0).cos());
             }
+            continue;
         }
-        // CHARMM harmonic-improper energy is intentionally not added
-        // here; see the wider comment at the impropers wiring site in
-        // compute_energy_with_forces.
+        // CHARMM harmonic improper: central atom is at slot K, but
+        // BALL's convention puts central at slot 1. Use the same
+        // unsigned phi = acos(cos_phi) BALL uses, so finite-difference
+        // gradients of this energy match the analytical force in
+        // `harmonic_improper_energy_and_forces`. See that function
+        // for the full derivation.
+        if let Some(terms) = params.get_harmonic_improper(tk, ti, tj, tl) {
+            let p1 = &coords[torsion.k]; // central
+            let p2 = &coords[torsion.i];
+            let p3 = &coords[torsion.j];
+            let p4 = &coords[torsion.l];
+            let ba = sub(p2, p1);
+            let bc = sub(p2, p3);
+            let bd = sub(p2, p4);
+            let bcxba = cross(&bc, &ba);
+            let bcxbd = cross(&bc, &bd);
+            let len_bcxba = norm(&bcxba);
+            let len_bcxbd = norm(&bcxbd);
+            if len_bcxba < 1e-10 || len_bcxbd < 1e-10 {
+                continue;
+            }
+            let cos_phi = (bcxba[0] * bcxbd[0] + bcxba[1] * bcxbd[1] + bcxba[2] * bcxbd[2])
+                / (len_bcxba * len_bcxbd);
+            let phi = cos_phi.clamp(-1.0, 1.0).acos();
+            for term in terms {
+                let dphi = phi - term.phi0;
+                result.improper_torsion += term.k * dphi * dphi;
+            }
+        }
     }
 
     // --- Nonbonded: LJ 12-6 + Coulomb with switching ---
@@ -467,35 +494,17 @@ fn compute_energy_and_forces_impl(
         false,
     );
 
-    // --- Improper torsion energy + gradient (cosine — AMBER) ---
+    // --- Improper torsion energy + gradient ---
     //
-    // CHARMM harmonic impropers are NOT yet wired into either the
-    // energy OR the forces path. Investigation in this PR found two
-    // structural issues that need addressing together for a clean
-    // gradient-consistent fix:
-    //   1. CHARMM measures the harmonic dihedral with central at slot
-    //      1; proteon's stored Torsion has central at slot 3. The
-    //      `harmonic_improper_energy_and_forces` function below
-    //      handles the index re-bind correctly.
-    //   2. CHARMM uses the UNSIGNED dihedral (acos, [0, π]) so that
-    //      L- and D-amino-acid chiral centers map to the same |phi|
-    //      and the same energy. proteon's `compute_dihedral` returns
-    //      signed atan2 in [-π, π].
-    //
-    // Wiring `harmonic_improper_energy_and_forces` produces the right
-    // ENERGY (~46 kJ/mol vs BALL's 39.7 on crambin), but the analytical
-    // FORCES come out inconsistent with the numerical FD of the same
-    // energy because the |phi| energy has a sign-discontinuity-aware
-    // derivative that doesn't match the existing Bekker-style force
-    // chain. The cross-path parity test
-    // `charmm19_eef1_gradient_matches_numerical_on_heavy_atoms` is
-    // the gate.
-    //
-    // Until the analytical force is reconciled with |phi| energy,
-    // CHARMM's improper_torsion stays at 0 (same as before this PR).
-    // The parser + topology + harmonic param table + wildcard cascade
-    // + scaffolding `harmonic_improper_energy_and_forces` body all
-    // land in this PR so the next-step fix is a small surgical change.
+    // The cosine path (AMBER) and harmonic path (CHARMM) are mutually
+    // exclusive at the per-FF level — AMBER's parameter table holds
+    // only cosine entries, CHARMM's holds only harmonic entries — but
+    // the topology can carry impropers under either label, so we run
+    // both compute paths and let the parameter dispatch decide
+    // per-torsion. `torsion_energy_and_forces(is_improper=true)` will
+    // skip torsions whose atom-type quadruple isn't in the cosine
+    // table; `harmonic_improper_energy_and_forces` skips ones not in
+    // the harmonic table.
     torsion_energy_and_forces(
         &topo.improper_torsions,
         coords,
@@ -504,6 +513,14 @@ fn compute_energy_and_forces_impl(
         &mut result.improper_torsion,
         &mut forces,
         true,
+    );
+    harmonic_improper_energy_and_forces(
+        &topo.improper_torsions,
+        coords,
+        topo,
+        params,
+        &mut result.improper_torsion,
+        &mut forces,
     );
 
     // --- Nonbonded: LJ 12-6 + Coulomb with switching + gradients ---
@@ -698,8 +715,14 @@ pub fn compute_energy_and_forces_nbl(
         &mut forces,
         true,
     );
-    // CHARMM harmonic-improper energy NOT wired here; same gradient-
-    // consistency concern as documented in compute_energy_with_forces.
+    harmonic_improper_energy_and_forces(
+        &topo.improper_torsions,
+        coords,
+        topo,
+        params,
+        &mut result.improper_torsion,
+        &mut forces,
+    );
 
     // --- Nonbonded via neighbor list ---
     let cutoff = params.nonbonded_cutoff();
@@ -1284,11 +1307,36 @@ fn eef1_energy_and_forces_nbl(
 /// default for `get_harmonic_improper` returns `None`, so this loop
 /// is a no-op on AMBER.
 ///
-/// Force formula: `dE/dphi = 2*k*(phi - phi0)`. The dihedral-to-Cartesian
-/// transformation (the `n1xn2`, `len_a23`-based force distribution
-/// chain) is shared with `torsion_energy_and_forces` so the two paths
-/// stay numerically consistent.
-#[allow(dead_code)]
+/// CHARMM harmonic improper torsion: `E = K * (phi - phi0)²` where
+/// `phi = acos(cos_phi) ∈ [0, π]` is the unsigned dihedral angle
+/// between the (central, n1, n2) plane and the (n1, n2, n3) plane.
+///
+/// This is a port of BALL's `CharmmImproperTorsion::updateForces`
+/// (`charmmImproperTorsion.C:452-563`), using the cosphi-based force
+/// chain rather than proteon's standard Bekker chain. The cosphi chain
+/// avoids the signed-vs-unsigned dihedral mismatch that broke the
+/// gradient FD test in earlier wirings.
+///
+/// Energy uses the same `phi = acos(cos_phi)` so finite-difference
+/// gradients of energy match the analytical force exactly.
+///
+/// Atom convention (matching BALL's `atom1`-as-central):
+/// - `atom1` = central atom (proteon's `torsion.k`)
+/// - `atom2`, `atom3`, `atom4` = the 3 atoms bonded to the central one
+///
+/// Force formula (BALL):
+/// - `factor = -2 K (phi - phi0) / sin(phi)`
+/// - `force_atom1 += factor * dcosphi/dba`
+/// - `force_atom2 -= factor * (dcosphi/dba + dcosphi/dbc + dcosphi/dbd)`
+/// - `force_atom3 += factor * dcosphi/dbc`
+/// - `force_atom4 += factor * dcosphi/dbd`
+///
+/// where `ba = atom2 - atom1`, `bc = atom2 - atom3`, `bd = atom2 - atom4`.
+/// At `sin(phi) = 0` (planar at `phi=0` or `phi=π`) the force is
+/// numerically singular; BALL skips those cases and so do we — the
+/// energy contribution is well-defined but the per-atom force has a
+/// removable singularity that's easier to skip than to L'Hopital
+/// through.
 fn harmonic_improper_energy_and_forces(
     torsion_list: &[super::topology::Torsion],
     coords: &[[f64; 3]],
@@ -1304,108 +1352,99 @@ fn harmonic_improper_energy_and_forces(
         let tl = &topo.atoms[torsion.l].amber_type;
 
         // CHARMM harmonic table keys central at slot 1; proteon's
-        // Torsion convention stores central at slot K (= 3rd atom).
+        // Torsion convention stores central at slot K.
         let terms = match params.get_harmonic_improper(tk, ti, tj, tl) {
             Some(t) => t,
             None => continue,
         };
 
-        // CHARMM measures the harmonic improper dihedral with the
-        // CENTRAL atom at slot 1, not slot 3. Re-bind the local
-        // indices so the dihedral formula `dihedral(p0,p1,p2,p3)`
-        // computes the right angle: the angle between the plane of
-        // (central, neighbor1, neighbor2) and the plane of
-        // (neighbor1, neighbor2, neighbor3). Using proteon's stored
-        // slot-3-central convention here would give an entirely
-        // different geometric angle (the dihedral around the J-K
-        // bond axis with central in the middle), producing ~10⁴×
-        // over-count on crambin (411k kJ/mol vs BALL's 39.7).
-        //
-        // Forces flow to (ai, aj, ak, al) = (central, n1, n2, n3) in
-        // that order — the Bekker formula below treats whichever atom
-        // is at slot 0 as receiving f0, etc., so the rebind alone is
-        // enough to put forces on the right atoms.
-        let (ai, aj, ak, al) = (torsion.k, torsion.i, torsion.j, torsion.l);
-        let p0 = &coords[ai];
-        let p1 = &coords[aj];
-        let p2 = &coords[ak];
-        let p3 = &coords[al];
+        // BALL: atom1=central, atoms 2/3/4 are the bonded neighbors.
+        // proteon: torsion.k = central, torsion.i / torsion.j / torsion.l
+        // are the neighbors.
+        let (a1, a2, a3, a4) = (torsion.k, torsion.i, torsion.j, torsion.l);
+        let p1 = &coords[a1];
+        let p2 = &coords[a2];
+        let p3 = &coords[a3];
+        let p4 = &coords[a4];
 
-        let a21 = sub(p0, p1);
-        let a23 = sub(p2, p1);
-        let a34 = sub(p3, p2);
+        // BALL's vectors (note the order: all are atom2 - atomX).
+        let ba = sub(p2, p1);
+        let bc = sub(p2, p3);
+        let bd = sub(p2, p4);
 
-        let n1 = cross(&a23, &a21);
-        let n2 = cross(&a23, &a34);
-
-        let len_n1 = norm(&n1);
-        let len_n2 = norm(&n2);
-        if len_n1 < 1e-10 || len_n2 < 1e-10 {
+        let bcxba = cross(&bc, &ba);
+        let bcxbd = cross(&bc, &bd);
+        let len_bcxba = norm(&bcxba);
+        let len_bcxbd = norm(&bcxbd);
+        if len_bcxba < 1e-10 || len_bcxbd < 1e-10 {
             continue;
         }
 
-        let cos_phi = (dot(&n1, &n2) / (len_n1 * len_n2)).clamp(-1.0, 1.0);
+        let inv_len_bcxba = 1.0 / len_bcxba;
+        let inv_len_bcxbd = 1.0 / len_bcxbd;
+
+        // cos(phi) is the dot product of the two normalized plane
+        // normals.
+        let cos_phi = (bcxba[0] * bcxbd[0] + bcxba[1] * bcxbd[1] + bcxba[2] * bcxbd[2])
+            * inv_len_bcxba
+            * inv_len_bcxbd;
+        let cos_phi = cos_phi.clamp(-1.0, 1.0);
         let phi = cos_phi.acos();
 
-        // Sum over harmonic terms (CHARMM typically has one but the
-        // table type is Vec for consistency with cosine paths).
+        // Sum harmonic terms (CHARMM typically has one).
         let mut e_imp = 0.0;
-        let mut de_dphi = 0.0;
+        let mut sum_2k_dphi = 0.0;
         for term in terms {
             let dphi = phi - term.phi0;
             e_imp += term.k * dphi * dphi;
-            de_dphi += 2.0 * term.k * dphi;
+            sum_2k_dphi += 2.0 * term.k * dphi;
         }
         *energy_accum += e_imp;
 
-        // Sign of phi: same convention as the cosine path.
-        let n1xn2 = cross(&n1, &n2);
-        let direction = dot(&n1xn2, &a23);
-        if direction > 0.0 {
-            de_dphi = -de_dphi;
-        }
-
-        // Force distribution: same algebra as torsion_energy_and_forces.
-        let len_a23 = norm(&a23);
-        if len_a23 < 1e-10 {
+        // Force: skip the sin(phi) ≈ 0 singularity (planar at phi=0
+        // or phi=π). In normal protein geometries this is a measure-
+        // zero set; BALL skips the same case.
+        let sin_phi_sq = 1.0 - cos_phi * cos_phi;
+        if sin_phi_sq <= 1e-12 {
             continue;
         }
-        let n1_cross_a23 = cross(&n1, &a23);
-        let n2_cross_a23 = cross(&n2, &a23);
-        let scale_t = de_dphi / (len_n1 * len_n1 * len_a23);
-        let scale_u = -de_dphi / (len_n2 * len_n2 * len_a23);
+        let sin_phi = sin_phi_sq.sqrt();
+        let factor = -sum_2k_dphi / sin_phi;
 
-        let dedt = [
-            scale_t * n1_cross_a23[0],
-            scale_t * n1_cross_a23[1],
-            scale_t * n1_cross_a23[2],
-        ];
-        let dedu = [
-            scale_u * n2_cross_a23[0],
-            scale_u * n2_cross_a23[1],
-            scale_u * n2_cross_a23[2],
-        ];
-        // Per-atom force contribution from a dihedral (Bekker formula
-        // shared with the cosine path; see torsion_energy_and_forces).
-        let f0 = cross(&dedt, &a23);
-        let f3 = cross(&a23, &dedu);
-        let mid_a = cross(&dedt, &a21);
-        let mid_b = cross(&dedu, &a34);
-        let f1 = [
-            mid_a[0] + mid_b[0] - f0[0],
-            mid_a[1] + mid_b[1] - f0[1],
-            mid_a[2] + mid_b[2] - f0[2],
-        ];
-        let f2 = [
-            -f1[0] - f0[0] - f3[0],
-            -f1[1] - f0[1] - f3[1],
-            -f1[2] - f0[2] - f3[2],
-        ];
+        // dcosphi/dba, dcosphi/dbc, dcosphi/dbd (BALL's formulas).
+        let inv_lba2 = inv_len_bcxba * inv_len_bcxba;
+        let inv_lbd2 = inv_len_bcxbd * inv_len_bcxbd;
+        let inv_lba_lbd = inv_len_bcxba * inv_len_bcxbd;
+        let bcba = bc[0] * ba[0] + bc[1] * ba[1] + bc[2] * ba[2];
+        let bcbd = bc[0] * bd[0] + bc[1] * bd[1] + bc[2] * bd[2];
+        let babd = ba[0] * bd[0] + ba[1] * bd[1] + ba[2] * bd[2];
+        let ba2 = ba[0] * ba[0] + ba[1] * ba[1] + ba[2] * ba[2];
+        let bc2 = bc[0] * bc[0] + bc[1] * bc[1] + bc[2] * bc[2];
+        let bd2 = bd[0] * bd[0] + bd[1] * bd[1] + bd[2] * bd[2];
+
+        let mut dcos_dba = [0.0f64; 3];
+        let mut dcos_dbc = [0.0f64; 3];
+        let mut dcos_dbd = [0.0f64; 3];
         for d in 0..3 {
-            forces[ai][d] += f0[d];
-            forces[aj][d] += f1[d];
-            forces[ak][d] += f2[d];
-            forces[al][d] += f3[d];
+            dcos_dbc[d] = cos_phi
+                * (inv_lbd2 * (bcbd * bd[d] - bd2 * bc[d])
+                    + inv_lba2 * (bcba * ba[d] - ba2 * bc[d]))
+                + inv_lba_lbd * (2.0 * babd * bc[d] - bcba * bd[d] - bcbd * ba[d]);
+            dcos_dbd[d] = cos_phi * inv_lbd2 * (bcbd * bc[d] - bc2 * bd[d])
+                + inv_lba_lbd * (bc2 * ba[d] - bcba * bc[d]);
+            dcos_dba[d] = cos_phi * inv_lba2 * (bcba * bc[d] - bc2 * ba[d])
+                + inv_lba_lbd * (bc2 * bd[d] - bcbd * bc[d]);
+        }
+
+        for d in 0..3 {
+            let f1d = factor * dcos_dba[d];
+            let f3d = factor * dcos_dbc[d];
+            let f4d = factor * dcos_dbd[d];
+            let f2d = -(f1d + f3d + f4d);
+            forces[a1][d] += f1d;
+            forces[a2][d] += f2d;
+            forces[a3][d] += f3d;
+            forces[a4][d] += f4d;
         }
     }
 }

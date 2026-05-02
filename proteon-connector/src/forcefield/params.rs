@@ -97,6 +97,19 @@ pub trait ForceField: Send + Sync {
     ) -> bool {
         true
     }
+    /// Per-residue list of explicit improper-torsion 4-atom paths
+    /// (CHARMM's `[ResidueImproperTorsions]` table). Default `None` →
+    /// the topology builder falls back to its "atom has 3 bonds and is
+    /// in `is_improper_center`" heuristic (AMBER behavior). When
+    /// `Some`, the topology builder enumerates impropers DIRECTLY from
+    /// the listed paths, bypassing the heuristic. See CharmmParams's
+    /// `residue_improper_paths` doc for the data layout.
+    fn improper_paths_for_residue(
+        &self,
+        _residue: &str,
+    ) -> Option<&Vec<(String, String, String, String)>> {
+        None
+    }
     fn scee(&self) -> f64;
     fn scnb(&self) -> f64;
     /// EEF1 solvation parameters (None for force fields without implicit solvent).
@@ -757,6 +770,29 @@ pub struct CharmmParams {
     /// for 1-4 pairs instead of `lj` scaled by `1/scnb`. Empty for
     /// AMBER-style parameter files. Loaded only by CharmmParams::from_ini.
     pub lj_14: HashMap<String, LJParam>,
+    /// Per-residue list of "canonical" 4-atom IMPROPER torsion paths
+    /// from the CHARMM `[ResidueImproperTorsions]` parameter section.
+    ///
+    /// Outer key: residue name (`"PHE"`, `"PHE-N"`, etc.).
+    /// Inner: list of `(name_A, name_B, name_C, name_D)` tuples where
+    /// `A` is the central atom and `B/C/D` are the 3 neighbors in
+    /// BALL's convention (atom1=A, atom2=B, atom3=C, atom4=D —
+    /// dihedral axis is B↔C, see charmmImproperTorsion.C:476-479).
+    /// Cross-residue prefixes `-X` (previous residue's `X`) and `+X`
+    /// (next residue's `X`) are preserved.
+    ///
+    /// Why this matters: BALL's CHARMM enumerates impropers
+    /// EXPLICITLY from this table, not from a "any atom with 3 bonds
+    /// AND in residue_impropers" heuristic. PHE has 10 impropers
+    /// (most ring atoms appear in 2 paths, plus CG appears twice with
+    /// different neighbors); proteon's old heuristic gave only 1 per
+    /// "center atom" and missed e.g. the second `PHE CG CD1 CD2 CB`
+    /// entry. Without the explicit list, larger structures (1bpi
+    /// 36% off, 1ake 18% off) under-counted.
+    ///
+    /// AMBER does not use [ResidueImproperTorsions]; AmberParams
+    /// leaves this empty.
+    pub residue_improper_paths: HashMap<String, Vec<(String, String, String, String)>>,
     /// Per-residue list of "canonical" 4-atom torsion paths from the
     /// CHARMM `[ResidueTorsions]` parameter section.
     ///
@@ -839,6 +875,11 @@ impl CharmmParams {
             (String, String, String, String),
             Vec<HarmonicImproperParam>,
         > = HashMap::new();
+        // Per-residue list of explicit 4-atom improper paths (matches
+        // BALL's `[ResidueImproperTorsions]` enumeration). See the
+        // field doc for the convention.
+        let mut residue_improper_paths: HashMap<String, Vec<(String, String, String, String)>> =
+            HashMap::new();
 
         // Parse EEF1 solvation + LennardJones14 + ResidueTorsions +
         // harmonic ImproperTorsions + ResidueImproperTorsions sections
@@ -962,20 +1003,26 @@ impl CharmmParams {
                     }
                 }
             } else if section == "ResidueImproperTorsions" {
-                // CHARMM 5-column: name central A B C  — names list the
-                // residue + the central atom + three bonded substituents.
-                // The shared AMBER parser keyed this section by
-                // `name.contains(':')` and so produced an empty
-                // residue_impropers set for CHARMM (whose format has no
-                // colon). Without that set populated, the topology
-                // builder skips every CHARMM improper at the
-                // `is_improper_center` gate and improper_torsion_energy
-                // comes out as 0 — even after we ship a parameter table
-                // for the impropers themselves.
+                // CHARMM 5-column: name central A B C  — residue name
+                // + central atom + three bonded substituents. Stored
+                // two ways: (1) the legacy "is_improper_center"
+                // HashSet keyed on RESIDUE:ATOM (still consulted by
+                // the AMBER fallback path in topology.rs); (2) a per-
+                // residue list of full 4-tuples for CHARMM's
+                // explicit-enumeration path.
                 let fields: Vec<&str> = line.split_whitespace().collect();
                 if fields.len() >= 5 {
-                    let key = format!("{}:{}", fields[0], fields[1]);
-                    amber.residue_impropers.insert(key);
+                    let center_key = format!("{}:{}", fields[0], fields[1]);
+                    amber.residue_impropers.insert(center_key);
+                    residue_improper_paths
+                        .entry(fields[0].to_string())
+                        .or_default()
+                        .push((
+                            fields[1].to_string(),
+                            fields[2].to_string(),
+                            fields[3].to_string(),
+                            fields[4].to_string(),
+                        ));
                 }
             }
         }
@@ -994,6 +1041,7 @@ impl CharmmParams {
             eef1,
             lj_14,
             residue_torsions,
+            residue_improper_paths,
             harmonic_impropers,
             cutoff_override: None,
             switching_on_override: None,
@@ -1203,6 +1251,12 @@ impl ForceField for CharmmParams {
     }
     fn get_lj_14(&self, atype: &str) -> Option<&LJParam> {
         self.lj_14.get(atype)
+    }
+    fn improper_paths_for_residue(
+        &self,
+        residue: &str,
+    ) -> Option<&Vec<(String, String, String, String)>> {
+        self.residue_improper_paths.get(residue)
     }
     fn is_canonical_torsion(
         &self,

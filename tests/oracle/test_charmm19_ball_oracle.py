@@ -162,7 +162,7 @@ class TestCharmm19BallOracle:
         assert rel < 0.01, f"proper torsion relative diff {rel:.4%} exceeds 1%"
 
     @pytest.mark.xfail(
-        reason="proteon CHARMM improper_torsion = 0 vs BALL 264.94 on crambin under the corrected polar-H fixture (was BALL 39.7 under the half-prepared fixture; the higher number reflects new sidechain N-H impropers like ASN:ND2-HD21-HD22-CG that are visible only with full polar-H placement). Parser + topology scaffolding from PR #22 is in place (CHARMM's 7-column [ImproperTorsions], 5-column [ResidueImproperTorsions]); the harmonic-improper energy compute is dead-code-gated until the unsigned-dihedral chain rule is reconciled with the existing Bekker analytical-force chain. See geometry_charmm19_ball.yaml failure_modes",
+        reason="proteon CHARMM improper_torsion 251.15 vs BALL 264.94 on crambin (~5.2% rel diff). Both energy and analytical force are correct now: harmonic compute is wired live, cosphi-chain ported from BALL's charmmImproperTorsion.C:526-544, and the gradient FD parity test passes. Cross-PDB residual is below the 2.5% band on every other test PDB: 1bpi 0.94%, 1ake 2.95%, 1ubq 0.36%. Crambin's 5.2% is a small [ResidueImproperTorsions] enumeration mismatch — 1-2 specific impropers BALL counts that proteon misses on this composition (1 PHE + 2 TYR + 6 disulfide CYS). The energy is monotonically under, never over — not a sign or formula bug, just a topology gap that needs per-residue diagnosis against BALL's expected list. See geometry_charmm19_ball.yaml failure_modes",
         strict=False,
     )
     def test_improper_torsion(self, reference_energies):

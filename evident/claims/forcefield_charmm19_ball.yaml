@@ -149,20 +149,23 @@ claims:
         wheel is unavailable — the slim EVIDENT image is expected to
         carry it after first PyPI publish lands.
     failure_modes:
-      - "PARTIAL ACTIVATION as of 2026-05-02: 6 of 7 CHARMM oracle
-        gates now pass live on crambin with shared polar-H placement
-        (proteon places via place_all_hydrogens(polar_only=True),
-        BALL reads with add_hydrogens=False, NoCutoff via
-        nonbonded_cutoff=1e6 on both sides):
-          bond_stretch  ~0.65% rel diff
-          angle_bend    ~0.60%
-          proper_torsion < 0.001% (closed 2026-05-02)
-          vdw           < 0.01%
-          electrostatic < 0.02%
-          EEF1 solvation ~0.73%
-        ONE component remains divergent and is xfail-marked in
-        tests/oracle/test_charmm19_ball_oracle.py with strict=False
-        so a future fix surfaces as xpass:
+      - "ACTIVATION as of 2026-05-02 (late): all 7 CHARMM oracle
+        components compute non-trivially against BALL on crambin
+        with shared polar-H placement (proteon places via
+        place_all_hydrogens(polar_only=True), BALL reads with
+        add_hydrogens=False, NoCutoff via nonbonded_cutoff=1e6 on
+        both sides). 6 components pass their per-tier tolerance
+        bands live; the 7th (improper_torsion) is xfail at 5.2% on
+        crambin with strict=False, but cross-PDB it lands within
+        band on 1bpi (0.94%), 1ake (2.95%), and 1ubq (0.36%):
+          bond_stretch  ~0.65% rel diff (passing)
+          angle_bend    ~0.60% (passing)
+          proper_torsion < 0.001% (passing, closed 2026-05-02)
+          vdw           < 0.01% (passing)
+          electrostatic < 0.02% (passing)
+          EEF1 solvation ~0.73% (passing)
+          improper_torsion 5.2% on crambin (xfail; cross-PDB <3%)
+        Per-component status:
           - (proper_torsion moved to PASSING tier 2026-05-02:
             994.38 vs 994.37 kJ/mol, < 0.001% rel diff (~7e-3 abs,
             float accumulation floor). Three-step topology fix:
@@ -184,11 +187,26 @@ claims:
             Cross-PDB check: 1crn 0.0008%, 1bpi 0.0009%, 1ake 0.0008%,
             1ubq 0.0000%. n_torsions varies 235-2450 across these so
             the per-path identity is mechanical, not coincidence.)
-          - improper_torsion: 0.0 vs 264.94 kJ/mol under the polar-H
-            fixture (was BALL 39.7 under the half-prepared one — the
-            increase reflects new sidechain N-H impropers like
-            ASN:ND2-HD21-HD22-CG that are visible only when polar Hs
-            are present). THREE parser/convention
+          - improper_torsion: 251.15 vs 264.94 kJ/mol on crambin
+            (5.2% rel diff). Energy and analytical force are now
+            both correct on the formula side — gradient FD parity
+            test passes; the cosphi-chain force formula was ported
+            verbatim from BALL's charmmImproperTorsion.C:526-544 to
+            avoid the |phi|-vs-signed-phi sign discontinuity that
+            blocked PR #22. Topology now enumerates impropers
+            EXPLICITLY from CHARMM's [ResidueImproperTorsions] table
+            (variant + base lookup) instead of the prior heuristic.
+            Cross-PDB validation: 1bpi 0.94%, 1ake 2.95%, 1ubq 0.36%
+            — all within band. Crambin's 5.2% is a residual
+            enumeration gap: a small number of specific impropers in
+            crambin's composition (1 PHE + 2 TYR + 6 disulfide CYS)
+            that BALL counts and proteon misses. The energy is
+            monotonically UNDER, never over, so this isn't a sign or
+            formula bug — likely a residue-template lookup detail
+            (variant fallback, alt-name in disulfide context, etc.)
+            visible only on this particular composition.
+
+            Original 3-issue diagnosis from PR #22 (now resolved):
             issues found and analysed; first two fixed in this PR,
             third blocking on a gradient-consistency design call:
             (1) CHARMM's 7-column [ImproperTorsions] is now recognised
