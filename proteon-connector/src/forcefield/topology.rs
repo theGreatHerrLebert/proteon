@@ -911,7 +911,7 @@ mod tests {
             let n_a = &topo_charmm.atoms[pair.0].atom_name;
             let n_b = &topo_charmm.atoms[pair.1].atom_name;
             let mut names = [n_a.as_str(), n_b.as_str()];
-            names.sort();
+            names.sort_unstable();
             assert!(
                 matches!(
                     (names[0], names[1]),
