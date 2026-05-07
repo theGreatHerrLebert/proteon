@@ -13,6 +13,25 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ### Added
 
+- **`proteon.prepare.normalize_histidine_tautomers(in_path, out_path)`**
+  (#60, PR 2 of 3). Reads a PDB, walks each HIS residue, inspects which
+  of Hδ1 / Hε2 are present, and writes a copy with the residue name
+  updated to HID / HIE / HIP. Idempotent on already-renamed inputs.
+  Returns a per-residue tally so the caller can log / observe the
+  classification. The Rust loader is unchanged — proteon's existing
+  residue-name-driven dispatch picks up the correct AMBER96 charges
+  via the data added in PR #62.
+- **`UserWarning` once per process when AMBER96's `compute_energy` sees
+  any residue still named "HIS"** — flags the systematic ~7-12% drift
+  this issue caused, and points the user at
+  `proteon.prepare.normalize_histidine_tautomers`.
+- **`tests/test_amber_invariants.py::TestHistidineTautomers`** — 6 tests
+  pinning the renaming behaviour: HD1-only→HID, HE2-only→HIE,
+  both→HIP, neither→stays HIS, idempotent on second call, and an
+  end-to-end check that compute_energy with renamed residues hits the
+  HID template's electrostatic charges (i.e. PR #62's data is wired
+  into the typer correctly).
+
 - **HID/HIE/HIP histidine protonation-state variants in AMBER96 data**
   (#60, PR 1 of 3). proteon's AMBER96 oracle previously showed 7-12%
   rel_diff vs OpenMM AMBER96 on every PDB containing histidines
