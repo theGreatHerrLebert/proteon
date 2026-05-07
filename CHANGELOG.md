@@ -13,6 +13,23 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ### Added
 
+- **DSSP 8-class vs mkdssp release-tier 50K claim** — completes the v0.2.0
+  trust pyramid's DSSP rung. mkdssp v4.6.1 is the wider biology
+  community's canonical Kabsch-Sander 1983 reference; proteon ports the
+  same algorithm. Per-residue agreement at 50K corpus scale closes
+  the gap left by the existing CI (per-PDB fixture) and the existing
+  release-tier (proteon-vs-pydssp 1k) claims.
+  - `evident/claims/dssp_8class_50k.{yaml,md}` — claim wired with
+    `last_verified: null` pending the first monster3 artifact.
+  - `validation/dssp_mkdssp_oracle.py` — new runner. Calls
+    `proteon.dssp` on one side, `mkdssp` via subprocess on the other,
+    parses mkdssp's per-residue 8-class column, computes per-PDB
+    agreement rate. Loop characters canonicalised to '-' on both
+    sides so the space-vs-character convention isn't a confounder.
+    pebble per-task isolation, resume + PROTEON_PDB_LIST support,
+    v0.2.0 bind-mount contract — same shape as the AMBER96 and CHARMM
+    oracles.
+  - `evident/evident.yaml` includes list extended with the new claim.
 - **HID/HIE/HIP histidine protonation-state variants in AMBER96 data**
   (#60, PR 1 of 3). proteon's AMBER96 oracle previously showed 7-12%
   rel_diff vs OpenMM AMBER96 on every PDB containing histidines
