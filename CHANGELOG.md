@@ -11,6 +11,35 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### Added
+
+- **HID/HIE/HIP histidine protonation-state variants in AMBER96 data**
+  (#60, PR 1 of 3). proteon's AMBER96 oracle previously showed 7-12%
+  rel_diff vs OpenMM AMBER96 on every PDB containing histidines
+  because only one HIS template shipped (with HIP-like charges by
+  accident). This PR adds the three canonical AMBER96 templates as
+  separate residue names — mirroring the CHARMM19 HSD precedent
+  rather than extending the position-only variant suffix system:
+  - `proteon-connector/data/amber96.ini` gains 9 new charge sections
+    (HID/HIE/HIP × mid-chain / -N / -C terminal variants), 165 atom
+    entries total. Charges and atom-class names extracted directly
+    from OpenMM's vendored `amber96.xml` (the v0.2.0 oracle's parity
+    target) via the new `scripts/extract_amber96_histidine_charges.py`
+    script — hand-authoring 165 partial charges would invite
+    sub-percent drift no reviewer can catch.
+  - `proteon-connector/data/fragments/HID.json`, `HIE.json`, `HIP.json`
+    — fragment templates mirroring `HIS.json`, with each variant's
+    `delete` list extended to drop the H atom that doesn't belong in
+    that tautomer (HID drops Hε2; HIE drops Hδ1; HIP keeps both).
+  - `proteon-connector/src/fragment_templates.rs` — 3 new entries in
+    the static `TEMPLATES` array.
+  Existing structures with residue name "HIS" continue to load and
+  energy-compute identically — no behaviour change on the existing
+  HIS path. Structures providing residue name HID/HIE/HIP get the
+  correct per-tautomer AMBER96 charges. The detection logic that
+  decides which name to apply (based on which Hδ1 / Hε2 atoms are
+  present in the PDB) lands in PR 2.
+
 ### Changed
 
 - **Fold-preservation runners now support resume + `PROTEON_PDB_LIST`**.
