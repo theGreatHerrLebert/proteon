@@ -68,6 +68,46 @@ def _maybe_warn_ff(ff: Optional[str]) -> None:
     if ff is not None and ff.lower() == "amber96":
         _warn_amber96_cutoff_policy()
 
+
+@functools.lru_cache(maxsize=1)
+def _warn_amber96_unrenamed_his() -> None:
+    """Warn once per process when AMBER96 sees a residue still named "HIS".
+
+    AMBER96 ships three histidine templates (HID/HIE/HIP) with different
+    per-atom partial charges. proteon's PDB loader is name-driven: a
+    residue named "HIS" hits the (legacy, HIP-charge) HIS template
+    regardless of which Hδ1/Hε2 atoms are present, producing a
+    systematic ~7-12% energy drift on every histidine-containing
+    structure.
+
+    The fix is to call ``proteon.prepare.normalize_histidine_tautomers``
+    on the PDB before loading, which inspects the H pattern and renames
+    each HIS residue to HID/HIE/HIP so the correct AMBER96 charge set
+    applies. See issue #60 for the full background.
+    """
+    warnings.warn(
+        "proteon's AMBER96 saw at least one residue named 'HIS'. AMBER96 "
+        "ships three protonation-state templates (HID, HIE, HIP) with "
+        "different per-atom charges, but the legacy 'HIS' name maps to "
+        "the HIP-charge template regardless of which Hs are present in "
+        "the structure — causing a systematic ~7-12% energy drift. "
+        "Pre-process the PDB with "
+        "proteon.prepare.normalize_histidine_tautomers(in, out) to rename "
+        "each HIS residue to HID/HIE/HIP based on its H pattern. See "
+        "issue #60.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _structure_has_unrenamed_his(structure) -> bool:
+    """Cheap check: does any residue still carry the legacy name 'HIS'?"""
+    try:
+        names = structure.residue_names  # type: ignore[attr-defined]
+    except AttributeError:
+        return False
+    return any(n == "HIS" for n in names)
+
 # ---------------------------------------------------------------------------
 # Unit conversion
 # ---------------------------------------------------------------------------
@@ -199,6 +239,8 @@ def compute_energy(
     """
     u = _validate_units(units)
     _maybe_warn_ff(ff)
+    if ff is not None and ff.lower() == "amber96" and _structure_has_unrenamed_his(structure):
+        _warn_amber96_unrenamed_his()
     result = _ff.compute_energy(_get_ptr(structure), ff, nbl_threshold, nonbonded_cutoff)
     return _convert_energy_dict(result, u)
 

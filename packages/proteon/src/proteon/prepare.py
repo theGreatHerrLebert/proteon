@@ -418,3 +418,162 @@ def load_and_prepare(
         minimize_steps=minimize_steps,
     )
     return structure, report
+
+
+# ---------------------------------------------------------------------------
+# AMBER96 histidine tautomer normalisation
+# ---------------------------------------------------------------------------
+#
+# Background: AMBER96 in OpenMM ships three histidine residue templates with
+# different per-atom partial charges:
+#   HID  δ-tautomer  (Hδ1 only,  neutral)
+#   HIE  ε-tautomer  (Hε2 only,  neutral)
+#   HIP  protonated  (both Hs,   +1 charge)
+#
+# PDBFixer's `addMissingHydrogens(7.0)` keeps the residue name "HIS" but
+# adds the H atoms in the geometrically/electrostatically appropriate
+# positions. Without renaming, proteon string-matches "HIS" against the
+# (single, HIP-charge) template — every histidine in every input gets
+# the wrong charges, producing a systematic 7-12% AMBER96-vs-OpenMM
+# energy drift on every PDB containing histidines (issue #60).
+#
+# `normalize_histidine_tautomers` reads a PDBFixer-prepared PDB,
+# inspects which of HD1 / HE2 each HIS residue has, and writes a
+# new PDB with the residue name updated. proteon's existing
+# residue-name-based template lookup then picks up the correct
+# AMBER96 charges automatically (per the data added in PR #62).
+#
+# The function operates on PDB-text in/out (no proteon Structure
+# mutation API needed, no Rust changes). The renamed PDB is fed
+# back to `proteon.load` exactly like the original.
+
+import re as _re
+from pathlib import Path as _Path
+
+# Column slices (PDB ATOM record, fixed-width per the PDB v3.30 spec):
+#   cols  1-6   record name   ("ATOM  " / "HETATM")
+#   cols 13-16  atom name
+#   cols 17     altloc indicator
+#   cols 18-20  residue name (3 chars, right-justified into the 4-char field 18-21)
+#   cols 22     chain id
+#   cols 23-26  residue sequence number
+# Python 0-indexed slices (end-exclusive):
+_ATOM_NAME_SLICE = slice(12, 16)
+_RESNAME_SLICE = slice(17, 20)
+_CHAIN_SLICE = slice(21, 22)
+_RESSEQ_SLICE = slice(22, 26)
+
+
+def _residue_key(line: str) -> tuple:
+    """(chain, residue_seq, insertion_code) — uniquely identifies a residue
+    across all of its ATOM lines."""
+    return (
+        line[_CHAIN_SLICE],
+        line[_RESSEQ_SLICE].strip(),
+        line[26:27] if len(line) > 26 else " ",
+    )
+
+
+def _is_atom(line: str) -> bool:
+    return line.startswith(("ATOM  ", "HETATM"))
+
+
+def _is_his(line: str) -> bool:
+    return _is_atom(line) and line[_RESNAME_SLICE].strip() == "HIS"
+
+
+def _classify_histidine(atom_names: set[str]) -> str:
+    """Return target residue name based on which Hs are present.
+
+    HD1 + HE2 → HIP   (+1 charge tautomer)
+    HD1 only  → HID   (δ tautomer)
+    HE2 only  → HIE   (ε tautomer)
+    neither   → HIS   (no rename — caller should warn)
+    """
+    has_hd1 = "HD1" in atom_names
+    has_he2 = "HE2" in atom_names
+    if has_hd1 and has_he2:
+        return "HIP"
+    if has_hd1:
+        return "HID"
+    if has_he2:
+        return "HIE"
+    return "HIS"
+
+
+def normalize_histidine_tautomers(
+    in_path: str | _Path,
+    out_path: str | _Path | None = None,
+) -> dict[str, int]:
+    """Rewrite a PDB so each HIS residue carries the correct AMBER96 tautomer name.
+
+    Walks the ATOM records, groups by (chain, resseq, icode), and for each
+    HIS residue inspects which of HD1 / HE2 are present. The residue name
+    is then updated in place (still 3 characters, fits the PDB column
+    layout) so downstream proteon.load picks up the correct AMBER96
+    template via the data added in PR #62.
+
+    Args:
+        in_path:  Path to a PDB file (typically PDBFixer-prepared with
+                  `addMissingHydrogens(7.0)` so HD1/HE2 are present).
+        out_path: Where to write the renamed PDB. If None, write to a sibling
+                  file with `.histaut.pdb` suffix.
+
+    Returns:
+        Dict of {original_name: count_after_rename} aggregated across all
+        HIS residues, e.g. {"HIS": 0, "HID": 3, "HIE": 1, "HIP": 0}. The
+        count for "HIS" reports residues that could NOT be classified
+        (no HD1, no HE2 — caller should warn or skip).
+
+    The function is idempotent: running it on a PDB that already has
+    HID/HIE/HIP residue names is a no-op for those residues and only
+    affects remaining HIS residues.
+    """
+    in_path = _Path(in_path)
+    if out_path is None:
+        out_path = in_path.with_suffix(".histaut.pdb")
+    else:
+        out_path = _Path(out_path)
+
+    text = in_path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+
+    # First pass: walk ATOM lines, group HIS atoms by residue key,
+    # collect atom names per residue.
+    his_atoms: dict[tuple, set[str]] = {}
+    for line in lines:
+        if _is_his(line):
+            key = _residue_key(line)
+            his_atoms.setdefault(key, set()).add(
+                line[_ATOM_NAME_SLICE].strip()
+            )
+
+    # Decide tautomer per residue.
+    his_targets: dict[tuple, str] = {
+        key: _classify_histidine(atoms) for key, atoms in his_atoms.items()
+    }
+
+    # Second pass: rewrite ATOM lines with new resname where applicable.
+    out_lines: list[str] = []
+    counts = {"HIS": 0, "HID": 0, "HIE": 0, "HIP": 0}
+    for line in lines:
+        if _is_his(line):
+            key = _residue_key(line)
+            target = his_targets[key]
+            if target != "HIS":
+                # Replace the 3-char resname in cols 17-19 (slice 17:20).
+                # New name is exactly 3 chars too — no width change, no
+                # column drift downstream.
+                new_line = line[:_RESNAME_SLICE.start] + target + line[_RESNAME_SLICE.stop:]
+                out_lines.append(new_line)
+            else:
+                out_lines.append(line)
+        else:
+            out_lines.append(line)
+
+    # Final per-residue counts (one entry per HIS residue, not per atom).
+    for target in his_targets.values():
+        counts[target] += 1
+
+    out_path.write_text("".join(out_lines), encoding="utf-8")
+    return counts

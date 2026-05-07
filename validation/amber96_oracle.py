@@ -73,6 +73,7 @@ def compare_one(pdb_path: str) -> dict:
     rec = {"pdb": Path(pdb_path).name}
     t0 = time.perf_counter()
     tmp_path = None
+    tmp_raw_path = None
     try:
         # 1. PDBFixer prep — both tools see the same atoms + positions.
         # We DETECT but do NOT add missing heavy atoms: PDBFixer's
@@ -97,10 +98,21 @@ def compare_one(pdb_path: str) -> dict:
         rec["n_atoms"] = len(list(fixer.topology.atoms()))
 
         # 2. Write to temp PDB for proteon to ingest.
-        tmp = tempfile.NamedTemporaryFile(suffix=".pdb", delete=False, mode="w")
-        tmp_path = tmp.name
-        openmm_app.PDBFile.writeFile(fixer.topology, fixer.positions, tmp, keepIds=True)
-        tmp.close()
+        # We write the raw PDBFixer output, then run the proteon
+        # histidine-tautomer normalizer over it. proteon's residue-name-
+        # driven typer needs HIS residues renamed to HID / HIE / HIP based
+        # on which Hδ1 / Hε2 PDBFixer placed (issue #60); OpenMM's
+        # amber96.xml does the equivalent detection internally on
+        # `fixer.topology`, so the OpenMM arm above is fine reading the
+        # raw topology while proteon below loads the renamed copy.
+        tmp_raw = tempfile.NamedTemporaryFile(suffix="_raw.pdb", delete=False, mode="w")
+        tmp_raw_path = tmp_raw.name
+        openmm_app.PDBFile.writeFile(fixer.topology, fixer.positions, tmp_raw, keepIds=True)
+        tmp_raw.close()
+
+        tmp_path = tempfile.NamedTemporaryFile(suffix="_proteon.pdb", delete=False, mode="w").name
+        his_counts = proteon.normalize_histidine_tautomers(tmp_raw_path, tmp_path)
+        rec["histidine_tautomer_counts"] = his_counts
 
         # 3. OpenMM single-point AMBER96 vacuum (no implicit solvent XML loaded).
         ff = openmm_app.ForceField("amber96.xml")
@@ -167,6 +179,8 @@ def compare_one(pdb_path: str) -> dict:
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+        if tmp_raw_path and os.path.exists(tmp_raw_path):
+            os.unlink(tmp_raw_path)
 
     rec["wall_s"] = time.perf_counter() - t0
     return rec

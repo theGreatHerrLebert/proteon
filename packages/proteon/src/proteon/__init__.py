@@ -94,7 +94,13 @@ from .hydrogens import (
     place_peptide_hydrogens,
     reconstruct_fragments,
 )
-from .prepare import PrepReport, batch_prepare, load_and_prepare, prepare
+from .prepare import (
+    PrepReport,
+    batch_prepare,
+    load_and_prepare,
+    normalize_histidine_tautomers,
+    prepare,
+)
 from .dssp import (
     batch_dssp,
     dssp,
@@ -261,6 +267,7 @@ _PREPARE_API = (
     "PrepReport",
     "batch_prepare",
     "load_and_prepare",
+    "normalize_histidine_tautomers",
     "prepare",
 )
 
