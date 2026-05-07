@@ -11,6 +11,21 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### Changed
+
+- `validation/amber96_oracle.py` now calls
+  `proteon.normalize_histidine_tautomers` between PDBFixer-write and
+  `proteon.load`, so the runner's proteon arm sees HID/HIE/HIP residue
+  names (matching what OpenMM AMBER96 detects internally on the same
+  topology). Resolves the 7-12% rel_diff on every histidine-containing
+  structure that surfaced in v0.2.0 contract smoke (#60).
+  Local end-to-end on 1ubq (1 HIS, HD1-only): rel_diff 0.026% (down from
+  ~10% pre-fix). The runner's per-record JSONL now also carries a
+  `histidine_tautomer_counts` field for observability.
+- `proteon` package exports `normalize_histidine_tautomers` at the top
+  level — `proteon.normalize_histidine_tautomers(in, out)` is the public
+  call site.
+
 ### Added
 
 - **`proteon.prepare.normalize_histidine_tautomers(in_path, out_path)`**
