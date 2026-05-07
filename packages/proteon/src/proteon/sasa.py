@@ -8,6 +8,9 @@ Functions:
     residue_sasa       — per-residue SASA (sum of atom contributions)
     relative_sasa      — RSA (residue SASA / max SASA for residue type)
     total_sasa         — total SASA of a structure
+    batch_atom_sasa    — per-atom SASA for many structures in parallel
+    batch_residue_sasa — per-residue SASA for many structures in parallel
+    batch_relative_sasa— per-residue RSA for many structures in parallel
     batch_total_sasa   — total SASA for many structures in parallel
     load_and_sasa      — load files + compute SASA in one parallel call
 """
@@ -131,6 +134,94 @@ def total_sasa(
         >>> print(f"ProtOr SASA: {proteon.total_sasa(structure, radii='protor'):.0f} A²")
     """
     return _sasa.total_sasa(_get_ptr(structure), probe, n_points, radii)
+
+
+def batch_atom_sasa(
+    structures: Sequence,
+    probe: float = 1.4,
+    n_points: int = 960,
+    *,
+    n_threads: Optional[int] = None,
+    radii: str = "bondi",
+) -> List[NDArray[np.float64]]:
+    """Compute per-atom SASA for many structures in parallel (Rust + rayon).
+
+    Per-structure result equals :func:`atom_sasa`. Length per array equals
+    that structure's primary-conformer atom count.
+
+    Args:
+        structures: Sequence of proteon Structure objects.
+        probe: Probe radius in Angstroms (default 1.4).
+        n_points: Test points per sphere (default 960).
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
+            (default); a positive integer = exactly that many threads.
+        radii: Atomic radii table ("bondi" or "protor").
+
+    Returns:
+        List of 1D float64 arrays, one per structure.
+    """
+    ptrs = [_get_ptr(s) for s in structures]
+    return [np.asarray(a) for a in _sasa.batch_atom_sasa(ptrs, probe, n_points, n_threads, radii)]
+
+
+def batch_residue_sasa(
+    structures: Sequence,
+    probe: float = 1.4,
+    n_points: int = 960,
+    *,
+    n_threads: Optional[int] = None,
+    radii: str = "bondi",
+) -> List[NDArray[np.float64]]:
+    """Compute per-residue SASA for many structures in parallel.
+
+    Per-structure result equals :func:`residue_sasa`. Length per array
+    equals that structure's residue count (including non-AA residues).
+
+    Args:
+        structures: Sequence of proteon Structure objects.
+        probe: Probe radius (default 1.4).
+        n_points: Test points per sphere (default 960).
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores.
+        radii: "bondi" or "protor".
+
+    Returns:
+        List of 1D float64 arrays, one per structure.
+    """
+    ptrs = [_get_ptr(s) for s in structures]
+    return [
+        np.asarray(a)
+        for a in _sasa.batch_residue_sasa(ptrs, probe, n_points, n_threads, radii)
+    ]
+
+
+def batch_relative_sasa(
+    structures: Sequence,
+    probe: float = 1.4,
+    n_points: int = 960,
+    *,
+    n_threads: Optional[int] = None,
+    radii: str = "bondi",
+) -> List[NDArray[np.float64]]:
+    """Compute relative SASA (RSA) per residue for many structures in parallel.
+
+    Per-structure result equals :func:`relative_sasa`. NaN for non-standard
+    residue types (no Tien-2013 reference value).
+
+    Args:
+        structures: Sequence of proteon Structure objects.
+        probe: Probe radius (default 1.4).
+        n_points: Test points per sphere (default 960).
+        n_threads: Thread count.
+        radii: "bondi" or "protor".
+
+    Returns:
+        List of 1D float64 arrays, one per structure.
+    """
+    ptrs = [_get_ptr(s) for s in structures]
+    return [
+        np.asarray(a)
+        for a in _sasa.batch_relative_sasa(ptrs, probe, n_points, n_threads, radii)
+    ]
 
 
 def batch_total_sasa(

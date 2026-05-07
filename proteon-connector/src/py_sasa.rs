@@ -70,6 +70,83 @@ fn extract_radii(pdb: &pdbtbx::PDB, radii_set: sasa::RadiiSet) -> (Vec<[f64; 3]>
     (coords, radii)
 }
 
+/// Per-structure data extracted on the main thread before the parallel
+/// SASA loop. Holding only owned data lets us drop into `allow_threads`
+/// without dragging PyRef / GIL state into the rayon pool.
+struct StructureView {
+    coords: Vec<[f64; 3]>,
+    radii: Vec<f64>,
+    /// Primary-conformer atom counts per residue (in residue order).
+    residue_atom_counts: Vec<usize>,
+    /// Residue names in the same order as `residue_atom_counts`.
+    residue_names: Vec<String>,
+}
+
+fn extract_structure_view(pdb: &pdbtbx::PDB, radii_set: sasa::RadiiSet) -> StructureView {
+    let mut coords = Vec::new();
+    let mut radii = Vec::new();
+    let mut residue_atom_counts = Vec::new();
+    let mut residue_names = Vec::new();
+    let first_model = match pdb.models().next() {
+        Some(m) => m,
+        None => {
+            return StructureView {
+                coords,
+                radii,
+                residue_atom_counts,
+                residue_names,
+            };
+        }
+    };
+    for chain in first_model.chains() {
+        for residue in chain.residues() {
+            let res_name = residue.name().unwrap_or("").to_string();
+            let mut n_atoms_in_res = 0usize;
+            for atom in crate::altloc::residue_atoms_primary(residue) {
+                let (x, y, z) = atom.pos();
+                coords.push([x, y, z]);
+                let elem = atom.element().map(|e| e.symbol()).unwrap_or("");
+                let r = match radii_set {
+                    sasa::RadiiSet::Bondi => sasa::vdw_radius(elem).unwrap_or(sasa::DEFAULT_RADIUS),
+                    sasa::RadiiSet::ProtOr => sasa::protor_radius(atom.name(), &res_name, elem),
+                };
+                radii.push(r);
+                n_atoms_in_res += 1;
+            }
+            residue_atom_counts.push(n_atoms_in_res);
+            residue_names.push(res_name);
+        }
+    }
+    StructureView {
+        coords,
+        radii,
+        residue_atom_counts,
+        residue_names,
+    }
+}
+
+fn residue_sasa_from_view(view: &StructureView, atom_areas: &[f64]) -> Vec<f64> {
+    let mut result = Vec::with_capacity(view.residue_atom_counts.len());
+    let mut idx = 0;
+    for &n in &view.residue_atom_counts {
+        let sum: f64 = atom_areas[idx..idx + n].iter().sum();
+        result.push(sum);
+        idx += n;
+    }
+    result
+}
+
+fn relative_sasa_from_view(view: &StructureView, residue_areas: &[f64]) -> Vec<f64> {
+    view.residue_names
+        .iter()
+        .zip(residue_areas.iter())
+        .map(|(name, area)| match sasa::max_sasa(name) {
+            Some(m) if m > 0.0 => area / m,
+            _ => f64::NAN,
+        })
+        .collect()
+}
+
 // ===========================================================================
 // Single-structure SASA
 // ===========================================================================
@@ -259,6 +336,98 @@ pub(crate) fn batch_total_sasa<'py>(
     Ok(results.into_pyarray(py))
 }
 
+/// Compute per-residue SASA for many structures in parallel.
+///
+/// Returns list of 1D numpy arrays, one per structure, each of length
+/// equal to that structure's residue count.
+#[pyfunction]
+#[pyo3(signature = (structures, probe=1.4, n_points=960, n_threads=None, radii="bondi"))]
+pub(crate) fn batch_residue_sasa<'py>(
+    py: Python<'py>,
+    structures: &Bound<'py, PyList>,
+    probe: f64,
+    n_points: usize,
+    n_threads: Option<i32>,
+    radii: &str,
+) -> PyResult<Vec<Bound<'py, PyArray1<f64>>>> {
+    validate_n_points(n_points)?;
+    let rs = parse_radii(radii)?;
+    let views: Vec<StructureView> = structures
+        .iter()
+        .map(|item| {
+            let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+            Ok(extract_structure_view(&pdb.inner, rs))
+        })
+        .collect::<PyResult<_>>()?;
+
+    let n = auto_threads(n_threads, SASA_PER_TASK_BYTES);
+
+    let results: Vec<Vec<f64>> = py.allow_threads(|| {
+        let pool = build_pool(n);
+        pool.install(|| {
+            views
+                .par_iter()
+                .map(|view| {
+                    let atom_areas =
+                        sasa::shrake_rupley(&view.coords, &view.radii, probe, n_points);
+                    residue_sasa_from_view(view, &atom_areas)
+                })
+                .collect()
+        })
+    });
+
+    Ok(results
+        .into_iter()
+        .map(|areas| areas.into_pyarray(py))
+        .collect())
+}
+
+/// Compute relative SASA per residue (RSA) for many structures in parallel.
+///
+/// Returns list of 1D numpy arrays. NaN for non-standard residue types.
+#[pyfunction]
+#[pyo3(signature = (structures, probe=1.4, n_points=960, n_threads=None, radii="bondi"))]
+pub(crate) fn batch_relative_sasa<'py>(
+    py: Python<'py>,
+    structures: &Bound<'py, PyList>,
+    probe: f64,
+    n_points: usize,
+    n_threads: Option<i32>,
+    radii: &str,
+) -> PyResult<Vec<Bound<'py, PyArray1<f64>>>> {
+    validate_n_points(n_points)?;
+    let rs = parse_radii(radii)?;
+    let views: Vec<StructureView> = structures
+        .iter()
+        .map(|item| {
+            let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+            Ok(extract_structure_view(&pdb.inner, rs))
+        })
+        .collect::<PyResult<_>>()?;
+
+    let n = auto_threads(n_threads, SASA_PER_TASK_BYTES);
+
+    let results: Vec<Vec<f64>> = py.allow_threads(|| {
+        let pool = build_pool(n);
+        pool.install(|| {
+            views
+                .par_iter()
+                .map(|view| {
+                    let atom_areas =
+                        sasa::shrake_rupley(&view.coords, &view.radii, probe, n_points);
+                    let res_areas = residue_sasa_from_view(view, &atom_areas);
+                    relative_sasa_from_view(view, &res_areas)
+                })
+                .collect()
+        })
+    });
+
+    Ok(results
+        .into_iter()
+        .map(|areas| areas.into_pyarray(py))
+        .collect())
+}
+
 // ===========================================================================
 // Load + SASA (zero GIL pipeline)
 // ===========================================================================
@@ -332,6 +501,8 @@ pub(crate) fn py_sasa(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(relative_sasa, m)?)?;
     m.add_function(wrap_pyfunction!(total_sasa, m)?)?;
     m.add_function(wrap_pyfunction!(batch_atom_sasa, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_residue_sasa, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_relative_sasa, m)?)?;
     m.add_function(wrap_pyfunction!(batch_total_sasa, m)?)?;
     m.add_function(wrap_pyfunction!(load_and_sasa, m)?)?;
     Ok(())

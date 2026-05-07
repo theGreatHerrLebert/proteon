@@ -101,6 +101,61 @@ pub(crate) fn hbond_count_per_residue<'py>(
     counts.into_pyarray(py)
 }
 
+/// Per-residue H-bond counts for many structures in parallel.
+///
+/// Same per-structure result as :func:`hbond_count_per_residue` but runs
+/// the structures concurrently via rayon.
+///
+/// Returns list of 1D u32 arrays, one per structure, each of length
+/// n_residues for that structure.
+#[pyfunction]
+#[pyo3(signature = (structures, energy_cutoff=-0.5, n_threads=None))]
+pub(crate) fn batch_hbond_count<'py>(
+    py: Python<'py>,
+    structures: &Bound<'py, PyList>,
+    energy_cutoff: f64,
+    n_threads: Option<i32>,
+) -> PyResult<Vec<Bound<'py, PyArray1<u32>>>> {
+    let all_residues: Vec<Vec<crate::dssp::DsspResidue>> = structures
+        .iter()
+        .map(|item| {
+            let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+            Ok(crate::dssp::extract_dssp_residues(&pdb.inner))
+        })
+        .collect::<PyResult<_>>()?;
+
+    let n = resolve_threads(n_threads);
+
+    let results: Vec<Vec<u32>> = py.allow_threads(|| {
+        let pool = build_pool(n);
+        pool.install(|| {
+            all_residues
+                .par_iter()
+                .map(|residues| {
+                    let bonds =
+                        hbond::backbone_hbonds_from_residues(residues, energy_cutoff);
+                    let n_res = residues.len();
+                    let mut counts = vec![0u32; n_res];
+                    for b in &bonds {
+                        if b.acceptor < n_res {
+                            counts[b.acceptor] += 1;
+                        }
+                        if b.donor < n_res {
+                            counts[b.donor] += 1;
+                        }
+                    }
+                    counts
+                })
+                .collect()
+        })
+    });
+
+    Ok(results
+        .into_iter()
+        .map(|c| c.into_pyarray(py))
+        .collect())
+}
+
 /// Batch backbone H-bonds for many structures in parallel.
 ///
 /// Returns list of Nx4 arrays.
@@ -157,6 +212,7 @@ pub(crate) fn py_hbond(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(backbone_hbonds, m)?)?;
     m.add_function(wrap_pyfunction!(geometric_hbonds, m)?)?;
     m.add_function(wrap_pyfunction!(hbond_count_per_residue, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_hbond_count, m)?)?;
     m.add_function(wrap_pyfunction!(batch_backbone_hbonds, m)?)?;
     Ok(())
 }

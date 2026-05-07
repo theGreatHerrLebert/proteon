@@ -444,6 +444,153 @@ fn minimize_h_single(
     )
 }
 
+/// Per-structure result captured by the parallel `batch_compute_energy` loop.
+/// Keeps owned scalars so the parallel body never touches Python objects.
+struct EnergyOutcome {
+    energy: energy::EnergyResult,
+    n_unassigned_atoms: usize,
+    n_topo_atoms: usize,
+    n_bonds: usize,
+    n_angles: usize,
+    n_torsions: usize,
+    n_impropers: usize,
+    n_excluded_pairs: usize,
+    n_14_pairs: usize,
+}
+
+#[derive(Clone, Copy)]
+enum FfKind {
+    Charmm19Eef1,
+    Amber96,
+    Amber96Obc,
+}
+
+fn parse_ff(ff: &str) -> PyResult<FfKind> {
+    match ff {
+        "charmm" | "charmm19" | "charmm19_eef1" => Ok(FfKind::Charmm19Eef1),
+        "amber" | "amber96" => Ok(FfKind::Amber96),
+        "amber96_obc" | "amber96+obc" | "amber96_obc2" => Ok(FfKind::Amber96Obc),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
+             (aliases: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
+        ))),
+    }
+}
+
+fn compute_energy_one(
+    pdb: &pdbtbx::PDB,
+    ff_kind: FfKind,
+    nbl_threshold: Option<usize>,
+    nonbonded_cutoff: Option<f64>,
+) -> EnergyOutcome {
+    macro_rules! run {
+        ($params_expr:expr) => {{
+            let mut params = $params_expr;
+            if let Some(c) = nonbonded_cutoff {
+                params.cutoff_override = Some(c);
+            }
+            let topo = topology::build_topology(pdb, &params);
+            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+            let result = match nbl_threshold {
+                Some(t) => energy::compute_energy_auto(&coords, &topo, &params, t),
+                None => energy::compute_energy(&coords, &topo, &params),
+            };
+            (topo, result)
+        }};
+    }
+    let (topo, result) = match ff_kind {
+        FfKind::Charmm19Eef1 => run!(params::charmm19_eef1()),
+        FfKind::Amber96 => run!(params::amber96()),
+        FfKind::Amber96Obc => run!(params::amber96_obc()),
+    };
+    EnergyOutcome {
+        energy: result,
+        n_unassigned_atoms: topo.unassigned_atoms.len(),
+        n_topo_atoms: topo.atoms.len(),
+        n_bonds: topo.bonds.len(),
+        n_angles: topo.angles.len(),
+        n_torsions: topo.torsions.len(),
+        n_impropers: topo.improper_torsions.len(),
+        n_excluded_pairs: topo.excluded_pairs.len(),
+        n_14_pairs: topo.pairs_14.len(),
+    }
+}
+
+fn energy_outcome_to_dict<'py>(
+    py: Python<'py>,
+    outcome: &EnergyOutcome,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("bond_stretch", outcome.energy.bond_stretch)?;
+    dict.set_item("angle_bend", outcome.energy.angle_bend)?;
+    dict.set_item("torsion", outcome.energy.torsion)?;
+    dict.set_item("improper_torsion", outcome.energy.improper_torsion)?;
+    dict.set_item("vdw", outcome.energy.vdw)?;
+    dict.set_item("electrostatic", outcome.energy.electrostatic)?;
+    dict.set_item("solvation", outcome.energy.solvation)?;
+    dict.set_item("total", outcome.energy.total)?;
+    dict.set_item("n_unassigned_atoms", outcome.n_unassigned_atoms)?;
+    dict.set_item("n_topo_atoms", outcome.n_topo_atoms)?;
+    dict.set_item("n_bonds", outcome.n_bonds)?;
+    dict.set_item("n_angles", outcome.n_angles)?;
+    dict.set_item("n_torsions", outcome.n_torsions)?;
+    dict.set_item("n_impropers", outcome.n_impropers)?;
+    dict.set_item("n_excluded_pairs", outcome.n_excluded_pairs)?;
+    dict.set_item("n_14_pairs", outcome.n_14_pairs)?;
+    Ok(dict)
+}
+
+/// Compute force-field energy for many structures in parallel (Rust + rayon).
+///
+/// Returns list of dicts with the same shape as :func:`compute_energy`.
+/// Same FF aliases and cutoff arguments. Structures are processed in chunks
+/// to bound peak memory from PDB cloning.
+#[pyfunction]
+#[pyo3(signature = (structures, ff="amber96", nbl_threshold=None, nonbonded_cutoff=None, n_threads=None))]
+pub(crate) fn batch_compute_energy<'py>(
+    py: Python<'py>,
+    structures: &Bound<'py, PyList>,
+    ff: &str,
+    nbl_threshold: Option<usize>,
+    nonbonded_cutoff: Option<f64>,
+    n_threads: Option<i32>,
+) -> PyResult<Vec<PyObject>> {
+    let ff_kind = parse_ff(ff)?;
+    let n = resolve_threads(n_threads);
+    let total = structures.len();
+    let chunk_size = 500;
+    let mut all_outcomes: Vec<EnergyOutcome> = Vec::with_capacity(total);
+
+    for start in (0..total).step_by(chunk_size) {
+        let end = (start + chunk_size).min(total);
+
+        let chunk_pdbs: Vec<pdbtbx::PDB> = (start..end)
+            .map(|i| {
+                let item = structures.get_item(i)?;
+                let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+                Ok(pdb.inner.clone())
+            })
+            .collect::<PyResult<_>>()?;
+
+        let outcomes: Vec<EnergyOutcome> = py.allow_threads(|| {
+            let pool = build_pool(n);
+            pool.install(|| {
+                chunk_pdbs
+                    .par_iter()
+                    .map(|pdb| compute_energy_one(pdb, ff_kind, nbl_threshold, nonbonded_cutoff))
+                    .collect()
+            })
+        });
+
+        all_outcomes.extend(outcomes);
+    }
+
+    all_outcomes
+        .iter()
+        .map(|o| energy_outcome_to_dict(py, o).map(|d| d.into_any().unbind()))
+        .collect()
+}
+
 /// Batch minimize hydrogen positions for many structures in parallel.
 ///
 /// Returns list of dicts (same format as minimize_hydrogens).
@@ -786,6 +933,7 @@ pub(crate) fn gpu_info(py: Python<'_>) -> PyResult<PyObject> {
 #[pymodule]
 pub(crate) fn py_forcefield(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_energy, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_compute_energy, m)?)?;
     m.add_function(wrap_pyfunction!(dump_topology, m)?)?;
     m.add_function(wrap_pyfunction!(minimize_hydrogens, m)?)?;
     m.add_function(wrap_pyfunction!(minimize_structure, m)?)?;

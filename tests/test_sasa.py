@@ -205,6 +205,33 @@ class TestBatchSASA:
         totals_serial = np.array([proteon.total_sasa(s) for s in structures])
         np.testing.assert_allclose(totals_batch, totals_serial, rtol=1e-10)
 
+    def test_batch_atom_sasa_matches_serial(self):
+        """batch_atom_sasa must equal a Python loop of atom_sasa per structure."""
+        structures = [load_crambin(), load_ubiquitin()]
+        batch = proteon.batch_atom_sasa(structures, n_threads=-1)
+        serial = [proteon.atom_sasa(s) for s in structures]
+        assert len(batch) == len(serial)
+        for b, s in zip(batch, serial):
+            assert b.shape == s.shape
+            np.testing.assert_array_equal(b, s)
+
+    def test_batch_residue_sasa_matches_serial(self):
+        """batch_residue_sasa must equal a loop of residue_sasa per structure."""
+        structures = [load_crambin(), load_ubiquitin()]
+        batch = proteon.batch_residue_sasa(structures, n_threads=-1)
+        serial = [proteon.residue_sasa(s) for s in structures]
+        for b, s in zip(batch, serial):
+            np.testing.assert_array_equal(b, s)
+
+    def test_batch_relative_sasa_matches_serial(self):
+        """batch_relative_sasa must equal a loop of relative_sasa per structure."""
+        structures = [load_crambin(), load_ubiquitin()]
+        batch = proteon.batch_relative_sasa(structures, n_threads=-1)
+        serial = [proteon.relative_sasa(s) for s in structures]
+        for b, s in zip(batch, serial):
+            # NaN for non-standard residues; equal_nan to compare exactly.
+            np.testing.assert_array_equal(b, s)
+
 
 # ===========================================================================
 # load_and_sasa
