@@ -106,6 +106,29 @@ def hbond_count(
     return np.asarray(_hbond.hbond_count_per_residue(_get_ptr(structure), energy_cutoff))
 
 
+def batch_hbond_count(
+    structures: Sequence,
+    energy_cutoff: float = -0.5,
+    *,
+    n_threads: Optional[int] = None,
+) -> List[NDArray[np.uint32]]:
+    """Per-residue H-bond counts for many structures in parallel.
+
+    Per-structure result equals :func:`hbond_count`. Length per array
+    equals that structure's residue count.
+
+    Args:
+        structures: Sequence of proteon Structure objects.
+        energy_cutoff: Kabsch-Sander energy cutoff (default -0.5).
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores.
+
+    Returns:
+        List of 1D uint32 arrays.
+    """
+    ptrs = [_get_ptr(s) for s in structures]
+    return [np.asarray(a) for a in _hbond.batch_hbond_count(ptrs, energy_cutoff, n_threads)]
+
+
 def batch_backbone_hbonds(
     structures: Sequence,
     energy_cutoff: float = -0.5,

@@ -79,6 +79,72 @@ class TestComputeEnergy:
 
 
 # ===========================================================================
+# batch_compute_energy
+# ===========================================================================
+
+
+class TestBatchComputeEnergy:
+    """batch_compute_energy must produce per-structure dicts identical to
+    a Python loop calling compute_energy on each structure."""
+
+    def _structures(self):
+        return [load_crambin(), load_ubiquitin()]
+
+    def test_charmm19_eef1_matches_serial(self):
+        structures = self._structures()
+        batch = proteon.batch_compute_energy(
+            structures, ff="charmm19_eef1", units=UNITS, n_threads=-1
+        )
+        serial = [
+            proteon.compute_energy(s, ff="charmm19_eef1", units=UNITS)
+            for s in structures
+        ]
+        assert len(batch) == len(serial)
+        for b, s in zip(batch, serial):
+            assert set(b.keys()) == set(s.keys())
+            for k in b:
+                assert b[k] == s[k], f"key {k} mismatch: batch={b[k]} serial={s[k]}"
+
+    def test_amber96_matches_serial(self):
+        structures = self._structures()
+        batch = proteon.batch_compute_energy(
+            structures, ff="amber96", units=UNITS, n_threads=-1
+        )
+        serial = [
+            proteon.compute_energy(s, ff="amber96", units=UNITS) for s in structures
+        ]
+        for b, s in zip(batch, serial):
+            assert set(b.keys()) == set(s.keys())
+            for k in b:
+                assert b[k] == s[k], f"key {k} mismatch: batch={b[k]} serial={s[k]}"
+
+    def test_nonbonded_cutoff_propagates(self):
+        """nonbonded_cutoff must reach the underlying per-structure call."""
+        structures = self._structures()
+        batch = proteon.batch_compute_energy(
+            structures, ff="amber96", nonbonded_cutoff=1e6, units=UNITS, n_threads=1
+        )
+        serial = [
+            proteon.compute_energy(s, ff="amber96", nonbonded_cutoff=1e6, units=UNITS)
+            for s in structures
+        ]
+        for b, s in zip(batch, serial):
+            assert b["total"] == s["total"]
+
+    def test_kj_units_default(self):
+        """Default units kJ/mol stays consistent between batch and serial."""
+        structures = self._structures()
+        batch = proteon.batch_compute_energy(structures, ff="charmm19_eef1", n_threads=1)
+        serial = [proteon.compute_energy(s, ff="charmm19_eef1") for s in structures]
+        for b, s in zip(batch, serial):
+            assert b["total"] == s["total"]
+
+    def test_unknown_ff_raises(self):
+        with pytest.raises(ValueError, match="Unknown force field"):
+            proteon.batch_compute_energy(self._structures(), ff="xyz")
+
+
+# ===========================================================================
 # minimize_hydrogens
 # ===========================================================================
 

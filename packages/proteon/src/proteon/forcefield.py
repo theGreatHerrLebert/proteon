@@ -245,6 +245,40 @@ def compute_energy(
     return _convert_energy_dict(result, u)
 
 
+def batch_compute_energy(
+    structures,
+    ff: str = "amber96",
+    units: str = "kJ/mol",
+    nbl_threshold: int | None = None,
+    nonbonded_cutoff: float | None = None,
+    *,
+    n_threads: int | None = None,
+) -> list[dict]:
+    """Compute force-field energy for many structures in parallel (Rust + rayon).
+
+    Per-structure result equals :func:`compute_energy`. Same FF aliases,
+    cutoff handling, and units conversion. Structures are processed in
+    chunks to bound peak memory from PDB cloning in the Rust layer.
+
+    Args:
+        structures: Sequence of proteon Structure objects.
+        ff: Force field name — see :func:`compute_energy`.
+        units: "kJ/mol" (default) or "kcal/mol".
+        nbl_threshold: Optional neighbor-list threshold override (per
+            structure). See :func:`compute_energy`.
+        nonbonded_cutoff: Optional cutoff override. See :func:`compute_energy`.
+        n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores.
+
+    Returns:
+        List of energy dicts, one per input structure, in input order.
+    """
+    u = _validate_units(units)
+    _maybe_warn_ff(ff)
+    ptrs = [_get_ptr(s) for s in structures]
+    raw = _ff.batch_compute_energy(ptrs, ff, nbl_threshold, nonbonded_cutoff, n_threads)
+    return [_convert_energy_dict(d, u) for d in raw]
+
+
 def minimize_hydrogens(
     structure,
     max_steps: int = 500,
