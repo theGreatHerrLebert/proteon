@@ -70,7 +70,6 @@ fn extract_radii(pdb: &pdbtbx::PDB, radii_set: sasa::RadiiSet) -> (Vec<[f64; 3]>
     (coords, radii)
 }
 
-
 // ===========================================================================
 // Single-structure SASA
 // ===========================================================================
@@ -314,8 +313,7 @@ pub(crate) fn batch_residue_sasa<'py>(
                     // Safety: see batch_atom_sasa.
                     let pdb: &pdbtbx::PDB = unsafe { &*(addr as *const pdbtbx::PDB) };
                     let (coords, radii) = extract_radii(pdb, rs);
-                    let atom_areas =
-                        sasa::shrake_rupley(&coords, &radii, probe, n_points);
+                    let atom_areas = sasa::shrake_rupley(&coords, &radii, probe, n_points);
                     sasa::residue_sasa(pdb, &atom_areas)
                 })
                 .collect()
@@ -364,8 +362,7 @@ pub(crate) fn batch_relative_sasa<'py>(
                     // Safety: see batch_atom_sasa.
                     let pdb: &pdbtbx::PDB = unsafe { &*(addr as *const pdbtbx::PDB) };
                     let (coords, radii) = extract_radii(pdb, rs);
-                    let atom_areas =
-                        sasa::shrake_rupley(&coords, &radii, probe, n_points);
+                    let atom_areas = sasa::shrake_rupley(&coords, &radii, probe, n_points);
                     let res_areas = sasa::residue_sasa(pdb, &atom_areas);
                     // Mirror py_sasa::relative_sasa exactly so parity holds.
                     let mut rsa = Vec::with_capacity(res_areas.len());

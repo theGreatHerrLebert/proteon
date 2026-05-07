@@ -142,8 +142,7 @@ pub(crate) fn batch_hbond_count<'py>(
                     // borrowed for 'py and outlives this closure.
                     let pdb: &pdbtbx::PDB = unsafe { &*(addr as *const pdbtbx::PDB) };
                     let residues = crate::dssp::extract_dssp_residues(pdb);
-                    let bonds =
-                        hbond::backbone_hbonds_from_residues(&residues, energy_cutoff);
+                    let bonds = hbond::backbone_hbonds_from_residues(&residues, energy_cutoff);
                     let n_res = residues.len();
                     let mut counts = vec![0u32; n_res];
                     for b in &bonds {
@@ -160,10 +159,7 @@ pub(crate) fn batch_hbond_count<'py>(
         })
     });
 
-    Ok(results
-        .into_iter()
-        .map(|c| c.into_pyarray(py))
-        .collect())
+    Ok(results.into_iter().map(|c| c.into_pyarray(py)).collect())
 }
 
 /// Batch backbone H-bonds for many structures in parallel.
