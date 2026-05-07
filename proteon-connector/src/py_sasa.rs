@@ -70,82 +70,6 @@ fn extract_radii(pdb: &pdbtbx::PDB, radii_set: sasa::RadiiSet) -> (Vec<[f64; 3]>
     (coords, radii)
 }
 
-/// Per-structure data extracted on the main thread before the parallel
-/// SASA loop. Holding only owned data lets us drop into `allow_threads`
-/// without dragging PyRef / GIL state into the rayon pool.
-struct StructureView {
-    coords: Vec<[f64; 3]>,
-    radii: Vec<f64>,
-    /// Primary-conformer atom counts per residue (in residue order).
-    residue_atom_counts: Vec<usize>,
-    /// Residue names in the same order as `residue_atom_counts`.
-    residue_names: Vec<String>,
-}
-
-fn extract_structure_view(pdb: &pdbtbx::PDB, radii_set: sasa::RadiiSet) -> StructureView {
-    let mut coords = Vec::new();
-    let mut radii = Vec::new();
-    let mut residue_atom_counts = Vec::new();
-    let mut residue_names = Vec::new();
-    let first_model = match pdb.models().next() {
-        Some(m) => m,
-        None => {
-            return StructureView {
-                coords,
-                radii,
-                residue_atom_counts,
-                residue_names,
-            };
-        }
-    };
-    for chain in first_model.chains() {
-        for residue in chain.residues() {
-            let res_name = residue.name().unwrap_or("").to_string();
-            let mut n_atoms_in_res = 0usize;
-            for atom in crate::altloc::residue_atoms_primary(residue) {
-                let (x, y, z) = atom.pos();
-                coords.push([x, y, z]);
-                let elem = atom.element().map(|e| e.symbol()).unwrap_or("");
-                let r = match radii_set {
-                    sasa::RadiiSet::Bondi => sasa::vdw_radius(elem).unwrap_or(sasa::DEFAULT_RADIUS),
-                    sasa::RadiiSet::ProtOr => sasa::protor_radius(atom.name(), &res_name, elem),
-                };
-                radii.push(r);
-                n_atoms_in_res += 1;
-            }
-            residue_atom_counts.push(n_atoms_in_res);
-            residue_names.push(res_name);
-        }
-    }
-    StructureView {
-        coords,
-        radii,
-        residue_atom_counts,
-        residue_names,
-    }
-}
-
-fn residue_sasa_from_view(view: &StructureView, atom_areas: &[f64]) -> Vec<f64> {
-    let mut result = Vec::with_capacity(view.residue_atom_counts.len());
-    let mut idx = 0;
-    for &n in &view.residue_atom_counts {
-        let sum: f64 = atom_areas[idx..idx + n].iter().sum();
-        result.push(sum);
-        idx += n;
-    }
-    result
-}
-
-fn relative_sasa_from_view(view: &StructureView, residue_areas: &[f64]) -> Vec<f64> {
-    view.residue_names
-        .iter()
-        .zip(residue_areas.iter())
-        .map(|(name, area)| match sasa::max_sasa(name) {
-            Some(m) if m > 0.0 => area / m,
-            _ => f64::NAN,
-        })
-        .collect()
-}
 
 // ===========================================================================
 // Single-structure SASA
@@ -270,22 +194,39 @@ pub(crate) fn batch_atom_sasa<'py>(
 ) -> PyResult<Vec<Bound<'py, PyArray1<f64>>>> {
     validate_n_points(n_points)?;
     let rs = parse_radii(radii)?;
-    let data: Vec<(Vec<[f64; 3]>, Vec<f64>)> = structures
+    // Pass raw &pdbtbx::PDB pointers across py.allow_threads instead of
+    // cloning each PDB. Safety: the input PyList borrow outlives this
+    // function call, so the underlying PyPDB instances (and the
+    // pdbtbx::PDB they own) stay valid for the whole rayon section.
+    // Only read access happens in the rayon body, no aliased mutation.
+    let pdb_addrs: Vec<usize> = structures
         .iter()
         .map(|item| {
             let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-            Ok(extract_radii(&pdb.inner, rs))
+            let ptr: *const pdbtbx::PDB = &pdb.inner;
+            Ok(ptr as usize)
         })
         .collect::<PyResult<_>>()?;
 
     let n = auto_threads(n_threads, SASA_PER_TASK_BYTES);
 
-    // Parallelize the SASA computation
     let results: Vec<Vec<f64>> = py.allow_threads(|| {
         let pool = build_pool(n);
         pool.install(|| {
-            data.par_iter()
-                .map(|(coords, radii)| sasa::shrake_rupley(coords, radii, probe, n_points))
+            pdb_addrs
+                .par_iter()
+                .map(|&addr| {
+                    // Safety: addr came from a live &pdbtbx::PDB held by a
+                    // PyPDB inside the input structures list, which is
+                    // borrowed for 'py and outlives this closure.
+                    let pdb: &pdbtbx::PDB = unsafe { &*(addr as *const pdbtbx::PDB) };
+                    let (coords, radii) = extract_radii(pdb, rs);
+                    // Use serial shrake_rupley: we already get parallelism
+                    // across structures; nested shrake_rupley_parallel inside
+                    // a busy pool just adds scheduling overhead without
+                    // additional speedup.
+                    sasa::shrake_rupley(&coords, &radii, probe, n_points)
+                })
                 .collect()
         })
     });
@@ -352,11 +293,13 @@ pub(crate) fn batch_residue_sasa<'py>(
 ) -> PyResult<Vec<Bound<'py, PyArray1<f64>>>> {
     validate_n_points(n_points)?;
     let rs = parse_radii(radii)?;
-    let views: Vec<StructureView> = structures
+    // See batch_atom_sasa for the safety rationale.
+    let pdb_addrs: Vec<usize> = structures
         .iter()
         .map(|item| {
             let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-            Ok(extract_structure_view(&pdb.inner, rs))
+            let ptr: *const pdbtbx::PDB = &pdb.inner;
+            Ok(ptr as usize)
         })
         .collect::<PyResult<_>>()?;
 
@@ -365,12 +308,15 @@ pub(crate) fn batch_residue_sasa<'py>(
     let results: Vec<Vec<f64>> = py.allow_threads(|| {
         let pool = build_pool(n);
         pool.install(|| {
-            views
+            pdb_addrs
                 .par_iter()
-                .map(|view| {
+                .map(|&addr| {
+                    // Safety: see batch_atom_sasa.
+                    let pdb: &pdbtbx::PDB = unsafe { &*(addr as *const pdbtbx::PDB) };
+                    let (coords, radii) = extract_radii(pdb, rs);
                     let atom_areas =
-                        sasa::shrake_rupley(&view.coords, &view.radii, probe, n_points);
-                    residue_sasa_from_view(view, &atom_areas)
+                        sasa::shrake_rupley(&coords, &radii, probe, n_points);
+                    sasa::residue_sasa(pdb, &atom_areas)
                 })
                 .collect()
         })
@@ -397,11 +343,13 @@ pub(crate) fn batch_relative_sasa<'py>(
 ) -> PyResult<Vec<Bound<'py, PyArray1<f64>>>> {
     validate_n_points(n_points)?;
     let rs = parse_radii(radii)?;
-    let views: Vec<StructureView> = structures
+    // See batch_atom_sasa for the safety rationale.
+    let pdb_addrs: Vec<usize> = structures
         .iter()
         .map(|item| {
             let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-            Ok(extract_structure_view(&pdb.inner, rs))
+            let ptr: *const pdbtbx::PDB = &pdb.inner;
+            Ok(ptr as usize)
         })
         .collect::<PyResult<_>>()?;
 
@@ -410,13 +358,31 @@ pub(crate) fn batch_relative_sasa<'py>(
     let results: Vec<Vec<f64>> = py.allow_threads(|| {
         let pool = build_pool(n);
         pool.install(|| {
-            views
+            pdb_addrs
                 .par_iter()
-                .map(|view| {
+                .map(|&addr| {
+                    // Safety: see batch_atom_sasa.
+                    let pdb: &pdbtbx::PDB = unsafe { &*(addr as *const pdbtbx::PDB) };
+                    let (coords, radii) = extract_radii(pdb, rs);
                     let atom_areas =
-                        sasa::shrake_rupley(&view.coords, &view.radii, probe, n_points);
-                    let res_areas = residue_sasa_from_view(view, &atom_areas);
-                    relative_sasa_from_view(view, &res_areas)
+                        sasa::shrake_rupley(&coords, &radii, probe, n_points);
+                    let res_areas = sasa::residue_sasa(pdb, &atom_areas);
+                    // Mirror py_sasa::relative_sasa exactly so parity holds.
+                    let mut rsa = Vec::with_capacity(res_areas.len());
+                    for chain in pdb.chains() {
+                        for residue in chain.residues() {
+                            let name = residue.name().unwrap_or("?");
+                            let max = sasa::max_sasa(name);
+                            let idx = rsa.len();
+                            if idx < res_areas.len() {
+                                match max {
+                                    Some(m) if m > 0.0 => rsa.push(res_areas[idx] / m),
+                                    _ => rsa.push(f64::NAN),
+                                }
+                            }
+                        }
+                    }
+                    rsa
                 })
                 .collect()
         })

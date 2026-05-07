@@ -116,11 +116,16 @@ pub(crate) fn batch_hbond_count<'py>(
     energy_cutoff: f64,
     n_threads: Option<i32>,
 ) -> PyResult<Vec<Bound<'py, PyArray1<u32>>>> {
-    let all_residues: Vec<Vec<crate::dssp::DsspResidue>> = structures
+    // Pass raw &pdbtbx::PDB pointers across py.allow_threads instead of
+    // cloning each PDB. Safety: the input PyList borrow outlives this
+    // function call, so the underlying PyPDB instances stay valid for
+    // the whole rayon section. Read access only inside the rayon body.
+    let pdb_addrs: Vec<usize> = structures
         .iter()
         .map(|item| {
             let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-            Ok(crate::dssp::extract_dssp_residues(&pdb.inner))
+            let ptr: *const pdbtbx::PDB = &pdb.inner;
+            Ok(ptr as usize)
         })
         .collect::<PyResult<_>>()?;
 
@@ -129,11 +134,16 @@ pub(crate) fn batch_hbond_count<'py>(
     let results: Vec<Vec<u32>> = py.allow_threads(|| {
         let pool = build_pool(n);
         pool.install(|| {
-            all_residues
+            pdb_addrs
                 .par_iter()
-                .map(|residues| {
+                .map(|&addr| {
+                    // Safety: addr came from a live &pdbtbx::PDB held by a
+                    // PyPDB inside the input structures list, which is
+                    // borrowed for 'py and outlives this closure.
+                    let pdb: &pdbtbx::PDB = unsafe { &*(addr as *const pdbtbx::PDB) };
+                    let residues = crate::dssp::extract_dssp_residues(pdb);
                     let bonds =
-                        hbond::backbone_hbonds_from_residues(residues, energy_cutoff);
+                        hbond::backbone_hbonds_from_residues(&residues, energy_cutoff);
                     let n_res = residues.len();
                     let mut counts = vec![0u32; n_res];
                     for b in &bonds {

@@ -557,35 +557,35 @@ pub(crate) fn batch_compute_energy<'py>(
 ) -> PyResult<Vec<PyObject>> {
     let ff_kind = parse_ff(ff)?;
     let n = resolve_threads(n_threads);
-    let total = structures.len();
-    let chunk_size = 500;
-    let mut all_outcomes: Vec<EnergyOutcome> = Vec::with_capacity(total);
 
-    for start in (0..total).step_by(chunk_size) {
-        let end = (start + chunk_size).min(total);
+    // Pass raw &pdbtbx::PDB pointers across py.allow_threads instead of
+    // cloning. Safety: the input PyList borrow outlives this call, so
+    // the PyPDB instances (and the pdbtbx::PDB they own) stay valid for
+    // the rayon section. Read-only access in the rayon body.
+    let pdb_addrs: Vec<usize> = structures
+        .iter()
+        .map(|item| {
+            let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+            let ptr: *const pdbtbx::PDB = &pdb.inner;
+            Ok(ptr as usize)
+        })
+        .collect::<PyResult<_>>()?;
 
-        let chunk_pdbs: Vec<pdbtbx::PDB> = (start..end)
-            .map(|i| {
-                let item = structures.get_item(i)?;
-                let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-                Ok(pdb.inner.clone())
-            })
-            .collect::<PyResult<_>>()?;
+    let outcomes: Vec<EnergyOutcome> = py.allow_threads(|| {
+        let pool = build_pool(n);
+        pool.install(|| {
+            pdb_addrs
+                .par_iter()
+                .map(|&addr| {
+                    // Safety: see batch_atom_sasa in py_sasa.rs.
+                    let pdb: &pdbtbx::PDB = unsafe { &*(addr as *const pdbtbx::PDB) };
+                    compute_energy_one(pdb, ff_kind, nbl_threshold, nonbonded_cutoff)
+                })
+                .collect()
+        })
+    });
 
-        let outcomes: Vec<EnergyOutcome> = py.allow_threads(|| {
-            let pool = build_pool(n);
-            pool.install(|| {
-                chunk_pdbs
-                    .par_iter()
-                    .map(|pdb| compute_energy_one(pdb, ff_kind, nbl_threshold, nonbonded_cutoff))
-                    .collect()
-            })
-        });
-
-        all_outcomes.extend(outcomes);
-    }
-
-    all_outcomes
+    outcomes
         .iter()
         .map(|o| energy_outcome_to_dict(py, o).map(|d| d.into_any().unbind()))
         .collect()
