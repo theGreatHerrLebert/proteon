@@ -1,0 +1,132 @@
+claims:
+  - id: proteon-dssp-8class-vs-mkdssp-50k-pdbs
+    title: Proteon DSSP 8-class secondary-structure assignments agree with mkdssp at 95% per-residue median across a 50 000-PDB random sample (PENDING — first run scheduled)
+    kind: measurement
+    subsystem: dssp
+    case: claims/dssp_8class_50k.md
+    source: ..
+    tier: release
+    trust_strategy:
+      - validation
+    capabilities:
+      - dssp-8class-parity
+    inputs:
+      corpus: dssp-mkdssp-50k-protein-only-monster3
+      n: 44210
+      class: random-sample
+      corpus_path: /globalscratch/dateschn/proteon-benchmark/pdbs_50k/
+      corpus_filter: validation/protein_only_corpus.py
+      corpus_sha: "PENDING-PIN-VALIDATION-PDB-CORPUS-50K"
+      seed: 42
+    outputs:
+      agreement_rate:
+        unit: dimensionless
+        description: >
+          Per-PDB fraction of residues where proteon's DSSP and mkdssp
+          assign the same 8-class character (H / G / I / E / B / T / S /
+          loop). Loop is canonicalised to '-' on both sides so the
+          space-vs-character convention isn't a confounder.
+      proteon_composition:
+        unit: counts
+        description: >
+          Per-PDB Counter of 8-class characters from proteon's DSSP
+          output. Aggregated across the n_ok subset for headline
+          per-class agreement.
+      mkdssp_composition:
+        unit: counts
+        description: >
+          Per-PDB Counter of 8-class characters from mkdssp's DSSP
+          output. Same role as proteon_composition.
+    pinned_versions:
+      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      mkdssp: "v4.6.1 (libcifpp v10.0.3, libmcfp v1.4.2)"
+      python: "3.12"
+      runner: validation/dssp_mkdssp_oracle.py
+      runner_workers: "32"
+    claim: >
+      Across N=44 210 protein-only PDBs (the same protein-only random
+      sample the CHARMM and AMBER96 oracles use, seed=42), proteon's
+      8-class DSSP secondary-structure assignments match mkdssp v4.6.1
+      at >=0.95 per-residue agreement on the median structure, with
+      >=80% of n_ok structures clearing the 0.95 threshold. The
+      residual disagreement sits on helix/strand boundary residues
+      where the H-bond energy crosses the -0.5 kcal/mol threshold and
+      tiny coordinate / detection differences flip the per-residue
+      call between H and T or E and B.
+      First 50K run scheduled; headline numbers will be filled in at
+      lock time. The CI claim
+      `proteon-dssp-8class-vs-mkdssp-reference` covers per-PDB
+      regression at unit-test scope; this 50K extension proves
+      cross-tool agreement holds at population scale.
+    tolerances:
+      - metric: median_relative_error
+        op: ">"
+        value: 0.95
+        output: agreement_rate
+        prose: >
+          Median(agreement_rate) >= 0.95 across the n_ok subset.
+          Empirically the two implementations agree at 0.97-1.00 on
+          canonical structures; the 0.95 floor leaves comfortable
+          room for boundary wobble without letting a systematic
+          regression slip through.
+      - metric: pass_rate
+        op: ">="
+        value: 0.80
+        output: agreement_rate
+        prose: >
+          n_ok structures with agreement_rate >= 0.95 / n_ok >= 0.80.
+          Some PDBs have unusual residue compositions (sequence ID
+          gaps, modified amino acids) that drive lower agreement;
+          80% buys headroom without papering over a systematic gap.
+      - metric: pass_rate
+        op: ">="
+        value: 0.85
+        output: agreement_rate
+        prose: >
+          n_ok / n_attempted >= 0.85. Lower-bound on usable n_ok per
+          v0.1.4's CHARMM 50K experience. mkdssp may reject some
+          PDBs (chain-break records, unusual atoms); proteon's DSSP
+          may reject 0-residue inputs. The 85% floor keeps the
+          comparison surface broad enough to claim "across the
+          corpus".
+    evidence:
+      oracle:
+        - mkdssp
+      command: >
+        PROTEON_PDB_LIST=validation/protein_only_50k.txt
+        PROTEON_DSSP_ORACLE_OUT=validation/dssp_mkdssp_oracle_50k.jsonl
+        N_PDBS=50000 N_WORKERS=32 SEED=42 TASK_TIMEOUT_S=60
+        python validation/dssp_mkdssp_oracle.py
+      artifact: validation/dssp_mkdssp_oracle_50k.jsonl
+    provenance: human
+    last_verified:
+      commit: null
+      date: null
+      value: null
+      corpus_sha: null
+    assumptions:
+      - >
+          Both arms run on identical PDB inputs (no PDBFixer pre-pass
+          on either side). DSSP is geometry-driven; H-bond energies
+          come from coordinates only, so the two implementations
+          agreeing on the same input atoms means agreement on the
+          algorithm not on the prep.
+      - >
+          mkdssp v4.6.1 is the libcifpp/dssp build pinned in the
+          EVIDENT image (PR #45). v3.x and earlier mkdssp use a
+          different H-bond detection radius; this claim is bound to
+          v4.x output specifically.
+      - >
+          Loop characters are canonicalised to '-' on both sides
+          before comparison. mkdssp emits ' ' (space) for loop;
+          proteon emits 'C'. The runner normalises both.
+    failure_modes:
+      - >
+          Length-mismatch records: per-PDB skip when proteon and
+          mkdssp report different residue counts. Common causes are
+          chain-break ('!') records in the DSSP output that mkdssp
+          drops while proteon includes the residue. Documented as
+          'skipped' (not 'error') in the JSONL.
+      - >
+          Headline (PENDING): n_attempted, n_ok, median agreement,
+          per-class composition deltas. Will be filled at first lock.

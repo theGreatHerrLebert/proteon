@@ -91,6 +91,7 @@ include:
   - claims/supervision_parity.yaml
   - claims/scale_50k_battle_test.yaml
   - claims/dssp_8class.yaml
+  - claims/dssp_8class_50k.yaml
   - claims/usalign_mm.yaml
   - claims/forcefield_charmm19_ball.yaml
   - claims/forcefield_charmm19_ball_corpus.yaml
