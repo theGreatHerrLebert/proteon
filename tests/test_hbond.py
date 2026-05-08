@@ -103,3 +103,12 @@ class TestBatchHBonds:
         serial = [proteon.backbone_hbonds(s) for s in structures]
         for b, s in zip(batch, serial):
             assert len(b) == len(s)
+
+    def test_batch_hbond_count_matches_serial(self):
+        """batch_hbond_count must equal a loop of hbond_count per structure."""
+        structures = [load_crambin(), load_ubiquitin()]
+        batch = proteon.batch_hbond_count(structures, n_threads=-1)
+        serial = [proteon.hbond_count(s) for s in structures]
+        assert len(batch) == len(serial)
+        for b, s in zip(batch, serial):
+            np.testing.assert_array_equal(b, s)

@@ -72,6 +72,7 @@ from .analysis import (
 )
 from .core import RustWrapperObject
 from .forcefield import (
+    batch_compute_energy,
     batch_minimize_hydrogens,
     compute_energy,
     gpu_available,
@@ -84,6 +85,7 @@ from .forcefield import (
 from .hbond import (
     backbone_hbonds,
     batch_backbone_hbonds,
+    batch_hbond_count,
     geometric_hbonds,
     hbond_count,
 )
@@ -117,6 +119,9 @@ from .geometry import (
 )
 from .sasa import (
     atom_sasa,
+    batch_atom_sasa,
+    batch_relative_sasa,
+    batch_residue_sasa,
     batch_total_sasa,
     load_and_sasa,
     relative_sasa,
@@ -238,6 +243,7 @@ _ANALYSIS_API = (
 _CORE_API = ("RustWrapperObject",)
 
 _FORCEFIELD_API = (
+    "batch_compute_energy",
     "batch_minimize_hydrogens",
     "compute_energy",
     "gpu_available",
@@ -251,6 +257,7 @@ _FORCEFIELD_API = (
 _HBOND_API = (
     "backbone_hbonds",
     "batch_backbone_hbonds",
+    "batch_hbond_count",
     "geometric_hbonds",
     "hbond_count",
 )
@@ -289,6 +296,9 @@ _GEOMETRY_API = (
 
 _SASA_API = (
     "atom_sasa",
+    "batch_atom_sasa",
+    "batch_relative_sasa",
+    "batch_residue_sasa",
     "batch_total_sasa",
     "load_and_sasa",
     "relative_sasa",

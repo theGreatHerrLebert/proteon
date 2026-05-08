@@ -30,6 +30,29 @@ release tag has a paired EVIDENT bundle pinned by sha256.
     v0.2.0 bind-mount contract — same shape as the AMBER96 and CHARMM
     oracles.
   - `evident/evident.yaml` includes list extended with the new claim.
+- **Per-structure batch primitives for SASA, energy, and H-bond counts.**
+  Adds `proteon.batch_atom_sasa`, `batch_residue_sasa`, `batch_relative_sasa`,
+  `batch_hbond_count`, and `batch_compute_energy` — rayon-parallel wrappers
+  that produce one result per input structure. Each new function is
+  parity-tested against a Python loop of the corresponding per-structure
+  call (exact float equality; same dict shape for energy components and
+  topology counts). Unblocks proteon-graphein's batch entry point — see
+  proteon-graphein/CHANGELOG once that ships.
+  - `batch_atom_sasa`: existing Rust function, previously unexposed in
+    Python (`py_sasa.rs::batch_atom_sasa` was registered but never wrapped);
+    now surfaced through `proteon.sasa`.
+  - `batch_residue_sasa` and `batch_relative_sasa`: new Rust functions in
+    `py_sasa.rs`. Pre-extract a `StructureView` (coords + radii + per-residue
+    atom counts + residue names) on the main thread so the rayon body
+    holds only owned data.
+  - `batch_hbond_count`: new Rust function in `py_hbond.rs`. Mirrors the
+    existing `batch_backbone_hbonds` data-flow but reduces to per-residue
+    counts (matches the single-call `hbond_count_per_residue` semantics).
+  - `batch_compute_energy`: new Rust function in `py_forcefield.rs`. Routes
+    the same FF aliases as `compute_energy` (`charmm19_eef1`, `amber96`,
+    `amber96_obc`) and forwards `nbl_threshold` / `nonbonded_cutoff` per
+    structure. Uses the same chunk-clone pattern as `batch_minimize_hydrogens`
+    to bound peak memory.
 - **HID/HIE/HIP histidine protonation-state variants in AMBER96 data**
   (#60, PR 1 of 3). proteon's AMBER96 oracle previously showed 7-12%
   rel_diff vs OpenMM AMBER96 on every PDB containing histidines
