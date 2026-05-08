@@ -11,6 +11,19 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### Fixed
+
+- **EVIDENT image: enable CCD download in libcifpp build**
+  (`evident/Dockerfile{,.cuda}`). Both Dockerfiles previously set
+  `-DCIFPP_DOWNLOAD_CCD=OFF` based on an outdated assumption that PDB
+  input didn't need the Chemical Component Dictionary. mkdssp v4 in
+  fact requires the CCD at runtime for every per-residue lookup ("ALA",
+  "GLY", ...) regardless of input format; without it, every PDB fails
+  with `compound information not found in /usr/local/share/libcifpp`.
+  Surfaced when the v0.2.0 50K DSSP-vs-mkdssp run failed on every
+  attempted record. Build-time download adds ~70 MB to the image
+  (components.cif.gz); the runtime cost is one mmap per process.
+
 ### Added
 
 - **DSSP 8-class vs mkdssp release-tier 50K claim** — completes the v0.2.0
