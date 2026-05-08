@@ -170,7 +170,7 @@ RUN git clone --depth 1 -b "${LIBMCFP_VERSION}" https://github.com/mhekkel/libmc
 RUN git clone --depth 1 -b "${LIBCIFPP_VERSION}" https://github.com/PDB-REDO/libcifpp.git && \
     cmake -S libcifpp -B libcifpp/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCIFPP_DOWNLOAD_CCD=OFF \
+        -DCIFPP_DOWNLOAD_CCD=ON \
         -DCIFPP_INSTALL_UPDATE_SCRIPT=OFF \
         -DBUILD_TESTING=OFF && \
     cmake --build libcifpp/build -j"$(nproc)" && \

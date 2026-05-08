@@ -149,8 +149,13 @@ RUN wget -q "https://github.com/soedinglab/MMseqs2/releases/download/${MMSEQS_VE
 # mkdssp (DSSP C++ reference, PDB-REDO/dssp). Closes the 8-class DSSP
 # gap claim's oracle install; the asserting test that uses it is
 # tracked separately. Build chain: libmcfp → libcifpp → dssp. CCD
-# download is disabled (-DCIFPP_DOWNLOAD_CCD=OFF) because PDB input
-# does not need the chemistry-component dictionary; mmCIF input would.
+# download is enabled (-DCIFPP_DOWNLOAD_CCD=ON) because mkdssp v4
+# requires the Chemical Component Dictionary at runtime even for PDB
+# input — without it, every per-residue lookup ("ALA", "GLY", ...)
+# fails with "compound information not found". Build-time download
+# adds ~70 MB to the image (components.cif.gz) but the runtime cost
+# is one mmap per process. Surfaced when the v0.2.0 50K DSSP-vs-mkdssp
+# claim's first run failed on every PDB.
 #
 # Pinned versions (closes #13). The triple is mutually compatible:
 # dssp v4.6.1 requires `find_package(cifpp 10.0.2)`; libmcfp v1.4.2
@@ -168,7 +173,7 @@ RUN git clone --depth 1 -b "${LIBMCFP_VERSION}" https://github.com/mhekkel/libmc
 RUN git clone --depth 1 -b "${LIBCIFPP_VERSION}" https://github.com/PDB-REDO/libcifpp.git && \
     cmake -S libcifpp -B libcifpp/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCIFPP_DOWNLOAD_CCD=OFF \
+        -DCIFPP_DOWNLOAD_CCD=ON \
         -DCIFPP_INSTALL_UPDATE_SCRIPT=OFF \
         -DBUILD_TESTING=OFF && \
     cmake --build libcifpp/build -j"$(nproc)" && \
