@@ -13,6 +13,14 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ### Fixed
 
+- **DSSP runner: pass `--output-format dssp` explicitly to mkdssp**
+  (`validation/dssp_mkdssp_oracle.py`). mkdssp v4 picks output format
+  based on the output filename's extension; we pipe through
+  `/dev/stdout` (no extension) so it defaulted to mmCIF, which the
+  runner's parser doesn't handle — resulting in `mkdssp_n=0` for every
+  PDB and 100% length-mismatch skips. One-line fix: pass the format
+  explicitly. Surfaced when the gemmi-bridge run produced records but
+  every record was a skip with empty `mkdssp_composition`.
 - **DSSP runner: bridge through gemmi for mkdssp compatibility**
   (`validation/dssp_mkdssp_oracle.py`). mkdssp v4 + libcifpp's strict
   validator rejects many PDB-derived datablocks at parse time

@@ -169,8 +169,12 @@ def compare_one(pdb_path: str) -> dict:
         try:
             s_gemmi = gemmi.read_pdb(pdb_path)
             s_gemmi.make_mmcif_document().write_file(cif_path)
+            # mkdssp v4 picks output format from the output filename's
+            # extension; /dev/stdout has no extension and defaults to
+            # mmCIF, which our parser doesn't handle. Force the classic
+            # DSSP text format explicitly.
             result = subprocess.run(
-                [MKDSSP_BIN, cif_path, "/dev/stdout"],
+                [MKDSSP_BIN, "--output-format", "dssp", cif_path, "/dev/stdout"],
                 capture_output=True, text=True, timeout=30,
             )
         finally:
