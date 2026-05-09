@@ -60,6 +60,7 @@ from pathlib import Path
 import numpy as np
 
 import pebble
+import gemmi
 import proteon
 
 # ---------------------------------------------------------------------------
@@ -153,12 +154,28 @@ def compare_one(pdb_path: str) -> dict:
             return rec
 
         # --- mkdssp side ---
-        # mkdssp v4 takes input + output paths; use stdout via /dev/stdout
-        # so we don't have to manage a second temp file per call.
-        result = subprocess.run(
-            [MKDSSP_BIN, pdb_path, "/dev/stdout"],
-            capture_output=True, text=True, timeout=30,
+        # mkdssp v4 + libcifpp's strict validator rejects many PDB-derived
+        # datablocks (multiple REMARK 3 records → "Duplicate Key violation"
+        # on the internal _refine table). Pre-convert PDB → mmCIF via
+        # gemmi (more permissive in its mmCIF emission) and feed mmCIF to
+        # mkdssp. The runtime cost is one gemmi read + write per PDB
+        # (sub-second). The libcifpp issue is upstream; this bridge avoids
+        # the workaround needing a libcifpp patch.
+        cif_tmp = tempfile.NamedTemporaryFile(
+            suffix=".cif", delete=False, mode="w"
         )
+        cif_path = cif_tmp.name
+        cif_tmp.close()
+        try:
+            s_gemmi = gemmi.read_pdb(pdb_path)
+            s_gemmi.make_mmcif_document().write_file(cif_path)
+            result = subprocess.run(
+                [MKDSSP_BIN, cif_path, "/dev/stdout"],
+                capture_output=True, text=True, timeout=30,
+            )
+        finally:
+            if os.path.exists(cif_path):
+                os.unlink(cif_path)
         if result.returncode != 0:
             rec["error"] = f"mkdssp returncode={result.returncode}: {result.stderr[:200]}"
             rec["wall_s"] = float(time.perf_counter() - t0)

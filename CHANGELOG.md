@@ -13,6 +13,15 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ### Fixed
 
+- **DSSP runner: bridge through gemmi for mkdssp compatibility**
+  (`validation/dssp_mkdssp_oracle.py`). mkdssp v4 + libcifpp's strict
+  validator rejects many PDB-derived datablocks at parse time
+  ("Duplicate Key violation" on the internal `_refine` table when a
+  PDB has multiple `REMARK 3` records). The runner now pre-converts
+  PDB → mmCIF via `gemmi.read_pdb().make_mmcif_document().write_file()`
+  before invoking mkdssp on the mmCIF. Pipeline verified on 5 PDBs
+  that previously failed (12e8, 8rqw, 7vsc, 1aaj, 7nz7) — all now
+  produce valid DSSP output. Sub-second per-PDB conversion overhead.
 - **EVIDENT image: enable CCD download in libcifpp build**
   (`evident/Dockerfile{,.cuda}`). Both Dockerfiles previously set
   `-DCIFPP_DOWNLOAD_CCD=OFF` based on an outdated assumption that PDB
