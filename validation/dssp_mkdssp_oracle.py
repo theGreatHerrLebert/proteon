@@ -173,8 +173,18 @@ def compare_one(pdb_path: str) -> dict:
             # extension; /dev/stdout has no extension and defaults to
             # mmCIF, which our parser doesn't handle. Force the classic
             # DSSP text format explicitly.
+            #
+            # --min-pp-stretch=999 effectively disables mkdssp's PP-helix
+            # ('P') class. proteon's DSSP doesn't emit P, so leaving the
+            # default (3) creates systematic per-residue mismatches that
+            # don't reflect a real algorithmic disagreement.
             result = subprocess.run(
-                [MKDSSP_BIN, "--output-format", "dssp", cif_path, "/dev/stdout"],
+                [
+                    MKDSSP_BIN,
+                    "--output-format", "dssp",
+                    "--min-pp-stretch", "999",
+                    cif_path, "/dev/stdout",
+                ],
                 capture_output=True, text=True, timeout=30,
             )
         finally:
@@ -211,6 +221,12 @@ def compare_one(pdb_path: str) -> dict:
         rec["agreement_rate"] = float(n_match) / rec["proteon_n"]
         rec["proteon_composition"] = dict(Counter(proteon_ss))
         rec["mkdssp_composition"] = dict(Counter(mkdssp_ss))
+        # Persist the full SS strings so post-hoc reanalysis (e.g.
+        # collapsing to 3-class, dropping boundary residues) is possible
+        # without re-running the 80-min compute. ~hundreds of bytes per
+        # record, ~10 MB at 50K — small for the forensic value.
+        rec["proteon_ss"] = "".join(proteon_ss)
+        rec["mkdssp_ss"] = "".join(mkdssp_ss)
 
     except Exception as e:
         rec["error"] = f"{type(e).__name__}: {str(e)[:200]}"
