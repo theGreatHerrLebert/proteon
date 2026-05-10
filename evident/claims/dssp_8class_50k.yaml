@@ -121,13 +121,18 @@ claims:
           before comparison. mkdssp emits ' ' (space) for loop;
           proteon emits 'C'. The runner normalises both.
       - >
-          mkdssp's PP-helix ('P') class is disabled at runtime via
-          --min-pp-stretch=999. proteon's DSSP doesn't emit P, so
-          leaving mkdssp's default (3) would create systematic
-          per-residue mismatches that don't reflect an algorithmic
-          disagreement on the H-bond geometry both implementations
-          actually agree on. Both arms thus emit the 8-class
-          alphabet {H,G,I,E,B,T,S,-}.
+          mkdssp's PP-helix ('P') class is normalised to loop ('-')
+          on the mkdssp side at comparison time. proteon's DSSP
+          doesn't emit P at all, so counting P-vs-anything as a
+          mismatch would double-count an alphabet-vocabulary
+          difference as an algorithmic disagreement on the H-bond
+          geometry both implementations otherwise agree on. The raw
+          mkdssp_ss field in each record preserves the unmodified P
+          chars for forensic reanalysis.
+          (Runtime disabling via --min-pp-stretch is not viable —
+          mkdssp v4.6.1 / libcifpp 10.0.3 has a CLI bug where any
+          non-default value crashes with `terminate called without
+          an active exception`.)
     failure_modes:
       - >
           Length-mismatch records: per-PDB skip when proteon and
