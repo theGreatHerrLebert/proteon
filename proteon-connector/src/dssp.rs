@@ -404,10 +404,27 @@ pub(crate) fn assign_dssp(residues: &[DsspResidue]) -> String {
         }
     }
 
-    // Turns (T): residues in a turn not already assigned higher
+    // Turns (T): residues *interior* to a turn, not already assigned higher.
+    //
+    // The mark_turn function records three different markers per n-turn:
+    //   - '>' / 'X' at the donor (start) — that residue's CO is the H-bond donor
+    //   - '3' / '4' / '5' at interior residues (between donor and acceptor)
+    //   - '<' / 'X' at the acceptor (end) — that residue's NH accepts the bond
+    //
+    // Canonical DSSP (and mkdssp) classify only the *interior* residues as T;
+    // the donor and acceptor positions are typically loop ('-') or bend ('S')
+    // unless they're separately covered by another turn. Counting endpoints
+    // as T over-emits turns by ~2× on short n-turns and was the dominant
+    // source of disagreement vs mkdssp (66% of all per-residue diffs in the
+    // 50K oracle run came from spurious proteon T's).
+    fn is_turn_interior(c: char) -> bool {
+        c == '3' || c == '4' || c == '5'
+    }
     for i in 0..n {
         if summary[i] == 'C' {
-            let in_turn = (turn3[i] != ' ') || (turn4[i] != ' ') || (turn5[i] != ' ');
+            let in_turn = is_turn_interior(turn3[i])
+                || is_turn_interior(turn4[i])
+                || is_turn_interior(turn5[i]);
             if in_turn {
                 summary[i] = 'T';
             }

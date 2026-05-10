@@ -13,6 +13,21 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ### Fixed
 
+- **DSSP: stop classifying turn endpoints as T (turn)**
+  (`proteon-connector/src/dssp.rs`). proteon's T-classification rule
+  treated *any* non-space turn marker as "in turn", which over-counts
+  by including the H-bond donor (`>`/`X`) and acceptor (`<`/`X`)
+  positions. Canonical DSSP only classifies the *interior* residues
+  of an n-turn (markers `3`, `4`, `5`) as T; donor/acceptor positions
+  fall through to S (bend) or `-` (loop) unless separately covered
+  by another turn. The 50K mkdssp oracle made the over-emission
+  visible: proteon emitted T 88.76% more often than mkdssp, and
+  66% of all per-residue diffs (1.8M residues) traced to spurious
+  T's at boundary positions adjacent to helices and strands. With
+  this fix, T-classification matches the canonical "interior only"
+  rule. No existing tests broke; impact on the median agreement_rate
+  vs mkdssp at 50K scale will be measured in the next oracle run.
+
 - **DSSP runner: normalise mkdssp's PP-helix class to loop in comparison**
   (`validation/dssp_mkdssp_oracle.py`). mkdssp v4 emits a "P" (PP-helix)
   class via its default `--min-pp-stretch=3`, but proteon's DSSP doesn't
