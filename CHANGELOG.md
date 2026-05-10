@@ -13,20 +13,23 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ### Fixed
 
-- **DSSP runner: disable mkdssp's PP-helix class for fair comparison**
+- **DSSP runner: normalise mkdssp's PP-helix class to loop in comparison**
   (`validation/dssp_mkdssp_oracle.py`). mkdssp v4 emits a "P" (PP-helix)
   class via its default `--min-pp-stretch=3`, but proteon's DSSP doesn't
   emit P at all — every PP-helix residue therefore counted as a
   per-residue mismatch even when both implementations agreed on the
-  underlying H-bond geometry. Pass `--min-pp-stretch=999` to effectively
-  disable P emission, so both arms speak the same 8-class alphabet
-  `{H,G,I,E,B,T,S,-}`. Surfaced by the first 50K run (median
-  agreement_rate 0.8447 / only 1.0% structures clearing 0.95) — the
-  systematic gap accounts for the bulk of the per-residue diff.
-  Runner now also persists the full proteon/mkdssp SS strings per
-  record so post-hoc reanalysis (e.g. 3-class collapse) doesn't need
-  the 80-min compute. Claim's assumptions section documents the
-  --min-pp-stretch override.
+  underlying H-bond geometry. Map `P → '-'` on the mkdssp side at
+  comparison time; the raw `mkdssp_ss` field preserves the unmodified
+  P chars per record for forensic reanalysis. Both arms now compare
+  on the same 8-class alphabet `{H,G,I,E,B,T,S,-}`. Surfaced by the
+  first 50K run (median agreement_rate 0.8447 / only 1.0% structures
+  clearing 0.95) — the systematic gap accounts for the bulk of the
+  per-residue diff. Runtime disabling via `--min-pp-stretch=N` is
+  not viable — mkdssp v4.6.1 / libcifpp 10.0.3 has a CLI bug where
+  any non-default value triggers `terminate called without an
+  active exception` (SIGABRT) on every PDB. Runner also now
+  persists the full proteon/mkdssp SS strings per record (~10 MB
+  at 50K) so future reclassifications don't need the 80-min compute.
 - **DSSP runner: pass `--output-format dssp` explicitly to mkdssp**
   (`validation/dssp_mkdssp_oracle.py`). mkdssp v4 picks output format
   based on the output filename's extension; we pipe through

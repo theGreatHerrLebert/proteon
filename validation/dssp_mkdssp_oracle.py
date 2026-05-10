@@ -174,17 +174,14 @@ def compare_one(pdb_path: str) -> dict:
             # mmCIF, which our parser doesn't handle. Force the classic
             # DSSP text format explicitly.
             #
-            # --min-pp-stretch=999 effectively disables mkdssp's PP-helix
-            # ('P') class. proteon's DSSP doesn't emit P, so leaving the
-            # default (3) creates systematic per-residue mismatches that
-            # don't reflect a real algorithmic disagreement.
+            # mkdssp v4.6.1 / libcifpp 10.0.3 has a CLI bug where any
+            # non-default `--min-pp-stretch` value triggers
+            # `terminate called without an active exception` (SIGABRT).
+            # We can't disable PP-helix detection at runtime, so we
+            # post-process the output instead — see the comparison step
+            # below.
             result = subprocess.run(
-                [
-                    MKDSSP_BIN,
-                    "--output-format", "dssp",
-                    "--min-pp-stretch", "999",
-                    cif_path, "/dev/stdout",
-                ],
+                [MKDSSP_BIN, "--output-format", "dssp", cif_path, "/dev/stdout"],
                 capture_output=True, text=True, timeout=30,
             )
         finally:
@@ -216,15 +213,23 @@ def compare_one(pdb_path: str) -> dict:
             rec["wall_s"] = float(time.perf_counter() - t0)
             return rec
 
-        n_match = sum(p == m for p, m in zip(proteon_ss, mkdssp_ss))
+        # PP-helix normalisation: mkdssp emits 'P' for PP-helix runs
+        # (default --min-pp-stretch=3); proteon's DSSP doesn't emit P
+        # at all. Counting every P as a per-residue mismatch would
+        # double-count an alphabet-vocabulary difference as an
+        # algorithmic disagreement. Map P → '-' on mkdssp side for the
+        # comparison; the raw mkdssp_ss is preserved for forensic work.
+        mkdssp_ss_compare = ["-" if c == "P" else c for c in mkdssp_ss]
+        n_match = sum(p == m for p, m in zip(proteon_ss, mkdssp_ss_compare))
         rec["n_match"] = int(n_match)
         rec["agreement_rate"] = float(n_match) / rec["proteon_n"]
         rec["proteon_composition"] = dict(Counter(proteon_ss))
         rec["mkdssp_composition"] = dict(Counter(mkdssp_ss))
-        # Persist the full SS strings so post-hoc reanalysis (e.g.
-        # collapsing to 3-class, dropping boundary residues) is possible
-        # without re-running the 80-min compute. ~hundreds of bytes per
-        # record, ~10 MB at 50K — small for the forensic value.
+        # Persist the full *raw* SS strings (mkdssp_ss still contains
+        # P chars where mkdssp called PP-helix). Post-hoc reanalysis
+        # (e.g. 3-class collapse, alternative P mappings) is possible
+        # without re-running the 80-min compute. ~hundreds of bytes
+        # per record, ~10 MB at 50K — small for the forensic value.
         rec["proteon_ss"] = "".join(proteon_ss)
         rec["mkdssp_ss"] = "".join(mkdssp_ss)
 
