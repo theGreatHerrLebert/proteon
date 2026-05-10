@@ -13,6 +13,20 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ### Fixed
 
+- **DSSP runner: disable mkdssp's PP-helix class for fair comparison**
+  (`validation/dssp_mkdssp_oracle.py`). mkdssp v4 emits a "P" (PP-helix)
+  class via its default `--min-pp-stretch=3`, but proteon's DSSP doesn't
+  emit P at all — every PP-helix residue therefore counted as a
+  per-residue mismatch even when both implementations agreed on the
+  underlying H-bond geometry. Pass `--min-pp-stretch=999` to effectively
+  disable P emission, so both arms speak the same 8-class alphabet
+  `{H,G,I,E,B,T,S,-}`. Surfaced by the first 50K run (median
+  agreement_rate 0.8447 / only 1.0% structures clearing 0.95) — the
+  systematic gap accounts for the bulk of the per-residue diff.
+  Runner now also persists the full proteon/mkdssp SS strings per
+  record so post-hoc reanalysis (e.g. 3-class collapse) doesn't need
+  the 80-min compute. Claim's assumptions section documents the
+  --min-pp-stretch override.
 - **DSSP runner: pass `--output-format dssp` explicitly to mkdssp**
   (`validation/dssp_mkdssp_oracle.py`). mkdssp v4 picks output format
   based on the output filename's extension; we pipe through

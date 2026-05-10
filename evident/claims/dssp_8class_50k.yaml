@@ -120,6 +120,14 @@ claims:
           Loop characters are canonicalised to '-' on both sides
           before comparison. mkdssp emits ' ' (space) for loop;
           proteon emits 'C'. The runner normalises both.
+      - >
+          mkdssp's PP-helix ('P') class is disabled at runtime via
+          --min-pp-stretch=999. proteon's DSSP doesn't emit P, so
+          leaving mkdssp's default (3) would create systematic
+          per-residue mismatches that don't reflect an algorithmic
+          disagreement on the H-bond geometry both implementations
+          actually agree on. Both arms thus emit the 8-class
+          alphabet {H,G,I,E,B,T,S,-}.
     failure_modes:
       - >
           Length-mismatch records: per-PDB skip when proteon and
