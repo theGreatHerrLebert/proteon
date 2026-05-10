@@ -27,6 +27,20 @@ release tag has a paired EVIDENT bundle pinned by sha256.
   Tolerance values left unchanged pending an explicit recalibration
   decision; failure_modes section documents the actual breakdown.
 
+- **Lock DSSP 8-class 50K claim with first-run headline (post-T-fix)**
+  (`evident/claims/dssp_8class_50k.yaml`). Headline from the
+  2026-05-10 run with the T-interior fix (PR #73) and PP-helix
+  post-process (PR #71): n_attempted=47 183, n_ok=21 370,
+  **median agreement_rate = 0.9527** (passes the ≥0.95 median band).
+  ≥0.95 = 54.8% / ≥0.90 = 94.6% / ≥0.85 = 97.9% / ≥0.80 = 98.4%.
+  Median moved +9.45 pp from the pre-T-fix 0.8582. Pass-rate floors
+  fail at population scale (n_ok/n_attempted = 45.3% vs 0.85;
+  ≥0.95/n_ok = 54.8% vs 0.80) — driven by length-mismatch skips
+  and residual T/S boundary + π-helix disagreement. Tolerance
+  values left unchanged pending recalibration; failure_modes
+  section documents the actual breakdown and the per-class
+  composition deltas.
+
 ### Fixed
 
 - **DSSP: stop classifying turn endpoints as T (turn)**
