@@ -1,6 +1,6 @@
 claims:
   - id: proteon-amber96-vs-openmm-corpus-50k-pdbs
-    title: Proteon AMBER96 single-point energy tracks OpenMM AMBER96 across a 50 000-PDB random sample (PENDING — first run scheduled)
+    title: Proteon AMBER96 single-point energy tracks OpenMM AMBER96 across a 47 183-PDB random sample (n_ok=7 775; median relative error 3.41e-04 — passes the median band; pass_rate floor is unmet — n_ok/n_attempted = 16.5%)
     kind: measurement
     subsystem: forcefield.amber96
     case: claims/forcefield_amber_openmm_50k.md
@@ -87,8 +87,8 @@ claims:
     provenance: human
     last_verified:
       commit: null
-      date: null
-      value: null
+      date: "2026-05-08"
+      value: 0.000341
       corpus_sha: null
     assumptions:
       - validation/protein_only_50k.txt is the same pre-filtered list the
@@ -110,12 +110,25 @@ claims:
         skip-missing-atoms guard fires).
     failure_modes:
       - >
-          Headline n_ok / n_skip / n_err breakdown: PENDING — fills in at
-          first lock. Component-wise relative diff distribution will be
-          recorded in the JSONL alongside the totals.
+          Headline at first lock (2026-05-08 run, post-histidine fix #60
+          + NoCutoff fix #59): n_attempted=47 183, n_ok=7 775,
+          n_skip=20 702 (44%), n_fail=18 706 (40%). Median rel_diff =
+          3.41e-04 (passes <0.01 band by ~30×). Median |diff| =
+          20.3 kJ/mol. p95 rel_diff = 0.856 (long tail dominated by
+          residues OpenMM rejects after PDBFixer does NOT fix), p95
+          |diff| = 644 000 kJ/mol. Distributional headlines and tail
+          breakdown live in the JSONL artifact at
+          validation/amber96_oracle_50k.jsonl.
       - >
-          Population narrowing: ~40-50% of 44 210 PDBs are expected to skip
-          for missing heavy atoms (PR #47 pattern). Of the remainder,
-          OpenMM's AMBER96 typer fails on a small fraction (residues with
-          non-canonical atom names that ff14SB conventions don't accept).
-          Documented as failure_modes once the actual breakdown lands.
+          Population narrowing: pre-run we expected ~40-50% skip. Actual
+          16.5% pass-rate (vs 0.85 tolerance floor) is dominated jointly
+          by the 44% missing-heavy-atom skips AND the 40% OpenMM-side
+          fails, where ff96 rejects residues with non-canonical atom
+          names that ff14SB-era PDBFixer prep doesn't repair. The
+          tolerance was calibrated against CHARMM 50K's experience and
+          underestimated the dual-rejection compounding. The median
+          (the algorithm-quality metric) is fine; the pass_rate gap
+          surfaces a population-coverage gap that will need either a
+          PDBFixer-prep step (different scope from this claim) or a
+          tolerance recalibration to ~0.15 documented as the
+          well-resolved-wwPDB-with-ff96-compatible-atoms subset.
