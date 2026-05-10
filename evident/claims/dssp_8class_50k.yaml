@@ -1,6 +1,6 @@
 claims:
   - id: proteon-dssp-8class-vs-mkdssp-50k-pdbs
-    title: Proteon DSSP 8-class secondary-structure assignments agree with mkdssp at 95% per-residue median across a 50 000-PDB random sample (PENDING — first run scheduled)
+    title: Proteon DSSP 8-class secondary-structure assignments agree with mkdssp at 95% per-residue median across a 47 183-PDB random sample (n_ok=21 370; median 0.9527 passes the median band; pass-rate floors fail — n_ok/n_attempted=45.3% and ≥0.95/n_ok=54.8%)
     kind: measurement
     subsystem: dssp
     case: claims/dssp_8class_50k.md
@@ -101,8 +101,8 @@ claims:
     provenance: human
     last_verified:
       commit: null
-      date: null
-      value: null
+      date: "2026-05-10"
+      value: 0.9527
       corpus_sha: null
     assumptions:
       - >
@@ -141,5 +141,29 @@ claims:
           drops while proteon includes the residue. Documented as
           'skipped' (not 'error') in the JSONL.
       - >
-          Headline (PENDING): n_attempted, n_ok, median agreement,
-          per-class composition deltas. Will be filled at first lock.
+          Headline at first lock (2026-05-10 run, post-T-interior fix
+          PR #73 + PP-helix post-process PR #71):
+          n_attempted=47 183, n_ok=21 370 (45.3%), n_skip=21 492 (45.5% —
+          length_mismatch dominant from chain-break records), n_err=4 321
+          (9.2% — mkdssp atom_site parser quirks). Median agreement_rate
+          = 0.9527 (passes the ≥0.95 band by +0.003). >=0.95 quartile =
+          54.8% / >=0.90 = 94.6% / >=0.85 = 97.9% / >=0.80 = 98.4%.
+          Per-class composition diff (proteon vs mkdssp): T −9.46% (was
+          +88.76% pre-fix; the T-interior fix slightly over-corrected,
+          falling boundary residues to S/loop instead of T), S +13.96%,
+          loop (-) +11.68%, B +35.28%, E −8.79%, G +13.83%, I −76.94%
+          (proteon never emits π-helix), H +1.37%.
+      - >
+          Two pass-rate tolerances fail at population scale: (a)
+          n_ok/n_attempted = 45.3% vs the 0.85 floor — driven by the
+          21 492 length-mismatch skips (proteon vs mkdssp residue-count
+          divergence on chain breaks and non-standard residues, not
+          algorithm quality); (b) ≥0.95/n_ok = 54.8% vs the 0.80
+          floor — the remaining tail is real algorithmic disagreement
+          on T/S/loop boundaries and π-helix, which the 50K artifact
+          characterises in detail. The median tolerance (the algorithm-
+          quality metric) passes; the pass_rate floors document
+          population-coverage and tail-quality gaps that need separate
+          triage. Tolerance values left unchanged pending an explicit
+          recalibration decision after the T-fix's other knock-on
+          effects are reviewed.
