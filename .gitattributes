@@ -1,2 +1,1 @@
-validation/report/*.html linguist-generated=true
-validation/*.html linguist-generated=true
+*.html linguist-generated=true
