@@ -11,6 +11,22 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### Changed
+
+- **Lock AMBER96 single-point 50K claim with first-run data**
+  (`evident/claims/forcefield_amber_openmm_50k.yaml`). Headline from
+  the 2026-05-08 run (post-histidine PR #60 + NoCutoff PR #59):
+  n_attempted=47 183, n_ok=7 775, **median rel_diff = 3.41e-04**
+  (passes the `<0.01` median band by ~30×). Median |diff| =
+  20.3 kJ/mol. p95 rel_diff = 0.856 — long tail driven by residues
+  OpenMM's ff96 typer rejects after PDBFixer prep. Pass-rate
+  (n_ok/n_attempted = 16.5%) sits well below the claim's 0.85
+  floor; the gap is dominated by population-coverage limits
+  (44% missing-heavy-atom skips + 40% ff96 typer fails), not by
+  algorithm quality. Title now reflects both outcomes honestly.
+  Tolerance values left unchanged pending an explicit recalibration
+  decision; failure_modes section documents the actual breakdown.
+
 ### Fixed
 
 - **DSSP: stop classifying turn endpoints as T (turn)**
