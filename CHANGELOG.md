@@ -13,6 +13,24 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ### Changed
 
+- **Lock CHARMM fold-preservation 50K claim with first-run headline**
+  (`evident/claims/fold_preservation_charmm_50k.yaml`). Headline from
+  the 2026-05-11 monster3 run (proteon-side finished 2026-05-08,
+  OpenMM-side 2026-05-11 02:17 local): n_attempted = 47 183.
+  proteon-side: n_ok = 44 464 (94.2%), median TM = 1.0000.
+  OpenMM-side: n_ok = 8 029 (17.0%), median TM = 0.9990. Paired
+  records = 7 791. **median tm_diff (openmm − proteon) = −0.0006**
+  (passes the `<0.01` drift band by ~17× and the title's tighter
+  0.001 by ~1.7×). |tm_diff| < 0.005 covers 85.0% of paired records.
+  All three claim tolerances pass on the proteon-side. The
+  OpenMM-side pass_rate floor (n_ok/n_attempted ≥ 0.85) does NOT
+  clear — same population-narrowing pattern as the AMBER96-SP 50K
+  claim (ff14SB-era typer rejects residues with non-canonical
+  atom names after PDBFixer prep). Tolerance values left unchanged
+  pending a recalibration decision; the failure_modes section
+  documents the actual breakdown.
+
+
 - **Lock AMBER96 single-point 50K claim with first-run data**
   (`evident/claims/forcefield_amber_openmm_50k.yaml`). Headline from
   the 2026-05-08 run (post-histidine PR #60 + NoCutoff PR #59):
