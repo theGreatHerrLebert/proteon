@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Proteon EVIDENT — v0.2.0</title>
+<style>
+  body { font: 14px system-ui, sans-serif; max-width: 1200px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { margin-bottom: 0.2em; }
+  .meta { color: #666; margin-bottom: 1.5em; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+  th { background: #fafafa; font-weight: 600; border-bottom: 2px solid #ddd; }
+  td code { font-size: 12px; }
+  tr:hover td { background: #f7f9fc; }
+  .footer { margin-top: 3em; color: #999; font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+  .pill-locked { background: #d4f4dd; color: #1d6b32; }
+  .pill-missing { background: #fde2e2; color: #6b1d1d; }
+  .pill-noartifact { background: #eee; color: #555; }
+</style>
+<h1>Proteon EVIDENT — v0.2.0</h1>
+<p class="meta">
+  Locked at <code>2026-05-11</code> from commit <code>cff7540e92877a69434b58e102bc4b82d6a6efa6</code>.<br>
+  24 claims surveyed:
+  10 locked,
+  13 CI-only (no persisted artifact),
+  1 missing artifact.
+</p>
+<table>
+  <thead>
+    <tr>
+      <th>Claim</th>
+      <th>Tier</th>
+      <th>Subsystem</th>
+      <th>Oracle</th>
+      <th>Status</th>
+      <th>Verdict</th>
+      <th>Size</th>
+      <th>sha256</th>
+      <th>Report</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><code>proteon-cross-path-parity-nbl-ci</code></td><td>ci</td><td>energy.cross-path</td><td>proteon-slow-path</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-dssp-vs-pydssp-ci</code></td><td>ci</td><td>dssp</td><td>pydssp</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-dssp-8class-vs-mkdssp-reference</code></td><td>ci</td><td>None</td><td>mkdssp</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-dssp-8class-vs-mkdssp-50k-pdbs</code></td><td>release</td><td>dssp</td><td>mkdssp</td><td>locked</td><td>0/47183 ok (0.0%)</td><td>51308 KB</td><td><code>b953e2469785…</code></td><td></td></tr>
+<tr><td><code>proteon-amber96-fold-preservation-vs-openmm-release-1k-pdbs</code></td><td>release</td><td>minimize</td><td>OpenMM</td><td>locked</td><td>0/1000 ok (0.0%)</td><td>533 KB</td><td><code>c1433563363b…</code></td><td><a href="proteon-amber96-fold-preservation-vs-openmm-release-1k-pdbs.html">report</a></td></tr>
+<tr><td><code>proteon-amber96-fold-preservation-vs-openmm-release-50k-pdbs</code></td><td>release</td><td>minimize</td><td>OpenMM</td><td>missing</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-charmm19-fold-preservation-vs-openmm-release-1k-pdbs</code></td><td>release</td><td>minimize</td><td>OpenMM</td><td>locked</td><td>0/1000 ok (0.0%)</td><td>552 KB</td><td><code>434b669bd980…</code></td><td><a href="proteon-charmm19-fold-preservation-vs-openmm-release-1k-pdbs.html">report</a></td></tr>
+<tr><td><code>proteon-charmm19-fold-preservation-vs-openmm-release-50k-pdbs</code></td><td>release</td><td>minimize</td><td>OpenMM</td><td>locked</td><td>0/47183 ok (0.0%)</td><td>11239 KB</td><td><code>3d33550009ee…</code></td><td><a href="proteon-charmm19-fold-preservation-vs-openmm-release-50k-pdbs.html">report</a></td></tr>
+<tr><td><code>proteon-amber96-vs-ball-ci</code></td><td>ci</td><td>forcefield.amber96</td><td>BALL</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-amber96-vs-openmm-corpus-50k-pdbs</code></td><td>release</td><td>forcefield.amber96</td><td>OpenMM</td><td>locked</td><td>0/47183 ok (0.0%)</td><td>29045 KB</td><td><code>73b927d14952…</code></td><td></td></tr>
+<tr><td><code>proteon-charmm19-vs-ball-ci</code></td><td>ci</td><td>forcefield.charmm19</td><td>BALL</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-charmm19-vs-ball-corpus-1k-pdbs</code></td><td>release</td><td>forcefield.charmm19</td><td>BALL</td><td>locked</td><td>223/662 ok (33.7%)</td><td>502 KB</td><td><code>ff96c75922f4…</code></td><td><a href="proteon-charmm19-vs-ball-corpus-1k-pdbs.html">report</a></td></tr>
+<tr><td><code>proteon-charmm19-vs-ball-corpus-50k-pdbs</code></td><td>release</td><td>forcefield.charmm19</td><td>BALL</td><td>locked</td><td>5309/44210 ok (12.0%)</td><td>22273 KB</td><td><code>3a6f1d8879b4…</code></td><td><a href="proteon-charmm19-vs-ball-corpus-50k-pdbs.html">report</a></td></tr>
+<tr><td><code>proteon-obc-gb-vs-openmm-release</code></td><td>release</td><td>gb.obc</td><td>OpenMM</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-rmsd-vs-ball-ci</code></td><td>ci</td><td>geometry</td><td>BALL</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-hydrogens-vs-reduce-ci</code></td><td>ci</td><td>prep.hydrogens</td><td>reduce</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-io-vs-biopython-gemmi-ci</code></td><td>ci</td><td>io</td><td>Biopython, Gemmi</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-oracle-backed-release-gate</code></td><td>release</td><td>None</td><td>OpenMM, BALL, USAlign, Biopython, Gemmi, FreeSASA, pydssp, reduce</td><td>locked</td><td></td><td>33 KB</td><td><code>bbaec25d6bff…</code></td><td></td></tr>
+<tr><td><code>proteon-sasa-vs-biopython-ci</code></td><td>ci</td><td>sasa</td><td>Biopython</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-sasa-vs-biopython-release-1k-pdbs</code></td><td>release</td><td>sasa</td><td>Biopython, FreeSASA</td><td>locked</td><td></td><td>32504 KB</td><td><code>b319c47c5987…</code></td><td><a href="proteon-sasa-vs-biopython-release-1k-pdbs.html">report</a></td></tr>
+<tr><td><code>proteon-50k-battle-test-release</code></td><td>release</td><td>pipeline.batch</td><td>physics-invariant</td><td>locked</td><td>45486/47183 ok (96.4%)</td><td>8287 KB</td><td><code>3bb5d2239024…</code></td><td><a href="proteon-50k-battle-test-release.html">report</a></td></tr>
+<tr><td><code>proteon-supervision-rust-vs-python-ci</code></td><td>ci</td><td>supervision</td><td>proteon-slow-path</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-tmalign-vs-usalign-ci</code></td><td>ci</td><td>align.tmalign</td><td>USAlign</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+<tr><td><code>proteon-usalign-mm-vs-cpp-ci</code></td><td>ci</td><td>align.usalign</td><td>USAlign</td><td>ci-only</td><td></td><td></td><td><code></code></td><td></td></tr>
+  </tbody>
+</table>
+<p class="footer">
+  Generated by <code>evident/scripts/lock_release_replays.py</code>.
+  This bundle is the immutable record for release <code>v0.2.0</code>;
+  edit by re-locking against a new release tag, not in place.
+</p>

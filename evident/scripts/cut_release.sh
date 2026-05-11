@@ -68,6 +68,9 @@ cd "$REPO_ROOT"
 # claim ships an artifact that has to be mirrored.
 declare -a ARTIFACTS=(
     "/globalscratch/dateschn/proteon-benchmark/proteon/validation/charmm19_eef1_ball_oracle_50k.jsonl validation/charmm19_eef1_ball_oracle_50k.jsonl"
+    "/globalscratch/dateschn/proteon-benchmark/v020_amber96_sp_50k/amber96_oracle.jsonl validation/amber96_oracle_50k.jsonl"
+    "/globalscratch/dateschn/proteon-benchmark/v020_dssp_50k/dssp_mkdssp_oracle.jsonl validation/dssp_mkdssp_oracle_50k.jsonl"
+    "/globalscratch/dateschn/proteon-benchmark/v020_fold_50k_charmm/charmm_pair_1k.jsonl validation/fold_preservation_50k/charmm_pair_1k.jsonl"
 )
 
 if (( FETCH )); then
