@@ -11,6 +11,19 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-11
+
+Release theme: comprehensive 50K-scale release-tier oracles + EVIDENT
+v0.2.0 data-mount contract (image bundles tools, user mounts data via
+`--bind`). Three new release-tier 50K claim locks (AMBER96-SP, DSSP
+8-class, CHARMM fold-preservation) and one major DSSP algorithm fix
+(T-classification interior-only) that moved DSSP-vs-mkdssp median
+agreement from 0.8582 → 0.9527.
+
+AMBER fold-preservation 50K is deferred to v0.2.1. SASA 50K is
+deferred (runner refactor needed). GROMACS fold-pres regen (#37)
+remains deferred.
+
 ### Changed
 
 - **Lock CHARMM fold-preservation 50K claim with first-run headline**
