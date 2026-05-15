@@ -1,6 +1,6 @@
 {
   "release": "v0.2.0",
-  "commit": "cff7540e92877a69434b58e102bc4b82d6a6efa6",
+  "commit": "4d6ddbec100b810b85c0d2104ecd63d78ac848ec",
   "locked_at_utc": "2026-05-11",
   "environment": {
     "python": "3.10.12",
