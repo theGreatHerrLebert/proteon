@@ -17,6 +17,14 @@ jobs:
           python-version: "3.12"
       - name: Check release versions stay synchronized
         run: python tools/check_versions.py
+      # Cheap structural guard so a malformed claim file cannot land on
+      # main. Non-strict: PENDING-* pins are allowed on ci/research-tier
+      # claims here; the strict release-pin gate lives in release.yml.
+      - name: Validate EVIDENT manifest schema
+        run: |
+          python -m pip install pyyaml
+          python evident/tools/validate_manifest.py evident/evident.yaml
+          python evident/tools/evident.py validate evident/evident.yaml
 
   # ubuntu only — macos rust-tests would require extra work to make
   # `cargo test` link against a framework-style setup-python libpython

@@ -20,8 +20,8 @@ claims:
         unit: A^2
         description: Per-structure total solvent-accessible surface area.
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
-      Biopython: "PENDING-PIN-FROM-VENV"
+      proteon: "0.2.0"
+      Biopython: "1.87"
       python: "3.12"
     claim: >
       Proteon's Shrake-Rupley solvent-accessible surface area agrees with
@@ -84,15 +84,15 @@ claims:
       corpus: validation-pdbs-1k
       n: 1000
       class: random-sample
-      corpus_sha: "PENDING-PIN-VALIDATION-PDBS-TARBALL"
+      corpus_sha: "b319c47c59871ed3990f81fb025c6ae90abba6adcff0b91ff7f118e41c730a53"  # sha256 of evidence artifact; results.json records per-PDB diffs
     outputs:
       total_sasa:
         unit: A^2
         description: Per-structure total solvent-accessible surface area.
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
-      Biopython: "PENDING-PIN-FROM-VENV"
-      FreeSASA: "PENDING-PIN-FROM-VENV"
+      proteon: "0.2.0"
+      Biopython: "1.87"
+      FreeSASA: "2.2.1"
       python: "3.12"
     claim: >
       Across a 1000-PDB validation corpus, proteon total SASA agrees with
@@ -146,10 +146,10 @@ claims:
       artifact: validation/results.json
     provenance: human
     last_verified:
-      commit: null
-      date: null
+      commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
+      date: "2026-05-11"
       value: 0.0017
-      corpus_sha: null
+      corpus_sha: "b319c47c59871ed3990f81fb025c6ae90abba6adcff0b91ff7f118e41c730a53"
     assumptions:
       - validation/pdbs/ is a representative sample of intended deployment
         input; bias toward small soluble proteins is a known limitation.
@@ -161,9 +161,11 @@ claims:
         runner so the comparison is on Shrake-Rupley vs Shrake-Rupley,
         not vs FreeSASA's L&R default.
     failure_modes:
-      - inputs.corpus_sha is currently a placeholder; until pinned to a
-        real sha or tarball hash, the cited 0.17% number is reproducible
-        only against a corpus that hasn't been regenerated.
+      - inputs.corpus_sha is pinned to the SHA-256 of the evidence
+        artifact validation/results.json (which records per-structure
+        relative diffs for every PDB in the run); the input PDB corpus
+        validation/pdbs/ is not archived in-repo, so full forensic
+        replay still requires preserving those PDBs alongside the JSON.
       - results.json records summary counts and relative diffs but not the
         absolute SASA values; full forensic replay requires the corpus PDBs
         to be preserved alongside the JSON.

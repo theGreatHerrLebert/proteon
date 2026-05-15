@@ -5,7 +5,7 @@ claims:
     subsystem: gb.obc
     case: claims/gb_obc.md
     source: ..
-    tier: release
+    tier: ci
     trust_strategy:
       - validation
     capabilities:
@@ -27,8 +27,8 @@ claims:
         unit: kJ/mol
         description: OBC1 generalised-Born solvation contribution alone.
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
-      OpenMM: "PENDING-PIN-OPENMM-VERSION"
+      proteon: "0.2.0"
+      OpenMM: "8.5.1"
       python: "3.12"
     claim: >
       For crambin (1crn) with PDBFixer-prepped hydrogens fed
@@ -70,8 +70,8 @@ claims:
       artifact: stdout summary table (Δ total / Δ GB in kJ/mol and %)
     provenance: human
     last_verified:
-      commit: null
-      date: null
+      commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
+      date: "2026-05-11"
       value: null
       corpus_sha: null
     assumptions:
@@ -87,6 +87,14 @@ claims:
         size and dielectric profile; the claim is scoped to crambin
         only.
     failure_modes:
+      - >
+          tier=ci, not release. Despite the '-release' suffix in the
+          claim id, this is a CI-tier claim: it runs on a single crambin
+          fixture and emits only a stdout summary (no persisted,
+          sha256-pinnable artifact). The id is kept stable for report
+          back-references; the tier reflects what the evidence actually
+          supports. Promoting to release needs a distributional corpus
+          and a machine-parseable artifact (see rows below).
       - Single fixture (crambin, n=1). A regression on larger or
         more solvent-exposed proteins would not surface. Extending
         to a small distributional release-tier benchmark

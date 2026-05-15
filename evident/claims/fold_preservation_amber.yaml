@@ -15,7 +15,7 @@ claims:
       n: 1000
       class: random-sample
       seed: 42
-      corpus_sha: "PENDING-PIN-VALIDATION-PDB-CORPUS-1K"
+      corpus_sha: "c1433563363bb18aa54ad70819255f6937ad9ed84eaf8b2d9e808bc60a77b7dc"  # sha256 of evidence artifact; the JSONL records every PDB processed
     outputs:
       tm_score:
         unit: dimensionless
@@ -34,7 +34,7 @@ claims:
           Per-PDB difference openmm.tm_score − proteon.tm_score. The
           claim's tolerance bounds the median magnitude.
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      proteon: "0.2.0"
       OpenMM: "8.5.1"
       python: "3.12"
       runner_proteon: validation/tm_fold_preservation_amber.py
@@ -84,10 +84,10 @@ claims:
       artifact: validation/fold_preservation/amber_pair_1k.jsonl
     provenance: human
     last_verified:
-      commit: null
+      commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
       date: "2026-04-13"
       value: 0.9959
-      corpus_sha: null
+      corpus_sha: "c1433563363bb18aa54ad70819255f6937ad9ed84eaf8b2d9e808bc60a77b7dc"
     assumptions:
       - >
         Both arms claim AMBER96 with the same nonbonded cutoff (15 Å
