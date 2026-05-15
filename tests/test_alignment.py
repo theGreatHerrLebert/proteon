@@ -101,11 +101,11 @@ class TestTMAlignPair:
 
 class TestTMAlignOneToMany:
     def test_basic(self, ubiq, crambin):
-        results = py_align_funcs.tm_align_one_to_many(ubiq, [crambin, ubiq])
+        results = py_align_funcs.tm_align_one_to_many(ubiq, [crambin, ubiq]).values
         assert len(results) == 2
 
     def test_results_order(self, ubiq, crambin):
-        results = py_align_funcs.tm_align_one_to_many(ubiq, [crambin, ubiq])
+        results = py_align_funcs.tm_align_one_to_many(ubiq, [crambin, ubiq]).values
         # Second result is self-alignment
         assert results[1].tm_score_chain1 == pytest.approx(1.0, abs=0.001)
         # First result is cross-alignment
@@ -113,7 +113,7 @@ class TestTMAlignOneToMany:
 
     def test_matches_single_pair(self, ubiq, crambin):
         single = py_align_funcs.tm_align_pair(ubiq, crambin)
-        batch = py_align_funcs.tm_align_one_to_many(ubiq, [crambin])
+        batch = py_align_funcs.tm_align_one_to_many(ubiq, [crambin]).values
         assert batch[0].tm_score_chain1 == pytest.approx(
             single.tm_score_chain1, abs=1e-6
         )
@@ -122,29 +122,29 @@ class TestTMAlignOneToMany:
     def test_n_threads_1(self, ubiq, crambin):
         results = py_align_funcs.tm_align_one_to_many(
             ubiq, [crambin, ubiq], n_threads=1
-        )
+        ).values
         assert len(results) == 2
 
     def test_n_threads_all(self, ubiq, crambin):
         results = py_align_funcs.tm_align_one_to_many(
             ubiq, [crambin], n_threads=-1
-        )
+        ).values
         assert len(results) == 1
 
     def test_n_threads_none(self, ubiq, crambin):
         results = py_align_funcs.tm_align_one_to_many(
             ubiq, [crambin], n_threads=None
-        )
+        ).values
         assert len(results) == 1
 
     def test_empty_targets(self, ubiq):
-        results = py_align_funcs.tm_align_one_to_many(ubiq, [])
+        results = py_align_funcs.tm_align_one_to_many(ubiq, []).values
         assert len(results) == 0
 
     def test_fast_mode(self, ubiq, crambin):
         results = py_align_funcs.tm_align_one_to_many(
             ubiq, [crambin], fast=True
-        )
+        ).values
         assert len(results) == 1
         assert results[0].n_aligned > 0
 
@@ -156,7 +156,7 @@ class TestTMAlignOneToMany:
 
 class TestTMAlignManyToMany:
     def test_basic(self, ubiq, crambin):
-        results = py_align_funcs.tm_align_many_to_many([ubiq], [crambin])
+        results = py_align_funcs.tm_align_many_to_many([ubiq], [crambin]).values
         assert len(results) == 1
         qi, ti, r = results[0]
         assert qi == 0
@@ -166,14 +166,14 @@ class TestTMAlignManyToMany:
     def test_cartesian_product_size(self, ubiq, crambin):
         results = py_align_funcs.tm_align_many_to_many(
             [ubiq, crambin], [crambin, ubiq]
-        )
+        ).values
         # 2 x 2 = 4 pairs
         assert len(results) == 4
 
     def test_indices(self, ubiq, crambin):
         results = py_align_funcs.tm_align_many_to_many(
             [ubiq, crambin], [crambin, ubiq]
-        )
+        ).values
         indices = [(qi, ti) for qi, ti, _ in results]
         expected = [(0, 0), (0, 1), (1, 0), (1, 1)]
         assert sorted(indices) == sorted(expected)
@@ -181,7 +181,7 @@ class TestTMAlignManyToMany:
     def test_self_alignment_in_batch(self, ubiq, crambin):
         results = py_align_funcs.tm_align_many_to_many(
             [ubiq, crambin], [ubiq, crambin]
-        )
+        ).values
         # Find self-alignments (diagonal)
         for qi, ti, r in results:
             if qi == ti:
@@ -189,7 +189,7 @@ class TestTMAlignManyToMany:
 
     def test_matches_single_pair(self, ubiq, crambin):
         single = py_align_funcs.tm_align_pair(ubiq, crambin)
-        batch = py_align_funcs.tm_align_many_to_many([ubiq], [crambin])
+        batch = py_align_funcs.tm_align_many_to_many([ubiq], [crambin]).values
         _, _, r = batch[0]
         assert r.tm_score_chain1 == pytest.approx(
             single.tm_score_chain1, abs=1e-6
@@ -198,15 +198,15 @@ class TestTMAlignManyToMany:
     def test_n_threads(self, ubiq, crambin):
         results = py_align_funcs.tm_align_many_to_many(
             [ubiq, crambin], [crambin], n_threads=2
-        )
+        ).values
         assert len(results) == 2
 
     def test_empty_queries(self, crambin):
-        results = py_align_funcs.tm_align_many_to_many([], [crambin])
+        results = py_align_funcs.tm_align_many_to_many([], [crambin]).values
         assert len(results) == 0
 
     def test_empty_targets(self, ubiq):
-        results = py_align_funcs.tm_align_many_to_many([ubiq], [])
+        results = py_align_funcs.tm_align_many_to_many([ubiq], []).values
         assert len(results) == 0
 
 
@@ -235,7 +235,7 @@ class TestBatchMultipleFiles:
     def test_one_to_many_multiple(self, structures):
         query = structures[0]
         targets = structures[1:]
-        results = py_align_funcs.tm_align_one_to_many(query, targets, n_threads=2)
+        results = py_align_funcs.tm_align_one_to_many(query, targets, n_threads=2).values
         assert len(results) == len(targets)
         for r in results:
             assert r.n_aligned > 0
@@ -244,7 +244,7 @@ class TestBatchMultipleFiles:
     def test_many_to_many_multiple(self, structures):
         results = py_align_funcs.tm_align_many_to_many(
             structures, structures, n_threads=2
-        )
+        ).values
         n = len(structures)
         assert len(results) == n * n
         # Diagonal should be self-alignment
@@ -255,7 +255,7 @@ class TestBatchMultipleFiles:
     def test_fast_batch(self, structures):
         results = py_align_funcs.tm_align_one_to_many(
             structures[0], structures[1:], fast=True, n_threads=2
-        )
+        ).values
         assert len(results) == len(structures) - 1
 
 
@@ -297,16 +297,16 @@ class TestSoiAlignPair:
 
 class TestSoiAlignBatch:
     def test_one_to_many(self, ubiq, crambin):
-        results = py_align_funcs.soi_align_one_to_many(ubiq, [crambin, ubiq], n_threads=2)
+        results = py_align_funcs.soi_align_one_to_many(ubiq, [crambin, ubiq], n_threads=2).values
         assert len(results) == 2
         assert results[1].tm_score_chain1 == pytest.approx(1.0, abs=0.001)
 
     def test_many_to_many(self, ubiq, crambin):
-        results = py_align_funcs.soi_align_many_to_many([ubiq], [crambin, ubiq], n_threads=2)
+        results = py_align_funcs.soi_align_many_to_many([ubiq], [crambin, ubiq], n_threads=2).values
         assert len(results) == 2
 
     def test_empty(self, ubiq):
-        results = py_align_funcs.soi_align_one_to_many(ubiq, [])
+        results = py_align_funcs.soi_align_one_to_many(ubiq, []).values
         assert len(results) == 0
 
 
@@ -347,18 +347,18 @@ class TestFlexAlignPair:
 
 class TestFlexAlignBatch:
     def test_one_to_many(self, ubiq, crambin):
-        results = py_align_funcs.flex_align_one_to_many(ubiq, [crambin, ubiq], n_threads=2)
+        results = py_align_funcs.flex_align_one_to_many(ubiq, [crambin, ubiq], n_threads=2).values
         assert len(results) == 2
 
     def test_many_to_many(self, ubiq, crambin):
-        results = py_align_funcs.flex_align_many_to_many([ubiq], [crambin], n_threads=1)
+        results = py_align_funcs.flex_align_many_to_many([ubiq], [crambin], n_threads=1).values
         assert len(results) == 1
         qi, ti, r = results[0]
         assert qi == 0 and ti == 0
         assert r.n_aligned > 0
 
     def test_empty(self, ubiq):
-        results = py_align_funcs.flex_align_one_to_many(ubiq, [])
+        results = py_align_funcs.flex_align_one_to_many(ubiq, []).values
         assert len(results) == 0
 
 
@@ -372,9 +372,9 @@ class TestThreadScaling:
 
     def test_thread_counts_give_same_results(self, ubiq, crambin):
         targets = [crambin] * 4
-        r1 = py_align_funcs.tm_align_one_to_many(ubiq, targets, n_threads=1)
-        r2 = py_align_funcs.tm_align_one_to_many(ubiq, targets, n_threads=2)
-        r4 = py_align_funcs.tm_align_one_to_many(ubiq, targets, n_threads=4)
+        r1 = py_align_funcs.tm_align_one_to_many(ubiq, targets, n_threads=1).values
+        r2 = py_align_funcs.tm_align_one_to_many(ubiq, targets, n_threads=2).values
+        r4 = py_align_funcs.tm_align_one_to_many(ubiq, targets, n_threads=4).values
 
         for a, b, c in zip(r1, r2, r4):
             assert a.tm_score_chain1 == pytest.approx(b.tm_score_chain1, abs=1e-10)

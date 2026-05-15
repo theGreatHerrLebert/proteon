@@ -5,7 +5,7 @@ claims:
     subsystem: minimize
     case: claims/fold_preservation_amber_50k.md
     source: ..
-    tier: release
+    tier: research
     trust_strategy:
       - validation
     capabilities:
@@ -98,6 +98,14 @@ claims:
       - TM-score is computed by proteon's TM-align port on both arms,
         so the alignment is shared and the diff isolates the physics.
     failure_modes:
+      - >
+          NOT YET RUN. This is a tier=research (planned) claim: the 50K
+          AMBER96 fold-preservation run has not been executed, the
+          artifact validation/fold_preservation_50k/amber_pair_1k.jsonl
+          does not exist, and pinned_versions.proteon / inputs.corpus_sha
+          / last_verified.* remain placeholders by design. It is NOT a
+          release claim and must not be cited as one until the run lands
+          and it is promoted to tier=release with real pins.
       - >
           Headline (PENDING) n_attempted, n_ok, pass_rate, per-side
           median TM, tm_diff distribution. Will be filled at first lock.

@@ -10,6 +10,27 @@ permissions:
 
 jobs:
   # =========================================================================
+  # Release-prep gate: every release-tier EVIDENT claim must be fully pinned
+  # (last_verified.commit + corpus_sha + non-placeholder pinned_versions).
+  # Fails the release if any release-tier claim still carries a PENDING-*
+  # placeholder. ci/research-tier claims are not gated here.
+  # =========================================================================
+  evidence-pins:
+    name: EVIDENT release-pin validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: python -m pip install pyyaml
+      - name: Validate manifest (strict release pins)
+        run: |
+          python evident/tools/validate_manifest.py evident/evident.yaml --strict-release-pins
+          python evident/tools/evident.py validate evident/evident.yaml
+
+  # =========================================================================
   # Build proteon-connector wheels (Rust + PyO3)
   # =========================================================================
   build-connector:
@@ -275,6 +296,7 @@ jobs:
     if: github.event_name == 'release'
     needs:
       [
+        evidence-pins,
         build-connector,
         build-connector-sdist,
         verify-metadata,

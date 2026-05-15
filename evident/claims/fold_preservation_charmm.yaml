@@ -15,7 +15,7 @@ claims:
       n: 1000
       class: random-sample
       seed: 42
-      corpus_sha: "PENDING-PIN-VALIDATION-PDB-CORPUS-1K"
+      corpus_sha: "434b669bd980bdcd45032aec51bc41781980ac7094afa550b01c78b43df36822"  # sha256 of evidence artifact; the JSONL records every PDB processed
     outputs:
       tm_score:
         unit: dimensionless
@@ -36,7 +36,7 @@ claims:
           = OpenMM holds the fold tighter than proteon on that PDB; the
           claim's tolerance bounds the median magnitude of this diff.
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      proteon: "0.2.0"
       OpenMM: "8.5.1"
       python: "3.12"
       runner_proteon: validation/tm_fold_preservation.py
@@ -92,10 +92,10 @@ claims:
       artifact: validation/fold_preservation/charmm_pair_1k.jsonl
     provenance: human
     last_verified:
-      commit: null
+      commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
       date: "2026-04-13"
       value: 0.9944
-      corpus_sha: null
+      corpus_sha: "434b669bd980bdcd45032aec51bc41781980ac7094afa550b01c78b43df36822"
     assumptions:
       - >
         proteon and OpenMM consume the same input PDB. PDBFixer
@@ -107,7 +107,9 @@ claims:
       - >
         Input corpus validation/pdbs/ is a 1000-PDB random sample
         from the wwPDB seeded at 42 for reproducibility. corpus_sha
-        resolves to a tarball hash at first replay.
+        is pinned to the SHA-256 of the evidence artifact JSONL (which
+        records every PDB processed); the input PDB pool itself is not
+        archived in-repo.
       - >
         Minimizer budget is 100 steps on both sides, L-BFGS-style.
         Neither side runs to convergence — the metric is "structure

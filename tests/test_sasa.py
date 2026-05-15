@@ -241,16 +241,37 @@ class TestBatchSASA:
 class TestLoadAndSASA:
     def test_basic(self):
         paths = [os.path.join(TEST_PDBS_DIR, "1crn.pdb")]
-        results = proteon.load_and_sasa(paths, n_threads=1)
-        assert len(results) == 1
-        idx, total = results[0]
-        assert idx == 0
-        assert 2500 < total < 3500
+        result = proteon.load_and_sasa(paths, n_threads=1)
+        assert len(result) == 1
+        assert result.n_attempted == 1
+        assert result.n_ok == 1
+        assert result.n_failed == 0
+        item = result[0]
+        assert item.index == 0
+        assert item.ok
+        assert 2500 < item.value < 3500
 
-    def test_skips_bad_files(self):
+    def test_bad_files_recorded_not_skipped(self):
+        """A file that fails to load is a failed item, not an omission."""
         paths = [
             os.path.join(TEST_PDBS_DIR, "1crn.pdb"),
             "/nonexistent/file.pdb",
         ]
-        results = proteon.load_and_sasa(paths, n_threads=1)
-        assert len(results) == 1  # only 1crn loaded
+        result = proteon.load_and_sasa(paths, n_threads=1)
+        # Cardinality is preserved: one item per input, in input order.
+        assert len(result) == 2
+        assert result.n_attempted == 2
+        assert result.n_ok == 1
+        assert result.n_failed == 1
+        assert result[0].ok and result[0].value > 0
+        assert not result[1].ok
+        assert result[1].error  # carries the load error message
+        assert result.failures == [(1, result[1].error)]
+
+    def test_strict_raises_on_failure(self):
+        paths = [
+            os.path.join(TEST_PDBS_DIR, "1crn.pdb"),
+            "/nonexistent/file.pdb",
+        ]
+        with pytest.raises(RuntimeError):
+            proteon.load_and_sasa(paths, n_threads=1, strict=True)

@@ -395,6 +395,7 @@ def load_and_minimize_hydrogens(
     gradient_tolerance: float = 0.1,
     *,
     n_threads=None,
+    strict: bool = False,
 ):
     """Load files and minimize hydrogens in one parallel call (zero GIL).
 
@@ -407,12 +408,21 @@ def load_and_minimize_hydrogens(
         gradient_tolerance: Convergence criterion.
         n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
             (default); a positive integer = exactly that many threads.
+        strict: If True, raise on the first file that fails to load instead
+            of recording it as a failed item.
 
     Returns:
-        List of (index, result_dict) tuples. Files that fail to load are skipped.
+        A ``BatchResult`` with one item per path, in input order. Each
+        successful ``item.value`` is the minimization result dict. A file
+        that fails to load is recorded as a failed item
+        (``item.ok is False``, ``item.error`` carries the parse error) —
+        failures are no longer silently dropped. Inspect ``.failures`` /
+        ``.n_failed`` for a summary.
     """
     str_paths = [str(p) for p in paths]
-    return _ff.load_and_minimize_hydrogens(str_paths, max_steps, gradient_tolerance, n_threads)
+    return _ff.load_and_minimize_hydrogens(
+        str_paths, max_steps, gradient_tolerance, n_threads, strict=strict
+    )
 
 
 def run_md(

@@ -256,7 +256,8 @@ def load_and_sasa(
     *,
     n_threads: Optional[int] = None,
     radii: str = "bondi",
-) -> List[Tuple[int, float]]:
+    strict: bool = False,
+):
     """Load files and compute total SASA in one parallel call (zero GIL).
 
     Args:
@@ -265,19 +266,29 @@ def load_and_sasa(
         n_points: Test points per sphere (default 960).
         n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores
             (default); a positive integer = exactly that many threads.
+        strict: If True, raise on the first file that fails to load instead
+            of recording it as a failed item.
 
     Returns:
-        List of (index, total_sasa) tuples for files that loaded.
+        A ``BatchResult`` with one item per path, in input order. Each
+        successful ``item.value`` is the structure's total SASA (float). A
+        file that fails to load is recorded as a failed item
+        (``item.ok is False``, ``item.error`` carries the parse error) —
+        failures are no longer silently dropped from the output.
 
     Examples:
         >>> results = proteon.load_and_sasa(pdb_files, n_threads=-1)
-        >>> for idx, sasa in results:
-        ...     print(f"{pdb_files[idx]}: {sasa:.0f} A²")
+        >>> for item in results:
+        ...     if item.ok:
+        ...         print(f"{pdb_files[item.index]}: {item.value:.0f} A²")
+        >>> print(f"{results.n_failed} of {results.n_attempted} failed")
+        >>> for idx, err in results.failures:
+        ...     print(f"{pdb_files[idx]}: {err}")
 
     Agent Notes:
-        WATCH: Failed inputs are skipped. Use the returned indices to map SASA
-            values back to the original path list.
+        WATCH: ``len(result) == len(paths)`` always; failed paths are failed
+            items, not omissions. ``item.index`` maps back to the path list.
         PREFER: Use this for large file batches to avoid Python-side load loops.
     """
     str_paths = [str(p) for p in paths]
-    return _sasa.load_and_sasa(str_paths, probe, n_points, n_threads, radii)
+    return _sasa.load_and_sasa(str_paths, probe, n_points, n_threads, radii, strict)

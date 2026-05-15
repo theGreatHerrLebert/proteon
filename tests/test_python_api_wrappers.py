@@ -271,14 +271,14 @@ class TestAlignWrappers:
 
     def test_tm_align_one_to_many(self, pair, triples):
         a, _ = pair
-        results = proteon.tm_align_one_to_many(a, triples, n_threads=1)
+        results = proteon.tm_align_one_to_many(a, triples, n_threads=1).values
         assert len(results) == 3
         for r in results:
             assert r.n_aligned > 0
 
     def test_tm_align_many_to_many(self, pair):
         a, b = pair
-        results = proteon.tm_align_many_to_many([a], [a, b], n_threads=1)
+        results = proteon.tm_align_many_to_many([a], [a, b], n_threads=1).values
         # Cartesian product: 1 × 2 = 2.
         assert len(results) == 2
         for qi, ti, r in results:
@@ -305,12 +305,12 @@ class TestAlignWrappers:
 
     def test_soi_align_one_to_many(self, pair, triples):
         a, _ = pair
-        results = proteon.soi_align_one_to_many(a, triples, n_threads=1)
+        results = proteon.soi_align_one_to_many(a, triples, n_threads=1).values
         assert len(results) == 3
 
     def test_soi_align_many_to_many(self, pair):
         a, b = pair
-        results = proteon.soi_align_many_to_many([a], [a, b], n_threads=1)
+        results = proteon.soi_align_many_to_many([a], [a, b], n_threads=1).values
         assert len(results) == 2
 
     # --- FlexAlign + FlexAlignResult properties ---------------------------
@@ -334,12 +334,12 @@ class TestAlignWrappers:
 
     def test_flex_align_one_to_many(self, pair, triples):
         a, _ = pair
-        results = proteon.flex_align_one_to_many(a, triples, n_threads=1)
+        results = proteon.flex_align_one_to_many(a, triples, n_threads=1).values
         assert len(results) == 3
 
     def test_flex_align_many_to_many(self, pair):
         a, b = pair
-        results = proteon.flex_align_many_to_many([a], [a, b], n_threads=1)
+        results = proteon.flex_align_many_to_many([a], [a, b], n_threads=1).values
         assert len(results) == 2
 
     # --- MM-align + MMAlignResult / ChainPairResult -----------------------
@@ -375,11 +375,11 @@ class TestAlignWrappers:
         assert r.get_py_ptr() is not None
 
     def test_mm_align_one_to_many(self, hhb):
-        results = proteon.mm_align_one_to_many(hhb, [hhb, hhb], n_threads=1)
+        results = proteon.mm_align_one_to_many(hhb, [hhb, hhb], n_threads=1).values
         assert len(results) == 2
         for r in results:
             assert r.total_score >= 0.0
 
     def test_mm_align_many_to_many(self, hhb):
-        results = proteon.mm_align_many_to_many([hhb], [hhb, hhb], n_threads=1)
+        results = proteon.mm_align_many_to_many([hhb], [hhb, hhb], n_threads=1).values
         assert len(results) == 2

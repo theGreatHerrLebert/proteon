@@ -7,6 +7,7 @@
 use numpy::PyArrayMethods;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
+use pyo3::IntoPyObject;
 use rayon::prelude::*;
 
 use proteon_align::core::align::tmalign::tmalign;
@@ -16,6 +17,7 @@ use proteon_align::ext::mmalign::{mmalign_complex, ChainData, MMAlignResult};
 use proteon_align::ext::soialign::{soialign_main, SoiOptions, SoiResult};
 use proteon_io::pdb_io::{extract_chains_for_alignment, extract_for_alignment};
 
+use crate::batch::{make_batch_result, BatchOutcome, PyBatchResult};
 use crate::py_align::PyAlignResult;
 use crate::py_pdb::PyPDB;
 
@@ -45,14 +47,65 @@ fn build_pool(n_threads: usize) -> rayon::ThreadPool {
     builder.build().expect("failed to build rayon thread pool")
 }
 
-/// Extract list of PyPDB from a Python list.
-fn extract_list(list: &Bound<'_, PyList>, chain: Option<&str>) -> PyResult<Vec<StructureData>> {
+/// Extract a list of PyPDB into per-item tolerant `StructureData` results.
+///
+/// A failed structure extraction (no usable chain, empty model, …) becomes a
+/// per-item `Err(String)` so the batch can record it and carry on. A
+/// wrong-typed list element is still a hard `PyErr` — that is a caller bug,
+/// not input data, and should abort the call.
+fn extract_list_tolerant(
+    list: &Bound<'_, PyList>,
+    chain: Option<&str>,
+) -> PyResult<Vec<Result<StructureData, String>>> {
     list.iter()
         .map(|item| {
             let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
-            extract(&pdb, chain)
+            Ok(extract_for_alignment(&pdb.inner, chain).map_err(|e| e.to_string()))
         })
         .collect()
+}
+
+/// Wrap a freshly-computed pyclass result as a successful [`BatchOutcome`].
+fn ok_value<T: pyo3::PyClass<BaseType = pyo3::PyAny>>(py: Python<'_>, obj: T) -> BatchOutcome {
+    Py::new(py, obj)
+        .map(|p| p.into_any())
+        .map_err(|e| e.to_string())
+}
+
+/// Run one `(query, target)` pair for a many-to-many batch, threading the
+/// per-item extraction errors through so they surface as failed batch items
+/// rather than aborting the whole product.
+fn pair_align<T, R>(
+    qi: usize,
+    ti: usize,
+    queries: &[Result<T, String>],
+    targets: &[Result<T, String>],
+    run: impl Fn(&T, &T) -> Result<R, String>,
+) -> Result<(usize, usize, R), String> {
+    match (queries[qi].as_ref(), targets[ti].as_ref()) {
+        (Err(e), _) => Err(format!("query {qi}: {e}")),
+        (_, Err(e)) => Err(format!("target {ti}: {e}")),
+        (Ok(q), Ok(t)) => run(q, t)
+            .map(|r| (qi, ti, r))
+            .map_err(|e| format!("query {qi}, target {ti}: {e}")),
+    }
+}
+
+/// Convert a many-to-many pair result into a [`BatchOutcome`] whose success
+/// value is a `(query_index, target_index, result)` tuple.
+fn pair_outcome<R, P: pyo3::PyClass<BaseType = pyo3::PyAny>>(
+    py: Python<'_>,
+    r: Result<(usize, usize, R), String>,
+    pack: impl Fn(R) -> P,
+) -> BatchOutcome {
+    match r {
+        Ok((qi, ti, inner)) => {
+            let obj = Py::new(py, pack(inner)).map_err(|e| e.to_string())?;
+            let tup = (qi, ti, obj).into_pyobject(py).map_err(|e| e.to_string())?;
+            Ok(tup.into_any().unbind())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 // ===========================================================================
@@ -97,8 +150,12 @@ pub(crate) fn tm_align_pair(
 }
 
 /// Align one query against many targets in parallel (TM-align).
+///
+/// Returns a `BatchResult` with one item per target (input order). A target
+/// that fails to extract or align is recorded as a failed item; the rest
+/// still produce results. Pass `strict=True` to raise on the first failure.
 #[pyfunction]
-#[pyo3(signature = (query, targets, n_threads=None, chain=None, fast=false))]
+#[pyo3(signature = (query, targets, n_threads=None, chain=None, fast=false, strict=false))]
 pub(crate) fn tm_align_one_to_many(
     py: Python<'_>,
     query: &PyPDB,
@@ -106,9 +163,10 @@ pub(crate) fn tm_align_one_to_many(
     n_threads: Option<i32>,
     chain: Option<&str>,
     fast: bool,
-) -> PyResult<Vec<PyAlignResult>> {
+    strict: bool,
+) -> PyResult<PyBatchResult> {
     let query_sd = extract(query, chain)?;
-    let target_sds = extract_list(targets, chain)?;
+    let target_sds = extract_list_tolerant(targets, chain)?;
     let n = resolve_threads(n_threads);
 
     let results = py.allow_threads(|| {
@@ -116,23 +174,34 @@ pub(crate) fn tm_align_one_to_many(
         pool.install(|| {
             target_sds
                 .par_iter()
-                .map(|target| run_tmalign(&query_sd, target, fast))
+                .map(|target| {
+                    target
+                        .as_ref()
+                        .map_err(Clone::clone)
+                        .and_then(|sd| run_tmalign(&query_sd, sd, fast))
+                })
                 .collect::<Vec<_>>()
         })
     });
 
-    results
+    let outcomes: Vec<BatchOutcome> = results
         .into_iter()
         .map(|r| match r {
-            Ok(result) => Ok(PyAlignResult::from_inner(result)),
-            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e)),
+            Ok(result) => ok_value(py, PyAlignResult::from_inner(result)),
+            Err(e) => Err(e),
         })
-        .collect()
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 /// Align all pairs between two lists (Cartesian product, TM-align).
+///
+/// Returns a `BatchResult` with one item per `(query, target)` pair in
+/// row-major order; each successful item value is a `(query_index,
+/// target_index, AlignResult)` tuple. Pass `strict=True` to raise on the
+/// first failure.
 #[pyfunction]
-#[pyo3(signature = (queries, targets, n_threads=None, chain=None, fast=false))]
+#[pyo3(signature = (queries, targets, n_threads=None, chain=None, fast=false, strict=false))]
 pub(crate) fn tm_align_many_to_many(
     py: Python<'_>,
     queries: &Bound<'_, PyList>,
@@ -140,9 +209,10 @@ pub(crate) fn tm_align_many_to_many(
     n_threads: Option<i32>,
     chain: Option<&str>,
     fast: bool,
-) -> PyResult<Vec<(usize, usize, PyAlignResult)>> {
-    let query_sds = extract_list(queries, chain)?;
-    let target_sds = extract_list(targets, chain)?;
+    strict: bool,
+) -> PyResult<PyBatchResult> {
+    let query_sds = extract_list_tolerant(queries, chain)?;
+    let target_sds = extract_list_tolerant(targets, chain)?;
     let n = resolve_threads(n_threads);
 
     let pairs: Vec<(usize, usize)> = (0..query_sds.len())
@@ -155,20 +225,19 @@ pub(crate) fn tm_align_many_to_many(
             pairs
                 .par_iter()
                 .map(|&(qi, ti)| {
-                    let r = run_tmalign(&query_sds[qi], &target_sds[ti], fast);
-                    (qi, ti, r)
+                    pair_align(qi, ti, &query_sds, &target_sds, |q, t| {
+                        run_tmalign(q, t, fast)
+                    })
                 })
                 .collect::<Vec<_>>()
         })
     });
 
-    results
+    let outcomes: Vec<BatchOutcome> = results
         .into_iter()
-        .map(|(qi, ti, r)| match r {
-            Ok(result) => Ok((qi, ti, PyAlignResult::from_inner(result))),
-            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e)),
-        })
-        .collect()
+        .map(|r| pair_outcome(py, r, PyAlignResult::from_inner))
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 // ===========================================================================
@@ -419,8 +488,11 @@ pub(crate) fn soi_align_pair(
 }
 
 /// SOI-align one query against many targets in parallel.
+///
+/// Returns a `BatchResult` with one item per target (input order); see
+/// [`tm_align_one_to_many`]. Pass `strict=True` to raise on the first failure.
 #[pyfunction]
-#[pyo3(signature = (query, targets, n_threads=None, chain=None, fast=false))]
+#[pyo3(signature = (query, targets, n_threads=None, chain=None, fast=false, strict=false))]
 pub(crate) fn soi_align_one_to_many(
     py: Python<'_>,
     query: &PyPDB,
@@ -428,9 +500,10 @@ pub(crate) fn soi_align_one_to_many(
     n_threads: Option<i32>,
     chain: Option<&str>,
     fast: bool,
-) -> PyResult<Vec<PySoiAlignResult>> {
+    strict: bool,
+) -> PyResult<PyBatchResult> {
     let query_sd = extract(query, chain)?;
-    let target_sds = extract_list(targets, chain)?;
+    let target_sds = extract_list_tolerant(targets, chain)?;
     let n = resolve_threads(n_threads);
 
     let results = py.allow_threads(|| {
@@ -438,20 +511,31 @@ pub(crate) fn soi_align_one_to_many(
         pool.install(|| {
             target_sds
                 .par_iter()
-                .map(|target| run_soialign(&query_sd, target, fast))
+                .map(|target| {
+                    target
+                        .as_ref()
+                        .map_err(Clone::clone)
+                        .map(|sd| run_soialign(&query_sd, sd, fast))
+                })
                 .collect::<Vec<_>>()
         })
     });
 
-    Ok(results
+    let outcomes: Vec<BatchOutcome> = results
         .into_iter()
-        .map(|r| PySoiAlignResult { inner: r })
-        .collect())
+        .map(|r| match r {
+            Ok(result) => ok_value(py, PySoiAlignResult { inner: result }),
+            Err(e) => Err(e),
+        })
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 /// SOI-align all pairs between two lists (Cartesian product).
+///
+/// Returns a `BatchResult`; see [`tm_align_many_to_many`] for the item shape.
 #[pyfunction]
-#[pyo3(signature = (queries, targets, n_threads=None, chain=None, fast=false))]
+#[pyo3(signature = (queries, targets, n_threads=None, chain=None, fast=false, strict=false))]
 pub(crate) fn soi_align_many_to_many(
     py: Python<'_>,
     queries: &Bound<'_, PyList>,
@@ -459,9 +543,10 @@ pub(crate) fn soi_align_many_to_many(
     n_threads: Option<i32>,
     chain: Option<&str>,
     fast: bool,
-) -> PyResult<Vec<(usize, usize, PySoiAlignResult)>> {
-    let query_sds = extract_list(queries, chain)?;
-    let target_sds = extract_list(targets, chain)?;
+    strict: bool,
+) -> PyResult<PyBatchResult> {
+    let query_sds = extract_list_tolerant(queries, chain)?;
+    let target_sds = extract_list_tolerant(targets, chain)?;
     let n = resolve_threads(n_threads);
 
     let pairs: Vec<(usize, usize)> = (0..query_sds.len())
@@ -474,17 +559,19 @@ pub(crate) fn soi_align_many_to_many(
             pairs
                 .par_iter()
                 .map(|&(qi, ti)| {
-                    let r = run_soialign(&query_sds[qi], &target_sds[ti], fast);
-                    (qi, ti, r)
+                    pair_align(qi, ti, &query_sds, &target_sds, |q, t| {
+                        Ok(run_soialign(q, t, fast))
+                    })
                 })
                 .collect::<Vec<_>>()
         })
     });
 
-    Ok(results
+    let outcomes: Vec<BatchOutcome> = results
         .into_iter()
-        .map(|(qi, ti, r)| (qi, ti, PySoiAlignResult { inner: r }))
-        .collect())
+        .map(|r| pair_outcome(py, r, |inner| PySoiAlignResult { inner }))
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 // ===========================================================================
@@ -537,8 +624,11 @@ pub(crate) fn flex_align_pair(
 }
 
 /// FlexAlign one query against many targets in parallel.
+///
+/// Returns a `BatchResult` with one item per target (input order); see
+/// [`tm_align_one_to_many`]. Pass `strict=True` to raise on the first failure.
 #[pyfunction]
-#[pyo3(signature = (query, targets, n_threads=None, chain=None, fast=false))]
+#[pyo3(signature = (query, targets, n_threads=None, chain=None, fast=false, strict=false))]
 pub(crate) fn flex_align_one_to_many(
     py: Python<'_>,
     query: &PyPDB,
@@ -546,9 +636,10 @@ pub(crate) fn flex_align_one_to_many(
     n_threads: Option<i32>,
     chain: Option<&str>,
     fast: bool,
-) -> PyResult<Vec<PyFlexAlignResult>> {
+    strict: bool,
+) -> PyResult<PyBatchResult> {
     let query_sd = extract(query, chain)?;
-    let target_sds = extract_list(targets, chain)?;
+    let target_sds = extract_list_tolerant(targets, chain)?;
     let n = resolve_threads(n_threads);
 
     let results = py.allow_threads(|| {
@@ -556,20 +647,31 @@ pub(crate) fn flex_align_one_to_many(
         pool.install(|| {
             target_sds
                 .par_iter()
-                .map(|target| run_flexalign(&query_sd, target, fast))
+                .map(|target| {
+                    target
+                        .as_ref()
+                        .map_err(Clone::clone)
+                        .and_then(|sd| run_flexalign(&query_sd, sd, fast))
+                })
                 .collect::<Vec<_>>()
         })
     });
 
-    results
+    let outcomes: Vec<BatchOutcome> = results
         .into_iter()
-        .map(|r| r.map_err(pyo3::exceptions::PyRuntimeError::new_err))
-        .collect()
+        .map(|r| match r {
+            Ok(result) => ok_value(py, result),
+            Err(e) => Err(e),
+        })
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 /// FlexAlign all pairs between two lists (Cartesian product).
+///
+/// Returns a `BatchResult`; see [`tm_align_many_to_many`] for the item shape.
 #[pyfunction]
-#[pyo3(signature = (queries, targets, n_threads=None, chain=None, fast=false))]
+#[pyo3(signature = (queries, targets, n_threads=None, chain=None, fast=false, strict=false))]
 pub(crate) fn flex_align_many_to_many(
     py: Python<'_>,
     queries: &Bound<'_, PyList>,
@@ -577,9 +679,10 @@ pub(crate) fn flex_align_many_to_many(
     n_threads: Option<i32>,
     chain: Option<&str>,
     fast: bool,
-) -> PyResult<Vec<(usize, usize, PyFlexAlignResult)>> {
-    let query_sds = extract_list(queries, chain)?;
-    let target_sds = extract_list(targets, chain)?;
+    strict: bool,
+) -> PyResult<PyBatchResult> {
+    let query_sds = extract_list_tolerant(queries, chain)?;
+    let target_sds = extract_list_tolerant(targets, chain)?;
     let n = resolve_threads(n_threads);
 
     let pairs: Vec<(usize, usize)> = (0..query_sds.len())
@@ -592,20 +695,19 @@ pub(crate) fn flex_align_many_to_many(
             pairs
                 .par_iter()
                 .map(|&(qi, ti)| {
-                    let r = run_flexalign(&query_sds[qi], &target_sds[ti], fast);
-                    (qi, ti, r)
+                    pair_align(qi, ti, &query_sds, &target_sds, |q, t| {
+                        run_flexalign(q, t, fast)
+                    })
                 })
                 .collect::<Vec<_>>()
         })
     });
 
-    results
+    let outcomes: Vec<BatchOutcome> = results
         .into_iter()
-        .map(|(qi, ti, r)| match r {
-            Ok(result) => Ok((qi, ti, result)),
-            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e)),
-        })
-        .collect()
+        .map(|r| pair_outcome(py, r, |inner| inner))
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 // ===========================================================================
@@ -693,6 +795,19 @@ fn extract_chains(pdb: &PyPDB) -> PyResult<Vec<ChainData>> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
+/// Extract a list of complexes into per-item tolerant `ChainData` results.
+/// See [`extract_list_tolerant`] for the wrong-type-vs-bad-data distinction.
+fn extract_chain_list_tolerant(
+    list: &Bound<'_, PyList>,
+) -> PyResult<Vec<Result<Vec<ChainData>, String>>> {
+    list.iter()
+        .map(|item| {
+            let pdb = item.extract::<PyRef<'_, PyPDB>>()?;
+            Ok(extract_chains_for_alignment(&pdb.inner).map_err(|e| e.to_string()))
+        })
+        .collect()
+}
+
 /// Align two multi-chain complexes using MM-align.
 ///
 /// Automatically determines chain-to-chain correspondence and computes
@@ -715,23 +830,21 @@ pub(crate) fn mm_align_pair(
 }
 
 /// MM-align one query complex against many target complexes in parallel.
+///
+/// Returns a `BatchResult` with one item per target complex (input order);
+/// see [`tm_align_one_to_many`]. Pass `strict=True` to raise on the first
+/// failure.
 #[pyfunction]
-#[pyo3(signature = (query, targets, n_threads=None))]
+#[pyo3(signature = (query, targets, n_threads=None, strict=false))]
 pub(crate) fn mm_align_one_to_many(
     py: Python<'_>,
     query: &PyPDB,
     targets: &Bound<'_, PyList>,
     n_threads: Option<i32>,
-) -> PyResult<Vec<PyMMAlignResult>> {
+    strict: bool,
+) -> PyResult<PyBatchResult> {
     let chains1 = extract_chains(query)?;
-    let target_chains: Vec<Vec<ChainData>> = targets
-        .iter()
-        .map(|t| {
-            let pdb = t.extract::<PyRef<'_, PyPDB>>()?;
-            extract_chains(&pdb)
-        })
-        .collect::<PyResult<_>>()?;
-
+    let target_chains = extract_chain_list_tolerant(targets)?;
     let n = resolve_threads(n_threads);
 
     let results = py.allow_threads(|| {
@@ -740,45 +853,38 @@ pub(crate) fn mm_align_one_to_many(
             target_chains
                 .par_iter()
                 .map(|tc| {
-                    mmalign_complex(&chains1, tc)
-                        .map(pack_mmalign_result)
-                        .map_err(|e| e.to_string())
+                    tc.as_ref()
+                        .map_err(Clone::clone)
+                        .and_then(|tc| mmalign_complex(&chains1, tc).map_err(|e| e.to_string()))
                 })
                 .collect::<Vec<_>>()
         })
     });
 
-    results
+    let outcomes: Vec<BatchOutcome> = results
         .into_iter()
-        .map(|r| r.map_err(pyo3::exceptions::PyRuntimeError::new_err))
-        .collect()
+        .map(|r| match r {
+            Ok(result) => ok_value(py, pack_mmalign_result(result)),
+            Err(e) => Err(e),
+        })
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 /// MM-align all pairs between two lists of complexes (Cartesian product).
+///
+/// Returns a `BatchResult`; see [`tm_align_many_to_many`] for the item shape.
 #[pyfunction]
-#[pyo3(signature = (queries, targets, n_threads=None))]
+#[pyo3(signature = (queries, targets, n_threads=None, strict=false))]
 pub(crate) fn mm_align_many_to_many(
     py: Python<'_>,
     queries: &Bound<'_, PyList>,
     targets: &Bound<'_, PyList>,
     n_threads: Option<i32>,
-) -> PyResult<Vec<(usize, usize, PyMMAlignResult)>> {
-    let query_chains: Vec<Vec<ChainData>> = queries
-        .iter()
-        .map(|q| {
-            let pdb = q.extract::<PyRef<'_, PyPDB>>()?;
-            extract_chains(&pdb)
-        })
-        .collect::<PyResult<_>>()?;
-
-    let target_chains: Vec<Vec<ChainData>> = targets
-        .iter()
-        .map(|t| {
-            let pdb = t.extract::<PyRef<'_, PyPDB>>()?;
-            extract_chains(&pdb)
-        })
-        .collect::<PyResult<_>>()?;
-
+    strict: bool,
+) -> PyResult<PyBatchResult> {
+    let query_chains = extract_chain_list_tolerant(queries)?;
+    let target_chains = extract_chain_list_tolerant(targets)?;
     let n = resolve_threads(n_threads);
 
     let pairs: Vec<(usize, usize)> = (0..query_chains.len())
@@ -791,22 +897,19 @@ pub(crate) fn mm_align_many_to_many(
             pairs
                 .par_iter()
                 .map(|&(qi, ti)| {
-                    let r = mmalign_complex(&query_chains[qi], &target_chains[ti])
-                        .map(pack_mmalign_result)
-                        .map_err(|e| e.to_string());
-                    (qi, ti, r)
+                    pair_align(qi, ti, &query_chains, &target_chains, |q, t| {
+                        mmalign_complex(q, t).map_err(|e| e.to_string())
+                    })
                 })
                 .collect::<Vec<_>>()
         })
     });
 
-    results
+    let outcomes: Vec<BatchOutcome> = results
         .into_iter()
-        .map(|(qi, ti, r)| match r {
-            Ok(result) => Ok((qi, ti, result)),
-            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e)),
-        })
-        .collect()
+        .map(|r| pair_outcome(py, r, pack_mmalign_result))
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 // ===========================================================================
@@ -836,5 +939,7 @@ pub(crate) fn py_align_funcs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<(
     m.add_class::<PyFlexAlignResult>()?;
     m.add_class::<PyMMAlignResult>()?;
     m.add_class::<PyChainPairResult>()?;
+    // Batch contract (BatchResult / BatchItem)
+    crate::batch::register(m)?;
     Ok(())
 }

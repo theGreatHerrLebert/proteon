@@ -15,7 +15,7 @@ claims:
       corpus: 50k-pdb-pool
       n: 47183
       class: random-sample
-      corpus_sha: "PENDING-PIN-50K-PDB-POOL-TARBALL"
+      corpus_sha: "3bb5d22390249f83283cdd9488d9f3d2cfe176307ef98d0f9b7eca0700d2004c"  # sha256 of evidence artifact; the JSONL records every PDB processed
     outputs:
       coverage_rate:
         unit: dimensionless
@@ -35,8 +35,8 @@ claims:
           Wall-time throughput on RTX 5090 + 128 cores. Reported
           context, not gated.
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
-      physics-invariant: "PENDING-PIN-CHARMM19-EEF1-CONVENTION"
+      proteon: "0.2.0"
+      physics-invariant: "final-total-energy<0; CHARMM19+EEF1 NoCutoff, 50-step minimize"
       python: "3.12"
     claim: >
       Across 47,183 random PDBs from the proteon-benchmark/pdbs_50k
@@ -85,14 +85,16 @@ claims:
       artifact: validation/stage3_50k_gpu_results.jsonl
     provenance: human
     last_verified:
-      commit: null
+      commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
       date: "2026-04-12"
       value: 0.991
-      corpus_sha: null
+      corpus_sha: "3bb5d22390249f83283cdd9488d9f3d2cfe176307ef98d0f9b7eca0700d2004c"
     assumptions:
       - The 50k-pdb-pool is the corpus the cited 99.1% number was
         produced against; pool drift between runs would invalidate
-        the rate. corpus_sha is currently a PENDING-PIN placeholder.
+        the rate. corpus_sha is pinned to the SHA-256 of the evidence
+        artifact JSONL (which records every PDB processed); the input
+        PDB pool itself is not archived in-repo.
       - 47,183 != 50,000; the pool is named '50k' but actually holds
         fewer files (acquisition-time filtering). Manifest n
         reflects pool size, not marketing name.

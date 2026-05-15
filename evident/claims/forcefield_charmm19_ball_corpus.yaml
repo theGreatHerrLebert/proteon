@@ -15,7 +15,7 @@ claims:
       n: 1000
       class: random-sample
       corpus_path: validation/pdbs/
-      corpus_sha: "PENDING-PIN-VALIDATION-PDB-CORPUS"
+      corpus_sha: "ff96c75922f4907202a696e79a83a6a2138cad4f51da9adbb2a3015960e6025b"  # sha256 of evidence artifact; the JSONL records every PDB processed
     outputs:
       bond_stretch:
         unit: kJ/mol
@@ -49,8 +49,8 @@ claims:
           pending the unsigned-dihedral chain rule fix; PR #22
           shipped the parser + topology scaffolding).
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
-      BALL: "ball-py 0.1.0a4 or later"
+      proteon: "0.2.0"
+      BALL: "ball-py 0.1.0a4"
       python: "3.12"
     claim: >
       Across N PDBs sampled (seed=42) from
@@ -113,14 +113,16 @@ claims:
       artifact: validation/charmm19_eef1_ball_oracle.jsonl
     provenance: human
     last_verified:
-      commit: null
-      date: null
-      value: null
-      corpus_sha: null
+      commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
+      date: "2026-05-02"
+      value: 223
+      corpus_sha: "ff96c75922f4907202a696e79a83a6a2138cad4f51da9adbb2a3015960e6025b"
     assumptions:
       - The PDB corpus at validation/pdbs/ is the canonical proteon
-        validation corpus. corpus_sha resolves to a tarball hash at
-        first replay.
+        validation corpus. corpus_sha is pinned to the SHA-256 of the
+        evidence artifact JSONL (which records every PDB processed);
+        the input PDB pool itself is not archived in-repo.
+        last_verified.value is the n_ok record count (223).
       - ball-py is installed in the test environment (see ball-py
         on PyPI; the slim EVIDENT image is expected to carry it
         after first publish lands).

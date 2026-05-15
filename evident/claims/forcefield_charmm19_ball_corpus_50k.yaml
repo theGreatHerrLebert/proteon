@@ -16,7 +16,7 @@ claims:
       class: random-sample
       corpus_path: /globalscratch/dateschn/proteon-benchmark/pdbs_50k/
       corpus_filter: validation/protein_only_corpus.py
-      corpus_sha: "PENDING-PIN-VALIDATION-PDB-CORPUS-50K"
+      corpus_sha: "3a6f1d8879b4d20adacb80d62db1d6e20479e45962c42b667e3991cb676a7540"  # sha256 of evidence artifact; the JSONL records every PDB processed
       seed: 42
     outputs:
       bond_stretch:
@@ -56,7 +56,7 @@ claims:
           is a residue-template-coverage gap discussed in
           failure_modes.
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      proteon: "0.2.0"
       BALL: "ball-py 0.1.0a4"
       python: "3.12"
       runner: validation/charmm19_eef1_ball_oracle.py
@@ -147,15 +147,17 @@ claims:
       artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl
     provenance: human
     last_verified:
-      commit: null
+      commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
       date: "2026-05-04"
       value: 5309
-      corpus_sha: null
+      corpus_sha: "3a6f1d8879b4d20adacb80d62db1d6e20479e45962c42b667e3991cb676a7540"
     assumptions:
       - The PDB corpus at /globalscratch/dateschn/proteon-benchmark/
         pdbs_50k/ is a 50 000-PDB random sample of the wwPDB
-        downloaded once for proteon's benchmark suite. The
-        corpus_sha will resolve at first replay-tag time.
+        downloaded once for proteon's benchmark suite. corpus_sha is
+        pinned to the SHA-256 of the evidence artifact JSONL (which
+        records every PDB processed); the input PDB pool itself is not
+        archived in-repo.
       - >
         validation/protein_only_corpus.py was run first to drop
         nucleic-acid and non-standard-residue PDBs that CHARMM19

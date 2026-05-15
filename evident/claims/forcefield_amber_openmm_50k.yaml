@@ -17,7 +17,7 @@ claims:
       class: random-sample
       corpus_path: /globalscratch/dateschn/proteon-benchmark/pdbs_50k/
       corpus_filter: validation/protein_only_corpus.py
-      corpus_sha: "PENDING-PIN-VALIDATION-PDB-CORPUS-50K"
+      corpus_sha: "73b927d14952c83fb35e1e334cdea0c88074601e42054eb32946a8a0096bb6b8"  # sha256 of evidence artifact; the JSONL records every PDB processed
       seed: 42
     outputs:
       e_total_proteon:
@@ -33,7 +33,7 @@ claims:
         unit: dimensionless
         description: "|proteon - openmm| / (|openmm| + 1.0). The +1.0 floor avoids divide-by-near-zero on PDBs with cancelling-component energies."
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      proteon: "0.2.0"
       OpenMM: "8.5.1"
       python: "3.12"
       runner: validation/amber96_oracle.py
@@ -86,10 +86,10 @@ claims:
       artifact: validation/amber96_oracle_50k.jsonl
     provenance: human
     last_verified:
-      commit: null
+      commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
       date: "2026-05-08"
       value: 0.000341
-      corpus_sha: null
+      corpus_sha: "73b927d14952c83fb35e1e334cdea0c88074601e42054eb32946a8a0096bb6b8"
     assumptions:
       - validation/protein_only_50k.txt is the same pre-filtered list the
         CHARMM 50K oracle uses, so the population is comparable across

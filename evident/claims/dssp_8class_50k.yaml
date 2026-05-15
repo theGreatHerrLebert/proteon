@@ -16,7 +16,7 @@ claims:
       class: random-sample
       corpus_path: /globalscratch/dateschn/proteon-benchmark/pdbs_50k/
       corpus_filter: validation/protein_only_corpus.py
-      corpus_sha: "PENDING-PIN-VALIDATION-PDB-CORPUS-50K"
+      corpus_sha: "b953e246978518a5c6d538ce7604ab56ed271b64d98fa851ca9f45764e7608e0"  # sha256 of evidence artifact; the JSONL records every PDB processed
       seed: 42
     outputs:
       agreement_rate:
@@ -38,7 +38,7 @@ claims:
           Per-PDB Counter of 8-class characters from mkdssp's DSSP
           output. Same role as proteon_composition.
     pinned_versions:
-      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      proteon: "0.2.0"
       mkdssp: "v4.6.1 (libcifpp v10.0.3, libmcfp v1.4.2)"
       python: "3.12"
       runner: validation/dssp_mkdssp_oracle.py
@@ -100,10 +100,10 @@ claims:
       artifact: validation/dssp_mkdssp_oracle_50k.jsonl
     provenance: human
     last_verified:
-      commit: null
+      commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
       date: "2026-05-10"
       value: 0.9527
-      corpus_sha: null
+      corpus_sha: "b953e246978518a5c6d538ce7604ab56ed271b64d98fa851ca9f45764e7608e0"
     assumptions:
       - >
           Both arms run on identical PDB inputs (no PDBFixer pre-pass
