@@ -5,9 +5,12 @@ the upstream EVIDENT framework
 (https://github.com/.../evident — `workflow/`).
 
 This vendor exists so the proteon Dockerfile and the CI manifest
-check do not need a cross-repo fetch at build time. The two files
-are not modified — they are byte-identical copies of the framework
-release proteon last synchronised against.
+check do not need a cross-repo fetch at build time.
+
+Proteon's copy currently carries one local hardening patch: the
+`--strict-release-pins` validator option rejects placeholder release
+corpus hashes, pinned versions, and `last_verified` pins during release
+prep.
 
 ## Re-syncing
 
@@ -21,9 +24,10 @@ python3 proteon/evident/tools/validate_manifest.py \
    proteon/evident/evident.yaml   # confirm proteon's manifest still passes
 ```
 
-Then commit the updated files. Do not edit them in place — drift
-between proteon's vendored copy and the framework breaks
-composability across projects using EVIDENT.
+Then reapply or upstream proteon's local `--strict-release-pins` patch
+before committing the updated files. Keep any local drift explicit:
+untracked divergence between proteon's vendored copy and the framework
+breaks composability across projects using EVIDENT.
 
 ## Why vendor
 

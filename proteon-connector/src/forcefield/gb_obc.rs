@@ -187,12 +187,13 @@ pub(crate) fn compute_born_radii_with_chain(
     let per_atom: Vec<(f64, f64)> = topo
         .atoms
         .iter()
-        .map(|a| {
+        .enumerate()
+        .map(|(atom_index, a)| {
             let p = params.get_obc_gb(&a.amber_type).unwrap_or_else(|| {
                 panic!(
                     "compute_born_radii: no OBC params for AMBER class '{}' \
                      (atom index {}); is amber96_obc.ini loaded?",
-                    a.amber_type, 0
+                    a.amber_type, atom_index
                 )
             });
             (p.radius, p.scale)

@@ -112,7 +112,10 @@ def _render_json(rows: list[dict]) -> None:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     try:
-        validate_manifest.validate_manifest(pathlib.Path(args.manifest))
+        validate_manifest.validate_manifest(
+            pathlib.Path(args.manifest),
+            strict_release_pins=args.strict_release_pins,
+        )
     except Exception as exc:
         print(f"manifest invalid: {exc}", file=sys.stderr)
         return 1
@@ -140,6 +143,14 @@ def main() -> int:
 
     p_val = sub.add_parser("validate", help="Structural check of a manifest")
     p_val.add_argument("manifest", nargs="?", default="evident.yaml")
+    p_val.add_argument(
+        "--strict-release-pins",
+        action="store_true",
+        help=(
+            "reject placeholder corpus hashes, pinned versions, and "
+            "last_verified release pins"
+        ),
+    )
     p_val.set_defaults(func=cmd_validate)
 
     p_list = sub.add_parser("list", help="List claims from a manifest")
