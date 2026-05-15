@@ -143,7 +143,7 @@ claims:
       command: >
         python validation/run_validation.py --n-structures 1000
         --pdb-dir validation/pdbs/ --output validation/results.json
-      artifact: validation/results.json
+      artifact: validation/results.json (archived in the v0.2.0-evidence.tar.gz release asset)
     provenance: human
     last_verified:
       commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"

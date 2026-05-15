@@ -110,7 +110,7 @@ claims:
       oracle:
         - BALL
       command: python validation/charmm19_eef1_ball_oracle.py
-      artifact: validation/charmm19_eef1_ball_oracle.jsonl
+      artifact: validation/charmm19_eef1_ball_oracle.jsonl (archived in the v0.2.0-evidence.tar.gz release asset)
     provenance: human
     last_verified:
       commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
