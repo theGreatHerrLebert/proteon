@@ -70,6 +70,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Free runner disk for CUDA image
+        if: matrix.variant.name == 'cuda'
+        run: |
+          df -h
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /opt/hostedtoolcache
+          docker system prune -af
+          df -h
+
       - name: Log in to GitHub Container Registry
         # Skip on pull_request — fork PRs don't have package:write
         # against the upstream registry. Build-only PRs don't need it.
