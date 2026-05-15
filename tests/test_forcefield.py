@@ -321,30 +321,38 @@ class TestLoadAndMinimizeHydrogens:
 
     def test_loads_and_minimizes(self):
         paths = [os.path.join(TEST_PDBS_DIR, "1crn.pdb")]
-        results = proteon.load_and_minimize_hydrogens(paths, n_threads=-1)
-        assert len(results) >= 1
+        result = proteon.load_and_minimize_hydrogens(paths, n_threads=-1)
+        assert len(result) == 1
+        assert result.n_ok == 1
 
-    def test_returns_index_result_tuples(self):
+    def test_item_carries_index_and_result(self):
         paths = [os.path.join(TEST_PDBS_DIR, "1crn.pdb")]
-        results = proteon.load_and_minimize_hydrogens(paths, n_threads=-1)
-        idx, r = results[0]
-        assert isinstance(idx, int)
-        assert "final_energy" in r
+        result = proteon.load_and_minimize_hydrogens(paths, n_threads=-1)
+        item = result[0]
+        assert item.index == 0
+        assert item.ok
+        assert "final_energy" in item.value
 
-    def test_skips_missing_files(self):
+    def test_bad_files_recorded_not_skipped(self):
+        """A file that fails to load is a failed item, not an omission."""
         paths = [
             os.path.join(TEST_PDBS_DIR, "1crn.pdb"),
             "/nonexistent/fake.pdb",
         ]
-        results = proteon.load_and_minimize_hydrogens(paths, n_threads=-1)
-        assert len(results) == 1, f"Expected 1 result (fake file skipped), got {len(results)}"
-        indices = [idx for idx, _ in results]
-        assert indices == [0], f"Expected index [0] for crambin, got {indices}"
+        result = proteon.load_and_minimize_hydrogens(paths, n_threads=-1)
+        # Cardinality is preserved: one item per input, in input order.
+        assert len(result) == 2, f"Expected 2 items, got {len(result)}"
+        assert result.n_ok == 1
+        assert result.n_failed == 1
+        assert result[0].ok and result[0].index == 0
+        assert not result[1].ok
+        assert result[1].error  # carries the load error message
 
     def test_multiple_files(self):
         paths = [
             os.path.join(TEST_PDBS_DIR, "1crn.pdb"),
             os.path.join(TEST_PDBS_DIR, "1ubq.pdb"),
         ]
-        results = proteon.load_and_minimize_hydrogens(paths, n_threads=-1)
-        assert len(results) == 2
+        result = proteon.load_and_minimize_hydrogens(paths, n_threads=-1)
+        assert len(result) == 2
+        assert result.n_ok == 2

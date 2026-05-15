@@ -5,8 +5,10 @@
 use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
+use pyo3::IntoPyObject;
 use rayon::prelude::*;
 
+use crate::batch::{make_batch_result, BatchOutcome, PyBatchResult};
 use crate::parallel::{auto_threads, build_pool};
 use crate::py_pdb::PyPDB;
 use crate::sasa;
@@ -414,17 +416,22 @@ fn permissive_load(path: &str) -> Result<pdbtbx::PDB, String> {
 
 /// Load files and compute total SASA in one parallel call.
 ///
-/// Returns list of (index, total_sasa) for files that loaded successfully.
+/// Returns a `BatchResult` with one item per path (input order); each
+/// successful item value is the structure's total SASA (float). A file that
+/// fails to load is recorded as a failed item carrying the parse error —
+/// failures are no longer silently dropped from the output. Pass
+/// `strict=True` to raise on the first failure instead.
 #[pyfunction]
-#[pyo3(signature = (paths, probe=1.4, n_points=960, n_threads=None, radii="bondi"))]
-pub(crate) fn load_and_sasa<'py>(
-    py: Python<'py>,
-    paths: &Bound<'py, PyList>,
+#[pyo3(signature = (paths, probe=1.4, n_points=960, n_threads=None, radii="bondi", strict=false))]
+pub(crate) fn load_and_sasa(
+    py: Python<'_>,
+    paths: &Bound<'_, PyList>,
     probe: f64,
     n_points: usize,
     n_threads: Option<i32>,
     radii: &str,
-) -> PyResult<Vec<(usize, f64)>> {
+    strict: bool,
+) -> PyResult<PyBatchResult> {
     validate_n_points(n_points)?;
     let rs = parse_radii(radii)?;
     let path_strs: Vec<String> = paths
@@ -434,23 +441,32 @@ pub(crate) fn load_and_sasa<'py>(
 
     let n = auto_threads(n_threads, SASA_PER_TASK_BYTES);
 
-    let results: Vec<(usize, f64)> = py.allow_threads(|| {
+    let results: Vec<Result<f64, String>> = py.allow_threads(|| {
         let pool = build_pool(n);
         pool.install(|| {
             path_strs
                 .par_iter()
-                .enumerate()
-                .filter_map(|(i, path)| {
-                    permissive_load(path).ok().map(|pdb| {
+                .map(|path| {
+                    permissive_load(path).map(|pdb| {
                         let areas = sasa::sasa_from_pdb(&pdb, probe, n_points, rs);
-                        (i, areas.iter().sum())
+                        areas.iter().sum()
                     })
                 })
                 .collect()
         })
     });
 
-    Ok(results)
+    let outcomes: Vec<BatchOutcome> = results
+        .into_iter()
+        .map(|r| match r {
+            Ok(total) => total
+                .into_pyobject(py)
+                .map(|b| b.into_any().unbind())
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        })
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 // ---------------------------------------------------------------------------
@@ -468,5 +484,6 @@ pub(crate) fn py_sasa(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(batch_relative_sasa, m)?)?;
     m.add_function(wrap_pyfunction!(batch_total_sasa, m)?)?;
     m.add_function(wrap_pyfunction!(load_and_sasa, m)?)?;
+    crate::batch::register(m)?;
     Ok(())
 }

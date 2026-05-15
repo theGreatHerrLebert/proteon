@@ -250,10 +250,19 @@ def tm_align_one_to_many(
     n_threads: Optional[int] = None,
     chain: Optional[str] = None,
     fast: bool = False,
-) -> List[AlignResult]:
-    """Align one query against many targets in parallel (TM-align)."""
-    results = _align.tm_align_one_to_many(_get_ptr(query), _get_ptrs(targets), n_threads, chain, fast)
-    return [AlignResult.from_py_ptr(r) for r in results]
+    strict: bool = False,
+) -> BatchResult:
+    """Align one query against many targets in parallel (TM-align).
+
+    Returns a ``BatchResult`` with one item per target, in input order. A
+    target that fails to extract or align is recorded as a failed item
+    (``item.ok is False``, ``item.error`` set) rather than aborting the whole
+    batch. Pass ``strict=True`` to raise on the first failure instead. Each
+    successful ``item.value`` is the alignment result.
+    """
+    return _align.tm_align_one_to_many(
+        _get_ptr(query), _get_ptrs(targets), n_threads, chain, fast, strict
+    )
 
 
 def tm_align_many_to_many(
@@ -263,10 +272,18 @@ def tm_align_many_to_many(
     n_threads: Optional[int] = None,
     chain: Optional[str] = None,
     fast: bool = False,
-) -> List[Tuple[int, int, AlignResult]]:
-    """Align all pairs between two lists in parallel (TM-align, Cartesian product)."""
-    results = _align.tm_align_many_to_many(_get_ptrs(queries), _get_ptrs(targets), n_threads, chain, fast)
-    return [(qi, ti, AlignResult.from_py_ptr(r)) for qi, ti, r in results]
+    strict: bool = False,
+) -> BatchResult:
+    """Align all pairs between two lists in parallel (TM-align, Cartesian product).
+
+    Returns a ``BatchResult`` with one item per ``(query, target)`` pair in
+    row-major order; each successful ``item.value`` is a
+    ``(query_index, target_index, result)`` tuple. Pass ``strict=True`` to
+    raise on the first failure.
+    """
+    return _align.tm_align_many_to_many(
+        _get_ptrs(queries), _get_ptrs(targets), n_threads, chain, fast, strict
+    )
 
 
 # ===========================================================================
@@ -294,10 +311,15 @@ def soi_align_one_to_many(
     n_threads: Optional[int] = None,
     chain: Optional[str] = None,
     fast: bool = False,
-) -> List[SoiAlignResult]:
-    """SOI-align one query against many targets in parallel."""
-    results = _align.soi_align_one_to_many(_get_ptr(query), _get_ptrs(targets), n_threads, chain, fast)
-    return [SoiAlignResult.from_py_ptr(r) for r in results]
+    strict: bool = False,
+) -> BatchResult:
+    """SOI-align one query against many targets in parallel.
+
+    Returns a ``BatchResult``; see :func:`tm_align_one_to_many`.
+    """
+    return _align.soi_align_one_to_many(
+        _get_ptr(query), _get_ptrs(targets), n_threads, chain, fast, strict
+    )
 
 
 def soi_align_many_to_many(
@@ -307,10 +329,15 @@ def soi_align_many_to_many(
     n_threads: Optional[int] = None,
     chain: Optional[str] = None,
     fast: bool = False,
-) -> List[Tuple[int, int, SoiAlignResult]]:
-    """SOI-align all pairs between two lists in parallel (Cartesian product)."""
-    results = _align.soi_align_many_to_many(_get_ptrs(queries), _get_ptrs(targets), n_threads, chain, fast)
-    return [(qi, ti, SoiAlignResult.from_py_ptr(r)) for qi, ti, r in results]
+    strict: bool = False,
+) -> BatchResult:
+    """SOI-align all pairs between two lists in parallel (Cartesian product).
+
+    Returns a ``BatchResult``; see :func:`tm_align_many_to_many`.
+    """
+    return _align.soi_align_many_to_many(
+        _get_ptrs(queries), _get_ptrs(targets), n_threads, chain, fast, strict
+    )
 
 
 # ===========================================================================
@@ -338,10 +365,15 @@ def flex_align_one_to_many(
     n_threads: Optional[int] = None,
     chain: Optional[str] = None,
     fast: bool = False,
-) -> List[FlexAlignResult]:
-    """FlexAlign one query against many targets in parallel."""
-    results = _align.flex_align_one_to_many(_get_ptr(query), _get_ptrs(targets), n_threads, chain, fast)
-    return [FlexAlignResult.from_py_ptr(r) for r in results]
+    strict: bool = False,
+) -> BatchResult:
+    """FlexAlign one query against many targets in parallel.
+
+    Returns a ``BatchResult``; see :func:`tm_align_one_to_many`.
+    """
+    return _align.flex_align_one_to_many(
+        _get_ptr(query), _get_ptrs(targets), n_threads, chain, fast, strict
+    )
 
 
 def flex_align_many_to_many(
@@ -351,10 +383,15 @@ def flex_align_many_to_many(
     n_threads: Optional[int] = None,
     chain: Optional[str] = None,
     fast: bool = False,
-) -> List[Tuple[int, int, FlexAlignResult]]:
-    """FlexAlign all pairs between two lists in parallel (Cartesian product)."""
-    results = _align.flex_align_many_to_many(_get_ptrs(queries), _get_ptrs(targets), n_threads, chain, fast)
-    return [(qi, ti, FlexAlignResult.from_py_ptr(r)) for qi, ti, r in results]
+    strict: bool = False,
+) -> BatchResult:
+    """FlexAlign all pairs between two lists in parallel (Cartesian product).
+
+    Returns a ``BatchResult``; see :func:`tm_align_many_to_many`.
+    """
+    return _align.flex_align_many_to_many(
+        _get_ptrs(queries), _get_ptrs(targets), n_threads, chain, fast, strict
+    )
 
 
 # ===========================================================================
@@ -455,10 +492,15 @@ def mm_align_one_to_many(
     targets: List[Structure],
     *,
     n_threads: Optional[int] = None,
-) -> List[MMAlignResult]:
-    """MM-align one query complex against many targets in parallel."""
-    results = _align.mm_align_one_to_many(_get_ptr(query), _get_ptrs(targets), n_threads)
-    return [MMAlignResult.from_py_ptr(r) for r in results]
+    strict: bool = False,
+) -> BatchResult:
+    """MM-align one query complex against many targets in parallel.
+
+    Returns a ``BatchResult``; see :func:`tm_align_one_to_many`.
+    """
+    return _align.mm_align_one_to_many(
+        _get_ptr(query), _get_ptrs(targets), n_threads, strict
+    )
 
 
 def mm_align_many_to_many(
@@ -466,7 +508,12 @@ def mm_align_many_to_many(
     targets: List[Structure],
     *,
     n_threads: Optional[int] = None,
-) -> List[Tuple[int, int, MMAlignResult]]:
-    """MM-align all pairs between two lists of complexes (Cartesian product)."""
-    results = _align.mm_align_many_to_many(_get_ptrs(queries), _get_ptrs(targets), n_threads)
-    return [(qi, ti, MMAlignResult.from_py_ptr(r)) for qi, ti, r in results]
+    strict: bool = False,
+) -> BatchResult:
+    """MM-align all pairs between two lists of complexes (Cartesian product).
+
+    Returns a ``BatchResult``; see :func:`tm_align_many_to_many`.
+    """
+    return _align.mm_align_many_to_many(
+        _get_ptrs(queries), _get_ptrs(targets), n_threads, strict
+    )

@@ -1,10 +1,13 @@
 //! PyO3 bindings for AMBER force field and energy minimization.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use rayon::prelude::*;
 
+use crate::batch::{make_batch_result, BatchOutcome, PyBatchResult};
 use crate::forcefield::{energy, md, minimize, params, params::ForceField, topology};
 use crate::parallel::resolve_threads;
 use crate::py_pdb::PyPDB;
@@ -20,21 +23,23 @@ use crate::py_pdb::PyPDB;
 #[pyfunction]
 #[pyo3(signature = (pdb, ff="amber96"))]
 pub(crate) fn dump_topology(py: Python<'_>, pdb: &PyPDB, ff: &str) -> PyResult<PyObject> {
-    let topo = match ff {
-        "charmm" | "charmm19" | "charmm19_eef1" => {
-            topology::build_topology(&pdb.inner, &params::charmm19_eef1())
-        }
-        "amber" | "amber96" => topology::build_topology(&pdb.inner, &params::amber96()),
-        "amber96_obc" | "amber96+obc" | "amber96_obc2" => {
-            topology::build_topology(&pdb.inner, &params::amber96_obc())
-        }
-        _ => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
-                 (aliases: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
-            )))
-        }
-    };
+    let topo = guard_panic("dump_topology", || -> PyResult<topology::Topology> {
+        Ok(match ff {
+            "charmm" | "charmm19" | "charmm19_eef1" => {
+                topology::build_topology(&pdb.inner, &params::charmm19_eef1())
+            }
+            "amber" | "amber96" => topology::build_topology(&pdb.inner, &params::amber96()),
+            "amber96_obc" | "amber96+obc" | "amber96_obc2" => {
+                topology::build_topology(&pdb.inner, &params::amber96_obc())
+            }
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
+                     (aliases: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
+                )))
+            }
+        })
+    })??;
     let dict = pyo3::types::PyDict::new(py);
     let bonds: Vec<(usize, usize)> = topo.bonds.iter().map(|b| (b.i, b.j)).collect();
     let angles: Vec<(usize, usize, usize)> = topo.angles.iter().map(|a| (a.i, a.j, a.k)).collect();
@@ -73,6 +78,33 @@ fn build_pool(n_threads: usize) -> rayon::ThreadPool {
     builder.build().expect("failed to build rayon thread pool")
 }
 
+/// Run a force-field computation, converting a Rust panic into a clean
+/// Python `ValueError`.
+///
+/// Force-field internals (`topology::build_topology`, the energy and OBC
+/// kernels, …) assert hard invariants — e.g. that every atom's AMBER class
+/// has a parameter entry. A user-supplied structure with an unusual residue
+/// or atom can violate one of those, which panics. Without this boundary the
+/// panic surfaces as `pyo3_runtime.PanicException`, which subclasses
+/// `BaseException` and so slips past a caller's `except Exception`. Catching
+/// it here turns it into an ordinary, catchable exception that still carries
+/// the original panic message (the OBC missing-parameter panic, for one,
+/// already names the offending atom index).
+fn guard_panic<T>(what: &str, f: impl FnOnce() -> T) -> PyResult<T> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(|payload| {
+        let detail = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "internal panic with no message".to_string());
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "{what}: force-field computation failed on this input. This \
+             usually means the structure contains a residue or atom the \
+             force field has no parameters for. Details: {detail}"
+        ))
+    })
+}
+
 /// Compute force field energy of a structure.
 ///
 /// Returns dict with energy components:
@@ -98,63 +130,65 @@ pub(crate) fn compute_energy(
     nbl_threshold: Option<usize>,
     nonbonded_cutoff: Option<f64>,
 ) -> PyResult<PyObject> {
-    let (topo, result) = match ff {
-        "charmm" | "charmm19" | "charmm19_eef1" => {
-            let mut charmm = params::charmm19_eef1();
-            if let Some(c) = nonbonded_cutoff {
-                charmm.cutoff_override = Some(c);
+    let (topo, result) = guard_panic("compute_energy", || -> PyResult<_> {
+        Ok(match ff {
+            "charmm" | "charmm19" | "charmm19_eef1" => {
+                let mut charmm = params::charmm19_eef1();
+                if let Some(c) = nonbonded_cutoff {
+                    charmm.cutoff_override = Some(c);
+                }
+                let topo = topology::build_topology(&pdb.inner, &charmm);
+                let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+                let result = py.allow_threads(|| match nbl_threshold {
+                    Some(t) => energy::compute_energy_auto(&coords, &topo, &charmm, t),
+                    None => energy::compute_energy(&coords, &topo, &charmm),
+                });
+                (topo, result)
             }
-            let topo = topology::build_topology(&pdb.inner, &charmm);
-            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-            let result = py.allow_threads(|| match nbl_threshold {
-                Some(t) => energy::compute_energy_auto(&coords, &topo, &charmm, t),
-                None => energy::compute_energy(&coords, &topo, &charmm),
-            });
-            (topo, result)
-        }
-        "amber" | "amber96" => {
-            let mut amber = params::amber96();
-            if let Some(c) = nonbonded_cutoff {
-                amber.cutoff_override = Some(c);
+            "amber" | "amber96" => {
+                let mut amber = params::amber96();
+                if let Some(c) = nonbonded_cutoff {
+                    amber.cutoff_override = Some(c);
+                }
+                let topo = topology::build_topology(&pdb.inner, &amber);
+                let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+                let result = py.allow_threads(|| match nbl_threshold {
+                    Some(t) => energy::compute_energy_auto(&coords, &topo, &amber, t),
+                    None => energy::compute_energy(&coords, &topo, &amber),
+                });
+                (topo, result)
             }
-            let topo = topology::build_topology(&pdb.inner, &amber);
-            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-            let result = py.allow_threads(|| match nbl_threshold {
-                Some(t) => energy::compute_energy_auto(&coords, &topo, &amber, t),
-                None => energy::compute_energy(&coords, &topo, &amber),
-            });
-            (topo, result)
-        }
-        "amber96_obc" | "amber96+obc" | "amber96_obc2" => {
-            // AMBER96 with OBC2 implicit solvent (α=1.0, β=0.8, γ=4.85).
-            // This matches OpenMM's ForceField("amber96.xml",
-            // "amber96_obc.xml") + AMBER's gbsa=OBC2 setting: the OpenMM
-            // kernel hardcodes `ObcParameters::ObcTypeII` regardless of
-            // whether the XML is named amber96_obc.xml or charmm36_obc2.xml,
-            // because the XML only serializes per-atom (radius, scale)
-            // and leaves α/β/γ to the code. If/when proteon grows
-            // genuine OBC1 support it will ship as a distinct ff string
-            // ("amber96_obc1") routed through a separate params loader,
-            // NOT as an alias here.
-            let mut amber = params::amber96_obc();
-            if let Some(c) = nonbonded_cutoff {
-                amber.cutoff_override = Some(c);
+            "amber96_obc" | "amber96+obc" | "amber96_obc2" => {
+                // AMBER96 with OBC2 implicit solvent (α=1.0, β=0.8, γ=4.85).
+                // This matches OpenMM's ForceField("amber96.xml",
+                // "amber96_obc.xml") + AMBER's gbsa=OBC2 setting: the OpenMM
+                // kernel hardcodes `ObcParameters::ObcTypeII` regardless of
+                // whether the XML is named amber96_obc.xml or charmm36_obc2.xml,
+                // because the XML only serializes per-atom (radius, scale)
+                // and leaves α/β/γ to the code. If/when proteon grows
+                // genuine OBC1 support it will ship as a distinct ff string
+                // ("amber96_obc1") routed through a separate params loader,
+                // NOT as an alias here.
+                let mut amber = params::amber96_obc();
+                if let Some(c) = nonbonded_cutoff {
+                    amber.cutoff_override = Some(c);
+                }
+                let topo = topology::build_topology(&pdb.inner, &amber);
+                let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+                let result = py.allow_threads(|| match nbl_threshold {
+                    Some(t) => energy::compute_energy_auto(&coords, &topo, &amber, t),
+                    None => energy::compute_energy(&coords, &topo, &amber),
+                });
+                (topo, result)
             }
-            let topo = topology::build_topology(&pdb.inner, &amber);
-            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-            let result = py.allow_threads(|| match nbl_threshold {
-                Some(t) => energy::compute_energy_auto(&coords, &topo, &amber, t),
-                None => energy::compute_energy(&coords, &topo, &amber),
-            });
-            (topo, result)
-        }
-        _ => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
                      (alias: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
-            )));
-        }
-    };
+                )));
+            }
+        })
+    })??;
 
     let dict = pyo3::types::PyDict::new(py);
     dict.set_item("bond_stretch", result.bond_stretch)?;
@@ -256,23 +290,25 @@ pub(crate) fn minimize_hydrogens(
     gradient_tolerance: f64,
     method: &str,
 ) -> PyResult<PyObject> {
-    let amber = params::amber96();
-    let topo = topology::build_topology(&pdb.inner, &amber);
-    let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-    let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
     let method = method.to_string();
 
-    let result = py.allow_threads(|| {
-        run_minimize(
-            &coords,
-            &topo,
-            &amber,
-            max_steps,
-            gradient_tolerance,
-            &constrained,
-            &method,
-        )
-    });
+    let result = guard_panic("minimize_hydrogens", || {
+        let amber = params::amber96();
+        let topo = topology::build_topology(&pdb.inner, &amber);
+        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+        let constrained: Vec<bool> = topo.atoms.iter().map(|a| !a.is_hydrogen).collect();
+        py.allow_threads(|| {
+            run_minimize(
+                &coords,
+                &topo,
+                &amber,
+                max_steps,
+                gradient_tolerance,
+                &constrained,
+                &method,
+            )
+        })
+    })?;
 
     let n = result.coords.len();
     let flat: Vec<f64> = result
@@ -328,65 +364,70 @@ pub(crate) fn minimize_structure(
     ff: &str,
 ) -> PyResult<PyObject> {
     let method = method.to_string();
-    let result = match ff {
-        "charmm" | "charmm19" | "charmm19_eef1" => {
-            let charmm = params::charmm19_eef1();
-            let topo = topology::build_topology(&pdb.inner, &charmm);
-            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-            let constrained = vec![false; coords.len()];
-            py.allow_threads(|| {
-                run_minimize(
-                    &coords,
-                    &topo,
-                    &charmm,
-                    max_steps,
-                    gradient_tolerance,
-                    &constrained,
-                    &method,
-                )
-            })
-        }
-        "amber96_obc" | "amber96+obc" | "amber96_obc2" => {
-            let amber = params::amber96_obc();
-            let topo = topology::build_topology(&pdb.inner, &amber);
-            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-            let constrained = vec![false; coords.len()];
-            py.allow_threads(|| {
-                run_minimize(
-                    &coords,
-                    &topo,
-                    &amber,
-                    max_steps,
-                    gradient_tolerance,
-                    &constrained,
-                    &method,
-                )
-            })
-        }
-        "amber" | "amber96" => {
-            let amber = params::amber96();
-            let topo = topology::build_topology(&pdb.inner, &amber);
-            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-            let constrained = vec![false; coords.len()];
-            py.allow_threads(|| {
-                run_minimize(
-                    &coords,
-                    &topo,
-                    &amber,
-                    max_steps,
-                    gradient_tolerance,
-                    &constrained,
-                    &method,
-                )
-            })
-        }
-        _ => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
+    let result = guard_panic(
+        "minimize_structure",
+        || -> PyResult<minimize::MinimizeResult> {
+            Ok(match ff {
+                "charmm" | "charmm19" | "charmm19_eef1" => {
+                    let charmm = params::charmm19_eef1();
+                    let topo = topology::build_topology(&pdb.inner, &charmm);
+                    let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+                    let constrained = vec![false; coords.len()];
+                    py.allow_threads(|| {
+                        run_minimize(
+                            &coords,
+                            &topo,
+                            &charmm,
+                            max_steps,
+                            gradient_tolerance,
+                            &constrained,
+                            &method,
+                        )
+                    })
+                }
+                "amber96_obc" | "amber96+obc" | "amber96_obc2" => {
+                    let amber = params::amber96_obc();
+                    let topo = topology::build_topology(&pdb.inner, &amber);
+                    let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+                    let constrained = vec![false; coords.len()];
+                    py.allow_threads(|| {
+                        run_minimize(
+                            &coords,
+                            &topo,
+                            &amber,
+                            max_steps,
+                            gradient_tolerance,
+                            &constrained,
+                            &method,
+                        )
+                    })
+                }
+                "amber" | "amber96" => {
+                    let amber = params::amber96();
+                    let topo = topology::build_topology(&pdb.inner, &amber);
+                    let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+                    let constrained = vec![false; coords.len()];
+                    py.allow_threads(|| {
+                        run_minimize(
+                            &coords,
+                            &topo,
+                            &amber,
+                            max_steps,
+                            gradient_tolerance,
+                            &constrained,
+                            &method,
+                        )
+                    })
+                }
+                _ => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
                      (aliases: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
-            )));
-        }
-    };
+                    )));
+                }
+            })
+        },
+    )??;
 
     let n = result.coords.len();
     let flat: Vec<f64> = result
@@ -684,16 +725,23 @@ pub(crate) fn batch_minimize_hydrogens<'py>(
 }
 
 /// Load files and minimize hydrogens in one parallel call (zero GIL).
+///
+/// Returns a `BatchResult` with one item per path (input order); each
+/// successful item value is a dict (same shape as `minimize_hydrogens`). A
+/// file that fails to load is recorded as a failed item carrying the parse
+/// error — failures are no longer silently dropped. Pass `strict=True` to
+/// raise on the first failure instead.
 #[pyfunction]
-#[pyo3(signature = (paths, max_steps=500, gradient_tolerance=0.1, n_threads=None, method="sd"))]
-pub(crate) fn load_and_minimize_hydrogens<'py>(
-    py: Python<'py>,
-    paths: &Bound<'py, PyList>,
+#[pyo3(signature = (paths, max_steps=500, gradient_tolerance=0.1, n_threads=None, method="sd", strict=false))]
+pub(crate) fn load_and_minimize_hydrogens(
+    py: Python<'_>,
+    paths: &Bound<'_, PyList>,
     max_steps: usize,
     gradient_tolerance: f64,
     n_threads: Option<i32>,
     method: &str,
-) -> PyResult<Vec<(usize, PyObject)>> {
+    strict: bool,
+) -> PyResult<PyBatchResult> {
     let path_strs: Vec<String> = paths
         .iter()
         .map(|p| p.extract::<String>())
@@ -702,8 +750,9 @@ pub(crate) fn load_and_minimize_hydrogens<'py>(
     let n = resolve_threads(n_threads);
     let method = method.to_string();
 
-    // Load + minimize entirely in Rust
-    let results: Vec<(usize, minimize::MinimizeResult)> = py.allow_threads(|| {
+    // Load + minimize entirely in Rust. A load failure becomes a per-path
+    // Err(String) instead of being filtered out of the result set.
+    let results: Vec<Result<minimize::MinimizeResult, String>> = py.allow_threads(|| {
         let mut parsing = pdbtbx::ParsingLevel::all();
         parsing.set_cryst1(false);
         parsing.set_master(false);
@@ -715,42 +764,53 @@ pub(crate) fn load_and_minimize_hydrogens<'py>(
         pool.install(|| {
             path_strs
                 .par_iter()
-                .enumerate()
-                .filter_map(|(i, path)| {
-                    opts.read(path).ok().map(|(pdb, _)| {
-                        let result =
-                            minimize_h_single(&pdb, max_steps, gradient_tolerance, &method);
-                        (i, result)
-                    })
+                .map(|path| {
+                    opts.read(path)
+                        .map(|(pdb, _)| {
+                            minimize_h_single(&pdb, max_steps, gradient_tolerance, &method)
+                        })
+                        .map_err(|errs| {
+                            errs.iter()
+                                .map(|e| e.to_string())
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        })
                 })
                 .collect()
         })
     });
 
-    // Convert to Python
-    Ok(results
+    let outcomes: Vec<BatchOutcome> = results
         .into_iter()
-        .map(|(idx, result)| {
-            let nn = result.coords.len();
-            let flat: Vec<f64> = result
-                .coords
-                .iter()
-                .flat_map(|c| c.iter().copied())
-                .collect();
+        .map(|r| match r {
+            Ok(result) => {
+                let nn = result.coords.len();
+                let flat: Vec<f64> = result
+                    .coords
+                    .iter()
+                    .flat_map(|c| c.iter().copied())
+                    .collect();
 
-            let dict = pyo3::types::PyDict::new(py);
-            let coords_arr = PyArray1::from_vec(py, flat)
-                .reshape([nn, 3])
-                .expect("reshape");
-            dict.set_item("coords", coords_arr).unwrap();
-            dict.set_item("initial_energy", result.initial_energy)
-                .unwrap();
-            dict.set_item("final_energy", result.energy.total).unwrap();
-            dict.set_item("steps", result.steps).unwrap();
-            dict.set_item("converged", result.converged).unwrap();
-            (idx, dict.into_any().unbind())
+                let dict = pyo3::types::PyDict::new(py);
+                let coords_arr = PyArray1::from_vec(py, flat)
+                    .reshape([nn, 3])
+                    .map_err(|e| e.to_string())?;
+                dict.set_item("coords", coords_arr)
+                    .map_err(|e| e.to_string())?;
+                dict.set_item("initial_energy", result.initial_energy)
+                    .map_err(|e| e.to_string())?;
+                dict.set_item("final_energy", result.energy.total)
+                    .map_err(|e| e.to_string())?;
+                dict.set_item("steps", result.steps)
+                    .map_err(|e| e.to_string())?;
+                dict.set_item("converged", result.converged)
+                    .map_err(|e| e.to_string())?;
+                Ok(dict.into_any().unbind())
+            }
+            Err(e) => Err(e),
         })
-        .collect())
+        .collect();
+    make_batch_result(py, outcomes, strict)
 }
 
 // ---------------------------------------------------------------------------
@@ -786,36 +846,35 @@ pub(crate) fn run_md(
     snapshot_freq: usize,
     shake: bool,
 ) -> PyResult<PyObject> {
-    let amber = params::amber96();
-    let topo = topology::build_topology(&pdb.inner, &amber);
-    let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-    let n = coords.len();
+    let result = guard_panic("run_md", || {
+        let amber = params::amber96();
+        let topo = topology::build_topology(&pdb.inner, &amber);
+        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+        let snap_freq = snapshot_freq.max(1);
 
-    let snap_freq = snapshot_freq.max(1);
-    let topo_clone = topo.clone();
-    let amber_clone = amber.clone();
+        // Build H-bond constraints if SHAKE enabled
+        let constraints = if shake {
+            md::build_h_constraints(&topo, &amber)
+        } else {
+            Vec::new()
+        };
 
-    // Build H-bond constraints if SHAKE enabled
-    let constraints = if shake {
-        md::build_h_constraints(&topo, &amber)
-    } else {
-        Vec::new()
-    };
-
-    // Run MD (release GIL)
-    let result = py.allow_threads(move || {
-        md::velocity_verlet_constrained(
-            &coords,
-            &topo_clone,
-            &amber_clone,
-            n_steps,
-            dt,
-            temperature,
-            thermostat_tau,
-            snap_freq,
-            &constraints,
-        )
-    });
+        // Run MD (release GIL)
+        py.allow_threads(|| {
+            md::velocity_verlet_constrained(
+                &coords,
+                &topo,
+                &amber,
+                n_steps,
+                dt,
+                temperature,
+                thermostat_tau,
+                snap_freq,
+                &constraints,
+            )
+        })
+    })?;
+    let n = result.coords.len();
 
     // Build result dict
     let dict = pyo3::types::PyDict::new(py);
@@ -939,6 +998,7 @@ pub(crate) fn py_forcefield(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()
     m.add_function(wrap_pyfunction!(minimize_structure, m)?)?;
     m.add_function(wrap_pyfunction!(batch_minimize_hydrogens, m)?)?;
     m.add_function(wrap_pyfunction!(load_and_minimize_hydrogens, m)?)?;
+    crate::batch::register(m)?;
     m.add_function(wrap_pyfunction!(run_md, m)?)?;
     m.add_function(wrap_pyfunction!(gpu_available, m)?)?;
     m.add_function(wrap_pyfunction!(gpu_info, m)?)?;

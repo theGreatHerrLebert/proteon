@@ -96,23 +96,23 @@ class TestMMAlignPair:
 
 class TestMMAlignBatch:
     def test_one_to_many(self, hhb, hho):
-        results = py_align_funcs.mm_align_one_to_many(hhb, [hho, hhb], n_threads=2)
+        results = py_align_funcs.mm_align_one_to_many(hhb, [hho, hhb], n_threads=2).values
         assert len(results) == 2
         # Second is self-alignment
         assert results[1].total_score > results[0].total_score
 
     def test_many_to_many(self, hhb, ubiq):
-        results = py_align_funcs.mm_align_many_to_many([hhb], [ubiq, hhb], n_threads=2)
+        results = py_align_funcs.mm_align_many_to_many([hhb], [ubiq, hhb], n_threads=2).values
         assert len(results) == 2
 
     def test_empty_targets(self, hhb):
-        results = py_align_funcs.mm_align_one_to_many(hhb, [])
+        results = py_align_funcs.mm_align_one_to_many(hhb, []).values
         assert len(results) == 0
 
     def test_n_threads_1(self, hhb, hho):
-        results = py_align_funcs.mm_align_one_to_many(hhb, [hho], n_threads=1)
+        results = py_align_funcs.mm_align_one_to_many(hhb, [hho], n_threads=1).values
         assert len(results) == 1
 
     def test_n_threads_all(self, hhb, hho):
-        results = py_align_funcs.mm_align_one_to_many(hhb, [hho], n_threads=-1)
+        results = py_align_funcs.mm_align_one_to_many(hhb, [hho], n_threads=-1).values
         assert len(results) == 1

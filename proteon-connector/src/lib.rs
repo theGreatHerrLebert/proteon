@@ -3,6 +3,7 @@ use pyo3::wrap_pymodule;
 
 pub(crate) mod add_hydrogens;
 pub mod altloc;
+mod batch;
 mod bond_order;
 mod dssp;
 pub mod forcefield;
