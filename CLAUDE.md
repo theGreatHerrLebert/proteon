@@ -81,9 +81,14 @@ cargo run --bin fasta_to_mmseqs_db -- input.fa out_db
 cargo build --release
 
 # Python (PyO3 connector)
-cd packages/proteon
-maturin develop --release           # CPU-only
+# The maturin crate is proteon-connector/, not packages/proteon/ (the latter
+# is a pure-setuptools package with no Cargo.toml). Build the connector, then
+# install the pure-Python package against it.
+cd proteon-connector
+maturin develop --release           # CPU-only; builds + installs proteon_connector
 maturin develop --release --features cuda
+cd ..
+pip install -e packages/proteon     # the Pythonic wrapper package
 
 # Python tests
 pytest                              # unit + integration (skips oracle)
