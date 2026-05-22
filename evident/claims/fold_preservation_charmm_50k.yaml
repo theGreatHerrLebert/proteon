@@ -81,7 +81,7 @@ claims:
         N_PDBS=50000 PROTEON_OUTPUT_DIR=validation/fold_preservation_50k python validation/tm_fold_preservation.py &&
         N_PDBS=50000 PROTEON_OUTPUT_DIR=validation/fold_preservation_50k python validation/tm_fold_preservation_openmm.py &&
         PROTEON_OUTPUT_DIR=validation/fold_preservation_50k python validation/fold_preservation/join_fold_preservation.py
-      artifact: validation/fold_preservation_50k/charmm_pair_1k.jsonl
+      artifact: validation/fold_preservation_50k/charmm_pair_1k.jsonl (archived in the v0.2.0-evidence.tar.gz release asset)
     provenance: human
     last_verified:
       commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"

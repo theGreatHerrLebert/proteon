@@ -89,7 +89,7 @@ claims:
         python validation/tm_fold_preservation.py &&
         python validation/tm_fold_preservation_openmm.py &&
         python validation/fold_preservation/join_fold_preservation.py
-      artifact: validation/fold_preservation/charmm_pair_1k.jsonl
+      artifact: validation/fold_preservation/charmm_pair_1k.jsonl (archived in the v0.2.0-evidence.tar.gz release asset)
     provenance: human
     last_verified:
       commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"

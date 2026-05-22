@@ -144,7 +144,7 @@ claims:
       oracle:
         - BALL
       command: PROTEON_PDB_LIST=validation/protein_only_50k.txt PROTEON_CHARMM_ORACLE_OUT=validation/charmm19_eef1_ball_oracle_50k.jsonl N_PDBS=50000 N_WORKERS=32 SEED=42 python validation/charmm19_eef1_ball_oracle.py
-      artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl
+      artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl (archived in the v0.2.0-evidence.tar.gz release asset)
     provenance: human
     last_verified:
       commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"

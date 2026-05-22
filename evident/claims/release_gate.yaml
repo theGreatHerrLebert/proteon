@@ -24,7 +24,7 @@ claims:
         - pydssp
         - reduce
       command: pytest tests/oracle -v
-      artifact: validation/report.html
+      artifact: validation/report.html (archived in the v0.2.0-evidence.tar.gz release asset)
     provenance: human
     assumptions:
       - Heavy release oracles may not run in fast CI.

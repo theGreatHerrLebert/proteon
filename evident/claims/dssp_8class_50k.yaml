@@ -97,7 +97,7 @@ claims:
         PROTEON_DSSP_ORACLE_OUT=validation/dssp_mkdssp_oracle_50k.jsonl
         N_PDBS=50000 N_WORKERS=32 SEED=42 TASK_TIMEOUT_S=60
         python validation/dssp_mkdssp_oracle.py
-      artifact: validation/dssp_mkdssp_oracle_50k.jsonl
+      artifact: validation/dssp_mkdssp_oracle_50k.jsonl (archived in the v0.2.0-evidence.tar.gz release asset)
     provenance: human
     last_verified:
       commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"

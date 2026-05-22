@@ -5,6 +5,14 @@ project: proteon
 # or structural-biology assertion proteon makes, with an oracle, tolerance,
 # reproducible command, and recorded artifact.
 #
+# Release-tier evidence artifacts are too large for the git tree; they are
+# archived in the v0.2.0 evidence bundle, attached as a release asset:
+#   https://github.com/theGreatHerrLebert/proteon/releases/download/v0.2.0/v0.2.0-evidence.tar.gz
+# Each release claim's evidence.artifact names the file's path inside that
+# bundle; inputs.corpus_sha / last_verified.corpus_sha hold its SHA-256, so
+# the in-repo manifest and the out-of-repo bundle are cross-checkable. The
+# bundle ships a SHA256SUMS file carrying the same hashes.
+#
 # Per-component claim files live under claims/ and are merged into a single
 # id namespace by the validator. Validate with:
 #

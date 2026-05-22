@@ -82,7 +82,7 @@ claims:
         --minimize-steps 50 --chunk 500 --gpu --threads 128 --seed 42
         --out validation/stage3_50k_gpu_results.jsonl
         --log validation/stage3_50k_gpu.log
-      artifact: validation/stage3_50k_gpu_results.jsonl
+      artifact: validation/stage3_50k_gpu_results.jsonl (archived in the v0.2.0-evidence.tar.gz release asset)
     provenance: human
     last_verified:
       commit: "4d6ddbec100b810b85c0d2104ecd63d78ac848ec"
