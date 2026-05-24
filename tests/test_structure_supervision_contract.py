@@ -100,7 +100,11 @@ def _real_example() -> StructureSupervisionExample:
     """Build a real example from `test-pdbs/1crn.pdb`.
 
     Skips cleanly if the PyO3 connector or the PDB file isn't available.
+    The connector check has to come *before* the load call: `proteon.load`
+    dereferences `io._io` which is `None` in source-only environments,
+    and would otherwise raise `AttributeError` instead of skipping.
     """
+    pytest.importorskip("proteon_connector")
     if not TEST_PDB.exists():
         pytest.skip(f"missing test PDB: {TEST_PDB}")
     structure = proteon.load(str(TEST_PDB))
