@@ -11,6 +11,51 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-05-24
+
+Release theme: make the existing NumPy + Parquet-first DL-prep surface
+discoverable from `proteon.*`. Pure plumbing release — no behavior
+changes, no schema bumps, no force-field or geometry changes.
+
+### Added
+
+- **DL-prep surface promoted to the top-level `proteon` namespace**: the
+  release-builder API (`build_structure_supervision_dataset` and
+  `build_structure_supervision_dataset_from_prepared` — the canonical
+  "structures + reports → release" path), the Parquet export layer
+  (`SupervisionParquetWriter`, `export_structure_supervision_examples`,
+  `iter_structure_supervision_examples`,
+  `load_structure_supervision_examples`,
+  `SUPERVISION_EXPORT_FORMAT`, `SUPERVISION_PARQUET_SCHEMA_VERSION`),
+  the manifest types (`PreparedStructureRecord`, `FailureRecord`,
+  `StructureSupervisionReleaseManifest`, `CorpusReleaseManifest`) and
+  their build / load functions, and the one-shot
+  `build_local_corpus_smoke_release`. All of these were already shipped
+  inside submodules in v0.2.0; v0.2.1 just lifts them so
+  `import proteon as p; p.build_structure_supervision_dataset_from_prepared(...)`
+  works without knowing the submodule layout.
+- **"Preparing structures for deep learning" section in `README.md`**
+  documenting the three-call canonical flow and pointing at
+  `examples/10_corpus_release_smoke.py` and
+  `devdocs/STRUCTURE_SUPERVISION_SCHEMA.md`.
+- **Exhaustive contract test**
+  (`tests/test_structure_supervision_contract.py`): iterates every entry
+  in `supervision_export.TENSOR_FIELDS` and asserts dtype, shape, and
+  bit-equal Parquet round-trip on both a synthetic and a real
+  (`test-pdbs/1crn.pdb`) example. 60 assertions; runs in <1 s in the
+  default tier. Catches schema-vs-dataclass drift on the next CI run
+  for new fields.
+
+### Notes
+
+- No change to `batch_prepare`'s signature; it still returns
+  `List[PrepReport]` and mutates structures in place. The README and the
+  top-level docstring now state this explicitly.
+- Parquet schema is unchanged at v1; rigid-group frames have been in v1
+  since v0.2.0. Any future v1 → v2 bump needs a dedicated
+  version-aware-reader migration PR (the current reader inspects
+  `format` but assumes columns exist).
+
 ## [0.2.0] — 2026-05-11
 
 Release theme: comprehensive 50K-scale release-tier oracles + EVIDENT
