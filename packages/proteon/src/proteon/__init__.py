@@ -1,14 +1,16 @@
 """Proteon — Rust-first structural bioinformatics toolkit.
 
 Fast structure loading, alignment, analysis, and preparation from Python, plus
-an experimental structural search stack.
+an experimental structural search stack and a NumPy/Parquet-first data layer
+for downstream geometric deep learning.
 
 The top-level ``proteon`` namespace is a curated convenience surface for the
-most common workflows. More specialized or format-specific APIs remain available
-from their submodules, e.g. ``proteon.sequence_export`` or
-``proteon.supervision_export``. Underscore-prefixed names and non-exported
-internals are not part of the stable top-level contract. Search-related APIs
-are available here, but should currently be treated as experimental.
+most common workflows, including the canonical "prepare and export a
+structure-supervision corpus" path. More specialized or format-specific APIs
+remain available from their submodules. Underscore-prefixed names and
+non-exported internals are not part of the stable top-level contract.
+Search-related APIs are available here, but should currently be treated as
+experimental.
 
     >>> import proteon
     >>> s = proteon.load("1crn.pdb")
@@ -17,6 +19,21 @@ are available here, but should currently be treated as experimental.
     >>> phi, psi, omega = proteon.backbone_dihedrals(s)
     >>> cm = proteon.contact_map(proteon.extract_ca_coords(s), cutoff=8.0)
     >>> df = proteon.to_dataframe(s)
+
+DL prep, three lines from PDBs to a supervision release directory:
+
+    >>> import proteon as p
+    >>> structures = [p.load(path) for path in pdb_paths]
+    >>> prep_reports = p.batch_prepare(structures)  # mutates in place
+    >>> p.build_structure_supervision_dataset_from_prepared(
+    ...     structures, prep_reports, out_dir="out/release", release_id="v1",
+    ... )
+
+See ``examples/10_corpus_release_smoke.py`` for the full pipeline and
+``devdocs/STRUCTURE_SUPERVISION_SCHEMA.md`` for the NumPy + Parquet contract.
+Framework-specific integration (PyTorch / PyG / DGL / JAX) lives in
+satellite packages such as ``proteon-graphein`` and ``proteon-pyg``, never in
+this core package.
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -179,6 +196,36 @@ from .supervision import (
     batch_build_structure_supervision_examples,
     build_structure_supervision_example,
 )
+from .supervision_export import (
+    SUPERVISION_EXPORT_FORMAT,
+    SUPERVISION_PARQUET_SCHEMA_VERSION,
+    SupervisionParquetWriter,
+    export_structure_supervision_examples,
+    iter_structure_supervision_examples,
+    load_structure_supervision_examples,
+)
+from .prepared_manifest import (
+    PreparedStructureRecord,
+    build_prepared_structure_records,
+    load_prepared_structure_manifest,
+    write_prepared_structure_manifest,
+)
+from .supervision_release import (
+    FailureRecord,
+    StructureSupervisionReleaseManifest,
+    build_structure_supervision_release,
+    load_failure_records,
+)
+from .supervision_dataset import (
+    build_structure_supervision_dataset,
+    build_structure_supervision_dataset_from_prepared,
+)
+from .corpus_release import (
+    CorpusReleaseManifest,
+    build_corpus_release_manifest,
+    load_corpus_release_manifest,
+)
+from .corpus_smoke import build_local_corpus_smoke_release
 from .failure_taxonomy import (
     ALL_FAILURE_CLASSES,
     classify_exception,
@@ -377,6 +424,39 @@ _SUPERVISION_API = (
     "build_structure_supervision_example",
 )
 
+# The NumPy + Parquet-first export surface for structure-supervision
+# corpora. Framework-specific adapters (PyTorch / PyG / DGL / JAX) live in
+# satellite packages such as proteon-graphein and proteon-pyg — never here.
+_SUPERVISION_EXPORT_API = (
+    "SUPERVISION_EXPORT_FORMAT",
+    "SUPERVISION_PARQUET_SCHEMA_VERSION",
+    "SupervisionParquetWriter",
+    "export_structure_supervision_examples",
+    "iter_structure_supervision_examples",
+    "load_structure_supervision_examples",
+)
+
+# Manifest + release-builder API. The dataset builders
+# (build_structure_supervision_dataset[_from_prepared]) are the canonical
+# high-level path from prepared structures to an on-disk supervision release;
+# the lower-level pieces are exposed for callers that need finer control.
+_CORPUS_RELEASE_API = (
+    "CorpusReleaseManifest",
+    "FailureRecord",
+    "PreparedStructureRecord",
+    "StructureSupervisionReleaseManifest",
+    "build_corpus_release_manifest",
+    "build_local_corpus_smoke_release",
+    "build_prepared_structure_records",
+    "build_structure_supervision_dataset",
+    "build_structure_supervision_dataset_from_prepared",
+    "build_structure_supervision_release",
+    "load_corpus_release_manifest",
+    "load_failure_records",
+    "load_prepared_structure_manifest",
+    "write_prepared_structure_manifest",
+)
+
 _FAILURE_API = (
     "ALL_FAILURE_CLASSES",
     "classify_exception",
@@ -409,5 +489,7 @@ __all__ = (
     *_IO_API,
     *_STRUCTURE_API,
     *_SUPERVISION_API,
+    *_SUPERVISION_EXPORT_API,
+    *_CORPUS_RELEASE_API,
     *_FAILURE_API,
 )

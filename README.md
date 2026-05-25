@@ -46,6 +46,74 @@ print(hits[0].tm_score_chain1, hits[0].rmsd)
 
 Runnable examples live in [`examples/`](examples/).
 
+## Preparing structures for deep learning
+
+Proteon's data layer is **NumPy + Parquet + JSONL first**. Tensors come back
+as `numpy.ndarray`, corpora are written as Parquet, and per-row manifests are
+JSONL. Framework-specific integration (PyTorch / PyG / DGL / JAX) lives in
+satellite packages — [`proteon-graphein`](https://github.com/theGreatHerrLebert/proteon-graphein),
+[`proteon-pyg`](https://github.com/theGreatHerrLebert/proteon-pyg), and
+similar siblings — never in this core package. That separation keeps the
+data contract framework-agnostic and lets satellites move at their own
+dependency cadence.
+
+From a list of PDB paths to a supervision release directory is three calls:
+
+```python
+import proteon as p
+
+# 1. Load
+structures = [p.load(path) for path in pdb_paths]
+
+# 2. Prepare: reconstruct missing atoms, place hydrogens, minimize.
+#    Mutates structures in place; returns one PrepReport per structure.
+prep_reports = p.batch_prepare(structures)
+
+# 3. Build the on-disk supervision release: writes
+#    examples/tensors.parquet (one row per chain), examples/examples.jsonl
+#    (per-row metadata), failures.jsonl (with the 10-class taxonomy), and
+#    release_manifest.json.
+p.build_structure_supervision_dataset_from_prepared(
+    structures, prep_reports,
+    out_dir="out/release",
+    release_id="v1",
+)
+```
+
+For the full pipeline including raw-input rescue, ingestion-failure capture,
+and a top-level corpus manifest, use the one-shot helper:
+
+```python
+p.build_local_corpus_smoke_release(
+    [pathlib.Path(p) for p in pdb_paths],
+    pathlib.Path("out/release"),
+    release_id="v1",
+)
+```
+
+A worked end-to-end script is at
+[`examples/10_corpus_release_smoke.py`](examples/10_corpus_release_smoke.py).
+
+Each `StructureSupervisionExample` carries the AlphaFold-style supervision
+tensors — `aatype`, `all_atom_positions` `(L, 37, 3)`, `all_atom_mask`,
+`atom14_*`, `pseudo_beta`, `phi`/`psi`/`omega`, `chi_angles`, the eight
+`rigidgroups_*` arrays — plus chain metadata and an optional
+`StructureQualityMetadata` block tying the example back to its
+preparation. The full per-field contract (dtype, shape, mask semantics,
+nullability) is documented at
+[`devdocs/STRUCTURE_SUPERVISION_SCHEMA.md`](devdocs/STRUCTURE_SUPERVISION_SCHEMA.md)
+and is enforced in CI by
+[`tests/test_structure_supervision_contract.py`](tests/test_structure_supervision_contract.py).
+
+Reading back into memory:
+
+```python
+examples = p.load_structure_supervision_examples("out/release/examples")
+# Or stream chunk-by-chunk if the corpus doesn't fit in RAM:
+for batch in p.iter_structure_supervision_examples("out/release/examples", batch_size=128):
+    ...  # batch is list[StructureSupervisionExample]
+```
+
 ## GPU build (optional)
 
 The PyPI wheel is **CPU-only**. Proteon has GPU-accelerated kernels
