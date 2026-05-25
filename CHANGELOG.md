@@ -11,6 +11,79 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### v0.3.0 Phase B0 — `ClusterAssignments` artifact contract
+
+Keystone phase for the v0.3.0 data-engine layer. The cluster artifact
+that Phase C (`cluster_aware_split`), Phase D (cluster-leakage check
+inside `validate_corpus_release`), and Phase E (hard-negative mining
+with same-cluster exclusion) all consume.
+
+Per `feedback_compute_kernel` and the v0.3.0 plan, proteon owns the
+**typed contract, joins, validation, and leakage checks**, but does
+NOT own the clustering algorithm. Upstream tools (`mmseqs cluster`,
+`foldseek easy-cluster`, …) produce the rows; proteon validates and
+joins them.
+
+### Added
+
+- **`proteon.cluster_assignments` module** with three dataclasses
+  (`ClusterAssignmentRow`, `ClusterAssignmentsManifest`,
+  `ClusterAssignments` — the last is `frozen=True` with eager
+  `record_id → cluster_id` and `cluster_id → members` indexes built
+  in `__post_init__` via `object.__setattr__`).
+- **Rich provenance on the manifest** so `cluster_id` is authoritative
+  rather than "just a string column": `tool`, `tool_version`, `params`,
+  `input_digest` paired with `input_digest_kind`, `record_id_digest`
+  (proteon-side reproducibility), `representative_selection` policy,
+  `sequence_id_namespace` with closed-enum validator,
+  `custom_namespace_description` (required when namespace == "custom"),
+  `created_from_release_id`.
+- **Validators** that catch every shape of structural invalidity an
+  external clusterer can introduce:
+  `validate_cluster_record_id_uniqueness`,
+  `validate_cluster_representative_consistency` (now also checks the
+  representative row's pointer is consistent across all cluster members),
+  `validate_cluster_size_consistency`,
+  `validate_manifest_consistency` (counts vs actual rows),
+  `validate_cluster_namespace`, `validate_cluster_coverage` (default
+  `strict=False` for Phase D's report-style use; Phase C will default
+  `strict=True`).
+- **Canonical entry point** `build_cluster_assignments_release` runs
+  all structural validators before writing any artifact; emits both
+  JSONL (human-inspectable) and Parquet (joinable, SHA-256 checksummed)
+  plus a `manifest.json` with the full provenance.
+- **`load_cluster_assignments` / `iter_cluster_assignments`** for
+  whole-corpus and streaming reads; both re-run
+  `validate_manifest_consistency` so returned objects are guaranteed
+  self-consistent.
+- **`compute_record_id_digest`** helper exposed for callers that want
+  to compute the canonical sorted-unique digest themselves.
+- **30 new top-level exports** in a new `_CLUSTER_ASSIGNMENTS_API`
+  tuple covering dataclasses, format/version constants, namespace
+  + digest-kind enums, I/O, and validators.
+- **README "Cluster-aware splits" subsection** documenting the
+  consumer contract and forward-referencing Phases C and D.
+- **New contract test** `tests/test_cluster_assignments.py` with 82
+  assertions across 10 test classes: public API surface, schema
+  source-of-truth sweep (`CLUSTER_ASSIGNMENT_FIELDS` mirrors
+  `TENSOR_FIELDS`), release-round-trip with full provenance,
+  `__post_init__` manifest validators, structural validators
+  (including the codex-flagged duplicate-`record_id` and
+  representative-pointer-drift cases), manifest consistency,
+  namespace and coverage checks (including strict-mode
+  `ClusterCoverageError`), frozen-container behavior + O(1) lookups,
+  edge cases (empty / all-singletons / single-cluster / unicode IDs),
+  and the streaming `iter_cluster_assignments` loader.
+
+### Notes
+
+- No behavior changes to existing modules. New module, additive
+  exports only.
+- No Parquet schema bumps to existing schemas. The new
+  `CLUSTER_ASSIGNMENTS_PARQUET_SCHEMA_VERSION` starts at 1.
+- No version bump (bundles into the v0.3.0 tag at Phase G per the
+  parent plan `TO_V030_TRAINING_CORPUS_FACTORY.md`).
+
 ### v0.3.0 Phase A — Training-corpus factory surface
 
 Same shape as v0.2.1: plumbing release that lifts already-shipped Layer 5
