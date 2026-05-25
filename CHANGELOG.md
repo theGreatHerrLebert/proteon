@@ -11,6 +11,58 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### v0.3.0 Phase A — Training-corpus factory surface
+
+Same shape as v0.2.1: plumbing release that lifts already-shipped Layer 5
+release-builder symbols into `proteon.__all__`. No behavior change, no
+Parquet schema bump. This is Phase A of the multi-PR v0.3.0 milestone
+(`TO_V030_TRAINING_CORPUS_FACTORY.md`); Phases B0 (`ClusterAssignments`
+contract), C (`cluster_aware_split`), D (cluster-leakage validation
+extension), E (hard-negative mining), and G (release tag) follow.
+
+### Added
+
+- **Sequence-export surface promoted to top-level**: `SequenceParquetWriter`,
+  `export_sequence_examples`, `iter_sequence_examples`,
+  `load_sequence_examples`, `SequenceReleaseManifest`,
+  `build_sequence_release`, `build_sequence_dataset`,
+  `SEQUENCE_EXPORT_FORMAT`, `SEQUENCE_PARQUET_SCHEMA_VERSION`. The
+  MSA-wired `build_sequence_dataset` is now the canonical entry point for
+  sequence-release construction (a previous test asserting the opposite
+  has been replaced — see `tests/test_public_api_surface.py:33`).
+- **Training-example surface promoted to top-level**: `TrainingExample`,
+  `TrainingReleaseManifest`, `build_training_release`,
+  `join_training_examples`, `iter_training_examples`,
+  `load_training_examples`, `TRAINING_EXPORT_FORMAT`,
+  `TRAINING_PARQUET_SCHEMA_VERSION`. `TrainingExample` is deliberately a
+  thin join over (`SequenceExample`, `StructureSupervisionExample`) plus
+  split/crop/weight metadata; crop / curriculum logic stays in model code
+  per `devdocs/GEOMETRIC_DL_INFRA_ROADMAP.md` §10.
+- **Release validation surface promoted to top-level**:
+  `CorpusValidationReport`, `ValidationIssue`, `validate_corpus_release`.
+  The validator was already shipping in v0.2.0+ and being called by
+  `build_local_corpus_smoke_release`, but wasn't reachable as
+  `proteon.validate_corpus_release` until now.
+- **New contract test** `tests/test_training_corpus_factory_contract.py`
+  pinning the new exports, the schema-version constants, and the
+  `SequenceExample` Parquet round-trip surface. Documents one pre-existing
+  dataclass-vs-schema drift (`msa_profile` is on `SequenceExample` but
+  not serialized in the Parquet schema — closing requires schema v2,
+  deferred per `reference_supervision_parquet_reader_not_version_aware`).
+- **README four-layer DL section** documenting the
+  `sequence_release → structure_release → training_release →
+  validate_corpus_release` flow with worked snippets.
+
+### Notes
+
+- No version bump; this lands under `[Unreleased]` and rolls up into the
+  v0.3.0 tag when all phases are complete. Codex review on the v0.3.0
+  plan explicitly OK'd bundling: "if v0.3.0 is near, bundle; there is
+  no technical dependency."
+- No Parquet schema bumps. All advertised schemas stay at v1. Memory
+  `reference_supervision_parquet_reader_not_version_aware` still applies
+  to any future v2 work.
+
 ## [0.2.1] — 2026-05-24
 
 Release theme: make the existing NumPy + Parquet-first DL-prep surface
