@@ -172,6 +172,62 @@ version `p.TRAINING_PARQUET_SCHEMA_VERSION`); the sequence-side schema is
 pinned at `p.SEQUENCE_EXPORT_FORMAT`. CI gates both contracts via
 [`tests/test_training_corpus_factory_contract.py`](tests/test_training_corpus_factory_contract.py).
 
+### Cluster-aware splits (consumer contract for upstream clusterers)
+
+For leakage-controlled training corpora, proteon consumes externally-produced
+cluster assignments (e.g. from `mmseqs cluster` or `foldseek easy-cluster`)
+as a typed artifact:
+
+```python
+rows = [
+    p.ClusterAssignmentRow(
+        record_id="chainA",
+        cluster_id="cluster-1",
+        representative_record_id="chainA",
+        is_representative=True,
+        cluster_size=2,
+    ),
+    p.ClusterAssignmentRow(
+        record_id="chainB",
+        cluster_id="cluster-1",
+        representative_record_id="chainA",
+        is_representative=False,
+        cluster_size=2,
+    ),
+]
+
+release_dir = p.build_cluster_assignments_release(
+    rows,
+    out_dir="out/cluster_release",
+    release_id="v1",
+    tool="mmseqs2",
+    tool_version="14.7e284",
+    params={"min_seq_id": 0.3, "coverage": 0.8},
+    sequence_id_namespace=p.NAMESPACE_PREPARED_RECORD_ID,
+)
+assignments = p.load_cluster_assignments(release_dir)
+```
+
+Proteon **does not own the clustering algorithm** — that lives in upstream
+tools where it belongs. What proteon owns is the **typed contract**: rich
+provenance (`tool`, `tool_version`, `params`, `input_digest`,
+`record_id_digest`, `representative_selection`,
+`sequence_id_namespace`, …) so `cluster_id` is auditable rather than just
+a string column, plus structural validators that catch duplicate
+`record_id` rows, mis-pointed representatives, denormalised `cluster_size`
+drift, manifest count inconsistencies, and namespace mismatches before
+the assignments reach downstream training-corpus code.
+
+Phase C of v0.3.0 (a future PR) will add `proteon.cluster_aware_split` that
+takes these assignments and produces a leakage-controlled train / val / test
+assignment; Phase D will extend `validate_corpus_release` to check that
+no cluster spans more than one split.
+
+The cluster-assignments Parquet schema is pinned at
+`p.CLUSTER_ASSIGNMENTS_FORMAT` ("proteon.cluster_assignments.parquet.v0",
+version `p.CLUSTER_ASSIGNMENTS_PARQUET_SCHEMA_VERSION`). CI gates the
+contract via [`tests/test_cluster_assignments.py`](tests/test_cluster_assignments.py).
+
 ## GPU build (optional)
 
 The PyPI wheel is **CPU-only**. Proteon has GPU-accelerated kernels

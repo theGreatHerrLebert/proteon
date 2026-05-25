@@ -231,6 +231,40 @@ from .corpus_validation import (
     ValidationIssue,
     validate_corpus_release,
 )
+from .cluster_assignments import (
+    ALL_CLUSTER_NAMESPACES,
+    ALL_INPUT_DIGEST_KINDS,
+    CLUSTER_ASSIGNMENTS_FORMAT,
+    CLUSTER_ASSIGNMENTS_PARQUET_SCHEMA_VERSION,
+    DIGEST_KIND_CUSTOM,
+    DIGEST_KIND_FASTA,
+    DIGEST_KIND_RECORD_ID_LIST,
+    NAMESPACE_CUSTOM,
+    NAMESPACE_PREPARED_RECORD_ID,
+    NAMESPACE_RAW_PDB_ID,
+    NAMESPACE_UNIPROT_ID,
+    ClusterAssignmentRow,
+    ClusterAssignments,
+    ClusterAssignmentsManifest,
+    ClusterCoverageError,
+    ClusterCoverageReport,
+    ClusterValidationReport,
+    build_cluster_assignments_release,
+    build_cluster_assignments_schema,
+    compute_record_id_digest,
+    iter_cluster_assignments,
+    load_cluster_assignments,
+    load_cluster_assignments_jsonl,
+    load_cluster_assignments_parquet,
+    validate_cluster_coverage,
+    validate_cluster_namespace,
+    validate_cluster_record_id_uniqueness,
+    validate_cluster_representative_consistency,
+    validate_cluster_size_consistency,
+    validate_manifest_consistency,
+    write_cluster_assignments_jsonl,
+    write_cluster_assignments_parquet,
+)
 from .sequence_export import (
     SEQUENCE_EXPORT_FORMAT,
     SEQUENCE_PARQUET_SCHEMA_VERSION,
@@ -528,6 +562,53 @@ _CORPUS_VALIDATION_API = (
     "validate_corpus_release",
 )
 
+# Cluster-assignments artifact contract (v0.3.0 Phase B0). Consumed by
+# Phase C (cluster_aware_split) and Phase D (cluster-leakage check in
+# validate_corpus_release). The contract is deliberately consume-only —
+# proteon does not own the clustering algorithm itself; upstream tools
+# (MMseqs2, foldseek, …) produce the rows and proteon validates +
+# joins them via the canonical post-chain-expansion record_id namespace.
+_CLUSTER_ASSIGNMENTS_API = (
+    # Dataclasses
+    "ClusterAssignmentRow",
+    "ClusterAssignments",
+    "ClusterAssignmentsManifest",
+    "ClusterCoverageReport",
+    "ClusterValidationReport",
+    "ClusterCoverageError",
+    # Format + schema constants
+    "CLUSTER_ASSIGNMENTS_FORMAT",
+    "CLUSTER_ASSIGNMENTS_PARQUET_SCHEMA_VERSION",
+    # Namespace enum
+    "ALL_CLUSTER_NAMESPACES",
+    "NAMESPACE_PREPARED_RECORD_ID",
+    "NAMESPACE_RAW_PDB_ID",
+    "NAMESPACE_UNIPROT_ID",
+    "NAMESPACE_CUSTOM",
+    # Digest-kind enum
+    "ALL_INPUT_DIGEST_KINDS",
+    "DIGEST_KIND_FASTA",
+    "DIGEST_KIND_RECORD_ID_LIST",
+    "DIGEST_KIND_CUSTOM",
+    # I/O
+    "build_cluster_assignments_release",
+    "build_cluster_assignments_schema",
+    "compute_record_id_digest",
+    "load_cluster_assignments",
+    "iter_cluster_assignments",
+    "write_cluster_assignments_jsonl",
+    "load_cluster_assignments_jsonl",
+    "write_cluster_assignments_parquet",
+    "load_cluster_assignments_parquet",
+    # Validators
+    "validate_cluster_namespace",
+    "validate_cluster_coverage",
+    "validate_cluster_representative_consistency",
+    "validate_cluster_size_consistency",
+    "validate_cluster_record_id_uniqueness",
+    "validate_manifest_consistency",
+)
+
 _FAILURE_API = (
     "ALL_FAILURE_CLASSES",
     "classify_exception",
@@ -565,5 +646,6 @@ __all__ = (
     *_SEQUENCE_EXPORT_API,
     *_TRAINING_API,
     *_CORPUS_VALIDATION_API,
+    *_CLUSTER_ASSIGNMENTS_API,
     *_FAILURE_API,
 )
