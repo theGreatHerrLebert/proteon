@@ -30,7 +30,15 @@ class TestTopLevelExports:
         }
         assert expected <= set(ns)
 
-    def test_advanced_release_alias_is_not_available_top_level(self):
-        assert "build_sequence_dataset" not in proteon.__all__
-        with pytest.raises(AttributeError, match="build_sequence_dataset"):
-            _ = proteon.build_sequence_dataset
+    def test_build_sequence_dataset_is_top_level_canonical_entry_point(self):
+        """v0.3.0 Phase A reversed an earlier v0.2.1-era decision to keep
+        `build_sequence_dataset` submodule-only. Per codex review on
+        TO_V030_TRAINING_CORPUS_FACTORY.md, the MSA-wired sequence-release
+        builder is the canonical "structures + MSA -> sequence release"
+        path and belongs in the top-level surface alongside
+        `build_structure_supervision_dataset_from_prepared`. The earlier
+        assertion that it must NOT be exposed is replaced by the
+        opposite — it MUST be exposed, by name, in `proteon.__all__`.
+        """
+        assert "build_sequence_dataset" in proteon.__all__
+        assert callable(proteon.build_sequence_dataset)

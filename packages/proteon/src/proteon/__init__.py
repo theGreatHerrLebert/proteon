@@ -226,6 +226,34 @@ from .corpus_release import (
     load_corpus_release_manifest,
 )
 from .corpus_smoke import build_local_corpus_smoke_release
+from .corpus_validation import (
+    CorpusValidationReport,
+    ValidationIssue,
+    validate_corpus_release,
+)
+from .sequence_export import (
+    SEQUENCE_EXPORT_FORMAT,
+    SEQUENCE_PARQUET_SCHEMA_VERSION,
+    SequenceParquetWriter,
+    export_sequence_examples,
+    iter_sequence_examples,
+    load_sequence_examples,
+)
+from .sequence_release import (
+    SequenceReleaseManifest,
+    build_sequence_dataset,
+    build_sequence_release,
+)
+from .training_example import (
+    TRAINING_EXPORT_FORMAT,
+    TRAINING_PARQUET_SCHEMA_VERSION,
+    TrainingExample,
+    TrainingReleaseManifest,
+    build_training_release,
+    iter_training_examples,
+    join_training_examples,
+    load_training_examples,
+)
 from .failure_taxonomy import (
     ALL_FAILURE_CLASSES,
     classify_exception,
@@ -457,6 +485,49 @@ _CORPUS_RELEASE_API = (
     "write_prepared_structure_manifest",
 )
 
+# Sequence-side export surface, parallel to _SUPERVISION_EXPORT_API. The
+# canonical "structures + MSA -> sequence release" entry point is
+# build_sequence_dataset; the lower-level writer/iter/load primitives are
+# exposed for callers that need finer control.
+_SEQUENCE_EXPORT_API = (
+    "SEQUENCE_EXPORT_FORMAT",
+    "SEQUENCE_PARQUET_SCHEMA_VERSION",
+    "SequenceParquetWriter",
+    "SequenceReleaseManifest",
+    "build_sequence_dataset",
+    "build_sequence_release",
+    "export_sequence_examples",
+    "iter_sequence_examples",
+    "load_sequence_examples",
+)
+
+# Training-example surface: joins a sequence release with a structure
+# supervision release into the model-facing training_example layer.
+# TrainingExample is deliberately a thin join (per
+# devdocs/STRUCTURE_SUPERVISION_SCHEMA.md and
+# devdocs/GEOMETRIC_DL_INFRA_ROADMAP.md §10) — crop / sample / curriculum
+# logic stays in model code, not in core proteon.
+_TRAINING_API = (
+    "TRAINING_EXPORT_FORMAT",
+    "TRAINING_PARQUET_SCHEMA_VERSION",
+    "TrainingExample",
+    "TrainingReleaseManifest",
+    "build_training_release",
+    "iter_training_examples",
+    "join_training_examples",
+    "load_training_examples",
+)
+
+# Release-time validation. validate_corpus_release walks a release
+# directory and checks count consistency, split-count consistency,
+# duplicate joined record_ids, and tensor completeness across the four
+# release layers (prepared / sequence / structure / training).
+_CORPUS_VALIDATION_API = (
+    "CorpusValidationReport",
+    "ValidationIssue",
+    "validate_corpus_release",
+)
+
 _FAILURE_API = (
     "ALL_FAILURE_CLASSES",
     "classify_exception",
@@ -491,5 +562,8 @@ __all__ = (
     *_SUPERVISION_API,
     *_SUPERVISION_EXPORT_API,
     *_CORPUS_RELEASE_API,
+    *_SEQUENCE_EXPORT_API,
+    *_TRAINING_API,
+    *_CORPUS_VALIDATION_API,
     *_FAILURE_API,
 )

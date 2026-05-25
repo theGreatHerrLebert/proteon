@@ -114,6 +114,64 @@ for batch in p.iter_structure_supervision_examples("out/release/examples", batch
     ...  # batch is list[StructureSupervisionExample]
 ```
 
+### Four-layer training corpus (sequence + structure + training + validation)
+
+For DL workflows that need *more than* per-chain structure supervision —
+explicitly sequence-side data, MSA features, a joined training table, and
+release validation — proteon ships a four-layer release stack:
+
+```python
+import proteon as p
+
+# Build a sequence release (with optional MSA wiring via build_sequence_dataset).
+seq_release = p.build_sequence_dataset(
+    structures,
+    out_dir="out/sequence_release",
+    release_id="v1",
+)
+
+# Build a structure-supervision release (same call as above).
+struct_release = p.build_structure_supervision_dataset_from_prepared(
+    structures, prep_reports,
+    out_dir="out/structure_release",
+    release_id="v1",
+)
+
+# Join into a training release (one row per example, ragged residue axis,
+# embedded sequence + structure tensors, split assignment + crop bounds +
+# per-example weight). One zstd-compressed Parquet artifact, SHA-256 pinned.
+training_release = p.build_training_release(
+    seq_release, struct_release,
+    out_dir="out/training_release",
+    release_id="v1",
+    split_assignments={"chainA": "train", "chainB": "val"},  # or omit for default
+)
+
+# Validate the assembled corpus — checks count + split consistency,
+# duplicate joined record_ids, and tensor completeness across all four
+# layers. Returns a CorpusValidationReport you can serialize alongside the
+# release manifest.
+report = p.validate_corpus_release("out/corpus_release_dir")
+```
+
+`p.build_local_corpus_smoke_release` does all five steps (plus rescue +
+ingestion-failure capture + corpus manifest + validation) in one call and
+is the recommended starting point for new pipelines.
+
+Reading a training release back, optionally filtered by split:
+
+```python
+for batch in p.iter_training_examples("out/training_release", splits=("train",), batch_size=64):
+    ...  # batch is list[TrainingExample], each carrying its embedded
+         #  SequenceExample and StructureSupervisionExample.
+```
+
+The training-side Parquet schema is pinned at
+`p.TRAINING_EXPORT_FORMAT` ("proteon.training_example.parquet.v0",
+version `p.TRAINING_PARQUET_SCHEMA_VERSION`); the sequence-side schema is
+pinned at `p.SEQUENCE_EXPORT_FORMAT`. CI gates both contracts via
+[`tests/test_training_corpus_factory_contract.py`](tests/test_training_corpus_factory_contract.py).
+
 ## GPU build (optional)
 
 The PyPI wheel is **CPU-only**. Proteon has GPU-accelerated kernels
