@@ -11,6 +11,71 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### v0.3.0 Phase C — `cluster_aware_split` leakage-controlled split
+
+Family-aware split helper that consumes the Phase B0 `ClusterAssignments`
+artifact and produces train / val / test assignments with the leakage
+invariant: **no cluster spans more than one split**. Implemented as a
+thin wrapper over the existing
+`corpus_smoke._hash_split_assignments(grouping_keys=...)` machinery, not
+a new split engine — per the codex review on
+`TO_V030_TRAINING_CORPUS_FACTORY.md` (catch #2).
+
+### Added
+
+- **`proteon.cluster_aware_split`** — takes a `ClusterAssignments`, a
+  list of record_ids, and optional ratios / seed / grouping_keys;
+  returns a `ClusterAwareSplitResult` carrying both the per-record
+  split and a skew report. Defaults reflect both codex reviews:
+    - `strict_coverage=True` — partial coverage raises
+      `ClusterCoverageError` (catch #6 on parent plan)
+    - `allow_unsafe_namespaces=False` — rejects `raw_pdb_id` /
+      `uniprot_id` namespaces (catch #5 on Phase B0 plan; chain
+      expansion makes them many-to-one and breaks the training-example
+      join)
+    - `skew_tolerance=0.10` via `DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE`
+      (catch #9 on parent plan: bounded deviation, not "approximated")
+- **`proteon.ClusterAwareSplitResult` dataclass** with fields
+  `assignments`, `requested_ratios`, `actual_ratios`, `skew`,
+  `max_skew`, `skew_tolerance`, `bounded_skew`. The skew report is
+  informational — assignments are leakage-free regardless of the
+  reported skew. A dominant cluster will produce
+  `bounded_skew=False` so callers can decide whether unavoidable
+  drift is acceptable.
+- **Composite grouping by union-find**: when both `cluster_id` and
+  `grouping_keys` (e.g. sibling-chain parent ID) constrain a record,
+  both apply — the equivalence classes stack rather than one winning.
+  Per codex Q5 nuance on the parent plan.
+- **`build_local_corpus_smoke_release` integration**: new optional
+  `cluster_assignments: ClusterAssignments | None = None` kwarg in
+  both single-shot and chunked paths. When provided, the smoke
+  pipeline routes the split through `cluster_aware_split` and surfaces
+  the skew report into the training-release manifest's `provenance`
+  block under the `cluster_aware_split` key for audit.
+- **3 new top-level exports** (`cluster_aware_split`,
+  `ClusterAwareSplitResult`, `DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE`)
+  bringing `proteon.__all__` to 215 unique entries.
+- **New contract test** `tests/test_cluster_aware_split.py` —
+  22 assertions across 9 test classes: public-API surface, leakage
+  invariant (no cluster spans splits + singletons split independently
+  + all inputs covered), determinism (same/different seeds,
+  order-invariant), composite-grouping union-find (sibling-chain
+  stacking, cluster-only path, mismatched-length rejection),
+  strict-coverage default (partial coverage raises), unsafe-namespace
+  rejection (`raw_pdb_id` and `uniprot_id` rejected by default,
+  opt-in works), skew report (balanced corpus stays within tolerance,
+  dominant cluster trips `bounded_skew=False`), default 80/10/10
+  ratios, result dataclass shape.
+
+### Notes
+
+- No edits to `_hash_split_assignments` itself — Phase C wraps it,
+  adding seeding via a `f"{seed}:{root}"` prefix on grouping keys so
+  identical seeds reproduce splits without touching the existing
+  function.
+- No Parquet schema bumps. No version bump (bundles into v0.3.0 tag
+  at Phase G).
+
 ### v0.3.0 Phase B0 — `ClusterAssignments` artifact contract
 
 Keystone phase for the v0.3.0 data-engine layer. The cluster artifact

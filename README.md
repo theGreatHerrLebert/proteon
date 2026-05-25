@@ -218,10 +218,37 @@ a string column, plus structural validators that catch duplicate
 drift, manifest count inconsistencies, and namespace mismatches before
 the assignments reach downstream training-corpus code.
 
-Phase C of v0.3.0 (a future PR) will add `proteon.cluster_aware_split` that
-takes these assignments and produces a leakage-controlled train / val / test
-assignment; Phase D will extend `validate_corpus_release` to check that
-no cluster spans more than one split.
+Once you have a `ClusterAssignments`, `cluster_aware_split` produces a
+leakage-controlled train / val / test assignment:
+
+```python
+result = p.cluster_aware_split(
+    assignments,
+    record_ids=["chainA", "chainB", "chainC"],
+    ratios={"train": 0.8, "val": 0.1, "test": 0.1},
+)
+# result.assignments: dict[record_id, split]
+# result.bounded_skew: True iff actual ratios are within DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE
+#                     of requested (informational — assignment is leakage-free either way)
+```
+
+All members of one cluster land in the same split (no leakage). When the
+caller also passes `grouping_keys` — e.g. to keep sibling chains of the
+same parent structure together — union-find merges both constraint sets
+so the equivalence classes stack rather than competing. The wrapper is
+strict-by-default: partial-coverage clusterings raise
+`ClusterCoverageError`, and the unsafe `raw_pdb_id` / `uniprot_id`
+namespaces are rejected unless explicitly opted into via
+`allow_unsafe_namespaces=True` (chain expansion makes them many-to-one
+and breaks the training-example join).
+
+`build_local_corpus_smoke_release` accepts a `cluster_assignments` kwarg
+and routes the whole pipeline through `cluster_aware_split`
+automatically, surfacing the skew report into the training-release
+manifest's provenance for audit.
+
+Phase D of v0.3.0 (a future PR) will extend `validate_corpus_release` to
+check that no cluster spans more than one split in a loaded corpus.
 
 The cluster-assignments Parquet schema is pinned at
 `p.CLUSTER_ASSIGNMENTS_FORMAT` ("proteon.cluster_assignments.parquet.v0",
