@@ -236,6 +236,7 @@ from .cluster_assignments import (
     ALL_INPUT_DIGEST_KINDS,
     CLUSTER_ASSIGNMENTS_FORMAT,
     CLUSTER_ASSIGNMENTS_PARQUET_SCHEMA_VERSION,
+    DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE,
     DIGEST_KIND_CUSTOM,
     DIGEST_KIND_FASTA,
     DIGEST_KIND_RECORD_ID_LIST,
@@ -246,11 +247,13 @@ from .cluster_assignments import (
     ClusterAssignmentRow,
     ClusterAssignments,
     ClusterAssignmentsManifest,
+    ClusterAwareSplitResult,
     ClusterCoverageError,
     ClusterCoverageReport,
     ClusterValidationReport,
     build_cluster_assignments_release,
     build_cluster_assignments_schema,
+    cluster_aware_split,
     compute_record_id_digest,
     iter_cluster_assignments,
     load_cluster_assignments,
@@ -573,12 +576,14 @@ _CLUSTER_ASSIGNMENTS_API = (
     "ClusterAssignmentRow",
     "ClusterAssignments",
     "ClusterAssignmentsManifest",
+    "ClusterAwareSplitResult",
     "ClusterCoverageReport",
     "ClusterValidationReport",
     "ClusterCoverageError",
     # Format + schema constants
     "CLUSTER_ASSIGNMENTS_FORMAT",
     "CLUSTER_ASSIGNMENTS_PARQUET_SCHEMA_VERSION",
+    "DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE",
     # Namespace enum
     "ALL_CLUSTER_NAMESPACES",
     "NAMESPACE_PREPARED_RECORD_ID",
@@ -600,13 +605,14 @@ _CLUSTER_ASSIGNMENTS_API = (
     "load_cluster_assignments_jsonl",
     "write_cluster_assignments_parquet",
     "load_cluster_assignments_parquet",
-    # Validators
+    # Validators + leakage-controlled split
     "validate_cluster_namespace",
     "validate_cluster_coverage",
     "validate_cluster_representative_consistency",
     "validate_cluster_size_consistency",
     "validate_cluster_record_id_uniqueness",
     "validate_manifest_consistency",
+    "cluster_aware_split",
 )
 
 _FAILURE_API = (

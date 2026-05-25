@@ -34,6 +34,7 @@ def build_local_corpus_smoke_release(
     rescue_allow: Optional[Sequence[str]] = None,
     split_assignments: Optional[Mapping[str, str]] = None,
     split_ratios: Optional[Mapping[str, float]] = None,
+    cluster_assignments: Optional["ClusterAssignments"] = None,
     msa_engine: Optional[object] = None,
     msa_max_seqs: int = 256,
     msa_gap_idx: int = 21,
@@ -49,6 +50,20 @@ def build_local_corpus_smoke_release(
 
     This is the intended smoke path for validating the full data-release stack
     on real PDB/mmCIF inputs already available on disk.
+
+    Split policy precedence (highest to lowest):
+
+      - ``split_assignments`` — explicit dict; record_ids missing from
+        the dict raise.
+      - ``cluster_assignments`` — leakage-controlled split via
+        ``cluster_aware_split`` (Phase C). All members of one cluster
+        land in the same split; sibling chains of the same parent
+        structure are stacked into the same equivalence class via
+        union-find. Coverage is strict by default (raises if the
+        cluster artifact doesn't 1:1 cover the expanded record_ids).
+      - ``split_ratios`` — deterministic hash-split with the given
+        ratios.
+      - Default — 80 / 10 / 10 hash-split.
 
     MSA inputs (any combination):
       - `msa_dir` — directory of pre-computed a3m files, keyed by
@@ -84,6 +99,7 @@ def build_local_corpus_smoke_release(
             rescue_allow=rescue_allow,
             split_assignments=split_assignments,
             split_ratios=split_ratios,
+            cluster_assignments=cluster_assignments,
             msa_engine=msa_engine,
             msa_max_seqs=msa_max_seqs,
             msa_gap_idx=msa_gap_idx,
@@ -202,6 +218,7 @@ def build_local_corpus_smoke_release(
     )
     # Splits are assigned at the expanded (chain-level) record granularity
     # so multi-chain structures can have per-chain split decisions.
+    cluster_aware_skew_report: Optional[Dict[str, object]] = None
     if split_assignments is not None:
         missing = [rid for rid in expanded_record_ids if rid not in split_assignments]
         if missing:
@@ -211,6 +228,27 @@ def build_local_corpus_smoke_release(
             )
         split_assignments = {rid: split_assignments[rid] for rid in expanded_record_ids}
         split_strategy = "explicit"
+    elif cluster_assignments is not None:
+        from .cluster_assignments import cluster_aware_split, DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE
+        effective_ratios = split_ratios or DEFAULT_SPLIT_RATIOS
+        result = cluster_aware_split(
+            cluster_assignments,
+            expanded_record_ids,
+            ratios=effective_ratios,
+            grouping_keys=expanded_parent_record_ids,
+        )
+        split_assignments = result.assignments
+        split_strategy = f"cluster_aware:{_format_ratios(effective_ratios)}"
+        cluster_aware_skew_report = {
+            "actual_ratios": result.actual_ratios,
+            "requested_ratios": result.requested_ratios,
+            "skew": result.skew,
+            "max_skew": result.max_skew,
+            "skew_tolerance": result.skew_tolerance,
+            "bounded_skew": result.bounded_skew,
+            "cluster_release_id": cluster_assignments.manifest.release_id,
+            "sequence_id_namespace": cluster_assignments.manifest.sequence_id_namespace,
+        }
     elif split_ratios is not None:
         split_assignments = _hash_split_assignments(
             expanded_record_ids,
@@ -223,6 +261,9 @@ def build_local_corpus_smoke_release(
             expanded_record_ids, grouping_keys=expanded_parent_record_ids
         )
         split_strategy = f"default_hash_split:{_format_ratios(DEFAULT_SPLIT_RATIOS)}"
+    training_provenance: Dict[str, object] = {"input_paths": [str(p) for p in loaded_paths]}
+    if cluster_aware_skew_report is not None:
+        training_provenance["cluster_aware_split"] = cluster_aware_skew_report
     training_root = build_training_release(
         sequence_root,
         prepared_root / "supervision_release",
@@ -231,7 +272,7 @@ def build_local_corpus_smoke_release(
         split_assignments=split_assignments,
         code_rev=code_rev,
         config_rev=config_rev,
-        provenance={"input_paths": [str(p) for p in loaded_paths]},
+        provenance=training_provenance,
         overwrite=True,
     )
     corpus_root = build_corpus_release_manifest(
@@ -348,6 +389,7 @@ def _build_local_corpus_smoke_release_chunked(
     rescue_allow: Optional[Sequence[str]],
     split_assignments: Optional[Mapping[str, str]],
     split_ratios: Optional[Mapping[str, float]],
+    cluster_assignments: Optional["ClusterAssignments"],
     msa_engine: Optional[object],
     msa_max_seqs: int,
     msa_gap_idx: int,
@@ -656,6 +698,7 @@ def _build_local_corpus_smoke_release_chunked(
     )
 
     # Split assignment (same logic as the single-shot path).
+    cluster_aware_skew_report: Optional[Dict[str, object]] = None
     if split_assignments is not None:
         missing = [rid for rid in expanded_record_ids if rid not in split_assignments]
         if missing:
@@ -665,6 +708,27 @@ def _build_local_corpus_smoke_release_chunked(
             )
         split_assignments = {rid: split_assignments[rid] for rid in expanded_record_ids}
         split_strategy = "explicit"
+    elif cluster_assignments is not None:
+        from .cluster_assignments import cluster_aware_split
+        effective_ratios = split_ratios or DEFAULT_SPLIT_RATIOS
+        result = cluster_aware_split(
+            cluster_assignments,
+            expanded_record_ids,
+            ratios=effective_ratios,
+            grouping_keys=expanded_parent_record_ids,
+        )
+        split_assignments = result.assignments
+        split_strategy = f"cluster_aware:{_format_ratios(effective_ratios)}"
+        cluster_aware_skew_report = {
+            "actual_ratios": result.actual_ratios,
+            "requested_ratios": result.requested_ratios,
+            "skew": result.skew,
+            "max_skew": result.max_skew,
+            "skew_tolerance": result.skew_tolerance,
+            "bounded_skew": result.bounded_skew,
+            "cluster_release_id": cluster_assignments.manifest.release_id,
+            "sequence_id_namespace": cluster_assignments.manifest.sequence_id_namespace,
+        }
     elif split_ratios is not None:
         split_assignments = _hash_split_assignments(
             expanded_record_ids, split_ratios, grouping_keys=expanded_parent_record_ids,
@@ -676,6 +740,9 @@ def _build_local_corpus_smoke_release_chunked(
         )
         split_strategy = f"default_hash_split:{_format_ratios(DEFAULT_SPLIT_RATIOS)}"
 
+    training_provenance: Dict[str, object] = {"input_paths": [str(p) for p in loaded_paths]}
+    if cluster_aware_skew_report is not None:
+        training_provenance["cluster_aware_split"] = cluster_aware_skew_report
     training_root = build_training_release(
         seq_release_root,
         sup_release_root,
@@ -684,7 +751,7 @@ def _build_local_corpus_smoke_release_chunked(
         split_assignments=split_assignments,
         code_rev=code_rev,
         config_rev=config_rev,
-        provenance={"input_paths": [str(p) for p in loaded_paths]},
+        provenance=training_provenance,
         overwrite=True,
     )
     corpus_root = build_corpus_release_manifest(

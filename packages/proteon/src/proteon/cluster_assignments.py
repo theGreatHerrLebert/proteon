@@ -35,11 +35,14 @@ and ``tests/test_cluster_assignments.py`` for the contract gate.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from hashlib import blake2b
 import hashlib
 import json
 from pathlib import Path
+from types import MappingProxyType
 from typing import (
     Dict,
     Iterable,
@@ -793,3 +796,228 @@ def iter_cluster_assignments(
                     chunk = []
     if chunk:
         yield chunk
+
+
+# --------------------------------------------------------------------------- #
+# Phase C: cluster_aware_split — leakage-controlled split helper
+# --------------------------------------------------------------------------- #
+
+_DEFAULT_SPLIT_RATIOS: Mapping[str, float] = MappingProxyType(
+    {"train": 0.8, "val": 0.1, "test": 0.1}
+)
+
+# Default skew tolerance for the bounded-deviation check. Per the codex
+# review on TO_V030_TRAINING_CORPUS_FACTORY.md (catch #9 — "cluster
+# splitting by hash of cluster ID can produce bad ratio skew when large
+# clusters exist; tests should check bounded deviation and report
+# unavoidable skew, not just 'approximated'"), the threshold is liberal
+# enough that ordinary clusterings pass but pathological ones (one
+# cluster dominating the corpus) get flagged.
+DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE: float = 0.10
+
+# Namespaces that are unsafe for direct training joins without an
+# explicit ID-mapping artifact, per the codex review on the Phase B0
+# plan (catch #5 — "raw_pdb_id and uniprot_id are not safe for
+# training_example.py joins because they can be many-to-one after chain
+# expansion"). cluster_aware_split rejects these unless the caller
+# explicitly opts in via allow_unsafe_namespaces=True.
+_UNSAFE_CLUSTER_NAMESPACES_FOR_SPLITTING: Tuple[str, ...] = (
+    NAMESPACE_RAW_PDB_ID,
+    NAMESPACE_UNIPROT_ID,
+)
+
+
+@dataclass
+class ClusterAwareSplitResult:
+    """Return value of ``cluster_aware_split``.
+
+    Carries both the per-record split assignment and a skew report so
+    callers can detect unavoidable distribution drift caused by lumpy
+    cluster sizes — flagging that, rather than silently producing a
+    badly-skewed corpus, is the point of running cluster-aware
+    splitting in the first place.
+    """
+
+    assignments: Dict[str, str]
+    requested_ratios: Dict[str, float]
+    actual_ratios: Dict[str, float]
+    skew: Dict[str, float]
+    max_skew: float
+    skew_tolerance: float
+    bounded_skew: bool
+
+
+def _union_find_roots(
+    record_ids: Sequence[str],
+    *equivalence_groups: Sequence[Sequence[str]],
+) -> Dict[str, str]:
+    """Build a canonical "effective grouping key" per record_id by
+    union-finding across one or more equivalence-class groupings.
+
+    Each entry in ``equivalence_groups`` is a sequence of clusters
+    (lists of record_ids that belong together). Records that appear
+    in the same cluster in *any* of the groupings end up in the same
+    equivalence class. The returned mapping sends each record_id to
+    the lexicographically smallest record_id in its equivalence
+    class — the deterministic "effective grouping key" used for
+    hash-splitting downstream.
+    """
+    parent: Dict[str, str] = {rid: rid for rid in record_ids}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # path compression
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        # Pick lexicographically smaller as root so the result is
+        # deterministic across input orderings.
+        if ra < rb:
+            parent[rb] = ra
+        else:
+            parent[ra] = rb
+
+    for groups in equivalence_groups:
+        for cluster in groups:
+            if len(cluster) < 2:
+                continue
+            first = cluster[0]
+            for other in cluster[1:]:
+                union(first, other)
+
+    return {rid: find(rid) for rid in record_ids}
+
+
+def _split_skew_report(
+    assignments: Mapping[str, str],
+    requested_ratios: Mapping[str, float],
+    *,
+    skew_tolerance: float,
+) -> ClusterAwareSplitResult:
+    total = sum(requested_ratios.values()) or 1.0
+    normalised_requested = {k: v / total for k, v in requested_ratios.items()}
+    n = len(assignments)
+    counts = Counter(assignments.values())
+    actual = {k: counts.get(k, 0) / n if n else 0.0 for k in requested_ratios}
+    skew = {k: abs(actual[k] - normalised_requested[k]) for k in requested_ratios}
+    max_skew = max(skew.values()) if skew else 0.0
+    return ClusterAwareSplitResult(
+        assignments=dict(assignments),
+        requested_ratios=dict(normalised_requested),
+        actual_ratios=actual,
+        skew=skew,
+        max_skew=max_skew,
+        skew_tolerance=skew_tolerance,
+        bounded_skew=max_skew <= skew_tolerance,
+    )
+
+
+def cluster_aware_split(
+    cluster_assignments: ClusterAssignments,
+    record_ids: Sequence[str],
+    ratios: Mapping[str, float] = _DEFAULT_SPLIT_RATIOS,
+    *,
+    seed: int = 0,
+    grouping_keys: Optional[Sequence[str]] = None,
+    strict_coverage: bool = True,
+    allow_unsafe_namespaces: bool = False,
+    skew_tolerance: float = DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE,
+) -> ClusterAwareSplitResult:
+    """Family-aware split that prevents cluster members from spanning splits.
+
+    All record_ids sharing a ``cluster_id`` land in the same split, so
+    test-set leakage from same-family training examples is structurally
+    impossible. Determinism is preserved: identical
+    ``(cluster_assignments, record_ids, ratios, seed)`` always yields
+    identical assignments regardless of input order.
+
+    When ``grouping_keys`` is supplied (e.g. for keeping sibling chains
+    of the same source structure together — the existing
+    ``corpus_smoke._hash_split_assignments`` use case), the splitter
+    runs union-find over **both** constraint sets: records sharing a
+    cluster AND records sharing a grouping key end up in one
+    equivalence class together, which then hash-splits as a unit. This
+    is the "stack, don't absorb" interaction recommended by the codex
+    review on the parent v0.3.0 plan (Q5 nuance).
+
+    Defaults reflect the codex reviews of the parent plan and Phase B0:
+
+    - ``strict_coverage=True`` (codex catch #6 on parent plan):
+      partial-coverage clusterings raise ``ClusterCoverageError``
+      rather than silently producing singleton-ish splits.
+    - Unsafe namespaces (``raw_pdb_id``, ``uniprot_id``) are rejected
+      unless ``allow_unsafe_namespaces=True`` because they can be
+      many-to-one after chain expansion and corrupt the
+      training-example join (codex catch #5 on Phase B0 plan).
+    - ``skew_tolerance=0.10`` is liberal enough that ordinary
+      clusterings pass; very lumpy clusters (one cluster
+      dominating the corpus) trip ``bounded_skew=False`` so callers
+      can decide whether the unavoidable skew is acceptable.
+
+    The returned ``ClusterAwareSplitResult`` carries both the per-record
+    assignment and the skew report. The skew is *informational* — even
+    with a dominant cluster the assignment is still leakage-free.
+    """
+    namespace = cluster_assignments.manifest.sequence_id_namespace
+    if not allow_unsafe_namespaces and namespace in _UNSAFE_CLUSTER_NAMESPACES_FOR_SPLITTING:
+        raise ValueError(
+            f"cluster_aware_split: sequence_id_namespace={namespace!r} is "
+            f"unsafe for training-example splits (can be many-to-one after "
+            f"chain expansion). Either supply assignments whose namespace is "
+            f"{NAMESPACE_PREPARED_RECORD_ID!r}, or pass "
+            f"allow_unsafe_namespaces=True if you have verified ID alignment."
+        )
+    if grouping_keys is not None and len(grouping_keys) != len(record_ids):
+        raise ValueError(
+            f"grouping_keys length {len(grouping_keys)} != record_ids length "
+            f"{len(record_ids)}; they must align one-to-one"
+        )
+
+    # Coverage check — strict by default so partial clusterings raise.
+    validate_cluster_coverage(
+        cluster_assignments, record_ids, strict=strict_coverage,
+    )
+
+    # Build the per-record cluster-id list (now safe; coverage passed).
+    cluster_ids_per_record = [
+        cluster_assignments.cluster_id_for(rid) for rid in record_ids
+    ]
+
+    # Bucket record_ids by cluster_id to form the cluster equivalence
+    # groups for union-find.
+    cluster_groups: Dict[str, List[str]] = {}
+    for rid, cid in zip(record_ids, cluster_ids_per_record):
+        cluster_groups.setdefault(cid, []).append(rid)
+    cluster_eq = tuple(cluster_groups.values())
+
+    # If grouping_keys were supplied, bucket those too.
+    sibling_eq: Tuple[List[str], ...] = ()
+    if grouping_keys is not None:
+        sibling_groups: Dict[str, List[str]] = {}
+        for rid, gk in zip(record_ids, grouping_keys):
+            sibling_groups.setdefault(gk, []).append(rid)
+        sibling_eq = tuple(sibling_groups.values())
+
+    # Union-find collapses both constraints into a single per-record
+    # effective grouping key.
+    effective_keys = _union_find_roots(record_ids, cluster_eq, *([sibling_eq] if sibling_eq else []))
+
+    # Hand off to the existing hash-split engine. The seed is mixed
+    # into the grouping key so different seeds produce different
+    # splits without touching _hash_split_assignments itself.
+    from .corpus_smoke import _hash_split_assignments
+
+    seeded_keys = [f"{seed}:{effective_keys[rid]}" for rid in record_ids]
+    raw_assignments = _hash_split_assignments(
+        record_ids,
+        ratios,
+        grouping_keys=seeded_keys,
+    )
+
+    return _split_skew_report(
+        raw_assignments, ratios, skew_tolerance=skew_tolerance,
+    )
