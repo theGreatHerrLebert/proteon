@@ -247,8 +247,20 @@ and routes the whole pipeline through `cluster_aware_split`
 automatically, surfacing the skew report into the training-release
 manifest's provenance for audit.
 
-Phase D of v0.3.0 (a future PR) will extend `validate_corpus_release` to
-check that no cluster spans more than one split in a loaded corpus.
+`validate_corpus_release` accepts an optional `cluster_assignments` (or
+`cluster_assignments_path`) kwarg and runs a **cluster-leakage check**
+when provided: every cluster's members must land in exactly one split,
+the assignments' namespace must match the expected training-join
+namespace, and the coverage gap (training records lacking cluster
+annotation) is reported. A leakage violation is an error-severity issue
+that flips `report.ok=False`; a namespace mismatch is a warning. The
+result is recorded on `report.cluster_leakage_check`
+(`ClusterLeakageReport` dataclass).
+
+`build_local_corpus_smoke_release` forwards its in-memory
+`cluster_assignments` to the validator automatically, so the
+`validation_report.json` emitted at the end of a smoke run includes the
+leakage check whenever cluster-aware splitting was used.
 
 The cluster-assignments Parquet schema is pinned at
 `p.CLUSTER_ASSIGNMENTS_FORMAT` ("proteon.cluster_assignments.parquet.v0",

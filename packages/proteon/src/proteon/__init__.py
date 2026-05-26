@@ -227,6 +227,7 @@ from .corpus_release import (
 )
 from .corpus_smoke import build_local_corpus_smoke_release
 from .corpus_validation import (
+    ClusterLeakageReport,
     CorpusValidationReport,
     ValidationIssue,
     validate_corpus_release,
@@ -560,6 +561,7 @@ _TRAINING_API = (
 # duplicate joined record_ids, and tensor completeness across the four
 # release layers (prepared / sequence / structure / training).
 _CORPUS_VALIDATION_API = (
+    "ClusterLeakageReport",
     "CorpusValidationReport",
     "ValidationIssue",
     "validate_corpus_release",

@@ -302,6 +302,7 @@ def build_local_corpus_smoke_release(
     validate_corpus_release(
         corpus_root / "corpus_release_manifest.json",
         out_path=corpus_root / "validation_report.json",
+        cluster_assignments=cluster_assignments,
     )
     return root
 
@@ -782,6 +783,7 @@ def _build_local_corpus_smoke_release_chunked(
     validate_corpus_release(
         corpus_root / "corpus_release_manifest.json",
         out_path=corpus_root / "validation_report.json",
+        cluster_assignments=cluster_assignments,
     )
     return root
 
