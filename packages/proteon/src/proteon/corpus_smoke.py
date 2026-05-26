@@ -299,10 +299,20 @@ def build_local_corpus_smoke_release(
         },
         overwrite=True,
     )
+    # Only forward cluster_assignments to the validator when they
+    # actually drove the split. Per the documented precedence,
+    # explicit split_assignments override cluster_assignments — and a
+    # caller who set both shouldn't see leakage errors against
+    # assignments they intentionally bypassed. `cluster_aware_skew_report`
+    # is set exclusively in the cluster-aware-split branch above, so
+    # it's the right signal.
+    cluster_assignments_for_validator = (
+        cluster_assignments if cluster_aware_skew_report is not None else None
+    )
     validate_corpus_release(
         corpus_root / "corpus_release_manifest.json",
         out_path=corpus_root / "validation_report.json",
-        cluster_assignments=cluster_assignments,
+        cluster_assignments=cluster_assignments_for_validator,
     )
     return root
 
@@ -780,10 +790,15 @@ def _build_local_corpus_smoke_release_chunked(
         },
         overwrite=True,
     )
+    # See the single-shot path for why this is gated on
+    # cluster_aware_skew_report rather than the raw kwarg.
+    cluster_assignments_for_validator = (
+        cluster_assignments if cluster_aware_skew_report is not None else None
+    )
     validate_corpus_release(
         corpus_root / "corpus_release_manifest.json",
         out_path=corpus_root / "validation_report.json",
-        cluster_assignments=cluster_assignments,
+        cluster_assignments=cluster_assignments_for_validator,
     )
     return root
 

@@ -50,13 +50,22 @@ class ClusterLeakageReport:
     different ID system than the corpus it's being audited against,
     and the leakage check below is meaningless.
 
-    ``cluster_size_summary`` (min/max/mean/median) and
-    ``unavoidable_skew`` mirror the report attached to
-    ``ClusterAwareSplitResult`` at split time, so the validator catches
-    drift between the assignments-at-split-time and the
-    assignments-at-validation-time (e.g. a different cluster artifact
-    was loaded into the validator than the one originally used to
-    build the split).
+    ``cluster_size_summary`` (min/max/mean/median) reports the realised
+    cluster-size distribution against the loaded training corpus, so
+    callers can spot drift between the assignments-at-split-time and
+    the assignments-at-validation-time (e.g. a different cluster
+    artifact was loaded into the validator than the one originally
+    used to build the split).
+
+    Skew reporting (actual vs requested split ratios) lives on
+    ``ClusterAwareSplitResult`` at split time and on the
+    training-release manifest provenance; the validator deliberately
+    does NOT duplicate that computation here, because the realised
+    ``manifest.split_counts`` are the only ratios the validator can
+    observe and using them as both numerator and denominator yields
+    a trivially-zero skew. Audit consumers wanting the requested
+    ratios should read them from the training manifest's
+    ``cluster_aware_split`` provenance block.
     """
 
     cluster_release_id: str
@@ -67,8 +76,6 @@ class ClusterLeakageReport:
     leaking_clusters: Dict[str, Dict[str, int]] = field(default_factory=dict)
     coverage_fraction: float = 1.0
     cluster_size_summary: Dict[str, float] = field(default_factory=dict)
-    unavoidable_skew: bool = False
-    actual_ratios: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -285,7 +292,6 @@ def _check_cluster_leakage(
     # Lazy import — see docstring.
     from .cluster_assignments import (
         ClusterAssignments,
-        DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE,
         load_cluster_assignments,
     )
 
@@ -418,29 +424,11 @@ def _check_cluster_leakage(
     else:
         cluster_size_summary = {"min": 0.0, "max": 0.0, "mean": 0.0, "median": 0.0}
 
-    # Compare the realised per-split fractions against the corpus-
-    # manifest split_counts ratios; surface as unavoidable_skew when
-    # the deviation exceeds DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE.
-    total_split = sum(manifest.split_counts.values()) or 1
-    requested_ratios = {
-        k: v / total_split for k, v in manifest.split_counts.items()
-    }
-    realised_per_split: Dict[str, int] = {}
-    for split in record_to_split.values():
-        realised_per_split[split] = realised_per_split.get(split, 0) + 1
-    total_realised = sum(realised_per_split.values()) or 1
-    actual_ratios = {
-        k: v / total_realised for k, v in realised_per_split.items()
-    }
-    max_skew = max(
-        (
-            abs(actual_ratios.get(k, 0.0) - requested_ratios.get(k, 0.0))
-            for k in set(actual_ratios) | set(requested_ratios)
-        ),
-        default=0.0,
-    )
-    unavoidable_skew = max_skew > DEFAULT_CLUSTER_SPLIT_SKEW_TOLERANCE
-
+    # Skew vs requested ratios is deliberately NOT recomputed here —
+    # see the ClusterLeakageReport docstring. ClusterAwareSplitResult
+    # (Phase C) is the source of truth for skew at split time; the
+    # training manifest's cluster_aware_split provenance carries the
+    # numbers for audit consumers that need them.
     report.cluster_leakage_check = ClusterLeakageReport(
         cluster_release_id=assignments.manifest.release_id,
         expected_namespace=expected_namespace,
@@ -450,8 +438,6 @@ def _check_cluster_leakage(
         leaking_clusters=leaking,
         coverage_fraction=coverage_fraction,
         cluster_size_summary=cluster_size_summary,
-        unavoidable_skew=unavoidable_skew,
-        actual_ratios=actual_ratios,
     )
 
 

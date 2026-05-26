@@ -331,3 +331,39 @@ class TestBackwardCompatibility:
         manifest_path, _ = _build_fake_corpus_release(tmp_path, splits=splits)
         report = validate_corpus_release(manifest_path)
         assert report.cluster_leakage_check is None
+
+
+# --------------------------------------------------------------------------- #
+# 9. ClusterLeakageReport surface (post-Codex-review trimming)
+# --------------------------------------------------------------------------- #
+
+
+class TestReportFieldSurface:
+    """Phase D's first round of code review (codex on PR #93) caught that
+    the originally-included ``unavoidable_skew`` / ``actual_ratios``
+    fields computed skew from realised counts as both numerator and
+    denominator — always yielding zero. They were dropped from the
+    ClusterLeakageReport schema in favour of the existing
+    ClusterAwareSplitResult provenance (Phase C) which records skew
+    accurately at split time. Pin the trimmed surface here so the
+    fields don't accidentally come back without a real implementation.
+    """
+
+    def test_report_does_not_advertise_skew_fields(self):
+        fields = set(ClusterLeakageReport.__dataclass_fields__.keys())
+        # Fields that SHOULD stay:
+        assert "no_leakage" in fields
+        assert "leaking_clusters" in fields
+        assert "coverage_fraction" in fields
+        assert "cluster_size_summary" in fields
+        # Fields that were dropped after the codex review on PR #93:
+        assert "unavoidable_skew" not in fields, (
+            "unavoidable_skew was removed because the computation was "
+            "trivially-zero; restore it only with a real requested-ratio "
+            "source (see ClusterAwareSplitResult / training manifest "
+            "provenance)"
+        )
+        assert "actual_ratios" not in fields, (
+            "actual_ratios was removed for the same reason — see Phase C "
+            "ClusterAwareSplitResult for the accurate per-split fractions"
+        )

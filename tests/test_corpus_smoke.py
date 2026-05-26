@@ -328,3 +328,123 @@ def _fake_structure(name: str):
     ]
     chain = SimpleNamespace(id="A", residues=residues)
     return SimpleNamespace(identifier=name, chain_count=1, chains=[chain], residue_count=2, atom_count=10)
+
+
+def test_explicit_split_skips_cluster_leakage_check_even_when_cluster_provided(tmp_path, monkeypatch):
+    """Codex review on PR #93 caught: when split_assignments overrides
+    cluster_assignments per the documented precedence, the validator
+    should NOT run a leakage check against the bypassed assignments.
+    Otherwise an explicit split that happens to violate a cluster
+    boundary would be flagged as a leakage error even though
+    cluster-aware splitting was never used.
+
+    This test pins the gating: ``cluster_assignments`` is forwarded to
+    the validator ONLY when the cluster-aware branch actually drove
+    the split.
+    """
+    from proteon.cluster_assignments import (
+        ClusterAssignmentRow,
+        ClusterAssignments,
+        ClusterAssignmentsManifest,
+        NAMESPACE_PREPARED_RECORD_ID,
+    )
+
+    loaded = [(0, _fake_structure("one")), (1, _fake_structure("two"))]
+
+    def fake_batch_load_tolerant(paths, n_threads=None):
+        return loaded
+
+    def fake_batch_prepare(structures, n_threads=None):
+        return [proteon.PrepReport(hydrogens_added=1, converged=True) for _ in structures]
+
+    def fake_build_structure_supervision_dataset_from_prepared(structures, prep_reports, out_dir, **kwargs):
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "prepared_structures.jsonl").write_text('{"record_id":"one"}\n{"record_id":"two"}\n', encoding="utf-8")
+        _write_fake_supervision_tree(out / "supervision_release", n=2, length=2)
+        return out
+
+    def fake_build_sequence_dataset(structures, out_dir, **kwargs):
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "release_manifest.json").write_text(json.dumps({"count_examples": 2, "lengths": {"mean": 2.0}}), encoding="utf-8")
+        (out / "failures.jsonl").write_text("", encoding="utf-8")
+        (out / "examples").mkdir(exist_ok=True)
+        return out
+
+    def fake_build_training_release(sequence_release_dir, structure_release_dir, out_dir, **kwargs):
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        # Explicit splits — sabotage the cluster boundary: 'one' and 'two'
+        # are in the same cluster below, but here they get different splits.
+        (out / "release_manifest.json").write_text(json.dumps({"count_examples": 2, "split_counts": {"train": 1, "val": 1}}), encoding="utf-8")
+        (out / "training_examples.jsonl").write_text(
+            '{"record_id":"one","split":"train"}\n{"record_id":"two","split":"val"}\n',
+            encoding="utf-8",
+        )
+        return out
+
+    monkeypatch.setattr(corpus_smoke, "batch_load_tolerant", fake_batch_load_tolerant)
+    monkeypatch.setattr(corpus_smoke, "batch_prepare", fake_batch_prepare)
+    monkeypatch.setattr(corpus_smoke, "build_structure_supervision_dataset_from_prepared", fake_build_structure_supervision_dataset_from_prepared)
+    monkeypatch.setattr(corpus_smoke, "build_sequence_dataset", fake_build_sequence_dataset)
+    monkeypatch.setattr(corpus_smoke, "build_training_release", fake_build_training_release)
+
+    # 'one' and 'two' share cluster-X — if forwarded to the validator,
+    # the leakage check would flag the explicit split above as an error.
+    cluster_assignments = ClusterAssignments(
+        manifest=ClusterAssignmentsManifest(
+            release_id="bypassed",
+            sequence_id_namespace=NAMESPACE_PREPARED_RECORD_ID,
+            count_sequences=2,
+            count_clusters=1,
+        ),
+        rows=(
+            ClusterAssignmentRow(
+                record_id="one",
+                cluster_id="cluster-X",
+                representative_record_id="one",
+                is_representative=True,
+                cluster_size=2,
+            ),
+            ClusterAssignmentRow(
+                record_id="two",
+                cluster_id="cluster-X",
+                representative_record_id="one",
+                is_representative=False,
+                cluster_size=2,
+            ),
+        ),
+    )
+
+    root = corpus_smoke.build_local_corpus_smoke_release(
+        [tmp_path / "one.pdb", tmp_path / "two.pdb"],
+        tmp_path / "smoke",
+        release_id="smoke-explicit-with-cluster",
+        # Explicit splits set the precedence — cluster_assignments
+        # should be ignored entirely, including by the validator.
+        split_assignments={"one": "train", "two": "val"},
+        cluster_assignments=cluster_assignments,
+        overwrite=True,
+    )
+
+    report_path = root / "corpus" / "validation_report.json"
+    assert report_path.exists()
+    report_data = json.loads(report_path.read_text(encoding="utf-8"))
+    # The cluster-leakage check must NOT have been run — explicit
+    # splits override cluster_assignments per documented precedence.
+    assert report_data["cluster_leakage_check"] is None, (
+        "cluster_leakage_check should be None when explicit "
+        "split_assignments overrode cluster_assignments, but the "
+        "validator was given the bypassed cluster artifact anyway"
+    )
+    # Defensively also assert that no leakage-related issues fired.
+    leakage_codes = {
+        i["code"]
+        for i in report_data["issues"]
+        if i["code"].startswith("cluster_")
+    }
+    assert leakage_codes == set(), (
+        f"no cluster_* issue codes should fire when the cluster "
+        f"artifact was bypassed; got {leakage_codes}"
+    )
