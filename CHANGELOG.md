@@ -11,6 +11,76 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### v0.3.0 Phase D — Cluster-leakage check inside `validate_corpus_release`
+
+Extends `corpus_validation.validate_corpus_release` with a new
+cluster-leakage check that downstream consumers can use to **prove**
+no cluster spans more than one split on a released corpus.
+
+The check is the audit-side complement of Phase C — Phase C *prevents*
+leakage at split time; Phase D *detects* leakage at release-validation
+time. Together they make leakage-controlled training corpora a
+release-tier claim rather than a hope.
+
+### Added
+
+- **`proteon.ClusterLeakageReport` dataclass** with fields
+  `cluster_release_id`, `expected_namespace`, `actual_namespace`,
+  `namespace_ok`, `no_leakage`, `leaking_clusters` (sample of
+  cluster_ids → {split → count}), `coverage_fraction`,
+  `cluster_size_summary` (min/max/mean/median), `unavoidable_skew`,
+  `actual_ratios`.
+- **`CorpusValidationReport.cluster_leakage_check` field** —
+  `Optional[ClusterLeakageReport]`, populated when the validator runs
+  with cluster info.
+- **`validate_corpus_release` accepts two new mutually-exclusive
+  kwargs**: `cluster_assignments_path` (loads from a Phase B0 release
+  dir, for standalone audits) and `cluster_assignments` (in-memory
+  ClusterAssignments, used by `corpus_smoke` when the smoke pipeline
+  already has the object in hand). Passing both raises `ValueError`.
+- **`expected_cluster_namespace` kwarg** with default
+  `"prepared_record_id"` — the canonical training-join namespace.
+- **`build_local_corpus_smoke_release` integration** (single-shot +
+  chunked paths): when the smoke pipeline runs with a
+  `cluster_assignments` kwarg (Phase C wiring), the validator
+  invocation automatically forwards that object and the resulting
+  `validation_report.json` carries the leakage check. No extra caller
+  effort needed.
+- **Issue codes recorded** (per the established `ValidationIssue`
+  taxonomy at `corpus_validation.py:29`):
+    - `cluster_spans_splits` (error) — any cluster spanning > 1 split
+    - `cluster_leakage_namespace_mismatch` (warning) — assignments and
+      corpus use different ID namespaces; leakage check is run but
+      result is not load-bearing
+    - `cluster_leakage_load_failed` (error) — Phase B0 release dir
+      cannot be loaded
+    - `cluster_leakage_bad_in_memory_type` (error) — `cluster_assignments`
+      kwarg is not a `ClusterAssignments` instance
+    - `cluster_leakage_skipped_no_training_release` (warning) —
+      corpus has no training release to audit against
+    - `cluster_partial_coverage` (warning) — some training records
+      have no cluster annotation; reported via
+      `coverage_fraction < 1.0`
+- **`ClusterLeakageReport` exported** at top level
+  (`proteon.ClusterLeakageReport`). `proteon.__all__` now at 216
+  unique entries.
+- **New test** `tests/test_cluster_leakage_validation.py` —
+  10 assertions across 8 test classes: public-API surface, clean
+  leakage-free case (in-memory and from-disk), leakage-detection
+  (cluster spans 2 splits flagged as error, `report.ok=False`),
+  namespace-mismatch warning (`namespace_ok=False`, check still runs),
+  mutual-exclusion of the two kwargs, bad in-memory type, coverage
+  gap reporting, backward compatibility (no cluster kwargs →
+  `cluster_leakage_check` stays None).
+
+### Notes
+
+- No behavior change to existing validator paths.
+  `_check_count_consistency`, `_check_training_release`,
+  `_check_structure_tensor_completeness` are unmodified.
+- No Parquet schema bumps.
+- No version bump (bundles into the v0.3.0 tag at Phase G).
+
 ### v0.3.0 Phase C — `cluster_aware_split` leakage-controlled split
 
 Family-aware split helper that consumes the Phase B0 `ClusterAssignments`

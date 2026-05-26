@@ -33,6 +33,52 @@ class ValidationIssue:
 
 
 @dataclass
+class ClusterLeakageReport:
+    """Result of the optional cluster-leakage check (v0.3.0 Phase D).
+
+    Populated when ``validate_corpus_release`` is called with a
+    ``cluster_assignments_path`` pointing at a Phase B0
+    ``ClusterAssignments`` release. The ``no_leakage`` invariant is
+    the load-bearing assertion: it is True iff every cluster's members
+    landed in exactly one split, which is exactly what
+    ``cluster_aware_split`` is supposed to guarantee.
+
+    ``namespace_ok`` is True iff the loaded assignments' namespace
+    matches ``expected_namespace`` (default
+    ``prepared_record_id`` — the canonical training-join namespace).
+    A False here means the cluster artifact was built against a
+    different ID system than the corpus it's being audited against,
+    and the leakage check below is meaningless.
+
+    ``cluster_size_summary`` (min/max/mean/median) reports the realised
+    cluster-size distribution against the loaded training corpus, so
+    callers can spot drift between the assignments-at-split-time and
+    the assignments-at-validation-time (e.g. a different cluster
+    artifact was loaded into the validator than the one originally
+    used to build the split).
+
+    Skew reporting (actual vs requested split ratios) lives on
+    ``ClusterAwareSplitResult`` at split time and on the
+    training-release manifest provenance; the validator deliberately
+    does NOT duplicate that computation here, because the realised
+    ``manifest.split_counts`` are the only ratios the validator can
+    observe and using them as both numerator and denominator yields
+    a trivially-zero skew. Audit consumers wanting the requested
+    ratios should read them from the training manifest's
+    ``cluster_aware_split`` provenance block.
+    """
+
+    cluster_release_id: str
+    expected_namespace: str
+    actual_namespace: str
+    namespace_ok: bool
+    no_leakage: bool
+    leaking_clusters: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    coverage_fraction: float = 1.0
+    cluster_size_summary: Dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
 class CorpusValidationReport:
     release_id: str
     artifact_type: str = "validation_report"
@@ -44,14 +90,44 @@ class CorpusValidationReport:
     failure_breakdown: Dict[str, int] = field(default_factory=dict)
     completeness: Dict[str, float] = field(default_factory=dict)
     issues: List[ValidationIssue] = field(default_factory=list)
+    cluster_leakage_check: Optional[ClusterLeakageReport] = None
 
 
 def validate_corpus_release(
     corpus_release_manifest: str | Path,
     *,
     out_path: str | Path | None = None,
+    cluster_assignments_path: str | Path | None = None,
+    cluster_assignments: object | None = None,
+    expected_cluster_namespace: str = "prepared_record_id",
 ) -> CorpusValidationReport:
-    """Validate a corpus release and optionally write a JSON QA report."""
+    """Validate a corpus release and optionally write a JSON QA report.
+
+    When ``cluster_assignments_path`` **or** ``cluster_assignments``
+    is supplied, the validator also runs the v0.3.0 Phase D
+    **cluster-leakage check**: it loads (or accepts in-memory) the
+    ``ClusterAssignments``, asserts the namespace matches
+    ``expected_cluster_namespace`` (default ``prepared_record_id``,
+    the canonical training-join namespace), and verifies that every
+    cluster's members landed in exactly one split. The result is
+    recorded under ``report.cluster_leakage_check``.
+
+    A leakage failure (any cluster spanning > 1 split) records an
+    ``error``-severity issue and marks the whole report ``ok=False``;
+    a namespace mismatch records a ``warning`` because the leakage
+    assertion below it becomes meaningless without confirmed ID
+    alignment.
+
+    ``cluster_assignments_path`` and ``cluster_assignments`` are
+    mutually exclusive — pass at most one. The in-memory form is what
+    ``corpus_smoke.build_local_corpus_smoke_release`` uses when the
+    caller supplied an in-memory ClusterAssignments to the smoke
+    pipeline; the path form is the standalone audit entry point.
+    """
+    if cluster_assignments_path is not None and cluster_assignments is not None:
+        raise ValueError(
+            "pass at most one of cluster_assignments_path / cluster_assignments"
+        )
     manifest = load_corpus_release_manifest(corpus_release_manifest)
     report = CorpusValidationReport(
         release_id=manifest.release_id,
@@ -68,6 +144,18 @@ def validate_corpus_release(
     _check_count_consistency(manifest, report)
     _check_training_release(manifest, report)
     _check_structure_tensor_completeness(manifest, report)
+    if cluster_assignments_path is not None or cluster_assignments is not None:
+        _check_cluster_leakage(
+            manifest,
+            report,
+            cluster_assignments_path=(
+                Path(cluster_assignments_path)
+                if cluster_assignments_path is not None
+                else None
+            ),
+            cluster_assignments=cluster_assignments,
+            expected_namespace=expected_cluster_namespace,
+        )
     report.ok = not any(issue.severity == "error" for issue in report.issues)
 
     if out_path is not None:
@@ -180,6 +268,177 @@ def _check_structure_tensor_completeness(manifest: CorpusReleaseManifest, report
         report.issues.append(
             ValidationIssue("warning", "low_pseudo_beta_fraction", "pseudo-beta completeness is below 95%")
         )
+
+
+def _check_cluster_leakage(
+    manifest: CorpusReleaseManifest,
+    report: CorpusValidationReport,
+    *,
+    cluster_assignments_path: Optional[Path] = None,
+    cluster_assignments: object | None = None,
+    expected_namespace: str,
+) -> None:
+    """Verify no cluster spans more than one split.
+
+    Accepts either a path (loaded fresh, the standalone-audit form) or
+    an in-memory ``ClusterAssignments`` (already loaded — used by
+    ``corpus_smoke.build_local_corpus_smoke_release`` when the caller
+    supplied assignments to the smoke pipeline).
+
+    Imported lazily because corpus_validation is consumed by
+    corpus_smoke, and a top-level import of cluster_assignments would
+    create a small import-time circle through validate_corpus_release.
+    """
+    # Lazy import — see docstring.
+    from .cluster_assignments import (
+        ClusterAssignments,
+        load_cluster_assignments,
+    )
+
+    if manifest.training_release is None:
+        report.issues.append(
+            ValidationIssue(
+                "warning",
+                "cluster_leakage_skipped_no_training_release",
+                "cannot run cluster-leakage check: no training release linked",
+            )
+        )
+        return
+
+    if cluster_assignments is not None:
+        if not isinstance(cluster_assignments, ClusterAssignments):
+            report.issues.append(
+                ValidationIssue(
+                    "error",
+                    "cluster_leakage_bad_in_memory_type",
+                    (
+                        f"cluster_assignments kwarg must be a ClusterAssignments "
+                        f"instance, got {type(cluster_assignments).__name__}"
+                    ),
+                )
+            )
+            return
+        assignments = cluster_assignments
+    else:
+        try:
+            assignments = load_cluster_assignments(cluster_assignments_path)
+        except Exception as exc:  # noqa: BLE001 — surface any load failure
+            report.issues.append(
+                ValidationIssue(
+                    "error",
+                    "cluster_leakage_load_failed",
+                    f"failed to load cluster assignments at {cluster_assignments_path}: {exc}",
+                )
+            )
+            return
+
+    namespace_ok = assignments.manifest.sequence_id_namespace == expected_namespace
+    if not namespace_ok:
+        report.issues.append(
+            ValidationIssue(
+                "warning",
+                "cluster_leakage_namespace_mismatch",
+                (
+                    f"cluster assignments use sequence_id_namespace="
+                    f"{assignments.manifest.sequence_id_namespace!r}, expected "
+                    f"{expected_namespace!r}; leakage check below assumes IDs "
+                    f"align with training join key — interpret with caution"
+                ),
+            )
+        )
+
+    # Load the per-record split assignments from the training release.
+    training_rows = _load_jsonl(
+        Path(manifest.training_release) / "training_examples.jsonl"
+    )
+    record_to_split: Dict[str, str] = {row["record_id"]: str(row.get("split", "train")) for row in training_rows}
+
+    cluster_to_splits: Dict[str, Dict[str, int]] = {}
+    covered_ids = set()
+    for row in assignments.rows:
+        split = record_to_split.get(row.record_id)
+        if split is None:
+            # Record present in the cluster artifact but absent from
+            # the training release. Surfaces as a low coverage_fraction
+            # below; not itself a leakage failure.
+            continue
+        covered_ids.add(row.record_id)
+        cluster_to_splits.setdefault(row.cluster_id, {}).setdefault(split, 0)
+        cluster_to_splits[row.cluster_id][split] += 1
+
+    leaking = {
+        cid: split_dist
+        for cid, split_dist in cluster_to_splits.items()
+        if len(split_dist) > 1
+    }
+    no_leakage = not leaking
+
+    if leaking:
+        sample = dict(list(leaking.items())[:3])
+        report.issues.append(
+            ValidationIssue(
+                "error",
+                "cluster_spans_splits",
+                (
+                    f"{len(leaking)} cluster(s) span more than one split — "
+                    f"leakage invariant violated. Sample: {sample}"
+                ),
+            )
+        )
+
+    coverage_fraction = (
+        len(covered_ids) / len(record_to_split) if record_to_split else 1.0
+    )
+    if coverage_fraction < 1.0 and namespace_ok:
+        report.issues.append(
+            ValidationIssue(
+                "warning",
+                "cluster_partial_coverage",
+                (
+                    f"cluster assignments cover {coverage_fraction:.4f} of "
+                    f"training records; some training records have no "
+                    f"cluster annotation"
+                ),
+            )
+        )
+
+    # Cluster size summary + skew measurement against the realised
+    # split distribution.
+    sizes: Dict[str, int] = {}
+    for cid, split_dist in cluster_to_splits.items():
+        sizes[cid] = sum(split_dist.values())
+    if sizes:
+        sorted_sizes = sorted(sizes.values())
+        n = len(sorted_sizes)
+        median = (
+            float(sorted_sizes[n // 2])
+            if n % 2
+            else float((sorted_sizes[n // 2 - 1] + sorted_sizes[n // 2]) / 2.0)
+        )
+        cluster_size_summary = {
+            "min": float(sorted_sizes[0]),
+            "max": float(sorted_sizes[-1]),
+            "mean": float(sum(sorted_sizes) / n),
+            "median": median,
+        }
+    else:
+        cluster_size_summary = {"min": 0.0, "max": 0.0, "mean": 0.0, "median": 0.0}
+
+    # Skew vs requested ratios is deliberately NOT recomputed here —
+    # see the ClusterLeakageReport docstring. ClusterAwareSplitResult
+    # (Phase C) is the source of truth for skew at split time; the
+    # training manifest's cluster_aware_split provenance carries the
+    # numbers for audit consumers that need them.
+    report.cluster_leakage_check = ClusterLeakageReport(
+        cluster_release_id=assignments.manifest.release_id,
+        expected_namespace=expected_namespace,
+        actual_namespace=assignments.manifest.sequence_id_namespace,
+        namespace_ok=namespace_ok,
+        no_leakage=no_leakage,
+        leaking_clusters=leaking,
+        coverage_fraction=coverage_fraction,
+        cluster_size_summary=cluster_size_summary,
+    )
 
 
 def _load_jsonl(path: Path) -> List[dict]:
