@@ -70,6 +70,7 @@ fixture); more than one is a spec error.
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import statistics
 from dataclasses import dataclass, field
@@ -185,14 +186,19 @@ def load_records(artifact: pathlib.Path, fmt: str, records_path: str | None) -> 
     if fmt == "jsonl":
         records: list[dict] = []
         with artifact.open("r", encoding="utf-8") as f:
-            for line in f:
+            for lineno, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
+                # A malformed (non-blank) line is corruption, not noise:
+                # silently dropping it would shrink a denominator and could
+                # let a band pass on a truncated artifact. Fail loudly.
                 try:
                     obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+                except json.JSONDecodeError as e:
+                    raise ScoringError(
+                        f"malformed JSON on line {lineno} of {artifact.name}: {e}"
+                    ) from e
                 if isinstance(obj, dict):
                     records.append(obj)
         return records
@@ -278,6 +284,24 @@ def _eval_predicate(record: dict, pred: dict, *, default_value: Any = None) -> b
     raise ScoringError(f"predicate has no recognised test: {pred!r}")
 
 
+def _coerce(v: Any) -> float | None:
+    """Coerce a present field to a finite float.
+
+    Returns None when the field is absent or not numeric (out of scope).
+    Raises ScoringError when it is present and numeric but non-finite —
+    a NaN/inf in evidence must not silently poison a median or be dropped.
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):
+        raise ScoringError(f"non-finite value in artifact: {v!r}")
+    return f
+
+
 def _extract_value(record: dict, value_spec: Any) -> float | None:
     """Pull the per-record numeric value per the ``value`` spec.
 
@@ -287,35 +311,29 @@ def _extract_value(record: dict, value_spec: Any) -> float | None:
     Returns None when a needed field is absent (record is out of scope).
     """
     if isinstance(value_spec, str):
-        v = _dig(record, value_spec)
-        if v is None:
-            return None
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
+        return _coerce(_dig(record, value_spec))
 
     if isinstance(value_spec, dict):
         if "rel" in value_spec:
             fields = value_spec["rel"]
             if not (isinstance(fields, list) and len(fields) == 2):
                 raise ScoringError("scoring.value.rel must be [numerator_field, oracle_field]")
-            a, b = _dig(record, fields[0]), _dig(record, fields[1])
+            a, b = _coerce(_dig(record, fields[0])), _coerce(_dig(record, fields[1]))
             if a is None or b is None:
                 return None
             floor = float(value_spec.get("floor", 0.0))
-            denom = max(abs(float(b)), floor)
+            denom = max(abs(b), floor)
             if denom == 0.0:
                 return None
-            return abs(float(a) - float(b)) / denom
+            return abs(a - b) / denom
         if "abs" in value_spec:
             fields = value_spec["abs"]
             if not (isinstance(fields, list) and len(fields) == 2):
                 raise ScoringError("scoring.value.abs must be [field_a, field_b]")
-            a, b = _dig(record, fields[0]), _dig(record, fields[1])
+            a, b = _coerce(_dig(record, fields[0])), _coerce(_dig(record, fields[1]))
             if a is None or b is None:
                 return None
-            return abs(float(a) - float(b))
+            return abs(a - b)
         raise ScoringError(f"scoring.value mapping must use 'rel' or 'abs': {value_spec!r}")
 
     raise ScoringError(f"scoring.value must be a field path or mapping: {value_spec!r}")

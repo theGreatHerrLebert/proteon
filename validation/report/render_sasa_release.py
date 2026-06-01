@@ -390,6 +390,11 @@ def render(
     # enforces. All SASA tolerances share output=total_sasa, so they're keyed
     # by the scoring.value field that distinguishes the Biopython arm from the
     # FreeSASA arm. HARD_BAND stays the sister CI claim's per-PDB band.
+    #
+    # Reassigning module globals is safe here because the lock gate invokes
+    # this renderer as a fresh subprocess per claim (one render() call per
+    # process). If that ever changes to render multiple SASA claims in-process,
+    # thread the bands through as parameters instead.
     global MEDIAN_BAND, FREESASA_BAND
     for _c in claim_doc.get("claims") or []:
         if "release-1k-pdbs" not in _c.get("id", ""):

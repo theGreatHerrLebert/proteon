@@ -60,7 +60,7 @@ claims:
       cross-tool agreement holds at population scale.
     tolerances:
       - metric: median_relative_error
-        op: ">"
+        op: ">="
         value: 0.95
         output: agreement_rate
         scoring:

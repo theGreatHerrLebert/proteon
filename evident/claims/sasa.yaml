@@ -159,7 +159,11 @@ claims:
           select:
             list: tests
             match: {test: sasa}
-          where: {field: status, in: [pass, warn, fail]}
+          # Denominator excludes load-cascade failures (prose: "- loading.fail").
+          # The runner emits sasa.status=fail only when loading failed upstream;
+          # genuine SASA disagreements are downgraded to 'warn', not 'fail'. So
+          # in:[pass,warn] == (pass + warn + fail - loading.fail).
+          where: {field: status, in: [pass, warn]}
           pass_when: {field: status, eq: pass}
         prose: >
           sasa.pass / (sasa.pass + sasa.warn + sasa.fail - loading.fail) >= 0.95

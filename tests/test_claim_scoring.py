@@ -29,11 +29,27 @@ import validate_manifest as vm  # noqa: E402
 # load_records
 # --------------------------------------------------------------------------- #
 
-def test_load_jsonl_skips_blank_and_malformed(tmp_path):
+def test_load_jsonl_skips_blank_keeps_records(tmp_path):
     p = tmp_path / "a.jsonl"
-    p.write_text('{"x": 1}\n\n{bad json}\n{"x": 2}\n', encoding="utf-8")
+    p.write_text('{"x": 1}\n\n{"x": 2}\n', encoding="utf-8")
     recs = cs.load_records(p, "jsonl", None)
     assert [r["x"] for r in recs] == [1, 2]
+
+
+def test_load_jsonl_malformed_line_raises(tmp_path):
+    # A corrupt (non-blank) line must error, not silently shrink the denominator.
+    p = tmp_path / "a.jsonl"
+    p.write_text('{"x": 1}\n{bad json}\n{"x": 2}\n', encoding="utf-8")
+    with pytest.raises(cs.ScoringError):
+        cs.load_records(p, "jsonl", None)
+
+
+def test_non_finite_value_raises():
+    # NaN/inf present in evidence must not silently poison an aggregate.
+    with pytest.raises(cs.ScoringError):
+        cs._extract_value({"v": float("nan")}, "v")
+    with pytest.raises(cs.ScoringError):
+        cs._extract_value({"v": float("inf")}, "v")
 
 
 def test_load_json_records_path(tmp_path):
