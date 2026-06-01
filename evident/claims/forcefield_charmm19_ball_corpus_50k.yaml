@@ -95,21 +95,45 @@ claims:
         op: "<"
         value: 0.01
         output: bond_stretch
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl
+          format: jsonl
+          value: {rel: [proteon.bond_stretch, ball.bond_stretch], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: "median |proteon - BALL| / |BALL| < 1% across the n_ok subset"
       - metric: median_relative_error
         op: "<"
         value: 0.01
         output: angle_bend
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl
+          format: jsonl
+          value: {rel: [proteon.angle_bend, ball.angle_bend], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: "median |proteon - BALL| / |BALL| < 1%"
       - metric: median_relative_error
         op: "<"
         value: 0.025
         output: vdw
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl
+          format: jsonl
+          value: {rel: [proteon.vdw, ball.vdw], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: "median |proteon - BALL| / |BALL| < 2.5%"
       - metric: median_relative_error
         op: "<"
         value: 0.01
         output: electrostatic
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl
+          format: jsonl
+          value: {rel: [proteon.electrostatic, ball.electrostatic], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: >
           median |proteon - BALL| / |BALL| < 1% on electrostatic.
           Tighter than the 1k claim's 0.5% because the 50k corpus
@@ -119,6 +143,12 @@ claims:
         op: "<"
         value: 0.05
         output: solvation
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl
+          format: jsonl
+          value: {rel: [proteon.solvation, ball.solvation], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: >
           median |proteon - BALL| / |BALL| < 5% on EEF1 solvation.
           Same band as the 1k claim; achieved.
@@ -126,6 +156,12 @@ claims:
         op: "<"
         value: 0.025
         output: torsion
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl
+          format: jsonl
+          value: {rel: [proteon.torsion, ball.torsion], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: >
           median |proteon - BALL| / |BALL| < 2.5% on proper torsion.
           50k median is 0.001% — well inside band; the gate is now
@@ -134,6 +170,12 @@ claims:
         op: "<"
         value: 0.025
         output: improper_torsion
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle_50k.jsonl
+          format: jsonl
+          value: {rel: [proteon.improper_torsion, ball.improper_torsion], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: >
           median |proteon - BALL| / |BALL| < 2.5% on harmonic
           improper torsion. Median (0.41%) passes; p95 (19.6%) and

@@ -111,6 +111,17 @@ claims:
         op: "<"
         value: 0.005
         output: total_sasa
+        scoring:
+          artifact: validation/results.json
+          format: json
+          records_path: results
+          select:
+            list: tests
+            match: {test: sasa}
+            take: details
+          value: relative_diff
+          where: {field: relative_diff, present: true}
+          aggregate: median
         prose: >
           Median(|proteon_total - biopython_total| / biopython_total) < 0.005
           across the 1000-structure validation/pdbs corpus.
@@ -118,6 +129,17 @@ claims:
         op: "<"
         value: 0.02
         output: total_sasa
+        scoring:
+          artifact: validation/results.json
+          format: json
+          records_path: results
+          select:
+            list: tests
+            match: {test: sasa}
+            take: details
+          value: freesasa_relative_diff
+          where: {field: freesasa_relative_diff, present: true}
+          aggregate: median
         prose: >
           Median(|proteon_total - freesasa_total| / freesasa_total) < 0.02
           across the same corpus. Looser than the Biopython gate because
@@ -130,6 +152,19 @@ claims:
         op: ">="
         value: 0.95
         output: total_sasa
+        scoring:
+          artifact: validation/results.json
+          format: json
+          records_path: results
+          select:
+            list: tests
+            match: {test: sasa}
+          # Denominator excludes load-cascade failures (prose: "- loading.fail").
+          # The runner emits sasa.status=fail only when loading failed upstream;
+          # genuine SASA disagreements are downgraded to 'warn', not 'fail'. So
+          # in:[pass,warn] == (pass + warn + fail - loading.fail).
+          where: {field: status, in: [pass, warn]}
+          pass_when: {field: status, eq: pass}
         prose: >
           sasa.pass / (sasa.pass + sasa.warn + sasa.fail - loading.fail) >= 0.95
           when load failures are excluded. A structure is downgraded from

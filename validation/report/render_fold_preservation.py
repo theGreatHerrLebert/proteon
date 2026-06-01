@@ -145,8 +145,14 @@ def plot_tm_distributions(records: list[dict], path: pathlib.Path,
     _save(fig, path)
 
 
-def plot_tm_diff_histogram(records: list[dict], path: pathlib.Path) -> None:
-    """Distribution of (openmm − proteon) per-PDB TM-score diff."""
+def plot_tm_diff_histogram(
+    records: list[dict], path: pathlib.Path, band: float = 0.01
+) -> None:
+    """Distribution of (openmm − proteon) per-PDB TM-score diff.
+
+    ``band`` is the claim's drift tolerance (drawn as the ±band line), passed
+    from the claim YAML so the figure matches the enforced number.
+    """
     ok = _ok_records(records)
     fig, ax = plt.subplots(figsize=(9, 4.5))
     if not ok:
@@ -162,9 +168,9 @@ def plot_tm_diff_histogram(records: list[dict], path: pathlib.Path) -> None:
     median = float(np.median(diffs))
     ax.axvline(median, color="#cb2431", linewidth=1.5,
                label=f"median {median:+.4f}")
-    ax.axvline(0.01, color="#d4a017", linestyle="--", linewidth=1.0,
-               label="claim band ±0.01")
-    ax.axvline(-0.01, color="#d4a017", linestyle="--", linewidth=1.0)
+    ax.axvline(band, color="#d4a017", linestyle="--", linewidth=1.0,
+               label=f"claim band ±{band:g}")
+    ax.axvline(-band, color="#d4a017", linestyle="--", linewidth=1.0)
     ax.set_xlabel(f"openmm.tm_score − proteon.tm_score (clipped to ±p99 = ±{p99:.4f})")
     ax.set_ylabel(f"# structures (n_ok = {len(ok)})")
     ax.set_title("Per-PDB TM-score diff distribution")
@@ -279,6 +285,13 @@ def render(
     claim_doc = yaml.safe_load(claim_path.read_text(encoding="utf-8"))
     meta = _claim_metadata(claim_doc)
     proteon_label, openmm_label = _label_from_id(meta["id"])
+    # Drift band from the claim's own tolerance, so the ±band line on the
+    # tm_diff figure matches the number the scorer enforces.
+    drift_band = 0.01
+    for _c in claim_doc.get("claims") or []:
+        for _t in _c.get("tolerances") or []:
+            if _t.get("metric") == "drift" and isinstance(_t.get("value"), (int, float)):
+                drift_band = float(_t["value"])
 
     records = _load_records(artifact_path)
     if not records:
@@ -293,7 +306,7 @@ def render(
     fig_diff = fig_dir / f"41_fold_{slug}_tm_diff.png"
     fig_scat = fig_dir / f"42_fold_{slug}_scatter.png"
     plot_tm_distributions(records, fig_dist, proteon_label, openmm_label)
-    plot_tm_diff_histogram(records, fig_diff)
+    plot_tm_diff_histogram(records, fig_diff, band=drift_band)
     plot_tm_scatter(records, fig_scat, proteon_label, openmm_label)
 
     artifact_sha = _sha256_file(artifact_path)

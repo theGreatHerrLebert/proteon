@@ -54,6 +54,9 @@ from typing import Any
 
 import yaml
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
+import claim_scoring as cs  # noqa: E402
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 CLAIMS_DIR = REPO_ROOT / "evident" / "claims"
 REPORTS_DIR = REPO_ROOT / "evident" / "reports"
@@ -357,6 +360,49 @@ def _verdict_from_summary(summary: dict[str, int] | None) -> str:
     return f"{n_ok}/{n_total} ok ({pct:.1f}%)"
 
 
+def _score_bands(claim: dict) -> dict | None:
+    """Score a claim's tolerance bands against their scoring: artifacts.
+
+    Returns None if the claim declares no scoring: blocks. Otherwise a dict
+    with a coarse ``status`` (pass|fail|error), a one-line ``summary``, and
+    the per-tolerance ``detail`` for the manifest. Unlike the JSONL
+    coverage verdict (``n_ok/n_total``), this asserts the recorded
+    tolerance is actually met — closing the gap where the band was only
+    ever checked by a human reading a number off a report.
+    """
+    has_scoring = any(
+        isinstance(t, dict) and t.get("scoring") is not None
+        for t in claim.get("tolerances") or []
+    )
+    if not has_scoring:
+        return None
+    try:
+        score = cs.score_claim(claim, REPO_ROOT)
+    except cs.ScoringError as e:
+        return {"status": "error", "summary": str(e), "detail": []}
+    detail = [
+        {
+            "metric": t.metric,
+            "output": t.output,
+            "op": t.op,
+            "threshold": t.threshold,
+            "observed": t.observed,
+            "passed": t.passed,
+            "n_in_scope": t.n_in_scope,
+            "n_records": t.n_records,
+        }
+        for t in score.tolerances
+        if t.scored
+    ]
+    n_pass = sum(1 for d in detail if d["passed"])
+    n = len(detail)
+    return {
+        "status": "fail" if score.any_failed else "pass",
+        "summary": f"{n_pass}/{n} bands met",
+        "detail": detail,
+    }
+
+
 def _row_for(
     claim_yaml: pathlib.Path,
     claim: dict,
@@ -375,6 +421,14 @@ def _row_for(
         "claim_yaml": str(claim_yaml.relative_to(REPO_ROOT)),
         "artifact": evidence.get("artifact"),
     }
+    # Score tolerance bands first — the scoring: blocks carry their own clean
+    # artifact paths, so a claim can be band-scored even when evidence.artifact
+    # is prose (e.g. "... archived in the bundle") that doesn't resolve to a
+    # file. Attached before the status branches below so it survives their
+    # early returns.
+    bands = _score_bands(claim)
+    if bands is not None:
+        row["bands"] = bands
     # CI-tier and other claims that declare "pytest console output" /
     # "stdout summary" as their artifact don't produce a file we could
     # sha256-pin, by design. Mark them `ci-only` so the index can
@@ -416,6 +470,14 @@ def _render_index(release_tag: str, manifest: dict, out_dir: pathlib.Path) -> No
         size_s = f"{size / 1024:.0f} KB" if size else ""
         verdict = r.get("verdict", "")
         oracles = ", ".join(r.get("oracles") or [])
+        bands = r.get("bands")
+        if bands is None:
+            bands_cell = ""
+        else:
+            status = bands.get("status", "")
+            bands_cell = (
+                f'<span class="pill pill-band-{status}">{bands.get("summary", status)}</span>'
+            )
         rows.append(
             "<tr>"
             f'<td><code>{r["id"]}</code></td>'
@@ -424,6 +486,7 @@ def _render_index(release_tag: str, manifest: dict, out_dir: pathlib.Path) -> No
             f"<td>{oracles}</td>"
             f'<td>{r.get("status", "")}</td>'
             f"<td>{verdict}</td>"
+            f"<td>{bands_cell}</td>"
             f"<td>{size_s}</td>"
             f"<td><code>{sha_short}</code></td>"
             f"<td>{report_link}</td>"
@@ -446,6 +509,9 @@ def _render_index(release_tag: str, manifest: dict, out_dir: pathlib.Path) -> No
   .pill-locked {{ background: #d4f4dd; color: #1d6b32; }}
   .pill-missing {{ background: #fde2e2; color: #6b1d1d; }}
   .pill-noartifact {{ background: #eee; color: #555; }}
+  .pill-band-pass {{ background: #d4f4dd; color: #1d6b32; }}
+  .pill-band-fail {{ background: #fde2e2; color: #6b1d1d; font-weight: 600; }}
+  .pill-band-error {{ background: #fff3cd; color: #7a5b00; }}
 </style>
 <h1>Proteon EVIDENT — {release_tag}</h1>
 <p class="meta">
@@ -464,6 +530,7 @@ def _render_index(release_tag: str, manifest: dict, out_dir: pathlib.Path) -> No
       <th>Oracle</th>
       <th>Status</th>
       <th>Verdict</th>
+      <th>Bands</th>
       <th>Size</th>
       <th>sha256</th>
       <th>Report</th>
@@ -506,6 +573,15 @@ def main() -> int:
         "--clean",
         action="store_true",
         help="Remove the output directory before writing (use for re-locks).",
+    )
+    parser.add_argument(
+        "--fail-on-band-regression",
+        action="store_true",
+        help=(
+            "Exit non-zero if any claim with scoring: blocks fails a recorded "
+            "tolerance band. Off by default — the lock stays tolerant and the "
+            "index is the reviewer's signal; turn on for a hard release gate."
+        ),
     )
     args = parser.parse_args()
 
@@ -579,6 +655,31 @@ def main() -> int:
         f"locked {n_locked}/{len(rows)} claims; rendered {n_rendered} HTML report(s) "
         f"into {out_dir.relative_to(REPO_ROOT)}",
     )
+
+    scored = [r for r in rows if r.get("bands")]
+    failed = [r for r in scored if r["bands"]["status"] == "fail"]
+    errored = [r for r in scored if r["bands"]["status"] == "error"]
+    n_band_pass = len(scored) - len(failed) - len(errored)
+    print(
+        f"tolerance bands: {n_band_pass}/{len(scored)} claims pass, "
+        f"{len(failed)} fail, {len(errored)} unscorable"
+    )
+    for r in failed:
+        offenders = [
+            f"{d['metric']}{('('+d['output']+')') if d.get('output') else ''}="
+            f"{d['observed']:.4g}{d['op']}{d['threshold']:.4g}"
+            for d in r["bands"]["detail"] if not d["passed"]
+        ]
+        print(f"  FAIL {r['id']}: {'; '.join(offenders)}", file=sys.stderr)
+    for r in errored:
+        print(f"  ERROR {r['id']}: {r['bands']['summary']}", file=sys.stderr)
+
+    if args.fail_on_band_regression and (failed or errored):
+        print(
+            "release gate: tolerance band regression(s) present "
+            "(--fail-on-band-regression)", file=sys.stderr,
+        )
+        return 1
     return 0
 
 

@@ -385,6 +385,32 @@ def render(
     claim_doc = yaml.safe_load(claim_path.read_text(encoding="utf-8"))
     meta = _claim_metadata(claim_doc, "release-1k-pdbs")
 
+    # Source the two release-claim median bands from the claim's own
+    # tolerances so the figures and table draw the same numbers the scorer
+    # enforces. All SASA tolerances share output=total_sasa, so they're keyed
+    # by the scoring.value field that distinguishes the Biopython arm from the
+    # FreeSASA arm. HARD_BAND stays the sister CI claim's per-PDB band.
+    #
+    # Reassigning module globals is safe here because the lock gate invokes
+    # this renderer as a fresh subprocess per claim (one render() call per
+    # process). If that ever changes to render multiple SASA claims in-process,
+    # thread the bands through as parameters instead.
+    global MEDIAN_BAND, FREESASA_BAND
+    for _c in claim_doc.get("claims") or []:
+        if "release-1k-pdbs" not in _c.get("id", ""):
+            continue
+        for _t in _c.get("tolerances") or []:
+            if _t.get("metric") != "median_relative_error":
+                continue
+            _vf = (_t.get("scoring") or {}).get("value")
+            _val = _t.get("value")
+            if not isinstance(_val, (int, float)) or isinstance(_val, bool):
+                continue
+            if _vf == "relative_diff":
+                MEDIAN_BAND = float(_val)
+            elif _vf == "freesasa_relative_diff":
+                FREESASA_BAND = float(_val)
+
     records = _load_sasa_records(artifact_path)
     if not records:
         raise SystemExit(f"no SASA records in artifact: {artifact_path}")

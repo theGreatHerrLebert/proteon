@@ -15,9 +15,15 @@ The ``-- extra args`` form forwards any extra tokens to the underlying
 command, joined with the claim's ``evidence.command``. Useful for
 ``-k <pattern>`` or ``--maxfail=1`` style overrides at replay time.
 
+After the command exits 0, if the claim carries ``scoring:`` blocks the
+replayed artifact is scored against the recorded tolerances (the oracle
+runners exit 0 regardless of whether a band was met, so the exit code
+alone is not a verdict). ``--no-score`` skips this.
+
 Exit codes:
-  0  command succeeded
-  1  command failed (non-zero exit from the replayed command)
+  0  command succeeded and every scored tolerance still passed
+  1  command failed, OR it succeeded but a tolerance band is no longer met
+  2  a scoring spec was malformed or its artifact was missing
   64 usage / argument error
   65 claim id not found
   66 claim has no ``evidence.command``
@@ -32,6 +38,9 @@ import subprocess
 import sys
 
 import yaml
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
+import claim_scoring as cs  # noqa: E402
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "evident" / "evident.yaml"
@@ -82,6 +91,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Replay a single EVIDENT claim by id."
     )
+    parser.add_argument(
+        "--no-score",
+        action="store_true",
+        help="Skip tolerance scoring after the replay (place before the claim id).",
+    )
     parser.add_argument("claim_id", help="Claim id (matches `id` in the YAML).")
     parser.add_argument(
         "extra",
@@ -130,7 +144,39 @@ def main() -> int:
     except FileNotFoundError as e:
         print(f"command not found: {e}", file=sys.stderr)
         return 64
-    return result.returncode
+    if result.returncode != 0:
+        return result.returncode
+
+    # The command exited 0. That only means the oracle runner ran — the
+    # runners exit 0 regardless of whether any band was met. If the claim
+    # carries scoring: blocks, enforce them against the artifact the command
+    # just (re)produced, so a replay that no longer meets its band fails.
+    if args.no_score:
+        return 0
+    has_scoring = any(
+        isinstance(t, dict) and t.get("scoring") is not None
+        for t in claim.get("tolerances") or []
+    )
+    if not has_scoring:
+        return 0
+    try:
+        score = cs.score_claim(claim, REPO_ROOT)
+    except cs.ScoringError as e:
+        print(f"\n# scoring error: {e}", file=sys.stderr)
+        return 2
+    print(f"\n# scoring {args.claim_id} against recorded tolerances:")
+    for t in score.tolerances:
+        if not t.scored:
+            continue
+        mark = "PASS" if t.passed else "FAIL"
+        out = f" ({t.output})" if t.output else ""
+        obs = "—" if t.observed is None else f"{t.observed:.5g}"
+        print(f"#   [{mark}] {t.metric}{out}: {obs} {t.op} {t.threshold:.5g}  [{t.reason}]")
+    if score.any_failed:
+        print("# replay command succeeded but at least one tolerance band is no "
+              "longer met", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

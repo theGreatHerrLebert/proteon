@@ -87,14 +87,22 @@ def successful_records(records: Iterable[dict]) -> list[dict]:
 
 # --- 10: per-component rel-diff distribution ----------------------------------
 
-def plot_error_distribution(records: list[dict], out: pathlib.Path) -> None:
+def plot_error_distribution(
+    records: list[dict], out: pathlib.Path, bands: dict | None = None
+) -> None:
     """7-panel grid (one per component) of rel-diff histograms.
 
     Each panel:
       * histogram of rel_diff[component] across all successful PDBs
       * red dashed line at the per-component band
       * pass-rate annotation in the corner
+
+    ``bands`` overrides the per-component thresholds (e.g. the 1k claim's
+    0.005 vs the module-default 50k bands); missing components fall back to
+    the module ``BANDS``. Pass the claim's tolerances so the drawn band
+    matches the enforced one.
     """
+    eff = {**BANDS, **(bands or {})}
     ok = successful_records(records)
     if not ok:
         return
@@ -121,12 +129,12 @@ def plot_error_distribution(records: list[dict], out: pathlib.Path) -> None:
         # Clip the visualization at the 99th percentile so the histogram
         # readable when one PDB is 1000% off; the outlier is still listed
         # in the outliers table.
-        vis_max = max(np.percentile(pct, 99) * 1.5, BANDS[comp] * 100 * 3)
+        vis_max = max(np.percentile(pct, 99) * 1.5, eff[comp] * 100 * 3)
         bins = np.linspace(0, vis_max, 41)
         n_above = (pct > vis_max).sum()
         ax.hist(pct, bins=bins, color=C["proteon"], alpha=0.85, edgecolor="white")
 
-        band_pct = BANDS[comp] * 100
+        band_pct = eff[comp] * 100
         ax.axvline(band_pct, color="#cb2431", lw=1.2, ls="--", alpha=0.85)
         ax.text(
             band_pct, ax.get_ylim()[1] * 0.92,
@@ -137,7 +145,7 @@ def plot_error_distribution(records: list[dict], out: pathlib.Path) -> None:
         # Headline numbers in the panel.
         median = np.median(pct)
         p95 = np.percentile(pct, 95)
-        n_pass = (vals < BANDS[comp]).sum()
+        n_pass = (vals < eff[comp]).sum()
         n_total = vals.size
         rate = n_pass / n_total * 100
         annotation = (

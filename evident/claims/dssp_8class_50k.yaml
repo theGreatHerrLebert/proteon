@@ -60,9 +60,15 @@ claims:
       cross-tool agreement holds at population scale.
     tolerances:
       - metric: median_relative_error
-        op: ">"
+        op: ">="
         value: 0.95
         output: agreement_rate
+        scoring:
+          artifact: validation/dssp_mkdssp_oracle_50k.jsonl
+          format: jsonl
+          value: agreement_rate
+          where: {field: agreement_rate, present: true}
+          aggregate: median
         prose: >
           Median(agreement_rate) >= 0.95 across the n_ok subset.
           Empirically the two implementations agree at 0.97-1.00 on
@@ -73,6 +79,12 @@ claims:
         op: ">="
         value: 0.80
         output: agreement_rate
+        scoring:
+          artifact: validation/dssp_mkdssp_oracle_50k.jsonl
+          format: jsonl
+          value: agreement_rate
+          where: {field: agreement_rate, present: true}
+          pass_when: {op: ">=", value: 0.95}
         prose: >
           n_ok structures with agreement_rate >= 0.95 / n_ok >= 0.80.
           Some PDBs have unusual residue compositions (sequence ID
@@ -82,6 +94,10 @@ claims:
         op: ">="
         value: 0.85
         output: agreement_rate
+        scoring:
+          artifact: validation/dssp_mkdssp_oracle_50k.jsonl
+          format: jsonl
+          pass_when: {field: agreement_rate, present: true}
         prose: >
           n_ok / n_attempted >= 0.85. Lower-bound on usable n_ok per
           v0.1.4's CHARMM 50K experience. mkdssp may reject some

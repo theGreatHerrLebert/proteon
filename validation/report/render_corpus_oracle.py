@@ -30,6 +30,7 @@ import hashlib
 import html
 import json
 import pathlib
+import sys
 from typing import Any
 
 try:
@@ -51,6 +52,9 @@ from corpus_oracle_plots import (
     successful_records,
 )
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "evident" / "tools"))
+import claim_scoring as cs  # noqa: E402
+
 
 def _embed_png(path: pathlib.Path, alt: str) -> str:
     if not path.exists():
@@ -67,8 +71,13 @@ def _sha256_file(path: pathlib.Path) -> str:
     return h.hexdigest()
 
 
-def _summary_table(records: list[dict]) -> str:
-    """Per-component summary (median / p95 / p99 / max / pass-rate)."""
+def _summary_table(records: list[dict], bands: dict | None = None) -> str:
+    """Per-component summary (median / p95 / p99 / max / pass-rate).
+
+    ``bands`` (the claim's per-component tolerances) overrides the module
+    defaults so the table's Band column matches the enforced tolerance.
+    """
+    eff = {**BANDS, **(bands or {})}
     ok = successful_records(records)
     if not ok:
         return "<p><em>No successful records.</em></p>"
@@ -81,7 +90,7 @@ def _summary_table(records: list[dict]) -> str:
         vals = vals[np.isfinite(vals)]
         if vals.size == 0:
             continue
-        band = BANDS.get(comp, 0.025)
+        band = eff.get(comp, 0.025)
         n_pass = (vals < band).sum()
         rate = n_pass / vals.size * 100
         rows.append(
@@ -138,6 +147,10 @@ def render(
 ) -> None:
     claim_doc = yaml.safe_load(claim_path.read_text())
     meta = _claim_metadata(claim_doc)
+    # Per-component bands from the claim's own tolerances, so the figure and
+    # summary table draw the same numbers the scorer enforces (the 1k and
+    # 50k charmm claims use different bands for the same components).
+    bands = cs.tolerance_bands(cs.first_claim(claim_doc), metric="median_relative_error")
 
     records = load_jsonl(artifact_path)
     if not records:
@@ -149,7 +162,7 @@ def render(
     fig_err = fig_dir / "10_corpus_error_distribution.png"
     fig_run = fig_dir / "11_corpus_runtime.png"
     fig_cor = fig_dir / "12_corpus_correlations.png"
-    plot_error_distribution(records, fig_err)
+    plot_error_distribution(records, fig_err, bands=bands)
     plot_runtime(records, fig_run)
     plot_correlations(records, fig_cor)
 
@@ -290,7 +303,7 @@ footer {{ margin-top: 40px; color: var(--muted); font-size: 12px;
 
 <section>
   <h2>Per-component summary</h2>
-  {_summary_table(records)}
+  {_summary_table(records, bands)}
 </section>
 
 <section>

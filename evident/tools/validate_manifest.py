@@ -47,6 +47,11 @@ VALID_TIERS = {"ci", "release", "research"}
 VALID_TRUST_STRATEGIES = {"understanding", "validation", "proof"}
 VALID_KINDS = {"measurement", "policy", "reference"}
 VALID_PROVENANCE = {"automatic", "human", "peer-reviewed"}
+# Mirror of claim_scoring.VALID_FORMATS / VALID_AGGREGATES. Kept as local
+# literals so this validator carries no hard import dependency on the scorer
+# (it doubles as the framework-level workflow/validate_manifest.py).
+VALID_SCORING_FORMATS = {"jsonl", "json"}
+VALID_SCORING_AGGREGATES = {"median", "mean", "max", "min", "value", "fraction"}
 PLACEHOLDER_PREFIXES = ("PENDING-", "TODO", "TBD")
 
 REQUIRED_FIELDS_ALL = {
@@ -194,6 +199,57 @@ def validate_tolerances(
                 entry["value"], bool
             ):
                 fail(f"claim {claim_id}: tolerances[{i}].value must be numeric")
+        if "scoring" in entry:
+            validate_scoring(entry, i, claim_id)
+
+
+def validate_scoring(entry: dict, i: int, claim_id: str) -> None:
+    """Schema-check an optional ``scoring:`` block on a tolerance.
+
+    Structural only — confirms the scorer can be pointed at the artifact.
+    Whether the recorded band is actually met is decided by claim_scoring
+    at score/replay/lock time, not here.
+    """
+    scoring = entry["scoring"]
+    if not isinstance(scoring, dict):
+        fail(f"claim {claim_id}: tolerances[{i}].scoring must be a mapping")
+    # A scorable tolerance must carry the metric/op/value it scores against.
+    for key in ("metric", "op", "value"):
+        if key not in entry:
+            fail(
+                f"claim {claim_id}: tolerances[{i}] has scoring: but no {key} "
+                f"to score against"
+            )
+    artifact = scoring.get("artifact")
+    if not isinstance(artifact, str) or not artifact.strip():
+        fail(f"claim {claim_id}: tolerances[{i}].scoring.artifact must be a non-empty string")
+    fmt = scoring.get("format")
+    if fmt not in VALID_SCORING_FORMATS:
+        fail(
+            f"claim {claim_id}: tolerances[{i}].scoring.format {fmt!r} invalid; "
+            f"allowed: {sorted(VALID_SCORING_FORMATS)}"
+        )
+    if "aggregate" in scoring and scoring["aggregate"] not in VALID_SCORING_AGGREGATES:
+        fail(
+            f"claim {claim_id}: tolerances[{i}].scoring.aggregate "
+            f"{scoring['aggregate']!r} invalid; allowed: {sorted(VALID_SCORING_AGGREGATES)}"
+        )
+    # fraction (the pass_rate aggregate) needs a per-record numerator predicate.
+    is_fraction = scoring.get("aggregate") == "fraction" or (
+        "aggregate" not in scoring and entry.get("metric") == "pass_rate"
+    )
+    if is_fraction and not isinstance(scoring.get("pass_when"), dict):
+        fail(
+            f"claim {claim_id}: tolerances[{i}].scoring needs a pass_when mapping "
+            f"for fraction/pass_rate scoring"
+        )
+    if "select" in scoring:
+        select = scoring["select"]
+        if not isinstance(select, dict) or not isinstance(select.get("list"), str):
+            fail(
+                f"claim {claim_id}: tolerances[{i}].scoring.select must be a mapping "
+                f"with a 'list' field name"
+            )
 
 
 def validate_inputs(
