@@ -21,8 +21,22 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "evident" / "tools"))
 
+# The scorer engine is stdlib-only and must always run. validate_manifest
+# imports PyYAML and raises SystemExit if it's absent (the Python CI matrix
+# runs pytest without PyYAML — it's only installed in the evident-image job),
+# so guard it and skip the yaml-dependent tests when it can't load. Matches
+# the pytest.importorskip pattern used by the other evident tests.
 import claim_scoring as cs  # noqa: E402
-import validate_manifest as vm  # noqa: E402
+
+try:
+    import yaml  # noqa: F401
+    import validate_manifest as vm  # noqa: E402
+    _HAVE_YAML = True
+except (ImportError, SystemExit):
+    vm = None
+    _HAVE_YAML = False
+
+needs_yaml = pytest.mark.skipif(not _HAVE_YAML, reason="PyYAML / validate_manifest unavailable")
 
 
 # --------------------------------------------------------------------------- #
@@ -320,10 +334,12 @@ def _tol(**over):
     return base
 
 
+@needs_yaml
 def test_validate_scoring_accepts_well_formed():
     vm.validate_scoring(_tol(), 0, "demo")  # no raise
 
 
+@needs_yaml
 def test_validate_scoring_rejects_bad_format():
     tol = _tol()
     tol["scoring"] = {**tol["scoring"], "format": "parquet"}
@@ -331,6 +347,7 @@ def test_validate_scoring_rejects_bad_format():
         vm.validate_scoring(tol, 0, "demo")
 
 
+@needs_yaml
 def test_validate_scoring_requires_pass_when_for_fraction():
     tol = {"metric": "pass_rate", "op": ">=", "value": 0.8, "prose": "x",
            "scoring": {"artifact": "a.jsonl", "format": "jsonl"}}
@@ -338,12 +355,14 @@ def test_validate_scoring_requires_pass_when_for_fraction():
         vm.validate_scoring(tol, 0, "demo")
 
 
+@needs_yaml
 def test_validate_scoring_requires_metric_op_value():
     tol = {"prose": "x", "scoring": {"artifact": "a.jsonl", "format": "jsonl"}}
     with pytest.raises(ValueError):
         vm.validate_scoring(tol, 0, "demo")
 
 
+@needs_yaml
 def test_real_manifest_still_validates():
     """The live manifest (now carrying scoring: blocks) passes schema check."""
     vm.validate_manifest(REPO_ROOT / "evident" / "evident.yaml")
@@ -353,6 +372,7 @@ def test_real_manifest_still_validates():
 # end-to-end against a real artifact (skips when the artifact isn't present)
 # --------------------------------------------------------------------------- #
 
+@needs_yaml
 @pytest.mark.skipif(
     not (REPO_ROOT / "validation" / "results.json").exists(),
     reason="release artifact validation/results.json not in working tree",
