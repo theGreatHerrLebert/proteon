@@ -77,21 +77,45 @@ claims:
         op: "<"
         value: 0.005
         output: bond_stretch
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle.jsonl
+          format: jsonl
+          value: {rel: [proteon.bond_stretch, ball.bond_stretch], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: "median |proteon - BALL| / |BALL| < 0.5% across the n_ok subset"
       - metric: median_relative_error
         op: "<"
         value: 0.005
         output: angle_bend
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle.jsonl
+          format: jsonl
+          value: {rel: [proteon.angle_bend, ball.angle_bend], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: "median |proteon - BALL| / |BALL| < 0.5%"
       - metric: median_relative_error
         op: "<"
         value: 0.005
         output: vdw
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle.jsonl
+          format: jsonl
+          value: {rel: [proteon.vdw, ball.vdw], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: "median |proteon - BALL| / |BALL| < 0.5%"
       - metric: median_relative_error
         op: "<"
         value: 0.005
         output: electrostatic
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle.jsonl
+          format: jsonl
+          value: {rel: [proteon.electrostatic, ball.electrostatic], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: >
           median |proteon - BALL| / |BALL| < 0.5% on electrostatic.
           The unit oracle on crambin measured 0.02%; the corpus
@@ -102,6 +126,12 @@ claims:
         op: "<"
         value: 0.05
         output: solvation
+        scoring:
+          artifact: validation/charmm19_eef1_ball_oracle.jsonl
+          format: jsonl
+          value: {rel: [proteon.solvation, ball.solvation], floor: 1.0}
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: >
           median |proteon - BALL| / |BALL| < 5% on EEF1. Wider band
           because BALL is the canonical EEF1 reference and small

@@ -58,6 +58,12 @@ claims:
         op: "<"
         value: 0.01
         output: rel_diff
+        scoring:
+          artifact: validation/amber96_oracle_50k.jsonl
+          format: jsonl
+          value: rel_diff
+          where: {field: rel_diff, present: true}
+          aggregate: median
         prose: >
           Median(|e_total_proteon - e_total_openmm| / (|e_total_openmm| + 1)) < 0.01
           across the n_ok subset. Tighter than the fold-preservation TM
@@ -68,6 +74,10 @@ claims:
         op: ">="
         value: 0.85
         output: rel_diff
+        scoring:
+          artifact: validation/amber96_oracle_50k.jsonl
+          format: jsonl
+          pass_when: {field: rel_diff, present: true}
         prose: >
           n_ok / n_attempted >= 0.85. Lower-bound on usable n_ok per
           v0.1.4's CHARMM 50K experience where ~12% n_ok rate was

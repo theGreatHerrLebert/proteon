@@ -55,6 +55,12 @@ claims:
         op: ">="
         value: 0.5
         output: tm_score
+        scoring:
+          artifact: validation/fold_preservation/amber_pair_1k.jsonl
+          format: jsonl
+          value: proteon.tm_score
+          where: {field: proteon.tm_score, present: true}
+          pass_when: {op: ">", value: 0.99}
         prose: >
           ≥50% of n_ok structures retain TM-score > 0.99 after 100
           minimizer steps. Fold preservation at population scale.
@@ -62,6 +68,12 @@ claims:
         op: "<"
         value: 0.01
         output: tm_diff
+        scoring:
+          artifact: validation/fold_preservation/amber_pair_1k.jsonl
+          format: jsonl
+          value: tm_diff
+          where: {field: tm_diff, present: true}
+          aggregate: median
         prose: >
           |median(openmm.tm_score − proteon.tm_score)| < 0.01 — the
           tightest bound across proteon's release-tier oracle claims
@@ -71,6 +83,10 @@ claims:
         op: ">="
         value: 0.85
         output: tm_score
+        scoring:
+          artifact: validation/fold_preservation/amber_pair_1k.jsonl
+          format: jsonl
+          pass_when: {field: proteon.tm_score, present: true}
         prose: >
           n_ok / n_attempted ≥ 0.85 to claim "across the corpus".
           Headline 86.4% (864 / 1000) on this run.
