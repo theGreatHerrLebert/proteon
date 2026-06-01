@@ -83,7 +83,7 @@ claims:
           value: {rel: [proteon.bond_stretch, ball.bond_stretch], floor: 1.0}
           where: {field: rel_diff, present: true}
           aggregate: median
-        prose: "median |proteon - BALL| / |BALL| < 0.5% across the n_ok subset"
+        prose: "median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 0.5% across the n_ok subset"
       - metric: median_relative_error
         op: "<"
         value: 0.005
@@ -94,7 +94,7 @@ claims:
           value: {rel: [proteon.angle_bend, ball.angle_bend], floor: 1.0}
           where: {field: rel_diff, present: true}
           aggregate: median
-        prose: "median |proteon - BALL| / |BALL| < 0.5%"
+        prose: "median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 0.5%"
       - metric: median_relative_error
         op: "<"
         value: 0.005
@@ -105,7 +105,7 @@ claims:
           value: {rel: [proteon.vdw, ball.vdw], floor: 1.0}
           where: {field: rel_diff, present: true}
           aggregate: median
-        prose: "median |proteon - BALL| / |BALL| < 0.5%"
+        prose: "median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 0.5%"
       - metric: median_relative_error
         op: "<"
         value: 0.005
@@ -117,7 +117,7 @@ claims:
           where: {field: rel_diff, present: true}
           aggregate: median
         prose: >
-          median |proteon - BALL| / |BALL| < 0.5% on electrostatic.
+          median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 0.5% on electrostatic.
           The unit oracle on crambin measured 0.02%; the corpus
           tolerance is wider to absorb structures with minor proteon-
           side typing differences from BALL (free-CYS HG handling,
@@ -133,7 +133,7 @@ claims:
           where: {field: rel_diff, present: true}
           aggregate: median
         prose: >
-          median |proteon - BALL| / |BALL| < 5% on EEF1. Wider band
+          median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 5% on EEF1. Wider band
           because BALL is the canonical EEF1 reference and small
           per-atom-volume rounding accumulates on larger structures.
     evidence:

@@ -101,7 +101,7 @@ claims:
           value: {rel: [proteon.bond_stretch, ball.bond_stretch], floor: 1.0}
           where: {field: rel_diff, present: true}
           aggregate: median
-        prose: "median |proteon - BALL| / |BALL| < 1% across the n_ok subset"
+        prose: "median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 1% across the n_ok subset"
       - metric: median_relative_error
         op: "<"
         value: 0.01
@@ -112,7 +112,7 @@ claims:
           value: {rel: [proteon.angle_bend, ball.angle_bend], floor: 1.0}
           where: {field: rel_diff, present: true}
           aggregate: median
-        prose: "median |proteon - BALL| / |BALL| < 1%"
+        prose: "median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 1%"
       - metric: median_relative_error
         op: "<"
         value: 0.025
@@ -123,7 +123,7 @@ claims:
           value: {rel: [proteon.vdw, ball.vdw], floor: 1.0}
           where: {field: rel_diff, present: true}
           aggregate: median
-        prose: "median |proteon - BALL| / |BALL| < 2.5%"
+        prose: "median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 2.5%"
       - metric: median_relative_error
         op: "<"
         value: 0.01
@@ -135,7 +135,7 @@ claims:
           where: {field: rel_diff, present: true}
           aggregate: median
         prose: >
-          median |proteon - BALL| / |BALL| < 1% on electrostatic.
+          median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 1% on electrostatic.
           Tighter than the 1k claim's 0.5% because the 50k corpus
           confirms that the dist-dep dielectric fix in PR #24
           generalises with no widening across the larger sample.
@@ -150,7 +150,7 @@ claims:
           where: {field: rel_diff, present: true}
           aggregate: median
         prose: >
-          median |proteon - BALL| / |BALL| < 5% on EEF1 solvation.
+          median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 5% on EEF1 solvation.
           Same band as the 1k claim; achieved.
       - metric: median_relative_error
         op: "<"
@@ -163,7 +163,7 @@ claims:
           where: {field: rel_diff, present: true}
           aggregate: median
         prose: >
-          median |proteon - BALL| / |BALL| < 2.5% on proper torsion.
+          median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 2.5% on proper torsion.
           50k median is 0.001% — well inside band; the gate is now
           a regression guard, not a measurement.
       - metric: median_relative_error
@@ -177,7 +177,7 @@ claims:
           where: {field: rel_diff, present: true}
           aggregate: median
         prose: >
-          median |proteon - BALL| / |BALL| < 2.5% on harmonic
+          median |proteon - BALL| / max(|BALL|, 1 kJ/mol) < 2.5% on harmonic
           improper torsion. Median (0.41%) passes; p95 (19.6%) and
           p99 (52%) are tail outliers documented under
           failure_modes — not gated until the residue-template
@@ -225,6 +225,21 @@ claims:
         environment. The replay command requires a maturin-built
         proteon-connector from main >= commit 4227a37 (PR #27).
     failure_modes:
+      - >
+        Denominator floor (issue 87): the relative error is
+        |proteon - BALL| / max(|BALL|, 1 kJ/mol), not a pure |BALL|
+        denominator. The 1 kJ/mol floor is a divide-by-small-number guard,
+        but it inflates the denominator for components whose BALL magnitude
+        is below ~1 kJ/mol on a given structure, which LOWERS the reported
+        relative error there. Improper torsion is the most affected (its
+        per-structure magnitude is often small), so its median understates
+        the raw |proteon - BALL|/|BALL| ratio on low-magnitude structures.
+        The gate is computed with the floor (matching the oracle runner), so
+        the median faithfully measures what is gated; the heavy improper-
+        torsion tail below is the unfloored reality the median does not show.
+        A p95/p99 gate is deliberately NOT added — the documented
+        improper-torsion tail would fail it pending the residue-template
+        coverage fix, so the tail is recorded here, not gated.
       - >
         Headline (commit at v0.1.4 lock time, 2026-05-04):
         n_attempted=44 210, n_ok=5 309, n_skip=37 258 (18 912

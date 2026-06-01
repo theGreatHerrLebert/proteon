@@ -1,10 +1,17 @@
-"""SOTA comparison: OpenMM CHARMM36+OBC2 fold preservation benchmark.
+"""SOTA comparison: OpenMM AMBER96 + OBC implicit-solvent fold preservation benchmark.
+
+This is the AMBER arm. (The CHARMM arm — OpenMM CHARMM36+OBC2 — lives in
+tm_fold_preservation.py's OpenMM counterpart.) The proteon side of this pair
+minimizes the same AMBER96 parameters WITHOUT the OBC implicit-solvent term,
+so the TM-score diff reflects implementation + solvent-environment
+differences, not pure implementation drift (issue 88).
 
 Same 1000 PDBs (seed=42) as the proteon benchmark. For each:
   1. Load PDB via PDBFixer.
   2. Add missing atoms + hydrogens at pH 7.
   3. Extract CA coords (pre-min).
-  4. Build system with amber96_obc.xml + .
+  4. Build system with amber96_obc.xml (AMBER96 + OBC GB) at a 10 Å
+     nonbonded cutoff (nonbondedCutoff=1.0 nm).
   5. LocalEnergyMinimizer (tolerance = 10 kJ/mol/nm, matches proteon's 0.1 kcal/mol/A).
   6. Extract CA coords (post-min).
   7. TM-score pre vs post (via proteon.tm_score — pure geometry op).
@@ -230,7 +237,7 @@ def main():
     if tms:
         tms_arr = np.array(tms)
         rmsds_arr = np.array(rmsds)
-        print(f"\nOpenMM CHARMM36+OBC2 TM-score (n={len(tms_arr)}):")
+        print(f"\nOpenMM AMBER96+OBC TM-score (n={len(tms_arr)}):")
         print(f"  mean={tms_arr.mean():.4f}  median={np.median(tms_arr):.4f}")
         print(f"  min={tms_arr.min():.4f}  p01={np.percentile(tms_arr,1):.4f}  p05={np.percentile(tms_arr,5):.4f}")
         print(f"  p95={np.percentile(tms_arr,95):.4f}  max={tms_arr.max():.4f}")

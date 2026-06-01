@@ -1,6 +1,10 @@
 claims:
   - id: proteon-amber96-fold-preservation-vs-openmm-release-1k-pdbs
-    title: Proteon AMBER96 minimization preserves fold within 0.005 TM-score of OpenMM AMBER96 across 1000 random PDBs
+    title: >
+      Proteon AMBER96 (vacuum) and OpenMM AMBER96+OBC minimization agree on
+      fold preservation to within 0.01 TM-score at the median across 1000
+      random PDBs (a relative agreement between two minimizers, not an
+      absolute fold-preservation floor)
     kind: measurement
     subsystem: minimize
     case: claims/fold_preservation_amber.md
@@ -106,11 +110,15 @@ claims:
       corpus_sha: "c1433563363bb18aa54ad70819255f6937ad9ed84eaf8b2d9e808bc60a77b7dc"
     assumptions:
       - >
-        Both arms claim AMBER96 with the same nonbonded cutoff (15 Å
-        per the AMBER+OpenMM oracle's documented policy choice — see
-        the closed forcefield_amber_openmm CI claim's history). The
-        TM-score diff captures pure implementation drift, not
-        parameter-set divergence.
+        Both arms use the AMBER96 parameter set, but NOT the same solvent
+        environment: OpenMM builds from amber96_obc.xml (AMBER96 + OBC
+        implicit solvent) at a 10 Å nonbonded cutoff
+        (nonbondedCutoff=1.0 nm in tm_fold_preservation_openmm_amber.py),
+        while proteon's arm minimizes the same parameters in vacuum (no
+        implicit-solvent term). So the TM-score diff captures implementation
+        AND solvent-environment differences — it is NOT pure implementation
+        drift, and the earlier "15 Å, purely implementation" framing was
+        wrong on both counts (issue 88).
       - >
         proteon's AMBER96 implementation uses all-atom prep (place all
         hydrogens, including non-polar) to match the parameter set's
