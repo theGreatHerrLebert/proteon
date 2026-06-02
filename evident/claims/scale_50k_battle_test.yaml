@@ -110,15 +110,19 @@ claims:
         what was exercised. CPU correctness is covered by the
         per-component oracle claims.
     failure_modes:
-      - The driver script is not in the source tree at the cited
-        commit. Artifact is preserved
-        (validation/stage3_50k_gpu_results.jsonl,
-        stage3_50k_gpu.log) but the driver that produced them is
-        not currently committed. The command field above is a
-        RECONSTRUCTED invocation matching the log header, not a
-        literal script path that exists today. Replay before the
-        next release requires re-creating the driver as
-        benchmark/stage3_50k_gpu.py.
+      - >
+        The cited artifact was produced before the driver was committed.
+        The driver has since been reconstructed as
+        benchmark/stage3_50k_gpu.py (issue 53) and matches the
+        evidence.command above: proteon.batch_load_tolerant +
+        batch_prepare(ff=charmm19_eef1, minimize_steps=50), emitting the
+        exact {pdb, atoms, status, skipped, initial_energy, final_energy,
+        steps, converged} schema (load failures become status=load_error +
+        exception). It honors the v0.2.0 data-mount contract
+        (PROTEON_CORPUS_DIR / PROTEON_OUTPUT_DIR) and was smoke-tested for
+        record-shape parity against this artifact. A fresh full-50K re-run
+        for the next EVIDENT bundle is tracked in issue 42; the cited 99.1%
+        number remains the v0.1.4-locked artifact until then.
       - Survival is not correctness. A pipeline that produces
         plausible-but-wrong energies on every structure could pass
         this claim. The per-component oracle claims (SASA, AMBER96,
