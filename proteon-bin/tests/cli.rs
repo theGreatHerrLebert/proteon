@@ -1,14 +1,15 @@
-//! Integration tests for the `proteon` analysis CLI (Phase 1: sasa/dssp/hbond).
+//! Integration tests for the `proteon` analysis CLI (sasa/dssp/hbond/energy).
 //!
 //! These guard the CLI against three failure modes:
 //!   1. Drift from the validated numbers (the SASA total is the
-//!      Biopython-oracle-backed value; DSSP is the known assignment).
+//!      Biopython-oracle-backed value; DSSP is the known assignment; the
+//!      energy total is the connector-native charmm19_eef1 value).
 //!   2. Non-deterministic batch output across thread counts.
 //!   3. Silent swallowing of per-file failures.
 //!
 //! Parity with the Python path is structural (both call the same
-//! `sasa::`/`dssp::`/`hbond::` entry points), so it is not re-asserted here;
-//! the Python oracle suite covers the numeric ground truth.
+//! `sasa::`/`dssp::`/`hbond::`/`forcefield::api::` entry points), so it is not
+//! re-asserted here; the Python oracle suite covers the numeric ground truth.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -97,6 +98,53 @@ fn batch_output_is_thread_count_independent() {
         .find("1crn.pdb")
         .expect("expected 1crn in batch output");
     assert!(pos_aaj < pos_crn, "batch output should be in sorted order");
+}
+
+fn energy_total(args: &[&str]) -> f64 {
+    let (stdout, stderr, code) = run(args);
+    assert_eq!(code, 0, "energy failed: {stderr}");
+    // total is the second-to-last column (n_unassigned_atoms is last).
+    let header = stdout.lines().next().unwrap();
+    let total_col = header.split('\t').position(|c| c == "total").unwrap();
+    stdout
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split('\t')
+        .nth(total_col)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn energy_units_and_default_ff() {
+    let p = pdb("1crn.pdb");
+    let ps = p.to_str().unwrap();
+    // Default ff is charmm19_eef1 in kJ/mol (matches proteon.compute_energy).
+    let kj = energy_total(&["energy", ps]);
+    let kcal = energy_total(&["energy", ps, "--units", "kcal/mol"]);
+    // kJ = kcal * 4.184; the connector-native charmm19_eef1 total for 1crn is
+    // ~22.27 kcal/mol (=> ~93.19 kJ/mol).
+    assert!(
+        (kcal - 22.2734).abs() < 0.1,
+        "charmm kcal total drifted: {kcal}"
+    );
+    assert!(
+        (kj - kcal * 4.184).abs() < 0.05,
+        "kJ/kcal conversion wrong: {kj} vs {kcal}"
+    );
+}
+
+#[test]
+fn energy_unknown_ff_fails_cleanly() {
+    let p = pdb("1crn.pdb");
+    let (_stdout, stderr, code) = run(&["energy", p.to_str().unwrap(), "--ff", "bogus"]);
+    assert_ne!(code, 0, "unknown ff must fail");
+    assert!(
+        stderr.contains("unknown force field"),
+        "should name the bad ff"
+    );
 }
 
 #[test]

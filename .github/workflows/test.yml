@@ -203,11 +203,12 @@ jobs:
       # symbols; if it links + runs here, the Linux link path is confirmed.
       - name: proteon help
         run: ./target/release/proteon --help
-      - name: proteon sasa / dssp / hbond
+      - name: proteon sasa / dssp / hbond / energy
         run: |
           ./target/release/proteon sasa test-pdbs/1crn.pdb
           ./target/release/proteon dssp test-pdbs/1crn.pdb
           ./target/release/proteon hbond test-pdbs/1crn.pdb | head -3
+          ./target/release/proteon energy test-pdbs/1crn.pdb
       - name: proteon no libpython dependency
         run: |
           if ldd ./target/release/proteon | grep -qi python; then
