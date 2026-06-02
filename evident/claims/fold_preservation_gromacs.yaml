@@ -1,0 +1,158 @@
+claims:
+  - id: proteon-amber96-fold-preservation-vs-gromacs-release-1k-pdbs
+    title: >
+      Proteon AMBER96 and GROMACS AMBER96 minimization agree on fold
+      preservation to within 0.01 TM-score at the median across a 1000-PDB
+      sample (a relative agreement between two independent minimizers, not
+      an absolute fold-preservation floor). n_ok=354; |median(gromacs −
+      proteon)| = 0.0036. Coverage (35.4%) documented, not gated.
+    kind: measurement
+    subsystem: minimize
+    case: claims/fold_preservation_gromacs.md
+    source: ..
+    tier: release
+    trust_strategy:
+      - validation
+    capabilities:
+      - fold-preservation-after-minimization
+    inputs:
+      corpus: amber-fold-preservation-1k-from-validation-pdbs
+      n: 1000
+      class: random-sample
+      seed: 42
+      corpus_sha: "9b62dafdefe5777fe57b3b92742d9cc520bbd7cc41a89c5eb472f4a9fb5c4716"  # sha256 of the joined evidence artifact
+      # Coverage — DOCUMENTED, not gated (see failure_modes). n_ok is the
+      # intersection where BOTH minimizers complete cleanly; pdb2gmx rejects
+      # incomplete/nonstandard/nucleic structures (out of population).
+      n_ok: 354
+      coverage_fraction: 0.354
+    outputs:
+      tm_score:
+        unit: dimensionless
+        description: >
+          TM-score between input PDB CA trace and post-minimization CA
+          trace. The same TM-score function runs on both arms, so the
+          comparison is on the physics, not on alignment idiosyncrasies.
+      tm_diff:
+        unit: dimensionless
+        description: >
+          Per-PDB difference gromacs.tm_score − proteon.tm_score. The
+          claim's tolerance bounds the median magnitude.
+    pinned_versions:
+      proteon: "0.2.0"
+      GROMACS: "2026.1"
+      python: "3.12"
+      runner_proteon: validation/tm_fold_preservation_amber.py
+      runner_gromacs: validation/tm_fold_preservation_gromacs.py
+      joiner: validation/fold_preservation/join_gromacs_pair.py
+    claim: >
+      Across a 1000-PDB seeded sample (seed=42) from validation/pdbs/,
+      proteon's AMBER96 vacuum minimization and GROMACS's AMBER96 vacuum
+      minimization agree on per-PDB fold preservation to within 0.01
+      TM-score at the median, over the n_ok=354 subset where both
+      minimizers complete cleanly. GROMACS is a third independent C lineage
+      for AMBER96 (its own energy code, L-BFGS minimizer, and pdb2gmx
+      topology builder), complementing the OpenMM-based
+      `fold_preservation_amber` claim — a shared proteon+OpenMM bug is
+      unlikely to also exist in GROMACS. The GATED claim is the relative
+      median agreement (and that ≥50% of structures retain TM > 0.99); the
+      35.4% coverage is documented as a population-narrowing stat
+      (pdb2gmx rejects incomplete / nonstandard / nucleic / multi-model
+      structures), not gated, since it measures reach, not agreement.
+      |median(gromacs − proteon)| = 0.0036, well inside the band; proteon
+      median TM = 0.9959, GROMACS median TM = 0.9995.
+    tolerances:
+      - metric: drift
+        op: "<"
+        value: 0.01
+        output: tm_diff
+        scoring:
+          artifact: validation/fold_preservation/gromacs_amber_pair_1k.jsonl
+          format: jsonl
+          value: tm_diff
+          where: {field: tm_diff, present: true}
+          aggregate: median
+        prose: >
+          |median(gromacs.tm_score − proteon.tm_score)| < 0.01 — the two
+          independent AMBER96 minimizers agree on per-PDB fold preservation
+          to within 0.01 TM-score at the median. Same 0.01 band as the
+          OpenMM-based AMBER claim. Headline 0.0036 is well inside it.
+      - metric: pass_rate
+        op: ">="
+        value: 0.5
+        output: tm_score
+        scoring:
+          artifact: validation/fold_preservation/gromacs_amber_pair_1k.jsonl
+          format: jsonl
+          value: proteon.tm_score
+          where: {field: proteon.tm_score, present: true}
+          pass_when: {op: ">", value: 0.99}
+        prose: >
+          ≥50% of n_ok structures retain proteon TM-score > 0.99 after 100
+          minimizer steps. Headline 87.3%. (GROMACS retains > 0.99 on 98.0%
+          — recorded in failure_modes, not separately gated since the SUT
+          here is proteon.)
+    evidence:
+      oracle:
+        - GROMACS
+      command: >
+        python validation/tm_fold_preservation_amber.py &&
+        python validation/tm_fold_preservation_gromacs.py &&
+        python validation/fold_preservation/join_gromacs_pair.py
+      artifact: validation/fold_preservation/gromacs_amber_pair_1k.jsonl
+    provenance: human
+    last_verified:
+      commit: "6f207207fad65027ef729708dee3d6a35fb5d239"
+      date: "2026-06-02"
+      value: 0.0036
+      corpus_sha: "9b62dafdefe5777fe57b3b92742d9cc520bbd7cc41a89c5eb472f4a9fb5c4716"
+    assumptions:
+      - >
+        Both arms minimize the same AMBER96 parameter set in vacuum (no
+        implicit solvent on either side), so the TM-score diff captures
+        implementation + minimizer-algorithm drift (proteon's minimizer vs
+        GROMACS L-BFGS), not a solvent-environment difference. This is a
+        cleaner pairing than the OpenMM AMBER arm, which runs OBC implicit
+        solvent (see fold_preservation_amber, issue 88).
+      - >
+        GROMACS skips structures pdb2gmx rejects (incomplete residues,
+        nonstandard/nucleic residues), mirroring the OpenMM arm's
+        skip-on-missing-heavy-atoms. addMissingAtoms is NOT run (it hangs
+        deterministically, PR #47), so the comparison surface is
+        well-resolved standard protein on both sides.
+      - >
+        Minimizer budget is 100 steps on both sides; neither runs to
+        convergence. The metric is fold survival, not minimum-finding.
+      - >
+        TM-score is computed by proteon's TM-align port on both arms, so the
+        alignment is shared and the diff isolates the minimization physics.
+    failure_modes:
+      - >
+        Headline (2026-06-02 run, issue 37 re-run after the runner was
+        patched to classify pdb2gmx-stage rejections as skips):
+        n_attempted=1000, n_ok=354 (35.4%). GROMACS side alone:
+        ok=363, skip=438 (400 incomplete_residue + 19 unsupported + 17
+        non-protein), error=199. proteon AMBER side: 950 ok. The joined
+        n_ok=354 is the intersection. tm_diff (gromacs − proteon) median
+        +0.0036, |tm_diff| p95 = 0.0124. proteon TM median 0.9959 / >0.99
+        on 87.3%; GROMACS TM median 0.9995 / >0.99 on 98.0%.
+      - >
+        Coverage is the population-narrowing concern, not agreement: pdb2gmx
+        only accepts complete standard protein residues, so missing heavy
+        atoms, incomplete rings, nonstandard and nucleic residues become
+        skips. This is the same well-resolved-wwPDB scoping the OpenMM AMBER
+        and CHARMM corpus claims use. Documented (inputs.coverage_fraction),
+        not gated.
+      - >
+        ~199 GROMACS-side structures error after building a topology:
+        ~165 are "CA shape mismatch" — NMR multi-model ensembles where the
+        GROMACS PDB output re-parses all models while the input CA count is
+        a single model (a post-extraction edge case, outside the
+        single-structure comparison surface); the rest are mdrun timeouts /
+        failures. These are errors, not skips, and are excluded from n_ok.
+      - >
+        AMBER96 is not proteon's production-default force field
+        (CHARMM19+EEF1 is). Like the OpenMM AMBER claim, this is an
+        implementation/cross-tool oracle, not a statement that proteon's
+        CHARMM19+EEF1 minimization is correct — that is carried by the
+        CHARMM corpus oracle and the per-component CI gate.

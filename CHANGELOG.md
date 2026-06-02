@@ -11,6 +11,30 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### EVIDENT: GROMACS AMBER96 fold-preservation oracle (#37)
+
+Re-produces the GROMACS fold-preservation artifact (previously a partial run
+dominated by uncategorised `pdb2gmx` errors) and adds it as a release-tier
+claim — a third independent C lineage for AMBER96 fold preservation,
+alongside the OpenMM-based `fold_preservation_amber`.
+
+- **Runner fix** (`validation/tm_fold_preservation_gromacs.py`): `pdb2gmx`-stage
+  failures (missing heavy atoms, incomplete rings, nonstandard / nucleic
+  residues) are now classified as principled `skipped` records — out of the
+  well-resolved-standard-protein population — rather than `error`. This
+  mirrors the OpenMM AMBER arm's skip-on-missing (no `addMissingAtoms`, which
+  hangs deterministically, PR #47), so the two arms compare the same
+  population. Post-topology failures (grompp / mdrun / NMR-ensemble CA
+  mismatch) remain `error`.
+- **Re-run** (1000 PDBs): 363 ok / 438 skip / 199 error; GROMACS AMBER96
+  median TM 0.9995.
+- **New claim** `proteon-amber96-fold-preservation-vs-gromacs-release-1k-pdbs`
+  with a #85-style scoring block: joins proteon-AMBER and GROMACS-AMBER per
+  PDB (`validation/fold_preservation/join_gromacs_pair.py`). Gated on the
+  relative median agreement (`|median(gromacs − proteon)| = 0.0036 < 0.01`)
+  and proteon TM > 0.99 on ≥50% (87.3%); the 35.4% coverage is documented,
+  not gated (same population-narrowing scoping as the other 50K/1K claims).
+
 ### EVIDENT claim integrity — honest rescoping of four release claims (#84, #86, #87, #88)
 
 Follow-up to the tolerance scorer (#85), which made the recorded bands
