@@ -20,8 +20,16 @@ proteon-align = { path = "../proteon-align" }
 proteon-arrow = { path = "../proteon-arrow" }
 proteon-io = { path = "../proteon-io" }
 proteon-search = { path = "../proteon-search" }
+# PROTOTYPE (Option A path): pull the connector in as an rlib to reach the
+# pure-Rust compute (sasa::, dssp::). This deliberately tests whether a plain
+# binary links against a pyo3 extension-module crate — the open architecture
+# question from TO_RUST_CLI.md. If `proteon` links + runs, Option A/C are
+# viable; if it fails at link time, that argues for Option B (extract a
+# pyo3-free proteon-core crate).
+proteon-connector = { path = "../proteon-connector" }
 pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
 clap = { version = "4", features = ["derive"] }
 parquet = "54"
 anyhow = "1"
 rayon = "1"
+serde_json = "1"

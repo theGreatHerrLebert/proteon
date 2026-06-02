@@ -16,7 +16,7 @@ use crate::dssp;
 
 /// A detected backbone hydrogen bond.
 #[derive(Clone, Debug)]
-pub(crate) struct BackboneHBond {
+pub struct BackboneHBond {
     /// Acceptor residue index (CO group)
     pub acceptor: usize,
     /// Donor residue index (NH group)
@@ -31,7 +31,7 @@ pub(crate) struct BackboneHBond {
 ///
 /// Returns a list of (acceptor_idx, donor_idx, energy, dist_ON) for all
 /// pairs where energy < cutoff (default -0.5 kcal/mol).
-pub(crate) fn backbone_hbonds(pdb: &pdbtbx::PDB, energy_cutoff: f64) -> Vec<BackboneHBond> {
+pub fn backbone_hbonds(pdb: &pdbtbx::PDB, energy_cutoff: f64) -> Vec<BackboneHBond> {
     let residues = dssp::extract_dssp_residues(pdb);
     backbone_hbonds_from_residues(&residues, energy_cutoff)
 }
@@ -93,7 +93,7 @@ pub(crate) fn backbone_hbonds_from_residues(
 
 /// A detected geometric hydrogen bond.
 #[derive(Clone, Debug)]
-pub(crate) struct GeometricHBond {
+pub struct GeometricHBond {
     /// Donor atom index (the heavy atom, e.g., N or O)
     pub donor_atom: usize,
     /// Acceptor atom index (the heavy atom, e.g., O)
@@ -115,7 +115,7 @@ pub(crate) struct GeometricHBond {
 ///
 /// Donors: N atoms (backbone and sidechain)
 /// Acceptors: O atoms (backbone and sidechain), S in Cys/Met
-pub(crate) fn geometric_hbonds(pdb: &pdbtbx::PDB, dist_cutoff: f64) -> Vec<GeometricHBond> {
+pub fn geometric_hbonds(pdb: &pdbtbx::PDB, dist_cutoff: f64) -> Vec<GeometricHBond> {
     // Collect donor and acceptor atoms with their positions
     struct AtomInfo {
         pos: [f64; 3],
