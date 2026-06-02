@@ -209,6 +209,12 @@ jobs:
           ./target/release/proteon dssp test-pdbs/1crn.pdb
           ./target/release/proteon hbond test-pdbs/1crn.pdb | head -3
           ./target/release/proteon energy test-pdbs/1crn.pdb
+      - name: proteon write commands (protonate / prepare)
+        run: |
+          ./target/release/proteon protonate test-pdbs/1crn.pdb -o "$RUNNER_TEMP/1crn_h.pdb"
+          test -s "$RUNNER_TEMP/1crn_h.pdb"
+          ./target/release/proteon prepare test-pdbs/1crn.pdb -o "$RUNNER_TEMP/1crn_prep.pdb" --minimize-steps 2
+          test -s "$RUNNER_TEMP/1crn_prep.pdb"
       - name: proteon no libpython dependency
         run: |
           if ldd ./target/release/proteon | grep -qi python; then

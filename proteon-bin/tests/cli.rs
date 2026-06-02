@@ -147,6 +147,94 @@ fn energy_unknown_ff_fails_cleanly() {
     );
 }
 
+fn col(stdout: &str, name: &str) -> String {
+    let header = stdout.lines().next().unwrap();
+    let i = header
+        .split('\t')
+        .position(|c| c == name)
+        .unwrap_or_else(|| panic!("no column {name} in: {header}"));
+    stdout
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split('\t')
+        .nth(i)
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn protonate_writes_structure_with_hydrogens() {
+    let out = std::env::temp_dir().join("proteon_cli_protonate.pdb");
+    let _ = std::fs::remove_file(&out);
+    let (stdout, stderr, code) = run(&[
+        "protonate",
+        pdb("1crn.pdb").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "protonate failed: {stderr}");
+    assert!(
+        col(&stdout, "h_added").parse::<i64>().unwrap() > 0,
+        "should add H"
+    );
+    assert_eq!(
+        col(&stdout, "minimized"),
+        "false",
+        "protonate must not minimize"
+    );
+    let written = std::fs::read_to_string(&out).expect("output not written");
+    assert!(written.contains("ATOM"), "output should be a PDB");
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn prepare_minimizes_and_reports() {
+    let out = std::env::temp_dir().join("proteon_cli_prepare.pdb");
+    let _ = std::fs::remove_file(&out);
+    // Small step budget keeps the test fast while still exercising the
+    // minimize branch.
+    let (stdout, stderr, code) = run(&[
+        "prepare",
+        pdb("1crn.pdb").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--minimize-steps",
+        "2",
+    ]);
+    assert_eq!(code, 0, "prepare failed: {stderr}");
+    assert_eq!(col(&stdout, "minimized"), "true", "prepare should minimize");
+    assert_eq!(col(&stdout, "ff"), "charmm19_eef1", "default ff");
+    assert!(out.exists(), "prepared structure not written");
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn write_command_requires_output_destination() {
+    // No -o / --out-dir → clean error, no panic.
+    let (_o, stderr, code) = run(&["protonate", pdb("1crn.pdb").to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("--out-dir") || stderr.contains("-o"),
+        "should explain output is required"
+    );
+}
+
+#[test]
+fn write_command_rejects_unknown_ff() {
+    let out = std::env::temp_dir().join("proteon_cli_badff.pdb");
+    let (_o, stderr, code) = run(&[
+        "prepare",
+        pdb("1crn.pdb").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--ff",
+        "bogus",
+    ]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("unknown force field"));
+}
+
 #[test]
 fn failure_is_isolated_and_signalled() {
     // Write a structurally-empty "PDB" that fails to load.
