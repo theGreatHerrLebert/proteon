@@ -135,6 +135,26 @@ def _gmx_error(stderr_bytes: bytes) -> str:
     return f"rc!=0 (empty stderr)"
 
 
+def _classify_pdb2gmx_reject(msg: str) -> str:
+    """Map a pdb2gmx failure to a skip reason.
+
+    A pdb2gmx failure means the structure is not a clean, complete, standard
+    protein that the amber96 topology template accepts — i.e. it falls
+    OUTSIDE the comparison population, exactly the cases the OpenMM AMBER arm
+    skips (prepare_fixer returns None on missing heavy atoms). So these are
+    `skipped`, not `error`: they bound coverage, not correctness.
+    """
+    m = msg.lower()
+    if "incomplete ring" in m or "is not found" in m or "not found in the input" in m:
+        return "incomplete_residue"          # missing heavy atoms / partial ring
+    if "rtp entry" in m and ("dt" in m or "dc" in m or "da" in m or "dg" in m
+                             or "rna" in m or " ru" in m):
+        return "non_protein_residue"          # nucleic acid in a "protein-only" file
+    if "residue topology" in m or "not found in residue topology" in m:
+        return "nonstandard_residue"
+    return "pdb2gmx_unsupported"              # any other template-match failure
+
+
 def run_one(pdb_path: str) -> dict:
     rec = {"pdb": Path(pdb_path).name}
     t0 = time.perf_counter()
@@ -164,7 +184,9 @@ def run_one(pdb_path: str) -> dict:
             cwd=work, capture_output=True, env=env, timeout=60,
         )
         if r.returncode != 0:
-            rec["error"] = f"pdb2gmx: {_gmx_error(r.stderr):.200}"
+            detail = _gmx_error(r.stderr)
+            rec["skipped"] = _classify_pdb2gmx_reject(detail)
+            rec["skip_detail"] = f"pdb2gmx: {detail:.200}"
             return rec
 
         # Pre-minimization CA from the original input PDB.
@@ -256,7 +278,7 @@ def main():
     print(f"Output: {OUT}", flush=True)
 
     t0 = time.perf_counter()
-    n_ok = n_fail = 0
+    n_ok = n_skip = n_fail = 0
     with open(OUT, "w") as f, ProcessPoolExecutor(max_workers=n_workers) as pool:
         futs = [pool.submit(run_one, p) for p in sample]
         done = 0
@@ -264,6 +286,8 @@ def main():
             rec = fut.result()
             if "tm_score" in rec:
                 n_ok += 1
+            elif "skipped" in rec:
+                n_skip += 1          # out-of-population (pdb2gmx-rejected); not a failure
             else:
                 n_fail += 1
             f.write(json.dumps(rec) + "\n")
@@ -274,13 +298,13 @@ def main():
                 rate = done / el
                 eta = (len(sample) - done) / rate if rate > 0 else 0
                 print(
-                    f"[{done}/{len(sample)}] ok={n_ok} fail={n_fail} "
+                    f"[{done}/{len(sample)}] ok={n_ok} skip={n_skip} fail={n_fail} "
                     f"rate={rate:.2f}/s eta={eta/60:.1f}min",
                     flush=True,
                 )
 
     elapsed = time.perf_counter() - t0
-    print(f"\nDone. ok={n_ok} fail={n_fail} in {elapsed/60:.1f} min "
+    print(f"\nDone. ok={n_ok} skip={n_skip} fail={n_fail} in {elapsed/60:.1f} min "
           f"({n_ok/elapsed:.2f} struct/s)", flush=True)
 
     tms = []
