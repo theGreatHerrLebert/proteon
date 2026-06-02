@@ -102,7 +102,7 @@ claims:
       artifact: validation/fold_preservation/gromacs_amber_pair_1k.jsonl
     provenance: human
     last_verified:
-      commit: null
+      commit: "6f207207fad65027ef729708dee3d6a35fb5d239"
       date: "2026-06-02"
       value: 0.0036
       corpus_sha: "9b62dafdefe5777fe57b3b92742d9cc520bbd7cc41a89c5eb472f4a9fb5c4716"
