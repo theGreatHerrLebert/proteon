@@ -1,13 +1,23 @@
 //! `proteon` — unified CLI for the molecular-mechanics / analysis surface.
 //!
-//! Phase 1 (read-only analysis): `sasa`, `dssp`, `hbond`. These are the
-//! Python-only surfaces given a command-line door. Each subcommand calls the
-//! EXACT same pure-Rust entry points the Python API calls
+//! Read-only analysis: `sasa`, `dssp`, `hbond`, `energy`. Write commands
+//! (emit prepared structures): `prepare`, `protonate`, `minimize`. These are
+//! the Python-only surfaces given a command-line door. Each subcommand calls
+//! the EXACT same pure-Rust entry points the Python API calls
 //! (`sasa::sasa_from_pdb`, `dssp::dssp_from_pdb`, `hbond::backbone_hbonds` /
-//! `geometric_hbonds`) — it is deliberately not a second implementation, so it
-//! cannot drift from the Python path. Numeric defaults mirror the Python
+//! `geometric_hbonds`, `forcefield::api::energy_from_pdb`,
+//! `prepare::prepare_from_pdb`) — deliberately not a second implementation, so
+//! it cannot drift from the Python path. Numeric defaults mirror the Python
 //! signatures (`probe=1.4`, `n_points=960`, `radii="bondi"`,
-//! `energy_cutoff=-0.5`, `dist_cutoff=3.5`).
+//! `energy_cutoff=-0.5`, `dist_cutoff=3.5`; energy defaults to `charmm19_eef1`
+//! in kJ/mol like `proteon.compute_energy`; the write commands are presets over
+//! the `batch_prepare` pipeline).
+//!
+//! Write-command I/O contract: see TO_RUST_CLI.md. In brief — first model only;
+//! highest-occupancy altloc; missing heavy *atoms* reconstructed, missing
+//! *residues* never fabricated; non-protein residues pass through but are not
+//! parameterized (>50% non-water-unassigned ⇒ skipped_no_protein, minimize
+//! skipped); output format follows the `-o`/`--out-dir` path extension.
 //!
 //! Implemented via the "Option A" path (TO_RUST_CLI.md): `proteon-bin` depends
 //! on the pyo3 `extension-module` connector as an rlib and calls only the
@@ -29,7 +39,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use rayon::prelude::*;
 
 use proteon_connector::dssp;
+use proteon_connector::forcefield::api as ff_api;
 use proteon_connector::hbond;
+use proteon_connector::prepare::{self, PrepareOptions, PrepareReport};
 use proteon_connector::sasa;
 
 #[derive(Parser)]
@@ -51,6 +63,14 @@ enum Cmd {
     Dssp(DsspArgs),
     /// Backbone (Kabsch-Sander energy) or geometric (distance) H-bonds.
     Hbond(HbondArgs),
+    /// Force-field potential energy + per-term breakdown (read-only).
+    Energy(EnergyArgs),
+    /// Full preparation: reconstruct missing atoms, place H, minimize (writes structures).
+    Prepare(PrepareArgs),
+    /// Place hydrogens only (writes structures).
+    Protonate(ProtonateArgs),
+    /// Energy-minimize the input as-is (writes structures).
+    Minimize(MinimizeArgs),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -112,6 +132,93 @@ struct HbondArgs {
     #[arg(long, default_value_t = 3.5)]
     dist_cutoff: f64,
 }
+
+#[derive(Args)]
+struct EnergyArgs {
+    #[command(flatten)]
+    common: Common,
+    /// Force field: charmm19_eef1 | amber96 | amber96_obc. Defaults to
+    /// charmm19_eef1 (proteon's production force field; united-atom, so it
+    /// evaluates on heavy-atom-only inputs — amber96 expects placed hydrogens,
+    /// e.g. via `proteon prepare`).
+    #[arg(long, default_value = "charmm19_eef1")]
+    ff: String,
+    /// Override the nonbonded cutoff distance in Angstroms (default: the force
+    /// field's own value). Mainly for cross-tool oracle comparison.
+    #[arg(long)]
+    nonbonded_cutoff: Option<f64>,
+    /// Energy units: kJ/mol (default, matches proteon.compute_energy) or
+    /// kcal/mol (the force field's internal unit).
+    #[arg(long, default_value = "kJ/mol")]
+    units: String,
+}
+
+/// Output destination + force field shared by the write commands. Exactly one
+/// of `-o`/`--out-dir` is required; `-o` is single-input only.
+#[derive(Args)]
+struct WriteCommon {
+    #[command(flatten)]
+    common: Common,
+    /// Write the single prepared structure to this file (single input only).
+    #[arg(short = 'o', long = "output")]
+    out_file: Option<PathBuf>,
+    /// Write each prepared structure into this directory, keeping its filename.
+    #[arg(long = "out-dir")]
+    out_dir: Option<PathBuf>,
+    /// Force field for topology/minimization: charmm19_eef1 (default) or amber96.
+    #[arg(long, default_value = "charmm19_eef1")]
+    ff: String,
+}
+
+#[derive(Args)]
+struct PrepareArgs {
+    #[command(flatten)]
+    write: WriteCommon,
+    /// Hydrogen placement: all (default) | backbone | general | none.
+    #[arg(long, default_value = "all")]
+    hydrogens: String,
+    /// Minimizer: lbfgs (default) | cg | sd.
+    #[arg(long = "method", default_value = "lbfgs")]
+    minimize_method: String,
+    /// Maximum minimizer steps.
+    #[arg(long, default_value_t = 500)]
+    minimize_steps: usize,
+    /// Skip the minimization stage (reconstruct + protonate only).
+    #[arg(long)]
+    no_minimize: bool,
+    /// Skip reconstruction of missing heavy atoms.
+    #[arg(long)]
+    no_reconstruct: bool,
+}
+
+#[derive(Args)]
+struct ProtonateArgs {
+    #[command(flatten)]
+    write: WriteCommon,
+    /// Hydrogen placement: all (default) | backbone | general.
+    #[arg(long, default_value = "all")]
+    hydrogens: String,
+    /// Keep pre-existing hydrogens instead of stripping and re-placing.
+    #[arg(long)]
+    keep_existing_h: bool,
+}
+
+#[derive(Args)]
+struct MinimizeArgs {
+    #[command(flatten)]
+    write: WriteCommon,
+    /// Minimizer: lbfgs (default) | cg | sd.
+    #[arg(long = "method", default_value = "lbfgs")]
+    minimize_method: String,
+    /// Maximum minimizer steps.
+    #[arg(long, default_value_t = 500)]
+    minimize_steps: usize,
+}
+
+/// kcal/mol → kJ/mol. Mirrors `_KCAL_TO_KJ` in the Python wrapper
+/// (packages/proteon/src/proteon/forcefield.py); the connector computes in
+/// kcal/mol and both front-ends convert for display.
+const KCAL_TO_KJ: f64 = 4.184;
 
 /// One output row, as ordered (column, value) pairs. The first column is always
 /// `file`, so the schema is identical for single-structure and batch runs and
@@ -187,16 +294,19 @@ fn gather_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
 
 fn run<F>(common: &Common, compute: F) -> Result<()>
 where
-    F: Fn(&pdbtbx::PDB) -> Vec<Row> + Sync,
+    F: Fn(&pdbtbx::PDB) -> std::result::Result<Vec<Row>, String> + Sync,
 {
     let files = gather_inputs(&common.inputs)?;
     if files.is_empty() {
         return Err(anyhow!("no input structures found"));
     }
 
+    // The compute closure is fallible so a per-structure failure (e.g. an
+    // unparameterized residue for `energy`) isolates to that file rather than
+    // aborting the batch — same path as a load failure.
     let compute_one = |path: &Path| -> std::result::Result<Vec<Row>, String> {
         let pdb = load_pdb(path).map_err(|e| e.to_string())?;
-        Ok(compute(&pdb))
+        compute(&pdb)
     };
 
     // Fan out with the requested thread budget; collect preserves input order.
@@ -309,7 +419,7 @@ fn run_sasa(args: &SasaArgs) -> Result<()> {
         let atom_areas = sasa::sasa_from_pdb(pdb, probe, n_points, rs);
         if !per_residue {
             let total: f64 = atom_areas.iter().sum();
-            return vec![vec![("total_sasa", Value::F64(total))]];
+            return Ok(vec![vec![("total_sasa", Value::F64(total))]]);
         }
         // residue_sasa() walks (first model → chains → residues) in the same
         // order we re-walk here for identifiers, so the vectors align.
@@ -338,14 +448,14 @@ fn run_sasa(args: &SasaArgs) -> Result<()> {
                 }
             }
         }
-        out
+        Ok(out)
     })
 }
 
 fn run_dssp(args: &DsspArgs) -> Result<()> {
     // Same entry point as py_dssp::compute_dssp — parity is by construction.
     run(&args.common, |pdb| {
-        vec![vec![("dssp", Value::Str(dssp::dssp_from_pdb(pdb)))]]
+        Ok(vec![vec![("dssp", Value::Str(dssp::dssp_from_pdb(pdb)))]])
     })
 }
 
@@ -354,7 +464,7 @@ fn run_hbond(args: &HbondArgs) -> Result<()> {
     let energy_cutoff = args.energy_cutoff;
     let dist_cutoff = args.dist_cutoff;
     run(&args.common, move |pdb| {
-        if geometric {
+        let rows = if geometric {
             hbond::geometric_hbonds(pdb, dist_cutoff)
                 .into_iter()
                 .map(|b| {
@@ -377,8 +487,237 @@ fn run_hbond(args: &HbondArgs) -> Result<()> {
                     ]
                 })
                 .collect()
-        }
+        };
+        Ok(rows)
     })
+}
+
+fn run_energy(args: &EnergyArgs) -> Result<()> {
+    // Validate the force field once up front so an unknown name fails the whole
+    // command cleanly, rather than emitting one identical per-file error.
+    if !ff_api::is_known_force_field(&args.ff) {
+        return Err(anyhow!(
+            "unknown force field '{}'. Use charmm19_eef1, amber96, or amber96_obc.",
+            args.ff
+        ));
+    }
+    let (unit_label, factor) = match args.units.to_lowercase().as_str() {
+        "kj/mol" | "kj" => ("kJ/mol", KCAL_TO_KJ),
+        "kcal/mol" | "kcal" => ("kcal/mol", 1.0),
+        other => {
+            return Err(anyhow!(
+                "unknown units '{other}'. Use 'kJ/mol' or 'kcal/mol'."
+            ))
+        }
+    };
+    let ff = args.ff.clone();
+    let cutoff = args.nonbonded_cutoff;
+    run(&args.common, move |pdb| {
+        // Same entry point as py_forcefield::compute_energy — parity by
+        // construction (the connector returns kcal/mol; we scale for display
+        // exactly as the Python wrapper does). A per-structure failure
+        // (unparameterized residue) becomes a String error and isolates to
+        // this file.
+        let rep = ff_api::energy_from_pdb(pdb, &ff, None, cutoff)?;
+        let e = &rep.energy;
+        Ok(vec![vec![
+            ("ff", Value::Str(ff.clone())),
+            ("units", Value::Str(unit_label.to_string())),
+            ("bond_stretch", Value::F64(e.bond_stretch * factor)),
+            ("angle_bend", Value::F64(e.angle_bend * factor)),
+            ("torsion", Value::F64(e.torsion * factor)),
+            ("improper_torsion", Value::F64(e.improper_torsion * factor)),
+            ("vdw", Value::F64(e.vdw * factor)),
+            ("electrostatic", Value::F64(e.electrostatic * factor)),
+            ("solvation", Value::F64(e.solvation * factor)),
+            ("total", Value::F64(e.total * factor)),
+            (
+                "n_unassigned_atoms",
+                Value::Int(rep.n_unassigned_atoms as i64),
+            ),
+        ]])
+    })
+}
+
+enum OutputDest {
+    File(PathBuf),
+    Dir(PathBuf),
+}
+
+fn resolve_output(w: &WriteCommon, n_inputs: usize) -> Result<OutputDest> {
+    match (&w.out_file, &w.out_dir) {
+        (Some(_), Some(_)) => Err(anyhow!("use -o/--output or --out-dir, not both")),
+        (None, None) => Err(anyhow!("specify -o FILE (single input) or --out-dir DIR")),
+        (Some(f), None) => {
+            if n_inputs != 1 {
+                return Err(anyhow!(
+                    "-o/--output takes a single input; use --out-dir for multiple"
+                ));
+            }
+            Ok(OutputDest::File(f.clone()))
+        }
+        (None, Some(d)) => Ok(OutputDest::Dir(d.clone())),
+    }
+}
+
+/// Per-structure stat row from a preparation report. Energies are the
+/// minimizer's native kcal/mol (column names say so) — distinct from the
+/// `energy` command, which reports kJ/mol by default.
+fn prepare_report_row(report: &PrepareReport, ff: &str) -> Row {
+    vec![
+        ("ff", Value::Str(ff.to_string())),
+        ("reconstructed", Value::Int(report.reconstructed as i64)),
+        ("h_added", Value::Int(report.h_added as i64)),
+        ("h_skipped", Value::Int(report.h_skipped as i64)),
+        ("n_unassigned", Value::Int(report.n_unassigned as i64)),
+        (
+            "skipped_no_protein",
+            Value::Str(report.skipped_no_protein.to_string()),
+        ),
+        ("minimized", Value::Str(report.minimized.to_string())),
+        ("init_e_kcal", Value::F64(report.init_e)),
+        ("final_e_kcal", Value::F64(report.final_e)),
+        ("steps", Value::Int(report.steps as i64)),
+        ("converged", Value::Str(report.converged.to_string())),
+    ]
+}
+
+/// Shared driver for the write commands: load each structure, run the
+/// preparation pipeline in place, save the result, and emit a stat row. Per-file
+/// failures isolate (stderr + nonzero exit); the structure file is written only
+/// on success.
+fn run_write(w: &WriteCommon, opts: PrepareOptions) -> Result<()> {
+    if !prepare::is_prepare_force_field(&w.ff) {
+        return Err(anyhow!(
+            "unknown force field '{}'. Use charmm19_eef1 or amber96.",
+            w.ff
+        ));
+    }
+    let files = gather_inputs(&w.common.inputs)?;
+    if files.is_empty() {
+        return Err(anyhow!("no input structures found"));
+    }
+    let dest = resolve_output(w, files.len())?;
+    if let OutputDest::Dir(d) = &dest {
+        std::fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
+    }
+    let ff = w.ff.clone();
+
+    let out_path_for = |input: &Path| -> PathBuf {
+        match &dest {
+            OutputDest::File(f) => f.clone(),
+            OutputDest::Dir(d) => {
+                d.join(input.file_name().unwrap_or(std::ffi::OsStr::new("out.pdb")))
+            }
+        }
+    };
+
+    let compute_one = |path: &Path| -> std::result::Result<Row, String> {
+        let mut pdb = load_pdb(path).map_err(|e| e.to_string())?;
+        let report = prepare::prepare_from_pdb(&mut pdb, &ff, &opts)?;
+        let outp = out_path_for(path);
+        let outp_str = outp.to_str().ok_or("non-UTF8 output path")?;
+        pdbtbx::save(&pdb, outp_str, pdbtbx::StrictnessLevel::Loose).map_err(|errs| {
+            format!(
+                "save failed: {}",
+                errs.iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })?;
+        let mut row = prepare_report_row(&report, &ff);
+        row.insert(
+            0,
+            ("output", Value::Str(outp.to_string_lossy().into_owned())),
+        );
+        Ok(row)
+    };
+
+    let results: Vec<std::result::Result<Row, String>> = if w.common.threads == 1 {
+        files.iter().map(|p| compute_one(p)).collect()
+    } else {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(w.common.threads)
+            .build()
+            .context("building thread pool")?;
+        pool.install(|| files.par_iter().map(|p| compute_one(p)).collect())
+    };
+
+    let mut rows: Vec<(String, Row)> = Vec::new();
+    let mut had_error = false;
+    for (path, res) in files.iter().zip(results) {
+        let file = path.to_string_lossy().into_owned();
+        match res {
+            Ok(mut row) => {
+                row.insert(0, ("file", Value::Str(file.clone())));
+                rows.push((file, row));
+            }
+            Err(e) => {
+                had_error = true;
+                eprintln!("ERROR {file}: {e}");
+            }
+        }
+    }
+    emit(w.common.format, &rows)?;
+    if had_error {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn run_prepare(a: &PrepareArgs) -> Result<()> {
+    run_write(
+        &a.write,
+        PrepareOptions {
+            reconstruct: !a.no_reconstruct,
+            hydrogens: a.hydrogens.clone(),
+            include_water: false,
+            minimize: !a.no_minimize,
+            minimize_method: a.minimize_method.clone(),
+            minimize_steps: a.minimize_steps,
+            gradient_tolerance: 0.1,
+            strip_hydrogens: true,
+            constrain_heavy: None, // FF-aware
+        },
+    )
+}
+
+fn run_protonate(a: &ProtonateArgs) -> Result<()> {
+    run_write(
+        &a.write,
+        PrepareOptions {
+            reconstruct: false,
+            hydrogens: a.hydrogens.clone(),
+            include_water: false,
+            minimize: false,
+            minimize_method: "lbfgs".to_string(),
+            minimize_steps: 0,
+            gradient_tolerance: 0.1,
+            strip_hydrogens: !a.keep_existing_h,
+            constrain_heavy: None,
+        },
+    )
+}
+
+fn run_minimize(a: &MinimizeArgs) -> Result<()> {
+    // Minimize the input as-is: no reconstruct, no H placement, keep existing
+    // atoms. If the input has no hydrogens the pipeline reports minimized=false
+    // (run `protonate` or `prepare` first to add them).
+    run_write(
+        &a.write,
+        PrepareOptions {
+            reconstruct: false,
+            hydrogens: "none".to_string(),
+            include_water: false,
+            minimize: true,
+            minimize_method: a.minimize_method.clone(),
+            minimize_steps: a.minimize_steps,
+            gradient_tolerance: 0.1,
+            strip_hydrogens: false,
+            constrain_heavy: None,
+        },
+    )
 }
 
 fn main() -> Result<()> {
@@ -387,5 +726,9 @@ fn main() -> Result<()> {
         Cmd::Sasa(a) => run_sasa(a),
         Cmd::Dssp(a) => run_dssp(a),
         Cmd::Hbond(a) => run_hbond(a),
+        Cmd::Energy(a) => run_energy(a),
+        Cmd::Prepare(a) => run_prepare(a),
+        Cmd::Protonate(a) => run_protonate(a),
+        Cmd::Minimize(a) => run_minimize(a),
     }
 }

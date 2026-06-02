@@ -10,6 +10,7 @@ pub mod forcefield;
 mod fragment_templates;
 pub mod hbond;
 mod parallel;
+pub mod prepare;
 mod py_add_hydrogens;
 mod py_align;
 mod py_align_funcs;

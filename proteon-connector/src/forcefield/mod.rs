@@ -15,6 +15,7 @@
 //! submodule's doc comment; per-component parameter citations are in
 //! `params.rs`.
 
+pub mod api;
 pub mod energy;
 pub mod gb_obc;
 #[cfg(feature = "cuda")]

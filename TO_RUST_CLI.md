@@ -192,24 +192,46 @@ surface only.
   CLIs we don't want to disturb) while the new compute surface lands under one
   `proteon` entry point.
 
-### I/O contract (must be explicit before write commands ship)
+### I/O contract for the write commands (AS BUILT)
 
-The read commands (`sasa`/`dssp`/`hbond`) emit tables; the **write** commands
-(`prepare`/`minimize`/`energy`/`protonate`) touch chemistry and must state,
-up front, what they do and don't handle — otherwise users assume more
-correctness than the CLI guarantees (codex-review):
+The read commands (`sasa`/`dssp`/`hbond`/`energy`) emit tables. The **write**
+commands (`prepare`/`protonate`/`minimize`) emit prepared structures, touch
+chemistry, and honor the following contract (shared with the Python
+`batch_prepare`, since both call `prepare::prepare_from_pdb`):
 
-- **Formats:** PDB and mmCIF in; output format follows input unless `-o` extension
-  says otherwise. Round-trip must preserve atom/residue identity.
-- **Models:** first model only by default (`--model N` to override); document it.
-- **Altloc:** policy stated (e.g. highest-occupancy kept), flag to override.
-- **Missing atoms vs missing residues:** reconstruct missing *atoms*; missing
-  *residues* (chain breaks) are reported, never fabricated.
-- **Non-protein:** ligands / waters / ions / nonstandard residues — explicitly
-  pass-through-untouched or dropped, never silently mishandled.
-- **Termini & insertion codes:** charged-terminus handling and icode preservation
-  stated per command.
-- **Metadata:** what header/CRYST1/SEQRES survives a write is documented.
+- **Verbs are presets over one pipeline** (reconstruct → place-H → minimize):
+  `protonate` = place-H only; `minimize` = minimize the input as-is (no
+  reconstruct, no H placement, existing atoms kept); `prepare` = the full
+  pipeline (reconstruct + place-H + FF-aware minimize), matching the production
+  `batch_prepare` defaults (hydrogens=all, lbfgs, 500 steps, strip pre-existing
+  H, charmm19_eef1).
+- **Force field:** `--ff charmm19_eef1` (default) or `amber96`. Under a
+  united-atom EEF1 force field only polar (N/O/S-bound) H are placed; AMBER96
+  freezes heavy atoms during minimization, CHARMM19+EEF1 relaxes them
+  (FF-aware `constrain_heavy`).
+- **Formats:** PDB and mmCIF in; **output format follows the `-o`/`--out-dir`
+  path extension** (`.pdb`→PDB, `.cif`→mmCIF) via `pdbtbx::save`. In `--out-dir`
+  mode the input filename (and thus extension) is preserved.
+- **Models:** first model only (consistent with the analysis commands and
+  `build_topology`).
+- **Altloc:** the primary conformer is used (blank altloc, then "A", then first
+  available); minimized coordinates are written back to that conformer.
+- **Missing atoms vs residues:** `prepare` reconstructs missing heavy *atoms*;
+  missing *residues* (chain breaks) are never fabricated. `reconstructed` is
+  reported per structure.
+- **Non-protein:** waters/ligands/ions/nonstandard residues are not
+  parameterized; if >50% of non-water atoms are unassigned the structure is
+  flagged `skipped_no_protein=true` and minimization is skipped (the structure
+  is still written, H/reconstruct applied).
+- **Output destination:** `-o FILE` (single input only) or `--out-dir DIR`
+  (batch; one file per input). Exactly one is required. A per-structure stat row
+  (`file, output, ff, reconstructed, h_added, …, minimized, init_e_kcal,
+  final_e_kcal, steps, converged`) goes to stdout (TSV/JSON); energies are the
+  minimizer's native **kcal/mol** (column-named, vs the `energy` command's
+  kJ/mol default).
+- **Failure isolation:** a structure that fails (unparameterized residue, load
+  error) is reported on stderr and the run continues; its output file is not
+  written; the process exits nonzero if any input failed.
 
 ### Batch mode (must be specified, not "accepts a directory")
 

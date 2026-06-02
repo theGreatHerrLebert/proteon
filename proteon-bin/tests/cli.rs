@@ -1,14 +1,15 @@
-//! Integration tests for the `proteon` analysis CLI (Phase 1: sasa/dssp/hbond).
+//! Integration tests for the `proteon` analysis CLI (sasa/dssp/hbond/energy).
 //!
 //! These guard the CLI against three failure modes:
 //!   1. Drift from the validated numbers (the SASA total is the
-//!      Biopython-oracle-backed value; DSSP is the known assignment).
+//!      Biopython-oracle-backed value; DSSP is the known assignment; the
+//!      energy total is the connector-native charmm19_eef1 value).
 //!   2. Non-deterministic batch output across thread counts.
 //!   3. Silent swallowing of per-file failures.
 //!
 //! Parity with the Python path is structural (both call the same
-//! `sasa::`/`dssp::`/`hbond::` entry points), so it is not re-asserted here;
-//! the Python oracle suite covers the numeric ground truth.
+//! `sasa::`/`dssp::`/`hbond::`/`forcefield::api::` entry points), so it is not
+//! re-asserted here; the Python oracle suite covers the numeric ground truth.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -97,6 +98,141 @@ fn batch_output_is_thread_count_independent() {
         .find("1crn.pdb")
         .expect("expected 1crn in batch output");
     assert!(pos_aaj < pos_crn, "batch output should be in sorted order");
+}
+
+fn energy_total(args: &[&str]) -> f64 {
+    let (stdout, stderr, code) = run(args);
+    assert_eq!(code, 0, "energy failed: {stderr}");
+    // total is the second-to-last column (n_unassigned_atoms is last).
+    let header = stdout.lines().next().unwrap();
+    let total_col = header.split('\t').position(|c| c == "total").unwrap();
+    stdout
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split('\t')
+        .nth(total_col)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn energy_units_and_default_ff() {
+    let p = pdb("1crn.pdb");
+    let ps = p.to_str().unwrap();
+    // Default ff is charmm19_eef1 in kJ/mol (matches proteon.compute_energy).
+    let kj = energy_total(&["energy", ps]);
+    let kcal = energy_total(&["energy", ps, "--units", "kcal/mol"]);
+    // kJ = kcal * 4.184; the connector-native charmm19_eef1 total for 1crn is
+    // ~22.27 kcal/mol (=> ~93.19 kJ/mol).
+    assert!(
+        (kcal - 22.2734).abs() < 0.1,
+        "charmm kcal total drifted: {kcal}"
+    );
+    assert!(
+        (kj - kcal * 4.184).abs() < 0.05,
+        "kJ/kcal conversion wrong: {kj} vs {kcal}"
+    );
+}
+
+#[test]
+fn energy_unknown_ff_fails_cleanly() {
+    let p = pdb("1crn.pdb");
+    let (_stdout, stderr, code) = run(&["energy", p.to_str().unwrap(), "--ff", "bogus"]);
+    assert_ne!(code, 0, "unknown ff must fail");
+    assert!(
+        stderr.contains("unknown force field"),
+        "should name the bad ff"
+    );
+}
+
+fn col(stdout: &str, name: &str) -> String {
+    let header = stdout.lines().next().unwrap();
+    let i = header
+        .split('\t')
+        .position(|c| c == name)
+        .unwrap_or_else(|| panic!("no column {name} in: {header}"));
+    stdout
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split('\t')
+        .nth(i)
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn protonate_writes_structure_with_hydrogens() {
+    let out = std::env::temp_dir().join("proteon_cli_protonate.pdb");
+    let _ = std::fs::remove_file(&out);
+    let (stdout, stderr, code) = run(&[
+        "protonate",
+        pdb("1crn.pdb").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "protonate failed: {stderr}");
+    assert!(
+        col(&stdout, "h_added").parse::<i64>().unwrap() > 0,
+        "should add H"
+    );
+    assert_eq!(
+        col(&stdout, "minimized"),
+        "false",
+        "protonate must not minimize"
+    );
+    let written = std::fs::read_to_string(&out).expect("output not written");
+    assert!(written.contains("ATOM"), "output should be a PDB");
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn prepare_minimizes_and_reports() {
+    let out = std::env::temp_dir().join("proteon_cli_prepare.pdb");
+    let _ = std::fs::remove_file(&out);
+    // Small step budget keeps the test fast while still exercising the
+    // minimize branch.
+    let (stdout, stderr, code) = run(&[
+        "prepare",
+        pdb("1crn.pdb").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--minimize-steps",
+        "2",
+    ]);
+    assert_eq!(code, 0, "prepare failed: {stderr}");
+    assert_eq!(col(&stdout, "minimized"), "true", "prepare should minimize");
+    assert_eq!(col(&stdout, "ff"), "charmm19_eef1", "default ff");
+    assert!(out.exists(), "prepared structure not written");
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn write_command_requires_output_destination() {
+    // No -o / --out-dir → clean error, no panic.
+    let (_o, stderr, code) = run(&["protonate", pdb("1crn.pdb").to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("--out-dir") || stderr.contains("-o"),
+        "should explain output is required"
+    );
+}
+
+#[test]
+fn write_command_rejects_unknown_ff() {
+    let out = std::env::temp_dir().join("proteon_cli_badff.pdb");
+    let (_o, stderr, code) = run(&[
+        "prepare",
+        pdb("1crn.pdb").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--ff",
+        "bogus",
+    ]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("unknown force field"));
 }
 
 #[test]

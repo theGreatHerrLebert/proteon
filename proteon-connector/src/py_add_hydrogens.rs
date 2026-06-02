@@ -8,111 +8,6 @@ use rayon::prelude::*;
 use crate::add_hydrogens;
 use crate::py_pdb::PyPDB;
 
-/// Apply minimized coordinates back to a PDB structure.
-///
-/// Iterates chains → residues → **primary conformer** → atoms in the same
-/// order as topology building, and sets each atom's position from the flat
-/// coordinate array. The primary-conformer selection mirrors
-/// [`crate::altloc::primary_conformer`]: blank altLoc first, then "A", then
-/// the first available conformer.
-///
-/// Atoms are included or skipped via `topology::should_include_atom`, the
-/// same predicate `build_topology` calls. That function filters out:
-///   * water residues (HOH/WAT/...) under vacuum protein force fields,
-///   * non-polar hydrogens under polar-H force fields (CHARMM19).
-///
-/// If this function's skip logic drifts from build_topology's, the
-/// coord array length and the atom iteration will desync and the asserts
-/// below will fire.
-///
-/// Takes the force field as a parameter so the predicate can consult
-/// the parameter table — same as build_topology does. Note that the
-/// residue-variant lookup (terminal "-N"/"-C" tails) is not available
-/// here since we don't have a Topology at this point, so we pass the
-/// base residue name as `lookup_name`. `get_atom_type` internally falls
-/// back from variant to base name, so hydrogens that exist under both
-/// variant and base names (all of them, in practice) still resolve.
-///
-/// Panics if the coordinate array doesn't match the atom count.
-fn apply_coords_to_pdb<F: crate::forcefield::params::ForceField + ?Sized>(
-    pdb: &mut pdbtbx::PDB,
-    coords: &[[f64; 3]],
-    params: &F,
-) {
-    let mut idx = 0;
-    // Use first model only (consistent with build_topology, etc.)
-    let first_model = match pdb.models_mut().next() {
-        Some(m) => m,
-        None => return,
-    };
-    for chain in first_model.chains_mut() {
-        for residue in chain.residues_mut() {
-            let res_name = residue.name().unwrap_or("UNK").to_string();
-
-            // Determine the primary-conformer alt_loc in an immutable scan,
-            // then iterate mutably and update only atoms in that conformer.
-            let primary_alt: Option<Option<String>> = {
-                let blank = residue
-                    .conformers()
-                    .find(|c| c.alternative_location().is_none());
-                let a = residue
-                    .conformers()
-                    .find(|c| c.alternative_location() == Some("A"));
-                blank
-                    .or(a)
-                    .or_else(|| residue.conformers().next())
-                    .map(|c| c.alternative_location().map(str::to_string))
-            };
-            let Some(target_alt) = primary_alt else {
-                continue;
-            };
-
-            for conformer in residue.conformers_mut() {
-                let matches = match (conformer.alternative_location(), target_alt.as_deref()) {
-                    (None, None) => true,
-                    (Some(a), Some(b)) => a == b,
-                    _ => false,
-                };
-                if !matches {
-                    continue;
-                }
-                for atom in conformer.atoms_mut() {
-                    let atom_name = atom.name().trim().to_string();
-                    let element = atom
-                        .element()
-                        .map(|e| e.symbol().to_string())
-                        .unwrap_or_else(|| "C".to_string());
-                    // Shared predicate — identical to build_topology.
-                    // Using `res_name` for both residue_name and lookup_name
-                    // because we lack Topology's residue_variants map here.
-                    if !crate::forcefield::topology::should_include_atom(
-                        &res_name, &atom_name, &element, params, &res_name,
-                    ) {
-                        continue;
-                    }
-                    assert!(
-                        idx < coords.len(),
-                        "apply_coords_to_pdb: coord array too short ({} coords, atom index {})",
-                        coords.len(),
-                        idx,
-                    );
-                    atom.set_pos((coords[idx][0], coords[idx][1], coords[idx][2]))
-                        .expect("apply_coords_to_pdb: invalid coordinates (NaN/Inf)");
-                    idx += 1;
-                }
-                break;
-            }
-        }
-    }
-    assert_eq!(
-        idx,
-        coords.len(),
-        "apply_coords_to_pdb: coord array length ({}) != atom count ({})",
-        coords.len(),
-        idx,
-    );
-}
-
 use crate::parallel::resolve_threads;
 
 fn build_pool(n_threads: usize) -> rayon::ThreadPool {
@@ -318,49 +213,9 @@ pub(crate) fn batch_place_peptide_hydrogens(
 /// Batch prepare structures in parallel (reconstruct + place H + minimize H).
 ///
 /// Runs the full preparation pipeline on each structure using rayon parallelism.
-/// Per-structure result from batch_prepare. One of these is produced per
-/// input structure and converted to a Python dict at the end.
-struct PrepareResult {
-    reconstructed: usize,
-    h_added: usize,
-    h_skipped: usize,
-    init_e: f64,
-    final_e: f64,
-    bond_stretch: f64,
-    angle_bend: f64,
-    torsion: f64,
-    improper_torsion: f64,
-    vdw: f64,
-    electrostatic: f64,
-    solvation: f64,
-    steps: usize,
-    converged: bool,
-    n_unassigned: usize,
-    skipped_no_protein: bool,
-}
-
-impl PrepareResult {
-    fn empty() -> Self {
-        Self {
-            reconstructed: 0,
-            h_added: 0,
-            h_skipped: 0,
-            init_e: 0.0,
-            final_e: 0.0,
-            bond_stretch: 0.0,
-            angle_bend: 0.0,
-            torsion: 0.0,
-            improper_torsion: 0.0,
-            vdw: 0.0,
-            electrostatic: 0.0,
-            solvation: 0.0,
-            steps: 0,
-            converged: false,
-            n_unassigned: 0,
-            skipped_no_protein: false,
-        }
-    }
-}
+/// The per-structure result type and pipeline body live in [`crate::prepare`]
+/// so the CLI (`proteon prepare`/`protonate`/`minimize`) drives the same code.
+use crate::prepare::{self, PrepareOptions, PrepareReport};
 
 /// Returns list of dicts with preparation statistics.
 ///
@@ -502,7 +357,7 @@ fn batch_prepare_inner<F>(
     strip_hydrogens: bool,
     ff: &F,
     constrain_heavy: bool,
-) -> PyResult<Vec<PrepareResult>>
+) -> PyResult<Vec<PrepareReport>>
 where
     F: crate::forcefield::params::ForceField + Sync,
 {
@@ -511,7 +366,7 @@ where
     let method = minimize_method.to_string();
     let total = structures.len();
     let chunk_size = 200; // prepare is heavier per-structure, smaller chunks
-    let mut all_results: Vec<PrepareResult> = Vec::with_capacity(total);
+    let mut all_results: Vec<PrepareReport> = Vec::with_capacity(total);
 
     // Process in chunks to avoid cloning all structures at once
     for start in (0..total).step_by(chunk_size) {
@@ -525,167 +380,24 @@ where
             })
             .collect::<PyResult<_>>()?;
 
-        let h_mode = h_mode.clone();
-        let method = method.clone();
-        let results: Vec<PrepareResult> = py.allow_threads(|| {
+        let opts = PrepareOptions {
+            reconstruct,
+            hydrogens: h_mode.clone(),
+            include_water,
+            minimize,
+            minimize_method: method.clone(),
+            minimize_steps,
+            gradient_tolerance,
+            strip_hydrogens,
+            // The caller already resolved the FF-aware default for this ff.
+            constrain_heavy: Some(constrain_heavy),
+        };
+        let results: Vec<PrepareReport> = py.allow_threads(|| {
             let pool = build_pool(n);
             pool.install(|| {
                 chunk_pdbs
                     .par_iter_mut()
-                    .map(|pdb| {
-                        // Optionally strip pre-existing hydrogens. Used to
-                        // rescue structures whose externally-resolved H sit
-                        // off the MM minimum and prevent LBFGS convergence.
-                        if strip_hydrogens {
-                            add_hydrogens::strip_hydrogens(pdb);
-                        }
-
-                        // Reconstruct
-                        let reconstructed = if reconstruct {
-                            crate::reconstruct::reconstruct_fragments(pdb).added
-                        } else {
-                            0
-                        };
-
-                        // Place hydrogens
-                        // Layer A: under a polar-H united-atom force field
-                        // (CHARMM19+EEF1), only place hydrogens bonded to
-                        // N/O/S. Non-polar C-H atoms are absorbed into
-                        // united carbon types (CH1E/CH2E/CH3E) and don't
-                        // exist as separate atoms. Placing them anyway
-                        // produces 40% "unassigned" atoms at build_topology
-                        // time, which Layer B skips, but it's cleaner to
-                        // not place them in the first place so the output
-                        // PDB matches GROMACS's pdb2gmx behavior exactly.
-                        let polar_only = ff.has_eef1();
-                        let (h_added, h_skipped) = match h_mode.as_str() {
-                            "backbone" => {
-                                let r = add_hydrogens::place_peptide_hydrogens(pdb);
-                                (r.added, r.skipped)
-                            }
-                            "general" => {
-                                let r = add_hydrogens::place_general_hydrogens(pdb, include_water);
-                                (r.added, r.skipped)
-                            }
-                            "none" => (0, 0),
-                            "all" => {
-                                let r = add_hydrogens::place_all_hydrogens(pdb, polar_only);
-                                (r.added, r.skipped)
-                            }
-                            _ => (0, 0),
-                        };
-
-                        // Build topology once. n_unassigned is invariant under
-                        // coordinate changes (it depends only on residue/atom
-                        // names), so we can compute it before minimization and
-                        // reuse the same topology for the minimizer.
-                        let topo = crate::forcefield::topology::build_topology(pdb, ff);
-                        let n_unassigned = topo.unassigned_atoms.len();
-
-                        // Heuristic: if more than half the NON-WATER atoms have
-                        // no force field type (e.g. nucleic acids, ligand-only
-                        // entries, exotic non-standard residues) then the
-                        // protein prep pipeline is the wrong tool. Skip
-                        // minimization and mark the structure so downstream
-                        // consumers can distinguish "convergence failed" from
-                        // "skipped, not a protein".
-                        //
-                        // Waters (HOH, WAT, ...) are EXCLUDED from both the
-                        // numerator and denominator: they're expected to be
-                        // "unassigned" under a protein-only force field, but
-                        // their presence doesn't mean the pipeline should give
-                        // up. Before this exclusion, 1bpi (58-residue protein
-                        // with 167 crystal waters + 2 PO4 ions) got classified
-                        // as not-a-protein because after H placement the water
-                        // atoms outnumbered the protein atoms by a hair
-                        // (544/1065 ≈ 51% unassigned, above the 50% line).
-                        // Post-fix, only the non-water atoms count: for 1bpi
-                        // that's ~44/565 ≈ 8% unassigned, well below threshold.
-                        //
-                        // Threshold 50% still picks DNA/RNA cleanly (193d: 394
-                        // of ~404 non-water atoms unassigned) without false-
-                        // flagging proteins with bound ligands or HETATM tails.
-                        let non_water_total = topo
-                            .atoms
-                            .iter()
-                            .filter(|a| !crate::add_hydrogens::is_water_residue(&a.residue_name))
-                            .count();
-                        let non_water_unassigned = topo
-                            .unassigned_atoms
-                            .iter()
-                            .filter(|s| {
-                                // Unassigned entries are formatted "ResName:AtomName".
-                                let res = s.split(':').next().unwrap_or("");
-                                !crate::add_hydrogens::is_water_residue(res)
-                            })
-                            .count();
-                        let skipped_no_protein =
-                            non_water_total > 0 && non_water_unassigned * 2 > non_water_total;
-
-                        let mut out = PrepareResult::empty();
-                        out.reconstructed = reconstructed;
-                        out.h_added = h_added;
-                        out.h_skipped = h_skipped;
-                        out.n_unassigned = n_unassigned;
-                        out.skipped_no_protein = skipped_no_protein;
-
-                        // Minimize H positions and apply coords back to PDB
-                        let has_any_h = crate::altloc::pdb_atoms_primary(pdb).any(|a| {
-                            a.element()
-                                .is_some_and(|e| e.symbol() == "H" || e.symbol() == "D")
-                        });
-                        if !skipped_no_protein && minimize && (h_added > 0 || has_any_h) {
-                            let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-                            // Freeze heavy atoms (move only H) when `constrain_heavy`
-                            // is true. AMBER96 default: True. CHARMM19+EEF1 default:
-                            // False — heavy atoms need to relax against united-atom
-                            // inflated carbon radii for a negative final energy.
-                            let constrained: Vec<bool> = if constrain_heavy {
-                                topo.atoms.iter().map(|a| !a.is_hydrogen).collect()
-                            } else {
-                                vec![false; topo.atoms.len()]
-                            };
-                            let result = match method.as_str() {
-                                "cg" => crate::forcefield::minimize::conjugate_gradient(
-                                    &coords,
-                                    &topo,
-                                    ff,
-                                    minimize_steps,
-                                    gradient_tolerance,
-                                    &constrained,
-                                ),
-                                "lbfgs" => crate::forcefield::minimize::lbfgs(
-                                    &coords,
-                                    &topo,
-                                    ff,
-                                    minimize_steps,
-                                    gradient_tolerance,
-                                    &constrained,
-                                ),
-                                _ => crate::forcefield::minimize::steepest_descent(
-                                    &coords,
-                                    &topo,
-                                    ff,
-                                    minimize_steps,
-                                    gradient_tolerance,
-                                    &constrained,
-                                ),
-                            };
-                            apply_coords_to_pdb(pdb, &result.coords, ff);
-                            out.init_e = result.initial_energy;
-                            out.final_e = result.energy.total;
-                            out.bond_stretch = result.energy.bond_stretch;
-                            out.angle_bend = result.energy.angle_bend;
-                            out.torsion = result.energy.torsion;
-                            out.improper_torsion = result.energy.improper_torsion;
-                            out.vdw = result.energy.vdw;
-                            out.electrostatic = result.energy.electrostatic;
-                            out.solvation = result.energy.solvation;
-                            out.steps = result.steps;
-                            out.converged = result.converged;
-                        }
-                        out
-                    })
+                    .map(|pdb| prepare::prepare_structure(pdb, &opts, ff))
                     .collect()
             })
         });

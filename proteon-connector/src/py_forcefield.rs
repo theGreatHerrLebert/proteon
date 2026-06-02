@@ -8,7 +8,7 @@ use pyo3::types::PyList;
 use rayon::prelude::*;
 
 use crate::batch::{make_batch_result, BatchOutcome, PyBatchResult};
-use crate::forcefield::{energy, md, minimize, params, params::ForceField, topology};
+use crate::forcefield::{api, energy, md, minimize, params, params::ForceField, topology};
 use crate::parallel::resolve_threads;
 use crate::py_pdb::PyPDB;
 
@@ -130,88 +130,37 @@ pub(crate) fn compute_energy(
     nbl_threshold: Option<usize>,
     nonbonded_cutoff: Option<f64>,
 ) -> PyResult<PyObject> {
-    let (topo, result) = guard_panic("compute_energy", || -> PyResult<_> {
-        Ok(match ff {
-            "charmm" | "charmm19" | "charmm19_eef1" => {
-                let mut charmm = params::charmm19_eef1();
-                if let Some(c) = nonbonded_cutoff {
-                    charmm.cutoff_override = Some(c);
-                }
-                let topo = topology::build_topology(&pdb.inner, &charmm);
-                let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-                let result = py.allow_threads(|| match nbl_threshold {
-                    Some(t) => energy::compute_energy_auto(&coords, &topo, &charmm, t),
-                    None => energy::compute_energy(&coords, &topo, &charmm),
-                });
-                (topo, result)
-            }
-            "amber" | "amber96" => {
-                let mut amber = params::amber96();
-                if let Some(c) = nonbonded_cutoff {
-                    amber.cutoff_override = Some(c);
-                }
-                let topo = topology::build_topology(&pdb.inner, &amber);
-                let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-                let result = py.allow_threads(|| match nbl_threshold {
-                    Some(t) => energy::compute_energy_auto(&coords, &topo, &amber, t),
-                    None => energy::compute_energy(&coords, &topo, &amber),
-                });
-                (topo, result)
-            }
-            "amber96_obc" | "amber96+obc" | "amber96_obc2" => {
-                // AMBER96 with OBC2 implicit solvent (α=1.0, β=0.8, γ=4.85).
-                // This matches OpenMM's ForceField("amber96.xml",
-                // "amber96_obc.xml") + AMBER's gbsa=OBC2 setting: the OpenMM
-                // kernel hardcodes `ObcParameters::ObcTypeII` regardless of
-                // whether the XML is named amber96_obc.xml or charmm36_obc2.xml,
-                // because the XML only serializes per-atom (radius, scale)
-                // and leaves α/β/γ to the code. If/when proteon grows
-                // genuine OBC1 support it will ship as a distinct ff string
-                // ("amber96_obc1") routed through a separate params loader,
-                // NOT as an alias here.
-                let mut amber = params::amber96_obc();
-                if let Some(c) = nonbonded_cutoff {
-                    amber.cutoff_override = Some(c);
-                }
-                let topo = topology::build_topology(&pdb.inner, &amber);
-                let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
-                let result = py.allow_threads(|| match nbl_threshold {
-                    Some(t) => energy::compute_energy_auto(&coords, &topo, &amber, t),
-                    None => energy::compute_energy(&coords, &topo, &amber),
-                });
-                (topo, result)
-            }
-            _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
-                     (alias: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
-                )));
-            }
-        })
-    })??;
+    // The ff-string → params → topology → energy pipeline (incl. the
+    // amber96_obc OBC2 routing and the catch_unwind panic boundary) lives in
+    // forcefield::api so the `proteon energy` CLI computes through the exact
+    // same code. Here we only release the GIL around it and shape the dict.
+    let report = py
+        .allow_threads(|| api::energy_from_pdb(&pdb.inner, ff, nbl_threshold, nonbonded_cutoff))
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let r = &report.energy;
 
     let dict = pyo3::types::PyDict::new(py);
-    dict.set_item("bond_stretch", result.bond_stretch)?;
-    dict.set_item("angle_bend", result.angle_bend)?;
-    dict.set_item("torsion", result.torsion)?;
-    dict.set_item("improper_torsion", result.improper_torsion)?;
-    dict.set_item("vdw", result.vdw)?;
-    dict.set_item("electrostatic", result.electrostatic)?;
-    dict.set_item("solvation", result.solvation)?;
-    dict.set_item("total", result.total)?;
-    dict.set_item("n_unassigned_atoms", topo.unassigned_atoms.len())?;
+    dict.set_item("bond_stretch", r.bond_stretch)?;
+    dict.set_item("angle_bend", r.angle_bend)?;
+    dict.set_item("torsion", r.torsion)?;
+    dict.set_item("improper_torsion", r.improper_torsion)?;
+    dict.set_item("vdw", r.vdw)?;
+    dict.set_item("electrostatic", r.electrostatic)?;
+    dict.set_item("solvation", r.solvation)?;
+    dict.set_item("total", r.total)?;
+    dict.set_item("n_unassigned_atoms", report.n_unassigned_atoms)?;
     // Topology counts — diagnostic data for cross-tool oracle comparison.
     // Proteon silently drops hydrogens whose names aren't in the FF
     // residue template (see should_include_atom in topology.rs); without
     // these counts it's impossible to tell from the outside whether a
     // given PDB's H atoms made it into the bonded/nonbonded sums or not.
-    dict.set_item("n_topo_atoms", topo.atoms.len())?;
-    dict.set_item("n_bonds", topo.bonds.len())?;
-    dict.set_item("n_angles", topo.angles.len())?;
-    dict.set_item("n_torsions", topo.torsions.len())?;
-    dict.set_item("n_impropers", topo.improper_torsions.len())?;
-    dict.set_item("n_excluded_pairs", topo.excluded_pairs.len())?;
-    dict.set_item("n_14_pairs", topo.pairs_14.len())?;
+    dict.set_item("n_topo_atoms", report.n_topo_atoms)?;
+    dict.set_item("n_bonds", report.n_bonds)?;
+    dict.set_item("n_angles", report.n_angles)?;
+    dict.set_item("n_torsions", report.n_torsions)?;
+    dict.set_item("n_impropers", report.n_impropers)?;
+    dict.set_item("n_excluded_pairs", report.n_excluded_pairs)?;
+    dict.set_item("n_14_pairs", report.n_14_pairs)?;
     Ok(dict.into_any().unbind())
 }
 
