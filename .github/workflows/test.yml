@@ -197,3 +197,21 @@ jobs:
       - name: tmalign self-alignment
         run: |
           ./target/release/tmalign test-pdbs/1crn.pdb test-pdbs/1crn.pdb --outfmt 2 | head -5
+      # The `proteon` binary links the pyo3 extension-module connector as an
+      # rlib (Option A, TO_RUST_CLI.md). This release build (lto=true,
+      # codegen-units=1) is the worst case for dead-code GC of the unused pyo3
+      # symbols; if it links + runs here, the Linux link path is confirmed.
+      - name: proteon help
+        run: ./target/release/proteon --help
+      - name: proteon sasa / dssp / hbond
+        run: |
+          ./target/release/proteon sasa test-pdbs/1crn.pdb
+          ./target/release/proteon dssp test-pdbs/1crn.pdb
+          ./target/release/proteon hbond test-pdbs/1crn.pdb | head -3
+      - name: proteon no libpython dependency
+        run: |
+          if ldd ./target/release/proteon | grep -qi python; then
+            echo "unexpected libpython dependency in proteon binary" >&2
+            exit 1
+          fi
+          echo "ok: proteon links no libpython"
