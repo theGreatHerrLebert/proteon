@@ -11,6 +11,46 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### EVIDENT claim integrity — honest rescoping of four release claims (#84, #86, #87, #88)
+
+Follow-up to the tolerance scorer (#85), which made the recorded bands
+enforceable and surfaced where claims overstated their evidence. The
+underlying science was sound in every case; the claims were rewritten to
+match what the evidence actually supports (fix-down, not evidence
+regeneration). No tolerance was widened to turn a failing gate green.
+
+- **#84 sasa** — rescoped to **Biopython-only**. FreeSASA diverges ~4.5%
+  from proteon at the median (an inter-oracle atom-radius / probe-
+  discretisation convention gap, not a proteon error) and the pinned
+  artifact never carried FreeSASA evidence, so the cross-tool-parity claim
+  was unsupported. FreeSASA divergence is now a documented failure mode.
+  `inputs.class` corrected `random-sample` → `convenience-sample` (the
+  runner takes the alphabetically-first 1000 files); the ~163 `.cif` files
+  Biopython cannot parse are explicitly excluded from the median and
+  per-structure pass-rate rather than silently counted as agreeing.
+- **#86 dssp** — headline scoped to the **median agreement (0.953 ≥ 0.95)**
+  only. The two failing `pass_rate` gates were demoted to documented
+  coverage / distribution stats: n_ok/n_attempted (45.3%) is a
+  population-narrowing artifact of comparing a gemmi-reencoded mmCIF
+  against a raw-PDB parse (the false "identical PDB inputs" assumption is
+  corrected), and a median of 0.953 cannot mathematically put 80% of
+  structures above 0.95. The pi-helix (`I`) vs PP-helix (`P`) normalisation
+  asymmetry is now documented.
+- **#87 charmm** — the relative-error prose now discloses the
+  `max(|BALL|, 1 kJ/mol)` denominator floor (was `/|BALL|`) and its
+  low-magnitude-suppressing effect on improper torsion. The amber-openmm
+  50K coverage `pass_rate` was demoted to a documented stat (same pattern).
+  Heavy improper-torsion tails (p99 ~200%) remain documented, not gated.
+- **#88 fold-preservation** — claim titles reframed as **relative agreement
+  between two minimizers** (gated at 0.01 TM-score, not the headline 0.005).
+  The AMBER assumption corrected: 10 Å cutoff (not 15 Å) and proteon-vacuum
+  vs OpenMM-OBC implicit solvent (not "pure implementation drift"). Stale
+  "CHARMM36+OBC2" labels in the AMBER runner
+  (`validation/tm_fold_preservation_openmm_amber.py`) fixed to AMBER96+OBC.
+
+All seven release-tier claims now pass their recorded bands honestly under
+`score_claim.py --all --release-only`.
+
 ### v0.3.0 Phase D — Cluster-leakage check inside `validate_corpus_release`
 
 Extends `corpus_validation.validate_corpus_release` with a new

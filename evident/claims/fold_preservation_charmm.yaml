@@ -1,6 +1,10 @@
 claims:
   - id: proteon-charmm19-fold-preservation-vs-openmm-release-1k-pdbs
-    title: Proteon CHARMM19+EEF1 minimization preserves fold within 0.005 TM-score of OpenMM CHARMM36+OBC2 across 1000 random PDBs
+    title: >
+      Proteon CHARMM19+EEF1 and OpenMM CHARMM36+OBC2 minimization agree on
+      fold preservation to within 0.01 TM-score at the median across 1000
+      random PDBs (a relative agreement between two different force
+      field + solvent models, not an absolute fold-preservation floor)
     kind: measurement
     subsystem: minimize
     case: claims/fold_preservation_charmm.md

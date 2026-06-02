@@ -382,8 +382,10 @@ def test_end_to_end_sasa_release_claim():
     doc = yaml.safe_load((REPO_ROOT / "evident" / "claims" / "sasa.yaml").read_text())
     claim = next(c for c in doc["claims"] if c["id"] == "proteon-sasa-vs-biopython-release-1k-pdbs")
     score = cs.score_claim(claim, REPO_ROOT)
-    # All three tolerances carry scoring blocks and are computed.
-    assert len(score.scored) == 3
-    biopy = next(t for t in score.scored
-                 if t.metric == "median_relative_error" and t.observed < 0.01)
-    assert biopy.passed  # Biopython median ~0.2% is within its 0.5% band
+    # Rescoped to Biopython-only (issue 84): two scored tolerances — the
+    # Biopython median and a Biopython per-structure pass-rate. FreeSASA was
+    # dropped (it diverges ~4.5%, an inter-oracle convention gap, not parity).
+    assert len(score.scored) == 2
+    assert score.all_passed
+    biopy = next(t for t in score.scored if t.metric == "median_relative_error")
+    assert biopy.passed and biopy.observed < 0.005  # ~0.2% within the 0.5% band

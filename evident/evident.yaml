@@ -83,6 +83,11 @@ vocabularies:
     - dssp-8class-parity
     - sasa-cross-tool-parity
     - acceleration-paths-parity
+  input_class:
+    # Extends the base vocabulary. A convenience sample is a non-random
+    # selection (e.g. the alphabetically-first N files) — distinguished from
+    # random-sample so a claim can't imply randomisation it didn't do.
+    - convenience-sample
 
 include:
   - claims/release_gate.yaml
