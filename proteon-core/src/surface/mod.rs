@@ -13,7 +13,11 @@
 //! - `ses` (L2) — the solvent-excluded-surface element graph: RS vertices/edges/
 //!   faces → contact/toric/spheric SES faces + ownership. Gated against
 //!   `ball-py ses_graph` (non-singular corpus; the L3 singular cleaner follows).
+//! - `mesh` (L4 foundation) — index triangle mesh + invariants (area,
+//!   watertightness, signed volume, Euler χ) and the `icosphere` contact-face
+//!   primitive. An isolated atom's SES is its sphere, gated against `ses_area`.
 
 pub mod geom;
+pub mod mesh;
 pub mod rs;
 pub mod ses;
