@@ -36,7 +36,7 @@ pub fn backbone_hbonds(pdb: &pdbtbx::PDB, energy_cutoff: f64) -> Vec<BackboneHBo
     backbone_hbonds_from_residues(&residues, energy_cutoff)
 }
 
-pub(crate) fn backbone_hbonds_from_residues(
+pub fn backbone_hbonds_from_residues(
     residues: &[dssp::DsspResidue],
     energy_cutoff: f64,
 ) -> Vec<BackboneHBond> {

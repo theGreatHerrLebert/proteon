@@ -12,8 +12,9 @@ Structural bioinformatics toolkit in Rust with Python bindings. Library, not a p
 | `proteon-io/` | PDB/mmCIF loader bridge over pdbtbx |
 | `proteon-arrow/` | Arrow RecordBatch + Parquet export for atoms/structures |
 | `proteon-search/` | MMseqs2-compatible search: DB I/O, k-mer prefilter, ungapped/gapped SW, PSSM, MSA, GPU kernels (feature `cuda`) |
-| `proteon-bin/` | CLI binaries: `tmalign`, `usalign`, `ingest`, `build_kmi`, `fasta_to_mmseqs_db` |
-| `proteon-connector/` | PyO3 cdylib bridge — exposes alignment, DSSP, SASA, H-bonds, geometry, forcefield/MD, search, supervision (feature `cuda`) |
+| `proteon-core/` | Pure-Rust MM/analysis compute — SASA, DSSP, H-bonds, hydrogen placement, reconstruction, force fields (CHARMM19+EEF1, AMBER96, OBC GB), minimize/MD, the `prepare` pipeline (feature `cuda`). **No PyO3.** Shared by the connector and the CLI so they cannot drift. |
+| `proteon-bin/` | CLI binaries: `tmalign`, `usalign`, `ingest`, `build_kmi`, `fasta_to_mmseqs_db`, and `proteon` (sasa/dssp/hbond/energy/prepare/protonate/minimize over `proteon-core` — pyo3-free) |
+| `proteon-connector/` | PyO3 cdylib bridge — thin `py_*` shims over `proteon-core` (+ alignment, search, geometry, supervision, arrow). Holds bindings, not compute (feature `cuda`) |
 
 `gpu-poc/` is a standalone exploratory crate, excluded from the workspace.
 
@@ -149,8 +150,8 @@ src/
 ### proteon-connector (PyO3 bridge)
 
 Three-layer rustims-style architecture:
-1. **Pure Rust** (`proteon-align`, `proteon-io`, `proteon-arrow`, `proteon-search`) — no Python dep
-2. **PyO3 connector** (`proteon-connector`) — `#[pyclass]` wrappers, `inner: RustType`
+1. **Pure Rust** (`proteon-align`, `proteon-core`, `proteon-io`, `proteon-arrow`, `proteon-search`) — no Python dep
+2. **PyO3 connector** (`proteon-connector`) — `#[pyclass]` wrappers, `inner: RustType`; MM/analysis compute is re-exported from `proteon-core`, not defined here
 3. **Python package** (`packages/proteon/`) — Pythonic API over the connector
 
 Subsystems live in `proteon-connector/src/`:

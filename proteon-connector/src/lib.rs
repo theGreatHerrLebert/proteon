@@ -1,16 +1,16 @@
 use pyo3::prelude::*;
 use pyo3::wrap_pymodule;
 
-pub(crate) mod add_hydrogens;
-pub mod altloc;
+// Pure-Rust compute now lives in proteon-core. Re-export the modules the
+// `py_*` shims reach via `crate::<module>` so those shims need no edits, and
+// so the connector still presents the same Rust surface.
+pub use proteon_core::{
+    add_hydrogens, altloc, bond_order, dssp, forcefield, fragment_templates, hbond, prepare,
+    reconstruct, sasa,
+};
+
 mod batch;
-mod bond_order;
-pub mod dssp;
-pub mod forcefield;
-mod fragment_templates;
-pub mod hbond;
 mod parallel;
-pub mod prepare;
 mod py_add_hydrogens;
 mod py_align;
 mod py_align_funcs;
@@ -28,8 +28,6 @@ mod py_search;
 mod py_structure;
 mod py_supervision;
 mod py_transform;
-mod reconstruct;
-pub mod sasa;
 
 /// proteon_connector — PyO3 bindings for the proteon structural bioinformatics toolkit.
 #[pymodule]

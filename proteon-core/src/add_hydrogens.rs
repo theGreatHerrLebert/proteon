@@ -56,7 +56,7 @@ struct HPlacement {
 }
 
 /// Result of peptide hydrogen placement.
-pub(crate) struct AddHydrogensResult {
+pub struct AddHydrogensResult {
     /// Number of H atoms added.
     pub added: usize,
     /// Number of residues skipped (missing backbone atoms, proline, N-terminal).
@@ -119,7 +119,7 @@ fn has_backbone_h(residue: &pdbtbx::Residue) -> bool {
 /// C(i-1)→N and CA→N vectors, at 1.02 Å from N.
 ///
 /// Returns the number of atoms added and skipped.
-pub(crate) fn place_peptide_hydrogens(pdb: &mut pdbtbx::PDB) -> AddHydrogensResult {
+pub fn place_peptide_hydrogens(pdb: &mut pdbtbx::PDB) -> AddHydrogensResult {
     // --- Read pass: compute all H positions ---
     let mut placements: Vec<HPlacement> = Vec::new();
     let mut skipped = 0;
@@ -1079,10 +1079,7 @@ fn compute_sidechain_h(
 /// N/O/S (guanidinium, amide, hydroxyl, thiol, imidazole, indole N-H,
 /// and the N-terminal NH3+) are added. This matches GROMACS's
 /// pdb2gmx hydrogen database for polar-H united-atom force fields.
-pub(crate) fn place_sidechain_hydrogens(
-    pdb: &mut pdbtbx::PDB,
-    polar_only: bool,
-) -> AddHydrogensResult {
+pub fn place_sidechain_hydrogens(pdb: &mut pdbtbx::PDB, polar_only: bool) -> AddHydrogensResult {
     let mut placements: Vec<(usize, usize, String, [f64; 3], usize)> = Vec::new();
     let mut skipped = 0;
     let mut max_serial: usize = crate::altloc::pdb_atoms_primary(pdb)
@@ -1265,7 +1262,7 @@ pub(crate) fn place_sidechain_hydrogens(
 /// backbone amide H is always polar so `place_peptide_hydrogens` is
 /// called unconditionally; only `place_sidechain_hydrogens` branches
 /// on the flag.
-pub(crate) fn place_all_hydrogens(pdb: &mut pdbtbx::PDB, polar_only: bool) -> AddHydrogensResult {
+pub fn place_all_hydrogens(pdb: &mut pdbtbx::PDB, polar_only: bool) -> AddHydrogensResult {
     let r1 = place_peptide_hydrogens(pdb);
     let r2 = place_sidechain_hydrogens(pdb, polar_only);
     AddHydrogensResult {
@@ -1523,10 +1520,7 @@ fn place_water_h(o_pos: [f64; 3]) -> [[f64; 3]; 2] {
 /// the user wants all atoms present for visualization or non-FF downstream
 /// tools. For a CHARMM19 energy run, use `place_all_hydrogens(pdb, true)`
 /// directly instead.
-pub(crate) fn place_general_hydrogens(
-    pdb: &mut pdbtbx::PDB,
-    include_water: bool,
-) -> AddHydrogensResult {
+pub fn place_general_hydrogens(pdb: &mut pdbtbx::PDB, include_water: bool) -> AddHydrogensResult {
     // First: place standard AA hydrogens (all atoms, not polar-only —
     // this mode is for non-FF consumers).
     let standard = place_all_hydrogens(pdb, false);

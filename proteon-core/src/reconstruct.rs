@@ -231,7 +231,7 @@ fn match_points(
 // ---------------------------------------------------------------------------
 
 /// Result of fragment reconstruction.
-pub(crate) struct ReconstructResult {
+pub struct ReconstructResult {
     /// Number of atoms added.
     pub added: usize,
 }
@@ -402,7 +402,7 @@ pub(crate) fn reconstruct_residue(
 }
 
 /// Reconstruct missing atoms in all standard amino acid residues of a PDB.
-pub(crate) fn reconstruct_fragments(pdb: &mut pdbtbx::PDB) -> ReconstructResult {
+pub fn reconstruct_fragments(pdb: &mut pdbtbx::PDB) -> ReconstructResult {
     let mut placements: Vec<(usize, usize, String, String, [f64; 3], usize)> = Vec::new();
     let mut max_serial: usize = crate::altloc::pdb_atoms_primary(pdb)
         .map(|a| a.serial_number())
