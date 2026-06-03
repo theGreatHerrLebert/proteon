@@ -50,7 +50,7 @@ struct GpuKernels {
 }
 
 /// Global GPU context. Created once, shared across all rayon threads.
-pub(crate) struct GpuContext {
+pub struct GpuContext {
     ctx: Arc<CudaContext>,
     kernels: GpuKernels,
 }

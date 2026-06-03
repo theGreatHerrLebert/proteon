@@ -19,7 +19,7 @@ pub mod api;
 pub mod energy;
 pub mod gb_obc;
 #[cfg(feature = "cuda")]
-pub(crate) mod gpu;
+pub mod gpu;
 pub mod md;
 pub mod minimize;
 pub mod neighbor_list;
