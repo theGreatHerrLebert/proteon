@@ -10,6 +10,10 @@
 //! - `rs` (L1) — the reduced surface: atom triples carrying a non-intersecting
 //!   probe (faces), the pairs they share (edges), and surface atoms (vertices).
 //!   Gated against `ball-py reduced_surface_stats`.
+//! - `ses` (L2) — the solvent-excluded-surface element graph: RS vertices/edges/
+//!   faces → contact/toric/spheric SES faces + ownership. Gated against
+//!   `ball-py ses_graph` (non-singular corpus; the L3 singular cleaner follows).
 
 pub mod geom;
 pub mod rs;
+pub mod ses;
