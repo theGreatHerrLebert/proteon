@@ -6,16 +6,24 @@
 //! atom pair the probe can roll between; an **RS vertex** is a surface atom.
 //!
 //! This first implementation computes the RS by **enumerate-and-validate**:
-//! for every candidate atom triple, place the probe (two positions via
-//! `intersect_three_spheres` on probe-inflated atoms) and keep each position
-//! that no other atom overlaps. It produces the same RS *face set* BALL's
-//! rolling-probe algorithm does — which is exactly what `ball-py
-//! reduced_surface_stats` exposes for gating (order-independent atom triples +
-//! probe centers). BALL rolls for O(n·k) efficiency; this is O(n³) with a
-//! distance prefilter — fine at oracle-corpus scale, and the efficient rolling
-//! variant can replace `compute` later behind the same oracle.
+//! faces from atom triples carrying a non-intersecting probe; edges from atom
+//! pairs whose roll-circle has a clear point; vertices from atoms with an
+//! exposed inflated cap. It produces the same RS *graph* (faces, edges,
+//! vertices) BALL's rolling-probe algorithm does — gated against `ball-py
+//! reduced_surface_stats` (counts + atom triples + probe centers). BALL rolls
+//! for O(n·k) efficiency; this is O(n³) with a distance prefilter (and circle/
+//! sphere sampling for edge/vertex existence) — fine at oracle-corpus scale.
+//! The efficient rolling variant and exact (sampling-free) arc analysis can
+//! replace `compute` later behind the same oracle.
 
-use super::geom::{intersect_three_spheres, Sphere, Vec3, EPSILON};
+use super::geom::{intersect_three_spheres, intersect_two_spheres, Sphere, Vec3, EPSILON};
+
+/// Circle / sphere sampling resolution for surface-atom and edge detection.
+/// High enough that a genuine clear arc/cap is never missed on non-degenerate
+/// inputs; the exact (blocked-arc / cap-coverage) analysis is the hardening
+/// path that removes the sampling entirely.
+const CIRCLE_SAMPLES: usize = 256;
+const SPHERE_SAMPLES: usize = 512;
 
 /// One reduced-surface face: a sorted atom triple and the probe-sphere center
 /// resting on those three atoms.
@@ -30,10 +38,10 @@ pub struct RsFace {
 pub struct ReducedSurface {
     pub probe_radius: f64,
     pub faces: Vec<RsFace>,
-    /// Sorted atom pairs that bound an RS face (the RS edges this layer knows;
-    /// free toric edges between exactly two atoms are a later refinement).
+    /// Sorted atom pairs the probe can rest on (face-bounding and free toric
+    /// edges), ascending.
     pub edges: Vec<[usize; 2]>,
-    /// Indices of atoms that appear on the surface (in any face).
+    /// Indices of the surface atoms (any atom a probe can touch), ascending.
     pub vertices: Vec<usize>,
 }
 
@@ -60,21 +68,83 @@ impl ReducedSurface {
 }
 
 /// Whether a probe centered at `c` (radius `probe_radius`) clears every atom
-/// except the three it rests on — BALL's `checkProbe`: a probe overlapping any
-/// other atom is rejected.
-fn probe_clear(c: Vec3, probe_radius: f64, atoms: &[Sphere], skip: [usize; 3]) -> bool {
+/// except those in `skip` — BALL's `checkProbe`: a probe overlapping any other
+/// atom is rejected. Strictly-less ⇒ genuine overlap (touching is allowed);
+/// the EPSILON guard mirrors BALL's `Maths::isLess` tolerance.
+fn probe_clear(c: Vec3, probe_radius: f64, atoms: &[Sphere], skip: &[usize]) -> bool {
     for (m, atom) in atoms.iter().enumerate() {
-        if m == skip[0] || m == skip[1] || m == skip[2] {
+        if skip.contains(&m) {
             continue;
         }
         let limit = probe_radius + atom.radius;
-        // strictly-less ⇒ genuine overlap (touching is allowed); EPSILON guard
-        // mirrors BALL's Maths::isLess tolerance.
         if c.square_distance(atom.center) < limit * limit - EPSILON {
             return false;
         }
     }
     true
+}
+
+/// Two orthonormal vectors spanning the plane normal to `n`.
+fn plane_basis(n: Vec3) -> (Vec3, Vec3) {
+    // Pick the world axis least parallel to n to avoid a degenerate cross.
+    let seed = if n.x.abs() <= n.y.abs() && n.x.abs() <= n.z.abs() {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else if n.y.abs() <= n.z.abs() {
+        Vec3::new(0.0, 1.0, 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    };
+    let u = n
+        .cross(seed)
+        .normalized()
+        .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+    let v = n.cross(u);
+    (u, v)
+}
+
+/// Is atom `i` on the reduced surface — i.e. can a probe touch it without
+/// overlapping another atom? Probes touching `i` have their center on `i`'s
+/// inflated sphere; `i` is a surface vertex iff any such center clears the rest.
+fn atom_exposed(i: usize, atoms: &[Sphere], inflated: &[Sphere], probe_radius: f64) -> bool {
+    let ci = atoms[i].center;
+    let ri = inflated[i].radius;
+    // Fibonacci-sphere directions for near-uniform coverage of the inflated cap.
+    let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+    for s in 0..SPHERE_SAMPLES {
+        let y = 1.0 - 2.0 * (s as f64 + 0.5) / SPHERE_SAMPLES as f64;
+        let r = (1.0 - y * y).max(0.0).sqrt();
+        let theta = golden * s as f64;
+        let dir = Vec3::new(r * theta.cos(), y, r * theta.sin());
+        if probe_clear(ci + dir * ri, probe_radius, atoms, &[i]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Is the atom pair `(i, j)` an RS edge — i.e. can a probe rest on both without
+/// overlapping a third atom? Probes touching both have their center on the
+/// roll-circle (the contact circle of the two inflated atoms); the edge exists
+/// iff any point on that circle clears the rest.
+fn edge_exists(
+    i: usize,
+    j: usize,
+    atoms: &[Sphere],
+    inflated: &[Sphere],
+    probe_radius: f64,
+) -> bool {
+    let Some(circle) = intersect_two_spheres(inflated[i], inflated[j]) else {
+        return false;
+    };
+    let (u, v) = plane_basis(circle.normal);
+    for s in 0..CIRCLE_SAMPLES {
+        let a = std::f64::consts::TAU * s as f64 / CIRCLE_SAMPLES as f64;
+        let p = circle.center + u * (circle.radius * a.cos()) + v * (circle.radius * a.sin());
+        if probe_clear(p, probe_radius, atoms, &[i, j]) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Compute the reduced surface. `atoms` are the van-der-Waals spheres; the
@@ -107,7 +177,7 @@ pub fn compute(atoms: &[Sphere], probe_radius: f64) -> ReducedSurface {
                     continue;
                 };
                 for c in [c1, c2] {
-                    if probe_clear(c, probe_radius, atoms, [i, j, k]) {
+                    if probe_clear(c, probe_radius, atoms, &[i, j, k]) {
                         faces.push(RsFace {
                             atoms: [i, j, k], // already ascending (i<j<k)
                             probe_center: c,
@@ -118,24 +188,27 @@ pub fn compute(atoms: &[Sphere], probe_radius: f64) -> ReducedSurface {
         }
     }
 
-    // Edges = sorted atom pairs that bound some face; vertices = atoms in faces.
-    let mut edge_set = std::collections::BTreeSet::new();
-    let mut vertex_set = std::collections::BTreeSet::new();
-    for f in &faces {
-        let [a, b, c] = f.atoms;
-        edge_set.insert([a, b]);
-        edge_set.insert([a, c]);
-        edge_set.insert([b, c]);
-        vertex_set.insert(a);
-        vertex_set.insert(b);
-        vertex_set.insert(c);
+    // RS edges: every touching pair the probe can rest on without overlapping a
+    // third atom (covers both face-bounding and free toric edges).
+    let mut edges = Vec::new();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if touch(i, j) && edge_exists(i, j, atoms, &inflated, probe_radius) {
+                edges.push([i, j]);
+            }
+        }
     }
+
+    // RS vertices: every atom a probe can touch — i.e. every surface atom.
+    let vertices: Vec<usize> = (0..n)
+        .filter(|&i| atom_exposed(i, atoms, &inflated, probe_radius))
+        .collect();
 
     ReducedSurface {
         probe_radius,
         faces,
-        edges: edge_set.into_iter().collect(),
-        vertices: vertex_set.into_iter().collect(),
+        edges,
+        vertices,
     }
 }
 
@@ -148,10 +221,14 @@ mod tests {
     }
 
     #[test]
-    fn single_atom_has_no_faces() {
+    fn single_atom_is_a_free_vertex() {
+        // A lone atom is entirely solvent-exposed: one free RS vertex, no edges
+        // or faces (oracle: nv=1 ne=0 nf=0).
         let rs = compute(&[sph(0.0, 0.0, 0.0, 1.5)], 1.4);
-        assert_eq!(rs.num_faces(), 0);
-        assert_eq!(rs.num_vertices(), 0);
+        assert_eq!(
+            (rs.num_vertices(), rs.num_edges(), rs.num_faces()),
+            (1, 0, 0)
+        );
     }
 
     #[test]
@@ -201,21 +278,6 @@ mod tests {
         assert_eq!(rs.num_faces(), 0);
     }
 
-    #[test]
-    fn far_apart_atoms_no_faces() {
-        let atoms = [
-            sph(0.0, 0.0, 0.0, 1.5),
-            sph(20.0, 0.0, 0.0, 1.5),
-            sph(0.0, 20.0, 0.0, 1.5),
-        ];
-        assert_eq!(compute(&atoms, 1.4).num_faces(), 0);
-    }
-
-    /// L1 oracle gate. Expected RS face atom-triple multisets are from
-    /// `ball-py 0.1.0a6` `reduced_surface_stats(spheres, probe_radius=1.4)` —
-    /// BALL's reduced surface. We gate on the FACE set (the core RS invariant);
-    /// edge/vertex parity for face-less configs (free toric edges, isolated
-    /// surface atoms) is a later refinement of this layer.
     fn face_multiset(rs: &ReducedSurface) -> std::collections::BTreeMap<[usize; 3], usize> {
         let mut m = std::collections::BTreeMap::new();
         for f in rs.face_atoms() {
@@ -224,28 +286,61 @@ mod tests {
         m
     }
 
+    /// L1 oracle gate. Expected `(n_vertices, n_edges, n_faces)` and the RS face
+    /// atom-triple multisets are from `ball-py 0.1.0a6`
+    /// `reduced_surface_stats(spheres, probe_radius=1.4)` — BALL's reduced
+    /// surface. Full RS-graph parity (vertices + edges + faces), including the
+    /// face-less configs (free toric edges, isolated surface atoms).
     #[test]
-    fn rs_face_set_matches_ball_oracle() {
+    fn rs_graph_matches_ball_oracle() {
         use std::collections::BTreeMap;
 
-        // triangle3 → oracle: nf=2, {(0,1,2): 2}
         let tri = [
             sph(0.0, 0.0, 0.0, 2.0),
             sph(2.5, 0.0, 0.0, 2.0),
             sph(1.25, 2.0, 0.0, 2.0),
         ];
-        assert_eq!(
-            face_multiset(&compute(&tri, 1.4)),
-            BTreeMap::from([([0, 1, 2], 2)])
-        );
-
-        // tetra4 → oracle: nf=4, one face per atom triple
         let tetra = [
             sph(0.0, 0.0, 0.0, 1.6),
             sph(2.0, 0.0, 0.0, 1.6),
             sph(1.0, 1.7, 0.0, 1.6),
             sph(1.0, 0.6, 1.6, 1.6),
         ];
+        let chain = [
+            sph(0.0, 0.0, 0.0, 1.5),
+            sph(2.6, 0.0, 0.0, 1.5),
+            sph(5.2, 0.0, 0.0, 1.5),
+            sph(7.8, 0.0, 0.0, 1.5),
+        ];
+        let far3 = [
+            sph(0.0, 0.0, 0.0, 1.5),
+            sph(20.0, 0.0, 0.0, 1.5),
+            sph(0.0, 20.0, 0.0, 1.5),
+        ];
+        let pair = [sph(0.0, 0.0, 0.0, 1.8), sph(2.5, 0.0, 0.0, 1.8)];
+
+        // (config, (nv, ne, nf)) — straight from the oracle.
+        let cases: [(&[Sphere], (usize, usize, usize)); 5] = [
+            (&tri, (3, 3, 2)),
+            (&tetra, (4, 6, 4)),
+            (&chain, (4, 3, 0)),
+            (&far3, (3, 0, 0)),
+            (&pair, (2, 1, 0)),
+        ];
+        for (atoms, (nv, ne, nf)) in cases {
+            let rs = compute(atoms, 1.4);
+            assert_eq!(
+                (rs.num_vertices(), rs.num_edges(), rs.num_faces()),
+                (nv, ne, nf),
+                "RS graph counts diverge from BALL"
+            );
+        }
+
+        // Face atom-triple multisets for the configs that have faces.
+        assert_eq!(
+            face_multiset(&compute(&tri, 1.4)),
+            BTreeMap::from([([0, 1, 2], 2)])
+        );
         assert_eq!(
             face_multiset(&compute(&tetra, 1.4)),
             BTreeMap::from([
@@ -255,16 +350,5 @@ mod tests {
                 ([1, 2, 3], 1)
             ])
         );
-
-        // chain4 + pair2 → oracle: nf=0 (no 3-atom probe rest)
-        let chain = [
-            sph(0.0, 0.0, 0.0, 1.5),
-            sph(2.6, 0.0, 0.0, 1.5),
-            sph(5.2, 0.0, 0.0, 1.5),
-            sph(7.8, 0.0, 0.0, 1.5),
-        ];
-        assert_eq!(compute(&chain, 1.4).num_faces(), 0);
-        let pair = [sph(0.0, 0.0, 0.0, 1.8), sph(2.5, 0.0, 0.0, 1.8)];
-        assert_eq!(compute(&pair, 1.4).num_faces(), 0);
     }
 }
