@@ -21,3 +21,4 @@ pub mod hbond;
 pub mod prepare;
 pub mod reconstruct;
 pub mod sasa;
+pub mod surface;
