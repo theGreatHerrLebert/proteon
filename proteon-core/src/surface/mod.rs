@@ -16,8 +16,12 @@
 //! - `mesh` (L4 foundation) — index triangle mesh + invariants (area,
 //!   watertightness, signed volume, Euler χ) and the `icosphere` contact-face
 //!   primitive. An isolated atom's SES is its sphere, gated against `ses_area`.
+//! - `patches` (L4) — reentrant-face meshing: the spheric (concave probe-cap)
+//!   face, gated on its closed-form area (`radius² × spherical excess`). Toric
+//!   faces + watertight stitching follow.
 
 pub mod geom;
 pub mod mesh;
+pub mod patches;
 pub mod rs;
 pub mod ses;
