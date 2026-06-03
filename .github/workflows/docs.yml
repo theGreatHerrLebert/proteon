@@ -41,18 +41,14 @@ jobs:
 
       # proteon-connector is a PyO3 cdylib and currently fails to rustdoc
       # cleanly without a libpython link. Excluded here; its public surface
-      # is documented at the Python-wrapper level on this site instead.
-      #
-      # proteon-bin is also excluded: it now depends on proteon-connector
-      # (the `proteon` analysis CLI calls the connector's pure-Rust paths),
-      # and rustdoc's intra-doc-link pass ICEs when documenting a bin crate
-      # that pulls the PyO3 connector into scope (reproduces on stable
-      # 1.95/1.96, independent of any doc-comment text). Bins are not an API
-      # surface the doc site renders — the CLI is documented in the user guide
-      # and `--help` — so excluding them loses no reference content.
+      # is documented at the Python-wrapper level on this site instead. The
+      # pure-Rust compute it used to hold now lives in proteon-core, which IS
+      # documented. (proteon-bin no longer needs excluding: it depends on
+      # proteon-core, not the PyO3 connector, so the rustdoc intra-doc-link
+      # ICE that the connector-in-scope used to trigger is gone.)
       - name: Build rustdoc
         run: |
-          cargo doc --workspace --no-deps --exclude proteon-connector --exclude proteon-bin
+          cargo doc --workspace --no-deps --exclude proteon-connector
           mkdir -p docs/rust
           rsync -a --delete target/doc/ docs/rust/
 

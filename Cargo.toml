@@ -2,6 +2,7 @@
 members = [
     "proteon-align",
     "proteon-arrow",
+    "proteon-core",
     "proteon-io",
     "proteon-bin",
     "proteon-connector",

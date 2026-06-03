@@ -1,0 +1,27 @@
+[package]
+name = "proteon-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Pure-Rust structural-bioinformatics compute: SASA, DSSP, H-bonds, hydrogen placement, reconstruction, force fields (CHARMM19+EEF1, AMBER96, OBC GB), minimization, and the prepare pipeline. No Python/PyO3 dependency."
+
+[lints]
+workspace = true
+
+[features]
+# GPU kernels (energy/SASA/OBC/bonded on CUDA via cudarc). Off by default; the
+# connector's `cuda` feature forwards to this one.
+cuda = ["cudarc"]
+
+[dependencies]
+pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
+rayon = "1"
+anyhow = "1"
+cudarc = { version = "0.19", features = ["std", "driver", "nvrtc", "cuda-12050"], optional = true }

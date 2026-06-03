@@ -38,11 +38,11 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use rayon::prelude::*;
 
-use proteon_connector::dssp;
-use proteon_connector::forcefield::api as ff_api;
-use proteon_connector::hbond;
-use proteon_connector::prepare::{self, PrepareOptions, PrepareReport};
-use proteon_connector::sasa;
+use proteon_core::dssp;
+use proteon_core::forcefield::api as ff_api;
+use proteon_core::hbond;
+use proteon_core::prepare::{self, PrepareOptions, PrepareReport};
+use proteon_core::sasa;
 
 #[derive(Parser)]
 #[command(

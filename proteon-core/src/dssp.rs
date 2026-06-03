@@ -24,7 +24,7 @@ const BEND_THRESHOLD: f64 = 70.0;
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
-pub(crate) struct DsspResidue {
+pub struct DsspResidue {
     pub n: [f64; 3],
     pub ca: [f64; 3],
     pub c: [f64; 3],
@@ -44,7 +44,7 @@ fn normalize(v: [f64; 3]) -> [f64; 3] {
     [v[0] / len, v[1] / len, v[2] / len]
 }
 
-pub(crate) fn extract_dssp_residues(pdb: &pdbtbx::PDB) -> Vec<DsspResidue> {
+pub fn extract_dssp_residues(pdb: &pdbtbx::PDB) -> Vec<DsspResidue> {
     let mut residues = Vec::new();
     let mut chain_idx = 0;
 
@@ -189,7 +189,7 @@ fn hbond_energy(acc: &DsspResidue, don: &DsspResidue) -> f64 {
 // ---------------------------------------------------------------------------
 
 /// Assign DSSP secondary structure.
-pub(crate) fn assign_dssp(residues: &[DsspResidue]) -> String {
+pub fn assign_dssp(residues: &[DsspResidue]) -> String {
     let n = residues.len();
     if n == 0 {
         return String::new();

@@ -1219,7 +1219,7 @@ dependencies = [
  "pdbtbx",
  "proteon-align",
  "proteon-arrow",
- "proteon-connector",
+ "proteon-core",
  "proteon-io",
  "proteon-search",
  "rayon",
@@ -1237,9 +1237,20 @@ dependencies = [
  "pdbtbx",
  "proteon-align",
  "proteon-arrow",
+ "proteon-core",
  "proteon-io",
  "proteon-search",
  "pyo3",
+ "rayon",
+]
+
+[[package]]
+name = "proteon-core"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "cudarc",
+ "pdbtbx",
  "rayon",
 ]
 
