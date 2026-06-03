@@ -40,8 +40,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run Rust tests
         run: cargo test --workspace
-
-  # Gating lint pass: PRs must pass cargo fmt + cargo clippy -D warnings.
+      # Compile-check the `cuda` feature. The default build / tests above never
+      # enable it, so feature-gated and cross-crate paths (e.g.
+      # forcefield::gpu / GpuContext after the proteon-core extraction) only
+      # used to surface in the post-merge EVIDENT cuda image. cudarc ships
+      # pregenerated bindings for the pinned CUDA version, so this compiles on a
+      # vanilla runner with no CUDA toolkit or GPU — it just exercises the
+      # feature-gated code paths. Build only (running needs a device).
+      - name: Compile-check cuda feature
+        run: cargo build -p proteon-connector --features cuda
   # Workspace lint config (clippy::all + pedantic with carve-outs) lives in
   # the root Cargo.toml [workspace.lints] table.
   lint:
