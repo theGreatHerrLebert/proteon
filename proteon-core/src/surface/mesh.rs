@@ -48,9 +48,12 @@ impl Mesh {
             .sum()
     }
 
-    /// Signed enclosed volume (divergence theorem). Positive ⇒ triangles are
-    /// consistently outward-oriented; a watertight inside-out mesh comes out
-    /// negative, which is why orientation is gated separately from area.
+    /// Signed enclosed volume (divergence theorem). **Only meaningful for a
+    /// closed mesh** (`is_watertight()`): the sum is translation-invariant only
+    /// when every edge is shared, so for an open mesh it shifts with the origin.
+    /// Gate it together with `num_nonmanifold_edges() == 0`. Positive ⇒
+    /// consistently outward-oriented; a watertight inside-out mesh is negative,
+    /// which is why orientation is checked separately (`is_consistently_oriented`).
     pub fn signed_volume(&self) -> f64 {
         self.tris
             .iter()
@@ -84,9 +87,32 @@ impl Mesh {
         self.num_nonmanifold_edges() == 0
     }
 
-    /// Euler characteristic V − E + F (a closed sphere-topology mesh gives 2).
+    /// Consistent outward winding: every directed edge `(a,b)` is used exactly
+    /// once and its reverse `(b,a)` exactly once. Closed + consistently-oriented
+    /// is what makes `signed_volume` trustworthy (undirected edge counts alone
+    /// miss flipped-winding triangles that still pair up).
+    pub fn is_consistently_oriented(&self) -> bool {
+        let mut dir: HashMap<(u32, u32), i32> = HashMap::new();
+        for &t in &self.tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                *dir.entry((a, b)).or_insert(0) += 1;
+            }
+        }
+        dir.iter()
+            .all(|(&(a, b), &c)| c == 1 && dir.get(&(b, a)) == Some(&1))
+    }
+
+    /// Euler characteristic V − E + F, counting only vertices actually used by a
+    /// triangle (stray/unreferenced vertices don't change the topology). A
+    /// closed sphere-topology mesh gives 2.
     pub fn euler_characteristic(&self) -> i64 {
-        let v = self.verts.len() as i64;
+        let mut used = std::collections::HashSet::new();
+        for &t in &self.tris {
+            used.insert(t[0]);
+            used.insert(t[1]);
+            used.insert(t[2]);
+        }
+        let v = used.len() as i64;
         let e = self.edge_use_counts().len() as i64;
         let f = self.tris.len() as i64;
         v - e + f
@@ -200,8 +226,14 @@ mod tests {
         assert_eq!(m.num_vertices(), 12);
         assert_eq!(m.num_triangles(), 20);
         assert!(m.is_watertight());
+        assert!(m.is_consistently_oriented());
         assert_eq!(m.euler_characteristic(), 2); // sphere topology
         assert!(m.signed_volume() > 0.0, "must be outward-oriented");
+
+        // Euler χ counts only used vertices: a stray vertex must not change it.
+        let mut m2 = m.clone();
+        m2.verts.push(Vec3::new(9.0, 9.0, 9.0));
+        assert_eq!(m2.euler_characteristic(), 2);
     }
 
     #[test]
@@ -224,8 +256,9 @@ mod tests {
         let ev_f = (fine.signed_volume() - exact_vol).abs();
         assert!(ev_f / exact_vol < 0.02, "fine volume within 2% of (4/3)πr³");
 
-        // Stays a watertight, sphere-topology manifold at every level.
+        // Stays a watertight, consistently-oriented sphere manifold.
         assert!(fine.is_watertight());
+        assert!(fine.is_consistently_oriented());
         assert_eq!(fine.euler_characteristic(), 2);
     }
 }

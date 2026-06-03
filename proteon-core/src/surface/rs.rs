@@ -19,9 +19,17 @@
 use super::geom::{intersect_three_spheres, intersect_two_spheres, Sphere, Vec3, EPSILON};
 
 /// Circle / sphere sampling resolution for surface-atom and edge detection.
-/// High enough that a genuine clear arc/cap is never missed on non-degenerate
-/// inputs; the exact (blocked-arc / cap-coverage) analysis is the hardening
-/// path that removes the sampling entirely.
+///
+/// LIMITATION (sampling is a stopgap, not exact — to be replaced before
+/// production / large molecules): existence of an RS edge/vertex is decided by
+/// testing sample points, so it can diverge from BALL in three measure-near-zero
+/// regimes — (a) a clear arc narrower than `2π/CIRCLE_SAMPLES` or an exposed cap
+/// with solid angle below the sphere-sample spacing is **missed** (false
+/// negative); (b) a sample landing just inside a blocker's `EPSILON` clearance
+/// band near a tangency reads as clear (false positive); (c) tangent blockers
+/// that BALL routes to singular handling. The exact blocked-arc / cap-coverage
+/// analysis removes the sampling entirely and is the hardening path; the
+/// non-degenerate oracle corpus does not exercise these regimes.
 const CIRCLE_SAMPLES: usize = 256;
 const SPHERE_SAMPLES: usize = 512;
 
@@ -69,8 +77,11 @@ impl ReducedSurface {
 
 /// Whether a probe centered at `c` (radius `probe_radius`) clears every atom
 /// except those in `skip` — BALL's `checkProbe`: a probe overlapping any other
-/// atom is rejected. Strictly-less ⇒ genuine overlap (touching is allowed);
-/// the EPSILON guard mirrors BALL's `Maths::isLess` tolerance.
+/// atom is rejected. The comparison is intentionally in **squared** units with
+/// an absolute `EPSILON` (`squareDistance < limit² − EPSILON`), mirroring BALL's
+/// `Maths::isLess(probe.p.getSquareDistance(atom.p), dist*dist)` exactly — the
+/// effective length tolerance is therefore `~EPSILON/(2·limit)`, by design, to
+/// match BALL's accept/reject boundary rather than impose a separate one.
 fn probe_clear(c: Vec3, probe_radius: f64, atoms: &[Sphere], skip: &[usize]) -> bool {
     for (m, atom) in atoms.iter().enumerate() {
         if skip.contains(&m) {
@@ -176,7 +187,14 @@ pub fn compute(atoms: &[Sphere], probe_radius: f64) -> ReducedSurface {
                 else {
                     continue;
                 };
-                for c in [c1, c2] {
+                // A tangent probe (discriminant ≈ 0) yields c1 == c2 — emit that
+                // RS face once, not twice. Distinct centers are the usual
+                // above/below pair.
+                let mut centers = vec![c1];
+                if c1.square_distance(c2) > EPSILON * EPSILON {
+                    centers.push(c2);
+                }
+                for c in centers {
                     if probe_clear(c, probe_radius, atoms, &[i, j, k]) {
                         faces.push(RsFace {
                             atoms: [i, j, k], // already ascending (i<j<k)
