@@ -12,9 +12,9 @@
 //! ```
 //!
 //! has the whole SES as `f = 0`. We sample `f` on a regular grid and extract the
-//! iso-surface with **naive surface nets** (one vertex per sign-changing cell,
-//! one quad per sign-changing grid edge) — watertight by construction, any
-//! topology, no patch stitching.
+//! iso-surface with **manifold dual contouring** (`manifold_dual_contour`: a dual
+//! vertex per surface *sheet* in each cell, a quad per sign-changing grid edge) —
+//! a 2-manifold by construction on any topology, no patch stitching.
 //!
 //! `dist(x, complement(A_p))` is the distance to the SAS (the union boundary).
 //! We compute it from an *analytically-seeded* vector distance transform: nodes
@@ -54,7 +54,7 @@ pub fn ses_mesh_sdf(atoms: &[Sphere], probe: f64, spacing: f64) -> Mesh {
     }
     let grid = Grid::enclosing(atoms, probe, spacing);
     let f = grid.distance_field(atoms, probe);
-    let mut mesh = surface_nets(&grid, &f);
+    let mut mesh = manifold_dual_contour(&grid, &f);
     // Guarantee outward (solvent-facing) orientation regardless of the seam
     // winding surface_nets emitted.
     mesh.orient_consistently();
@@ -432,38 +432,87 @@ const CORNER: [[usize; 3]; 8] = [
     [1, 1, 1],
 ];
 
-/// Naive surface nets: one vertex per sign-changing cell (at the mean of its
-/// edge zero-crossings), one quad per interior sign-changing grid edge. The
-/// result is a closed two-manifold; orientation is fixed by the caller.
-fn surface_nets(grid: &Grid, f: &[f64]) -> Mesh {
-    let [nx, ny, nz] = grid.dims;
-    let (cx, cy, cz) = (nx - 1, ny - 1, nz - 1); // cells per axis
-    let cell_index = |i: usize, j: usize, k: usize| i + cx * (j + cy * k);
-    let mut cell_vert = vec![u32::MAX; cx * cy * cz];
-    let mut verts: Vec<Vec3> = Vec::new();
+// The 6 cube faces, each as its 4 cube-edge indices in cyclic order, and the 4
+// corner indices in the matching cyclic order. `FACE_EDGES[f][t]` is the edge
+// between `FACE_CORNERS[f][t]` and `FACE_CORNERS[f][(t+1)%4]`.
+const FACE_EDGES: [[usize; 4]; 6] = [
+    [4, 10, 6, 8],  // x=0
+    [5, 11, 7, 9],  // x=1
+    [0, 9, 2, 8],   // y=0
+    [1, 11, 3, 10], // y=1
+    [0, 5, 1, 4],   // z=0
+    [2, 7, 3, 6],   // z=1
+];
+const FACE_CORNERS: [[usize; 4]; 6] = [
+    [0, 2, 6, 4],
+    [1, 3, 7, 5],
+    [0, 1, 5, 4],
+    [2, 3, 7, 6],
+    [0, 1, 3, 2],
+    [4, 5, 7, 6],
+];
 
-    // Place a vertex in every sign-changing cell.
+fn uf_find(parent: &mut [usize; 12], x: usize) -> usize {
+    let mut r = x;
+    while parent[r] != r {
+        r = parent[r];
+    }
+    let mut c = x;
+    while parent[c] != c {
+        let n = parent[c];
+        parent[c] = r;
+        c = n;
+    }
+    r
+}
+fn uf_union(parent: &mut [usize; 12], a: usize, b: usize) {
+    let (ra, rb) = (uf_find(parent, a), uf_find(parent, b));
+    parent[ra] = rb;
+}
+
+/// **Manifold dual contouring.** Like surface nets — a dual vertex per cell, a
+/// quad per sign-changing grid edge — but a cell whose surface passes through as
+/// *several disconnected sheets* gets **one vertex per sheet**, and each quad
+/// corner is routed to the sheet that owns its grid edge. That removes the
+/// non-manifold pinches naive surface nets makes at saddle cells (which appear
+/// on real protein surfaces), giving a 2-manifold by construction.
+///
+/// Sheets are the connected components of the cell's 12 edge-crossings, joined
+/// by the marching-squares segments on each of the 6 faces; the lone ambiguous
+/// face (all four edges crossing) is resolved by the bilinear **asymptotic
+/// decider**, deterministic from the four shared corner values so the two cells
+/// across that face always agree. Orientation is finalized by the caller.
+fn manifold_dual_contour(grid: &Grid, f: &[f64]) -> Mesh {
+    let [nx, ny, nz] = grid.dims;
+    let (cx, cy, cz) = (nx - 1, ny - 1, nz - 1);
+    let cell_index = |i: usize, j: usize, k: usize| i + cx * (j + cy * k);
+    let mut verts: Vec<Vec3> = Vec::new();
+    // (cell, cube-edge) → the vertex of the sheet that edge belongs to.
+    let mut edge_vert: std::collections::HashMap<(usize, usize), u32> =
+        std::collections::HashMap::new();
+
     for k in 0..cz {
         for j in 0..cy {
             for i in 0..cx {
-                let mut corner_f = [0.0f64; 8];
+                let mut cf = [0.0f64; 8];
                 for (c, off) in CORNER.iter().enumerate() {
-                    corner_f[c] = f[grid.idx(i + off[0], j + off[1], k + off[2])];
+                    cf[c] = f[grid.idx(i + off[0], j + off[1], k + off[2])];
                 }
-                let neg = corner_f.iter().filter(|&&x| x < 0.0).count();
+                let neg = cf.iter().filter(|&&x| x < 0.0).count();
                 if neg == 0 || neg == 8 {
-                    continue; // not crossed
+                    continue;
                 }
-                let mut acc = Vec3::new(0.0, 0.0, 0.0);
-                let mut m = 0.0;
-                for &(a, b) in &CUBE_EDGES {
-                    let (fa, fb) = (corner_f[a], corner_f[b]);
+                // Crossing position per cube edge.
+                let mut crossing = [false; 12];
+                let mut cpos = [Vec3::new(0.0, 0.0, 0.0); 12];
+                for (e, &(a, b)) in CUBE_EDGES.iter().enumerate() {
+                    let (fa, fb) = (cf[a], cf[b]);
                     if (fa < 0.0) == (fb < 0.0) {
                         continue;
                     }
-                    // A crossing endpoint must be a reached (finite, near-band)
-                    // node; the UNREACHED sentinel never borders the surface, so
-                    // this guards against a NaN/∞ interpolation slipping through.
+                    // A crossing endpoint must be a reached (finite) node; the
+                    // UNREACHED sentinel never borders the surface, so this guards
+                    // a NaN/∞ interpolation.
                     debug_assert!(
                         fa.abs() < 1e17 && fb.abs() < 1e17,
                         "sign-changing edge touches an unreached node"
@@ -471,83 +520,137 @@ fn surface_nets(grid: &Grid, f: &[f64]) -> Mesh {
                     let t = fa / (fa - fb);
                     let pa = grid.pos(i + CORNER[a][0], j + CORNER[a][1], k + CORNER[a][2]);
                     let pb = grid.pos(i + CORNER[b][0], j + CORNER[b][1], k + CORNER[b][2]);
-                    acc = acc + pa + (pb - pa) * t;
-                    m += 1.0;
+                    crossing[e] = true;
+                    cpos[e] = pa + (pb - pa) * t;
                 }
-                cell_vert[cell_index(i, j, k)] = verts.len() as u32;
-                verts.push(acc * (1.0 / m));
+
+                // Join crossings into sheets via per-face marching-squares segments.
+                let mut parent: [usize; 12] = std::array::from_fn(|e| e);
+                for fa in 0..6 {
+                    let fe = FACE_EDGES[fa];
+                    let crossed = [
+                        crossing[fe[0]],
+                        crossing[fe[1]],
+                        crossing[fe[2]],
+                        crossing[fe[3]],
+                    ];
+                    match crossed.iter().filter(|&&x| x).count() {
+                        2 => {
+                            let mut it = (0..4).filter(|&t| crossed[t]);
+                            let (a, b) = (it.next().unwrap(), it.next().unwrap());
+                            uf_union(&mut parent, fe[a], fe[b]);
+                        }
+                        4 => {
+                            let fc = FACE_CORNERS[fa];
+                            let (f0, f1, f2, f3) = (cf[fc[0]], cf[fc[1]], cf[fc[2]], cf[fc[3]]);
+                            let denom = f0 - f1 + f2 - f3;
+                            // Asymptotic decider: is the f0/f2 diagonal joined
+                            // through the face interior? Then the surface cuts off
+                            // corners c1 and c3 (segments {E0,E1} and {E2,E3}).
+                            let joined_02 = if denom.abs() < 1e-12 {
+                                true
+                            } else {
+                                ((f0 * f2 - f1 * f3) / denom < 0.0) == (f0 < 0.0)
+                            };
+                            if joined_02 {
+                                uf_union(&mut parent, fe[0], fe[1]);
+                                uf_union(&mut parent, fe[2], fe[3]);
+                            } else {
+                                uf_union(&mut parent, fe[1], fe[2]);
+                                uf_union(&mut parent, fe[3], fe[0]);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // One vertex per sheet = mean of its crossings.
+                let mut sheet: std::collections::HashMap<usize, (Vec3, f64, u32)> =
+                    std::collections::HashMap::new();
+                for e in 0..12 {
+                    if crossing[e] {
+                        let r = uf_find(&mut parent, e);
+                        let entry = sheet.entry(r).or_insert_with(|| {
+                            let vid = verts.len() as u32;
+                            verts.push(Vec3::new(0.0, 0.0, 0.0));
+                            (Vec3::new(0.0, 0.0, 0.0), 0.0, vid)
+                        });
+                        entry.0 = entry.0 + cpos[e];
+                        entry.1 += 1.0;
+                    }
+                }
+                for (acc, n, vid) in sheet.values() {
+                    verts[*vid as usize] = *acc * (1.0 / *n);
+                }
+                for e in 0..12 {
+                    if crossing[e] {
+                        let r = uf_find(&mut parent, e);
+                        edge_vert.insert((cell_index(i, j, k), e), sheet[&r].2);
+                    }
+                }
             }
         }
     }
 
-    // One quad per interior grid edge whose endpoints differ in sign; the four
-    // cells around that edge own the quad's corners.
+    // One quad per interior sign-changing grid edge. The four incident cells, in
+    // cyclic order, each contribute the sheet vertex of *their* copy of that grid
+    // edge (cube-edge index given per direction).
     let mut tris: Vec<[u32; 3]> = Vec::new();
-    let quad = |a: u32, b: u32, c: u32, d: u32, flip: bool, tris: &mut Vec<[u32; 3]>| {
-        // The four cells sharing a sign-changing grid edge each straddle that
-        // edge, so each is itself sign-changing and owns a vertex — a MAX here
-        // would mean a dropped quad (a hole), so trip the build rather than
-        // silently leave one.
+    let quad = |slots: [(usize, usize); 4], flip: bool, tris: &mut Vec<[u32; 3]>| {
+        let v: [Option<u32>; 4] = std::array::from_fn(|t| edge_vert.get(&slots[t]).copied());
         debug_assert!(
-            a != u32::MAX && b != u32::MAX && c != u32::MAX && d != u32::MAX,
-            "sign-changing edge with a non-crossed incident cell → would hole the mesh"
+            v.iter().all(Option::is_some),
+            "crossing grid edge with a cell missing its sheet vertex → hole"
         );
-        if a == u32::MAX || b == u32::MAX || c == u32::MAX || d == u32::MAX {
-            return;
-        }
-        if flip {
-            tris.push([a, c, b]);
-            tris.push([a, d, c]);
-        } else {
-            tris.push([a, b, c]);
-            tris.push([a, c, d]);
+        if let [Some(a), Some(b), Some(c), Some(d)] = v {
+            if flip {
+                tris.push([a, c, b]);
+                tris.push([a, d, c]);
+            } else {
+                tris.push([a, b, c]);
+                tris.push([a, c, d]);
+            }
         }
     };
     for k in 0..nz {
         for j in 0..ny {
             for i in 0..nx {
                 let here = f[grid.idx(i, j, k)] < 0.0;
-                // +x edge → quad in the y/z cells around it
-                if i + 1 < nx && j > 0 && k > 0 {
-                    let there = f[grid.idx(i + 1, j, k)] < 0.0;
-                    if here != there {
-                        quad(
-                            cell_vert[cell_index(i, j - 1, k - 1)],
-                            cell_vert[cell_index(i, j, k - 1)],
-                            cell_vert[cell_index(i, j, k)],
-                            cell_vert[cell_index(i, j - 1, k)],
-                            here,
-                            &mut tris,
-                        );
-                    }
+                if i + 1 < nx && j > 0 && k > 0 && here != (f[grid.idx(i + 1, j, k)] < 0.0) {
+                    quad(
+                        [
+                            (cell_index(i, j - 1, k - 1), 3),
+                            (cell_index(i, j, k - 1), 2),
+                            (cell_index(i, j, k), 0),
+                            (cell_index(i, j - 1, k), 1),
+                        ],
+                        here,
+                        &mut tris,
+                    );
                 }
-                // +y edge → quad in the x/z cells
-                if j + 1 < ny && i > 0 && k > 0 {
-                    let there = f[grid.idx(i, j + 1, k)] < 0.0;
-                    if here != there {
-                        quad(
-                            cell_vert[cell_index(i - 1, j, k - 1)],
-                            cell_vert[cell_index(i, j, k - 1)],
-                            cell_vert[cell_index(i, j, k)],
-                            cell_vert[cell_index(i - 1, j, k)],
-                            !here,
-                            &mut tris,
-                        );
-                    }
+                if j + 1 < ny && i > 0 && k > 0 && here != (f[grid.idx(i, j + 1, k)] < 0.0) {
+                    quad(
+                        [
+                            (cell_index(i - 1, j, k - 1), 7),
+                            (cell_index(i, j, k - 1), 6),
+                            (cell_index(i, j, k), 4),
+                            (cell_index(i - 1, j, k), 5),
+                        ],
+                        !here,
+                        &mut tris,
+                    );
                 }
-                // +z edge → quad in the x/y cells
-                if k + 1 < nz && i > 0 && j > 0 {
-                    let there = f[grid.idx(i, j, k + 1)] < 0.0;
-                    if here != there {
-                        quad(
-                            cell_vert[cell_index(i - 1, j - 1, k)],
-                            cell_vert[cell_index(i, j - 1, k)],
-                            cell_vert[cell_index(i, j, k)],
-                            cell_vert[cell_index(i - 1, j, k)],
-                            here,
-                            &mut tris,
-                        );
-                    }
+                if k + 1 < nz && i > 0 && j > 0 && here != (f[grid.idx(i, j, k + 1)] < 0.0) {
+                    quad(
+                        [
+                            (cell_index(i - 1, j - 1, k), 11),
+                            (cell_index(i, j - 1, k), 10),
+                            (cell_index(i, j, k), 8),
+                            (cell_index(i - 1, j, k), 9),
+                        ],
+                        here,
+                        &mut tris,
+                    );
                 }
             }
         }
