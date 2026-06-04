@@ -24,6 +24,7 @@
 //!   `ball-py ses_area`; the general registry + arrangement (`TO_SES_STITCHING.md`)
 //!   follows.
 
+pub mod arrangement;
 pub mod geom;
 pub mod mesh;
 pub mod patches;
