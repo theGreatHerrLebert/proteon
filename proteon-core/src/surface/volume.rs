@@ -17,14 +17,22 @@
 //! topology, no patch stitching.
 //!
 //! `dist(x, complement(A_p))` is the distance to the SAS (the union boundary).
-//! We compute it **sub-voxel-accurately**: nodes adjacent to the inside/outside
-//! boundary are seeded with the *analytic* nearest point on an inflated atom
-//! (`AtomGrid::nearest_surface_point`), then a **jump-flooding vector transform**
-//! (`jump_flood`) propagates each node's nearest seeded surface point. Distance
-//! is `|node − nearest_surface|`, signed by occupancy. This puts the surface at
-//! its true position (no voxel quantization, no staircase), so area/volume
-//! converge smoothly — sub-0.5% of the analytic `ball-py ses_area` at `h = 0.2`.
-//! A uniform spatial hash (`AtomGrid`) keeps occupancy/seeding O(neighbours).
+//! We compute it from an *analytically-seeded* vector distance transform: nodes
+//! adjacent to the inside/outside boundary are seeded with the nearest point on
+//! an inflated atom (`AtomGrid::nearest_surface_point`), then a **jump-flooding
+//! vector transform** (`jump_flood`) propagates each node's nearest seeded
+//! surface point; distance is `|node − nearest_surface|`, signed by occupancy.
+//!
+//! Because the seeds are *analytic* (not voxel-snapped) and densely cover the
+//! surface (one per boundary cell), the field has no occupancy staircase and the
+//! positional error is `O(h)` — including at concave creases, where the per-node
+//! `nearest_surface_point` is biased (the true nearest SAS point is on an
+//! intersection rim) but the dense band still carries near-rim seeds, so JFA
+//! recovers it. Empirically area/volume converge smoothly to `ball-py ses_area`:
+//! sub-0.5 % at `h = 0.2`, sub-0.35 % even on sharp-crease / reentrant cases at
+//! `h = 0.15`. A uniform spatial hash (`AtomGrid`) keeps occupancy/seeding
+//! `O(neighbours)`. Topology below the grid scale (necks/components thinner than
+//! `h`) is resolution-limited, like any grid iso-surface.
 
 use super::geom::{Sphere, Vec3};
 use super::mesh::Mesh;
@@ -115,15 +123,16 @@ impl Grid {
     /// inside `A_p` (the union of probe-inflated atoms). The SES is `f = 0`: the
     /// points exactly `probe` deep inside the SAS, i.e. `A_p` eroded by the probe.
     ///
-    /// `signed_dist` is a **sub-voxel-accurate Euclidean distance to the SAS**:
-    /// every node adjacent to the inside/outside boundary is seeded with the
-    /// *analytic* nearest point on the inflated-atom union (an exposed radial
-    /// projection), then a jump-flooding vector transform propagates each node's
-    /// nearest seeded surface point. `signed_dist = ±|node − nearest_surface|`,
-    /// signed by occupancy. Unlike a binary occupancy + scalar EDT, the surface
-    /// sits at its true position (no voxel quantization, no staircase), so the
-    /// area/volume converge smoothly to the analytic values.
+    /// `signed_dist` is an `O(h)`-accurate Euclidean distance to the SAS: every
+    /// node adjacent to the inside/outside boundary is seeded with the *analytic*
+    /// nearest point on the inflated-atom union (an exposed radial projection),
+    /// then a jump-flooding vector transform propagates each node's nearest seeded
+    /// surface point. `signed_dist = ±|node − nearest_surface|`, signed by
+    /// occupancy. Analytic seeds (not voxel-snapped) remove the binary-occupancy
+    /// staircase, so area/volume converge smoothly — see the module docs for the
+    /// crease-bias argument and the measured convergence.
     fn distance_field(&self, atoms: &[Sphere], probe: f64) -> Vec<f64> {
+        const UNREACHED: f64 = 1e18; // finite sentinel for nodes JFA never reached
         let [nx, ny, nz] = self.dims;
         let n = nx * ny * nz;
         let grid = AtomGrid::build(atoms, probe);
@@ -204,8 +213,12 @@ impl Grid {
                 for i in 0..nx {
                     let idx = self.idx(i, j, k);
                     let s = feat[idx];
+                    // Unreached nodes are farther than `reach` from any surface, so
+                    // they are deep in the sign-correct interior/exterior and never
+                    // border the f=0 band. Use a large *finite* sentinel (not ∞) so
+                    // a stray sign-change interpolation can never produce NaN.
                     let dist = if s[0].is_nan() {
-                        f64::INFINITY // unreached: deep field, never near f=0
+                        UNREACHED
                     } else {
                         self.pos(i, j, k).distance(Vec3::new(s[0], s[1], s[2]))
                     };
@@ -225,6 +238,10 @@ struct AtomGrid {
     cell: f64,
     buckets: std::collections::HashMap<(i64, i64, i64), Vec<usize>>,
 }
+
+/// Bucket reach for `AtomGrid` queries — valid only while `cell` is the maximum
+/// inflated radius (see `for_each_near`).
+const NEAR_REACH: i64 = 2;
 
 impl AtomGrid {
     fn build(atoms: &[Sphere], probe: f64) -> Self {
@@ -258,7 +275,12 @@ impl AtomGrid {
         )
     }
 
-    /// Visit every atom whose bucket is within `reach` cells of `p`.
+    /// Visit every atom whose bucket is within `reach` cells of `p`. With
+    /// `cell = max inflated radius`, any atom whose surface lies within one
+    /// `cell` of `p` (the relevant range for both nearest-surface and burial
+    /// queries) has its centre ≤ `2·cell` away in distance, i.e. ≤ 2 buckets
+    /// after `floor` bucketing — hence callers use `reach = NEAR_REACH` (2). The
+    /// per-atom distance test inside the callback rejects false positives.
     fn for_each_near(&self, p: Vec3, reach: i64, mut f: impl FnMut(usize)) {
         let (kx, ky, kz) = Self::key(p, self.cell);
         for dz in -reach..=reach {
@@ -279,7 +301,7 @@ impl AtomGrid {
     /// `None` only if no atom is near (shouldn't happen for a boundary node).
     fn nearest_surface_point(&self, p: Vec3) -> Option<Vec3> {
         let mut best: Option<(f64, Vec3)> = None;
-        self.for_each_near(p, 2, |i| {
+        self.for_each_near(p, NEAR_REACH, |i| {
             let s = self.spheres[i];
             let dir = match (p - s.center).normalized() {
                 Some(d) => d,
@@ -288,7 +310,7 @@ impl AtomGrid {
             let proj = s.center + dir * s.radius;
             // Exposed = not strictly inside any other inflated sphere.
             let mut exposed = true;
-            self.for_each_near(proj, 2, |j| {
+            self.for_each_near(proj, NEAR_REACH, |j| {
                 if j != i {
                     let o = self.spheres[j];
                     if proj.square_distance(o.center) < o.radius * o.radius - 1e-9 {
@@ -320,10 +342,21 @@ fn jump_flood(
 ) {
     let [nx, ny, nz] = dims;
     let idx = |i: usize, j: usize, k: usize| i + nx * (j + ny * k);
+    // Halving schedule next_pow2(reach) … 2, 1, then one extra unit pass — the
+    // "JFA+1" variant, which cleans up the rare wrong-nearest cell vanilla JFA
+    // leaves near Voronoi boundaries. (With dense band seeding the base error is
+    // already tiny; this is cheap insurance.)
+    let mut schedule: Vec<usize> = Vec::new();
     let mut step = reach.max(1).next_power_of_two();
+    while step >= 1 {
+        schedule.push(step);
+        step /= 2;
+    }
+    schedule.push(1);
+
     let mut src = feat.to_vec();
     let mut dst = feat.to_vec();
-    while step >= 1 {
+    for step in schedule {
         for k in 0..nz {
             for j in 0..ny {
                 for i in 0..nx {
@@ -367,7 +400,6 @@ fn jump_flood(
             }
         }
         std::mem::swap(&mut src, &mut dst);
-        step /= 2;
     }
     feat.copy_from_slice(&src);
 }
@@ -429,6 +461,13 @@ fn surface_nets(grid: &Grid, f: &[f64]) -> Mesh {
                     if (fa < 0.0) == (fb < 0.0) {
                         continue;
                     }
+                    // A crossing endpoint must be a reached (finite, near-band)
+                    // node; the UNREACHED sentinel never borders the surface, so
+                    // this guards against a NaN/∞ interpolation slipping through.
+                    debug_assert!(
+                        fa.abs() < 1e17 && fb.abs() < 1e17,
+                        "sign-changing edge touches an unreached node"
+                    );
                     let t = fa / (fa - fb);
                     let pa = grid.pos(i + CORNER[a][0], j + CORNER[a][1], k + CORNER[a][2]);
                     let pb = grid.pos(i + CORNER[b][0], j + CORNER[b][1], k + CORNER[b][2]);
@@ -611,6 +650,57 @@ mod tests {
             assert!(
                 (vf - ball_vol).abs() / ball_vol < 0.01,
                 "{name}: fine volume {vf} within 1% of {ball_vol}"
+            );
+        }
+    }
+
+    /// Adversarial *connected* surfaces that stress the field where
+    /// `nearest_surface_point` is biased (the per-node radial projection is not
+    /// the true nearest SAS point — that lies on an intersection rim):
+    /// **heterogeneous radii** (also stresses the `cell = maxR` spatial-hash
+    /// reach) and a tight **reentrant pocket**, both three-sphere so each carries
+    /// rim creases. Staying within 1% is the evidence that dense band seeding +
+    /// JFA bound the crease bias to `O(h)` (codex-review). The 2-sphere rim case
+    /// is the existing `pair_sym` gate; barely-overlapping (near-disconnection)
+    /// is deliberately *not* gated here — that is resolution-limited topology,
+    /// not field accuracy. Gated vs `ball-py 0.1.0a6 ses_area`.
+    #[test]
+    fn crease_and_heterogeneous_cases_stay_within_tolerance() {
+        let cases = [
+            (
+                "hetero",
+                vec![
+                    s(0.0, 0.0, 0.0, 2.4),
+                    s(3.0, 0.0, 0.0, 1.0),
+                    s(1.0, 2.2, 0.0, 1.3),
+                ],
+                87.5941,
+                69.2654,
+            ),
+            (
+                "tri_pocket",
+                vec![
+                    s(0.0, 0.0, 0.0, 1.7),
+                    s(2.4, 0.0, 0.0, 1.7),
+                    s(1.2, 2.0, 0.0, 1.7),
+                ],
+                77.4331,
+                55.9095,
+            ),
+        ];
+        for (name, atoms, ball_area, ball_vol) in cases {
+            let m = ses_mesh_sdf(&atoms, 1.4, 0.15);
+            assert!(m.is_watertight(), "{name}: closed");
+            assert!(m.is_consistently_oriented(), "{name}: oriented");
+            assert_eq!(m.euler_characteristic(), 2, "{name}: sphere topology");
+            let (a, v) = (m.surface_area(), m.signed_volume());
+            assert!(
+                (a - ball_area).abs() / ball_area < 0.01,
+                "{name}: area {a} within 1% of {ball_area}"
+            );
+            assert!(
+                (v - ball_vol).abs() / ball_vol < 0.01,
+                "{name}: volume {v} within 1% of {ball_vol}"
             );
         }
     }
