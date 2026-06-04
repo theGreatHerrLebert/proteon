@@ -14,7 +14,8 @@
 //! has the whole SES as `f = 0`. We sample `f` on a regular grid and extract the
 //! iso-surface with **manifold dual contouring** (`manifold_dual_contour`: a dual
 //! vertex per surface *sheet* in each cell, a quad per sign-changing grid edge) —
-//! a 2-manifold by construction on any topology, no patch stitching.
+//! a 2-manifold by construction for non-degenerate fields (exact-zero samples are
+//! nudged off the grid corners), on any surface topology, no patch stitching.
 //!
 //! `dist(x, complement(A_p))` is the distance to the SAS (the union boundary).
 //! We compute it from an *analytically-seeded* vector distance transform: nodes
@@ -222,7 +223,13 @@ impl Grid {
                     } else {
                         self.pos(i, j, k).distance(Vec3::new(s[0], s[1], s[2]))
                     };
-                    f[idx] = if inside[idx] { dist } else { -dist } - probe;
+                    let v = if inside[idx] { dist } else { -dist } - probe;
+                    // Nudge an exact zero off the surface (consistently, toward
+                    // inside) so no edge crossing lands exactly on a grid corner —
+                    // that would make a vertex coincident with a node and a
+                    // degenerate triangle (codex-review). Negligible vs any real
+                    // distance; for real coordinates this effectively never fires.
+                    f[idx] = if v == 0.0 { f64::EPSILON } else { v };
                 }
             }
         }
