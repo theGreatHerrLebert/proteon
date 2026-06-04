@@ -29,6 +29,7 @@ pub mod cdt;
 pub mod geom;
 pub mod mesh;
 pub mod patches;
+pub mod registry;
 pub mod rs;
 pub mod ses;
 pub mod stitch;
