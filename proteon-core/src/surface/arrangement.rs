@@ -84,10 +84,17 @@ pub fn circle_intersections(a: SphereCircle, b: SphereCircle) -> Vec<Vec3> {
     ) else {
         return Vec::new();
     };
+    // Mathematically unit, but renormalize against accumulated round-off so
+    // downstream angle/burial tests see exact directions.
+    let pt = |t: f64| {
+        (line.p + line.dir * t)
+            .normalized()
+            .unwrap_or(line.p + line.dir * t)
+    };
     if (t1 - t2).abs() < EPS {
-        vec![line.p + line.dir * t1]
+        vec![pt(t1)]
     } else {
-        vec![line.p + line.dir * t1, line.p + line.dir * t2]
+        vec![pt(t1), pt(t2)]
     }
 }
 
@@ -96,42 +103,54 @@ pub fn circle_intersections(a: SphereCircle, b: SphereCircle) -> Vec<Vec3> {
 /// wrapping interval is split at 0). Empty ⇒ the rim is fully buried. One
 /// interval `[0, TAU)` ⇒ fully exposed.
 pub fn exposed_arcs(circle: &SphereCircle, others: &[SphereCircle]) -> Vec<(f64, f64)> {
+    // One basis for the whole rim — `theta_of` must be the inverse of
+    // `rim_point`, so both use exactly these (u, v) (plane_basis is a
+    // deterministic pure function of the axis, but pinning it here removes the
+    // dependence on that and keeps the round-trip exact).
+    let (u, v) = plane_basis(circle.axis);
+    let theta_of = |p: Vec3| -> f64 {
+        let t = p.dot(v).atan2(p.dot(u));
+        if t < 0.0 {
+            t + TAU
+        } else {
+            t
+        }
+    };
+
     // Collect the θ-intervals removed by each other cap.
     let mut removed: Vec<(f64, f64)> = Vec::new();
+    let alpha = circle.half_angle;
     for o in others {
-        match circle_intersections(*circle, *o).as_slice() {
-            // No crossing: the rim is wholly inside or wholly outside o.
-            [] | [_] => {
-                if is_buried(circle.rim_point(0.0), o) {
-                    return Vec::new(); // entire rim buried by this cap alone
-                }
-            }
-            [p1, p2] => {
-                let theta_of = |p: &Vec3| -> f64 {
-                    let (u, v) = plane_basis(circle.axis);
-                    let t = p.dot(v).atan2(p.dot(u));
-                    if t < 0.0 {
-                        t + TAU
-                    } else {
-                        t
-                    }
-                };
-                let (mut a, mut b) = (theta_of(p1), theta_of(p2));
-                if a > b {
-                    std::mem::swap(&mut a, &mut b);
-                }
-                // One of the two arcs (a,b) / (b,a+TAU) is the buried one; pick
-                // it by testing the midpoint.
-                let mid = (a + b) / 2.0;
-                if is_buried(circle.rim_point(mid), o) {
-                    removed.push((a, b));
-                } else {
-                    // The complementary (wrapping) arc is buried.
-                    removed.push((b, TAU));
-                    removed.push((0.0, a));
-                }
-            }
-            _ => unreachable!(),
+        // Classify the pair by the angle δ between axes vs the two angular
+        // radii — robust, unlike sampling a single rim point. A rim point sits
+        // at angular distance in [δ−α, δ+α] from o.axis; o's cap reaches to β.
+        let beta = o.half_angle;
+        let delta = circle.axis.dot(o.axis).clamp(-1.0, 1.0).acos();
+        if delta >= alpha + beta - EPS {
+            continue; // disjoint: nearest rim point still outside o's cap
+        }
+        if delta + alpha <= beta + EPS {
+            return Vec::new(); // farthest rim point still inside o → fully buried
+        }
+        // Crossing (|α−β| < δ < α+β): two genuine intersections bound the
+        // buried arc. If round-off failed to produce both, the buried arc is a
+        // numerically negligible sliver — skip it rather than guess from one
+        // sample.
+        let pts = circle_intersections(*circle, *o);
+        let [p1, p2] = pts.as_slice() else { continue };
+        let (mut a, mut b) = (theta_of(*p1), theta_of(*p2));
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        // One of the two arcs (a,b) / (b,a+TAU) is the buried one; pick it by
+        // testing the midpoint.
+        let mid = (a + b) / 2.0;
+        if is_buried(circle.rim_point(mid), o) {
+            removed.push((a, b));
+        } else {
+            // The complementary (wrapping) arc is buried.
+            removed.push((b, TAU));
+            removed.push((0.0, a));
         }
     }
     complement_intervals(removed)
@@ -233,5 +252,40 @@ mod tests {
         // A far cap removes nothing → fully exposed.
         let far = circ(Vec3::new(0.0, 0.0, -1.0), 0.3);
         assert_eq!(exposed_arcs(&circle, &[far]), vec![(0.0, TAU)]);
+    }
+
+    #[test]
+    fn tangent_and_near_tangent_caps_do_not_flip_the_rim() {
+        // Two caps that just touch (δ = α + β): the buried arc has zero length,
+        // so the rim must survive whole — the angular classifier treats this as
+        // disjoint, where the old single-sample test could have flipped it.
+        let circle = circ(Vec3::new(0.0, 0.0, 1.0), 0.6);
+        let beta = 0.5;
+        let delta = circle.half_angle + beta; // exact external tangency
+        let other = circ(Vec3::new(delta.sin(), 0.0, delta.cos()), beta);
+        assert_eq!(exposed_arcs(&circle, &[other]), vec![(0.0, TAU)]);
+
+        // Nudge to a genuine (tiny) overlap — still a valid arrangement, no panic,
+        // and the surviving arcs agree with the pointwise classifier.
+        let inside = circ(
+            Vec3::new((delta - 0.05).sin(), 0.0, (delta - 0.05).cos()),
+            beta,
+        );
+        let arcs = exposed_arcs(&circle, &[inside]);
+        let in_arcs = |t: f64| arcs.iter().any(|&(a, b)| t >= a - 1e-9 && t <= b + 1e-9);
+        for k in 0..2000 {
+            let t = TAU * k as f64 / 2000.0;
+            assert_eq!(in_arcs(t), is_exposed(circle.rim_point(t), &[inside]));
+        }
+    }
+
+    #[test]
+    fn rim_just_inside_a_cap_is_fully_buried() {
+        // Concentric caps, the circle's rim a hair inside the other's cap
+        // (δ + α < β). The angular test must report fully buried even though no
+        // intersection points exist (parallel planes).
+        let circle = circ(Vec3::new(0.0, 0.0, 1.0), 0.40);
+        let cover = circ(Vec3::new(0.0, 0.0, 1.0), 0.45);
+        assert!(exposed_arcs(&circle, &[cover]).is_empty());
     }
 }

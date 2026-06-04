@@ -201,6 +201,16 @@ pub fn contact_cap_mesh(
 /// stays inside) — true for the exposed cap of an atom with a few neighbours,
 /// with the apex taken away from them; pathological crowding needs the
 /// projection/CDT fill noted in `TO_SES_STITCHING.md`.
+///
+/// Two contracts the *caller* (the assembler) owns, not this function:
+/// - **Winding** is computed locally from `outward` assuming `loop_dirs` are
+///   ordered CCW as seen from outside. For a non-convex boundary that local
+///   choice can disagree per-quad; the authoritative fix is the assembler's
+///   `Mesh::orient_consistently` flood-fill after all patches are welded. So
+///   treat the orientation here as a *seed*, not a guarantee.
+/// - **Apex placement**: a boundary point near-antipodal to `apex_dir` makes the
+///   slerp geodesic ill-defined (sin θ → 0). Debug builds assert against it; the
+///   assembler must choose an apex within the region's angular radius.
 pub fn fill_loop_on_sphere(
     center: Vec3,
     radius: f64,
@@ -210,6 +220,11 @@ pub fn fill_loop_on_sphere(
     outward: bool,
 ) -> Mesh {
     let n = loop_dirs.len();
+    debug_assert!(
+        loop_dirs.iter().all(|d| d.dot(apex_dir) > -0.999),
+        "fill_loop_on_sphere: a boundary point is near-antipodal to the apex; \
+         slerp-to-apex is degenerate — choose an apex inside the region"
+    );
     let side = |d: Vec3| if outward { d } else { -d };
     let mut verts: Vec<Vec3> = loop_dirs.iter().map(|&d| center + d * radius).collect();
     let mut normals: Vec<Vec3> = loop_dirs.iter().map(|&d| side(d)).collect();
