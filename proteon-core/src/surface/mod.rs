@@ -31,3 +31,4 @@ pub mod patches;
 pub mod rs;
 pub mod ses;
 pub mod stitch;
+pub mod volume;

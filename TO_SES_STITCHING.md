@@ -1,5 +1,32 @@
 # Design note: watertight stitching of SES patches (L4 final step)
 
+> **DECISION (2026-06): build the SES mesh by iso-surfacing a distance field,
+> not by analytic patch stitching.** Reading BALL's own triangulator
+> (`triangulatedSES.C`) settled it: BALL meshes contact caps by clipping a
+> template icosphere with each contact-circle *plane* and gift-wrapping an
+> advancing front over the union of {clipped interior points} ∪ {shared
+> boundary points the toric pass stored in `edge_[ses_edge]`} — i.e. clip-and-snap
+> over a registry, with a global mutable `Constants::EPSILON` and a magic
+> `(4·density·π·r²−12)/30` refinement sizing. Faithfully porting that is not sane.
+>
+> The sane port uses the **erosion identity**: the SES solid is the
+> solvent-accessible solid (atoms inflated by the probe) **eroded by a probe-radius
+> ball**. So a signed distance field `f(x) = dist(x, complement(A_p)) − probe`
+> (with `A_p` = union of inflated atoms) has the *entire* SES — contact, toric, and
+> reentrant — as its `f = 0` iso-surface. Iso-surfacing (surface nets / marching
+> cubes) gives a watertight mesh by construction, handles any hole/annulus/pocket
+> topology automatically, and needs no patch stitching. Grid spacing is the single
+> convergence knob; gated against `ball-py ses_area` (analytic area **and** volume,
+> an independent Connolly path). Implemented in `surface/volume.rs`.
+>
+> The grid/SDF mesher (`volume.rs`) shipped as ONE output. But it does not refute
+> the boss's "BALL's triangulation isn't portable" claim — that needs the EXACT
+> analytic Connolly mesh, which is now being completed (hybrid clean-room +
+> faithful singularity cleaner — see `TO_SES_EXACT_COMPLETION.md`). So the
+> analytic machinery below (`arrangement.rs`, `patches.rs`, this registry) is back
+> to being **the mesher**, not just a cross-check oracle. The stitching strategy
+> below is the design for that registry-first assembly.
+
 ## Context
 
 The SES port (`proteon-core/src/surface/`, plan in `TO_SES_TRIANGULATION.md`) has,
