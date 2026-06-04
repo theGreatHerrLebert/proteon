@@ -144,9 +144,12 @@ impl Mesh {
     /// shared edges (flip a neighbor whenever it traverses the shared edge in the
     /// same direction as the current triangle). Robust regardless of how the
     /// input patches were individually wound — the principled alternative to a
-    /// per-curve orientation contract. Assumes a manifold (each edge ≤ 2
-    /// triangles); leaves orientation arbitrary-but-consistent (call `flip` after
-    /// if `signed_volume` should be positive).
+    /// per-curve orientation contract. Propagation crosses only edges shared by
+    /// exactly two triangles, so a non-manifold edge (>2 triangles) cannot corrupt
+    /// the orientation of unrelated triangles. This does **not** validate the
+    /// result: on a non-manifold or non-orientable input the outcome is undefined
+    /// — `is_watertight()` (catches >2-triangle edges) and `is_consistently_oriented()`
+    /// (catches unresolved conflicts) are the validators, asserted after.
     pub fn orient_consistently(&mut self) {
         // undirected edge → triangle indices sharing it
         let mut edge_tris: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
@@ -171,6 +174,11 @@ impl Mesh {
                 let t = self.tris[ti];
                 for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
                     let k = if a < b { (a, b) } else { (b, a) };
+                    // Only cross genuine manifold edges; a non-manifold fan
+                    // (>2 triangles) must not propagate orientation.
+                    if edge_tris[&k].len() != 2 {
+                        continue;
+                    }
                     for &nb in &edge_tris[&k] {
                         if nb == ti || visited[nb] {
                             continue;
@@ -188,23 +196,20 @@ impl Mesh {
         }
     }
 
-    /// Merge vertices within `eps` (a grid-snap dedup) and remap triangles,
-    /// dropping any triangle that collapses. The pragmatic glue for stitching
-    /// **non-degenerate** patches whose only coincident vertices are the intended
-    /// shared boundary rims; the explicit shared-index registry
-    /// (`TO_SES_STITCHING.md`) replaces this for crowded / arrangement cases where
-    /// coordinate welding could merge distinct near-degenerate features. Keeps the
-    /// first occurrence's normal (seam normals are an accepted artifact — mesh
-    /// invariants use positions + winding, not normals).
-    pub fn welded(&self, eps: f64) -> Mesh {
-        let key = |p: Vec3| {
-            (
-                (p.x / eps).round() as i64,
-                (p.y / eps).round() as i64,
-                (p.z / eps).round() as i64,
-            )
-        };
-        let mut rep: HashMap<(i64, i64, i64), u32> = HashMap::new();
+    /// Merge **bit-identical** vertices and remap triangles, dropping any
+    /// triangle that collapses. Used to fuse shared boundary rims after `append`:
+    /// the adjacent patches are constructed to copy the *exact same* `Vec3` rim
+    /// values (not merely close ones), so an exact-coordinate dedup is correct and
+    /// — unlike a tolerance/grid-snap weld — can never false-merge distinct
+    /// near-degenerate features. Crowded / arrangement stitching uses the explicit
+    /// shared-index registry (`TO_SES_STITCHING.md`) and needs no coordinate
+    /// matching at all. Keeps the first occurrence's normal: **seam normals are
+    /// shading-only after this** (a seam vertex belongs to two patches with
+    /// different geometric normals) — the residual/normal gates must use
+    /// per-patch normals, not these.
+    pub fn welded(&self) -> Mesh {
+        let key = |p: Vec3| (p.x.to_bits(), p.y.to_bits(), p.z.to_bits());
+        let mut rep: HashMap<(u64, u64, u64), u32> = HashMap::new();
         let mut remap = vec![0u32; self.verts.len()];
         let mut verts = Vec::new();
         let mut normals = Vec::new();
