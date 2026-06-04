@@ -16,11 +16,15 @@
 //! one quad per sign-changing grid edge) — watertight by construction, any
 //! topology, no patch stitching.
 //!
-//! `dist(x, complement(A_p))` is the distance from an interior node to the
-//! nearest node *outside* every inflated atom; we get it from an exact separable
-//! squared-Euclidean distance transform (Felzenszwalb–Huttenlocher) seeded on the
-//! outside nodes. Grid spacing is the single accuracy knob; gated against
-//! `ball-py ses_area` (analytic area + volume).
+//! `dist(x, complement(A_p))` is the distance to the SAS (the union boundary).
+//! We compute it **sub-voxel-accurately**: nodes adjacent to the inside/outside
+//! boundary are seeded with the *analytic* nearest point on an inflated atom
+//! (`AtomGrid::nearest_surface_point`), then a **jump-flooding vector transform**
+//! (`jump_flood`) propagates each node's nearest seeded surface point. Distance
+//! is `|node − nearest_surface|`, signed by occupancy. This puts the surface at
+//! its true position (no voxel quantization, no staircase), so area/volume
+//! converge smoothly — sub-0.5% of the analytic `ball-py ses_area` at `h = 0.2`.
+//! A uniform spatial hash (`AtomGrid`) keeps occupancy/seeding O(neighbours).
 
 use super::geom::{Sphere, Vec3};
 use super::mesh::Mesh;
@@ -111,128 +115,261 @@ impl Grid {
     /// inside `A_p` (the union of probe-inflated atoms). The SES is `f = 0`: the
     /// points exactly `probe` deep inside the SAS, i.e. `A_p` eroded by the probe.
     ///
-    /// `signed_dist` comes from a **binary** occupancy of `A_p` plus a squared
-    /// Euclidean distance transform: inside nodes get their grid-distance to the
-    /// nearest outside node (= distance to the complement of `A_p` = distance to
-    /// the SAS). This quantizes the SAS to voxel resolution, so the area/volume
-    /// converge from slightly high as `h → 0` (see `sweep_resolution`); a
-    /// sub-voxel-accurate field would need a vector/Danielsson EDT seeded with
-    /// the analytic distance to the nearest inflated atom.
+    /// `signed_dist` is a **sub-voxel-accurate Euclidean distance to the SAS**:
+    /// every node adjacent to the inside/outside boundary is seeded with the
+    /// *analytic* nearest point on the inflated-atom union (an exposed radial
+    /// projection), then a jump-flooding vector transform propagates each node's
+    /// nearest seeded surface point. `signed_dist = ±|node − nearest_surface|`,
+    /// signed by occupancy. Unlike a binary occupancy + scalar EDT, the surface
+    /// sits at its true position (no voxel quantization, no staircase), so the
+    /// area/volume converge smoothly to the analytic values.
     fn distance_field(&self, atoms: &[Sphere], probe: f64) -> Vec<f64> {
         let [nx, ny, nz] = self.dims;
-        let h = self.spacing;
-        const BIG: f64 = 1e20;
-        let mut inside = vec![false; nx * ny * nz];
-        let mut d = vec![0.0f64; nx * ny * nz]; // FH seed: 0 outside A_p, BIG inside
-        for k in 0..nz {
-            for j in 0..ny {
-                for i in 0..nx {
-                    let p = self.pos(i, j, k);
-                    let ins = atoms.iter().any(|a| {
-                        let r = a.radius + probe;
-                        p.square_distance(a.center) <= r * r
-                    });
-                    let idx = self.idx(i, j, k);
-                    inside[idx] = ins;
-                    d[idx] = if ins { BIG } else { 0.0 };
+        let n = nx * ny * nz;
+        let grid = AtomGrid::build(atoms, probe);
+
+        // Occupancy of A_p by rasterizing each inflated sphere into its node
+        // bounding box — O(atoms · R³/h³), far cheaper than an O(neighbours)
+        // query at every node.
+        let mut inside = vec![false; n];
+        let inv_h = 1.0 / self.spacing;
+        for s in &grid.spheres {
+            let r2 = s.radius * s.radius;
+            let lo = |c: f64, o: f64| (((c - s.radius - o) * inv_h).floor() as isize).max(0);
+            let hi = |c: f64, o: f64, m: usize| {
+                (((c - o + s.radius) * inv_h).ceil() as isize).min(m as isize - 1)
+            };
+            let (i0, i1) = (
+                lo(s.center.x, self.origin.x),
+                hi(s.center.x, self.origin.x, nx),
+            );
+            let (j0, j1) = (
+                lo(s.center.y, self.origin.y),
+                hi(s.center.y, self.origin.y, ny),
+            );
+            let (k0, k1) = (
+                lo(s.center.z, self.origin.z),
+                hi(s.center.z, self.origin.z, nz),
+            );
+            for k in k0..=k1 {
+                for j in j0..=j1 {
+                    for i in i0..=i1 {
+                        let (i, j, k) = (i as usize, j as usize, k as usize);
+                        if self.pos(i, j, k).square_distance(s.center) <= r2 {
+                            inside[self.idx(i, j, k)] = true;
+                        }
+                    }
                 }
             }
         }
-        // D(p) = squared index-distance from inside nodes to the nearest outside
-        // node = squared distance to the complement of A_p (grid-quantized).
-        squared_edt_3d(&mut d, self.dims);
-        for (v, &ins) in d.iter_mut().zip(inside.iter()) {
-            let dist = v.sqrt() * h; // distance to the SAS surface, in Å
-            *v = if ins { dist } else { -dist } - probe; // + inside A_p, erode by probe
+
+        // Seed: nodes adjacent (6-neighbour) to a sign change carry their analytic
+        // nearest point on the SAS. NaN x marks "no feature yet".
+        const NONE: [f64; 3] = [f64::NAN; 3];
+        let mut feat = vec![NONE; n];
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let idx = self.idx(i, j, k);
+                    let ins = inside[idx];
+                    let boundary = [
+                        (i + 1 < nx).then(|| self.idx(i + 1, j, k)),
+                        (i > 0).then(|| self.idx(i - 1, j, k)),
+                        (j + 1 < ny).then(|| self.idx(i, j + 1, k)),
+                        (j > 0).then(|| self.idx(i, j - 1, k)),
+                        (k + 1 < nz).then(|| self.idx(i, j, k + 1)),
+                        (k > 0).then(|| self.idx(i, j, k - 1)),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|nb| inside[nb] != ins);
+                    if boundary {
+                        if let Some(s) = grid.nearest_surface_point(self.pos(i, j, k)) {
+                            feat[idx] = [s.x, s.y, s.z];
+                        }
+                    }
+                }
+            }
         }
-        d
+
+        // Features only need to reach nodes within ~probe of the surface (that's
+        // the band straddling f = 0); beyond it the sign alone is correct.
+        let reach = (probe / self.spacing).ceil() as usize + 4;
+        jump_flood(&mut feat, self.dims, reach, &|i, j, k| self.pos(i, j, k));
+
+        // signed distance to the SAS, then erode by the probe.
+        let mut f = vec![0.0f64; n];
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let idx = self.idx(i, j, k);
+                    let s = feat[idx];
+                    let dist = if s[0].is_nan() {
+                        f64::INFINITY // unreached: deep field, never near f=0
+                    } else {
+                        self.pos(i, j, k).distance(Vec3::new(s[0], s[1], s[2]))
+                    };
+                    f[idx] = if inside[idx] { dist } else { -dist } - probe;
+                }
+            }
+        }
+        f
     }
 }
 
-/// In-place separable squared Euclidean distance transform over a 3D grid stored
-/// `i + nx·(j + ny·k)`. Input holds the seed cost per node (0 at seeds, large
-/// elsewhere); output holds `min_q cost(q) + |p−q|²` in node² units.
-///
-/// `Grid::enclosing` pads by `probe + 2·spacing` on every side, so the first and
-/// last node of every axis line are outside `A_p` (seed cost 0). No line is ever
-/// all-`BIG`, which keeps the parabola lower-envelope finite (the `BIG` sentinel
-/// never has to compete against itself).
-fn squared_edt_3d(d: &mut [f64], dims: [usize; 3]) {
+/// Uniform spatial hash over the probe-inflated atoms, so occupancy and
+/// nearest-surface queries cost O(neighbours) rather than O(atoms).
+struct AtomGrid {
+    /// inflated spheres (centre, radius + probe)
+    spheres: Vec<Sphere>,
+    cell: f64,
+    buckets: std::collections::HashMap<(i64, i64, i64), Vec<usize>>,
+}
+
+impl AtomGrid {
+    fn build(atoms: &[Sphere], probe: f64) -> Self {
+        let spheres: Vec<Sphere> = atoms
+            .iter()
+            .map(|a| Sphere::new(a.center, a.radius + probe))
+            .collect();
+        // Cell ≈ the largest inflated radius, so any query touches O(1) buckets.
+        let cell = spheres.iter().map(|s| s.radius).fold(1.0_f64, f64::max);
+        let mut buckets: std::collections::HashMap<(i64, i64, i64), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (idx, s) in spheres.iter().enumerate() {
+            buckets
+                .entry(Self::key(s.center, cell))
+                .or_default()
+                .push(idx);
+        }
+        AtomGrid {
+            spheres,
+            cell,
+            buckets,
+        }
+    }
+
+    #[inline]
+    fn key(p: Vec3, cell: f64) -> (i64, i64, i64) {
+        (
+            (p.x / cell).floor() as i64,
+            (p.y / cell).floor() as i64,
+            (p.z / cell).floor() as i64,
+        )
+    }
+
+    /// Visit every atom whose bucket is within `reach` cells of `p`.
+    fn for_each_near(&self, p: Vec3, reach: i64, mut f: impl FnMut(usize)) {
+        let (kx, ky, kz) = Self::key(p, self.cell);
+        for dz in -reach..=reach {
+            for dy in -reach..=reach {
+                for dx in -reach..=reach {
+                    if let Some(b) = self.buckets.get(&(kx + dx, ky + dy, kz + dz)) {
+                        for &i in b {
+                            f(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The analytic nearest point on the SAS (the boundary of the union): the
+    /// closest *exposed* radial projection onto a nearby inflated sphere. Returns
+    /// `None` only if no atom is near (shouldn't happen for a boundary node).
+    fn nearest_surface_point(&self, p: Vec3) -> Option<Vec3> {
+        let mut best: Option<(f64, Vec3)> = None;
+        self.for_each_near(p, 2, |i| {
+            let s = self.spheres[i];
+            let dir = match (p - s.center).normalized() {
+                Some(d) => d,
+                None => return, // p at the centre — degenerate, skip
+            };
+            let proj = s.center + dir * s.radius;
+            // Exposed = not strictly inside any other inflated sphere.
+            let mut exposed = true;
+            self.for_each_near(proj, 2, |j| {
+                if j != i {
+                    let o = self.spheres[j];
+                    if proj.square_distance(o.center) < o.radius * o.radius - 1e-9 {
+                        exposed = false;
+                    }
+                }
+            });
+            if exposed {
+                let d = p.square_distance(proj);
+                if best.map_or(true, |(bd, _)| d < bd) {
+                    best = Some((d, proj));
+                }
+            }
+        });
+        best.map(|(_, pt)| pt)
+    }
+}
+
+/// Jump-flooding vector distance transform: each node adopts the nearest seeded
+/// feature point. Halving passes from `next_pow2(reach)` down to 1 propagate each
+/// seed up to ~`reach` nodes — enough to make the distance exact in the band
+/// straddling `f = 0`; farther nodes stay NaN (sign-only, which is all they need).
+/// `pos(i,j,k)` maps a node to world space.
+fn jump_flood(
+    feat: &mut [[f64; 3]],
+    dims: [usize; 3],
+    reach: usize,
+    pos: &impl Fn(usize, usize, usize) -> Vec3,
+) {
     let [nx, ny, nz] = dims;
-    // along x
-    let mut line = vec![0.0f64; nx.max(ny).max(nz)];
-    for k in 0..nz {
-        for j in 0..ny {
-            let base = nx * (j + ny * k);
-            line[..nx].copy_from_slice(&d[base..base + nx]);
-            let out = edt_1d(&line[..nx]);
-            d[base..base + nx].copy_from_slice(&out);
-        }
-    }
-    // along y
-    for k in 0..nz {
-        for i in 0..nx {
+    let idx = |i: usize, j: usize, k: usize| i + nx * (j + ny * k);
+    let mut step = reach.max(1).next_power_of_two();
+    let mut src = feat.to_vec();
+    let mut dst = feat.to_vec();
+    while step >= 1 {
+        for k in 0..nz {
             for j in 0..ny {
-                line[j] = d[i + nx * (j + ny * k)];
-            }
-            let out = edt_1d(&line[..ny]);
-            for j in 0..ny {
-                d[i + nx * (j + ny * k)] = out[j];
-            }
-        }
-    }
-    // along z
-    for j in 0..ny {
-        for i in 0..nx {
-            for k in 0..nz {
-                line[k] = d[i + nx * (j + ny * k)];
-            }
-            let out = edt_1d(&line[..nz]);
-            for k in 0..nz {
-                d[i + nx * (j + ny * k)] = out[k];
-            }
-        }
-    }
-}
-
-/// 1D distance transform of a sampled function `f`: returns
-/// `D[q] = min_p f[p] + (q − p)²` (Felzenszwalb–Huttenlocher lower envelope of
-/// parabolas).
-fn edt_1d(f: &[f64]) -> Vec<f64> {
-    let n = f.len();
-    let mut d = vec![0.0f64; n];
-    let mut v = vec![0usize; n]; // locations of parabolas in the envelope
-    let mut z = vec![0.0f64; n + 1]; // breakpoints between them
-    let mut k: isize = 0;
-    v[0] = 0;
-    z[0] = f64::NEG_INFINITY;
-    z[1] = f64::INFINITY;
-    for q in 1..n {
-        let q2 = (q * q) as f64;
-        loop {
-            let p = v[k as usize];
-            let s = ((f[q] + q2) - (f[p] + (p * p) as f64)) / (2.0 * q as f64 - 2.0 * p as f64);
-            if s <= z[k as usize] && k > 0 {
-                k -= 1;
-            } else {
-                k += 1;
-                v[k as usize] = q;
-                z[k as usize] = s;
-                z[k as usize + 1] = f64::INFINITY;
-                break;
+                for i in 0..nx {
+                    let here = pos(i, j, k);
+                    let cur = src[idx(i, j, k)];
+                    let mut best = cur;
+                    let mut bestd = if cur[0].is_nan() {
+                        f64::INFINITY
+                    } else {
+                        here.square_distance(Vec3::new(cur[0], cur[1], cur[2]))
+                    };
+                    for dk in [-(step as isize), 0, step as isize] {
+                        let kk = k as isize + dk;
+                        if kk < 0 || kk as usize >= nz {
+                            continue;
+                        }
+                        for dj in [-(step as isize), 0, step as isize] {
+                            let jj = j as isize + dj;
+                            if jj < 0 || jj as usize >= ny {
+                                continue;
+                            }
+                            for di in [-(step as isize), 0, step as isize] {
+                                let ii = i as isize + di;
+                                if ii < 0 || ii as usize >= nx {
+                                    continue;
+                                }
+                                let cand = src[idx(ii as usize, jj as usize, kk as usize)];
+                                if cand[0].is_nan() {
+                                    continue;
+                                }
+                                let d = here.square_distance(Vec3::new(cand[0], cand[1], cand[2]));
+                                if d < bestd {
+                                    bestd = d;
+                                    best = cand;
+                                }
+                            }
+                        }
+                    }
+                    dst[idx(i, j, k)] = best;
+                }
             }
         }
+        std::mem::swap(&mut src, &mut dst);
+        step /= 2;
     }
-    k = 0;
-    for q in 0..n {
-        while z[k as usize + 1] < q as f64 {
-            k += 1;
-        }
-        let p = v[k as usize];
-        let dq = q as f64 - p as f64;
-        d[q] = dq * dq + f[p];
-    }
-    d
+    feat.copy_from_slice(&src);
 }
 
 // The 12 edges of a cube, as pairs of corner indices (corner c = bit pattern
@@ -422,8 +559,8 @@ mod tests {
         assert!(mesh.signed_volume() > 0.0, "outward oriented");
         let exact = 4.0 * std::f64::consts::PI * 1.8 * 1.8; // 40.715
         assert!(
-            (mesh.surface_area() - exact).abs() / exact < 0.02,
-            "area {} vs {exact}",
+            (mesh.surface_area() - exact).abs() / exact < 0.005,
+            "area {} vs {exact} (within 0.5% with the vector-DT field)",
             mesh.surface_area()
         );
     }
@@ -451,8 +588,8 @@ mod tests {
             ("tri_tight", tri_tight, 1.4, 64.5463, 43.6869),
         ];
         for (name, atoms, probe, ball_area, ball_vol) in cases {
-            let coarse = ses_mesh_sdf(&atoms, probe, 0.3);
-            let fine = ses_mesh_sdf(&atoms, probe, 0.12);
+            let coarse = ses_mesh_sdf(&atoms, probe, 0.4);
+            let fine = ses_mesh_sdf(&atoms, probe, 0.2);
 
             assert!(fine.is_watertight(), "{name}: closed");
             assert!(fine.is_consistently_oriented(), "{name}: oriented");
@@ -460,20 +597,20 @@ mod tests {
 
             let (af, vf) = (fine.surface_area(), fine.signed_volume());
             let ac = coarse.surface_area();
-            // Monotone convergence toward the analytic area as the grid refines.
+            // Smooth monotone convergence toward the analytic area as h shrinks
+            // (the vector-DT field has no occupancy staircase).
             assert!(
                 (af - ball_area).abs() < (ac - ball_area).abs() + 1e-9,
                 "{name}: area converges ({ac} → {af} vs {ball_area})"
             );
-            // Resolution-limited (grid SES): ~1.5-2% high at h=0.15, shrinking
-            // with h (see the `sweep_resolution` probe).
+            // Sub-voxel-accurate field: within 1% at h=0.15 (see `sweep_resolution`).
             assert!(
-                (af - ball_area).abs() / ball_area < 0.025,
-                "{name}: fine area {af} within 2.5% of {ball_area}"
+                (af - ball_area).abs() / ball_area < 0.01,
+                "{name}: fine area {af} within 1% of {ball_area}"
             );
             assert!(
-                (vf - ball_vol).abs() / ball_vol < 0.03,
-                "{name}: fine volume {vf} within 3% of {ball_vol}"
+                (vf - ball_vol).abs() / ball_vol < 0.01,
+                "{name}: fine volume {vf} within 1% of {ball_vol}"
             );
         }
     }
