@@ -8,8 +8,13 @@
 //!   swept by the probe. Every surface point is exactly `probe_radius` from the
 //!   roll-circle (the locus of probe centers) — the defining invariant we gate
 //!   on. Normals point toward the generating probe center (concave).
+//! - **Contact cap** (RS vertex / surface atom): the convex atom-sphere patch
+//!   outside the contact discs. `contact_cap_mesh` handles the single-hole case
+//!   (cap from rim to antipode) sharing its rim with the toric face; the
+//!   multi-hole spherical arrangement (`TO_SES_STITCHING.md`) is the next step.
 //!
-//! Watertight stitching across patch boundaries is the next step. Each patch is
+//! Watertight stitching of these patches across shared boundaries is the next
+//! step (`TO_SES_STITCHING.md`). Each patch is
 //! gated on a closed-form quantity independent of the triangulation (spheric:
 //! `radius² × spherical excess`; toric: distance-to-roll-circle + Pappus area).
 
@@ -105,6 +110,81 @@ pub fn spheric_face_mesh(
         subdivisions,
         true,
     )
+}
+
+/// Mesh a contact cap with a single circular hole: the part of an atom sphere
+/// (`center`, `radius`) **outside** one contact disc — the patch from the hole
+/// rim around to the antipodal pole. `hole_axis` is the unit direction from the
+/// sphere center toward the hole center; `hole_half_angle` (α) is the rim's
+/// angular radius about that axis. `rim` are the shared boundary vertices (on the
+/// sphere at latitude α) the adjacent toric face also uses — they become ring 0,
+/// so the two patches share the curve exactly. Convex face → outward normals.
+///
+/// (Single-hole only. Atoms with ≥2 incident contact circles need the spherical
+/// arrangement from `TO_SES_STITCHING.md`; this is the building block.)
+pub fn contact_cap_mesh(
+    center: Vec3,
+    radius: f64,
+    hole_axis: Vec3,
+    hole_half_angle: f64,
+    rim: &[Vec3],
+    n_lat: usize,
+) -> Mesh {
+    let a = hole_axis.normalized().expect("hole_axis must be nonzero");
+    let (u, v) = super::geom::plane_basis(a);
+    // Longitude of each shared rim vertex, so interior rings line up in columns.
+    let lons: Vec<f64> = rim
+        .iter()
+        .map(|&p| {
+            let rel = p - center;
+            rel.dot(v).atan2(rel.dot(u))
+        })
+        .collect();
+    let n = rim.len();
+
+    let mut verts: Vec<Vec3> = rim.to_vec(); // ring 0 = the shared rim
+    let mut normals: Vec<Vec3> = rim
+        .iter()
+        .map(|&p| (p - center).normalized().unwrap())
+        .collect();
+    let dir = |theta: f64, lon: f64| -> Vec3 {
+        a * theta.cos() + (u * lon.cos() + v * lon.sin()) * theta.sin()
+    };
+    // Interior rings at latitudes α → π, then a single pole vertex at -axis.
+    for r in 1..n_lat {
+        let theta =
+            hole_half_angle + (std::f64::consts::PI - hole_half_angle) * r as f64 / n_lat as f64;
+        for &lon in &lons {
+            let d = dir(theta, lon);
+            verts.push(center + d * radius);
+            normals.push(d);
+        }
+    }
+    let pole_dir = -a;
+    let pole = verts.len() as u32;
+    verts.push(center + pole_dir * radius);
+    normals.push(pole_dir);
+
+    let mut tris = Vec::new();
+    let ring = |r: usize, k: usize| (r * n + (k % n)) as u32;
+    for r in 0..(n_lat - 1) {
+        for k in 0..n {
+            let (a0, b0) = (ring(r, k), ring(r, k + 1));
+            let (a1, b1) = (ring(r + 1, k), ring(r + 1, k + 1));
+            tris.push([a0, a1, b1]);
+            tris.push([a0, b1, b0]);
+        }
+    }
+    // Fan the last ring to the pole.
+    let last = n_lat - 1;
+    for k in 0..n {
+        tris.push([ring(last, k), pole, ring(last, k + 1)]);
+    }
+    Mesh {
+        verts,
+        normals,
+        tris,
+    }
 }
 
 /// Spherical linear interpolation between two unit vectors (`t` in `[0,1]`).
@@ -229,6 +309,51 @@ mod tests {
         }
         // It is an open patch (a triangle has a boundary), so not watertight.
         assert!(!m.is_watertight());
+    }
+
+    #[test]
+    fn contact_cap_area_matches_spherical_zone() {
+        // Atom sphere, one hole of angular radius α about +z. The exposed cap
+        // (rim → antipode) is a spherical zone: area = 2πR²(1 + cos α). The mesh
+        // must converge to it, reuse the shared rim, and be outward-oriented.
+        let center = Vec3::new(-1.0, 2.0, 0.5);
+        let radius = 1.7;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let alpha = PI / 5.0;
+        let n = 48;
+        let (u, v) = crate::surface::geom::plane_basis(axis);
+        // Shared rim: n points at latitude α.
+        let rim: Vec<Vec3> = (0..n)
+            .map(|k| {
+                let lon = 2.0 * PI * k as f64 / n as f64;
+                let d = axis * alpha.cos() + (u * lon.cos() + v * lon.sin()) * alpha.sin();
+                center + d * radius
+            })
+            .collect();
+        let exact = 2.0 * PI * radius * radius * (1.0 + alpha.cos());
+
+        let coarse = contact_cap_mesh(center, radius, axis, alpha, &rim, 6).surface_area();
+        let fine = contact_cap_mesh(center, radius, axis, alpha, &rim, 24).surface_area();
+        assert!(
+            (fine - exact).abs() < (coarse - exact).abs(),
+            "area converges"
+        );
+        assert!(
+            (fine - exact).abs() / exact < 0.01,
+            "fine within 1% of zone area"
+        );
+
+        let m = contact_cap_mesh(center, radius, axis, alpha, &rim, 8);
+        // Ring 0 IS the shared rim (so the toric face can reuse these vertices).
+        for k in 0..n {
+            assert!(m.verts[k].distance(rim[k]) < 1e-12);
+        }
+        // Convex face → outward normals; one boundary loop (the rim) → open.
+        for (vert, nrm) in m.verts.iter().zip(&m.normals) {
+            assert!(nrm.dot((*vert - center).normalized().unwrap()) > 0.999);
+        }
+        assert!(!m.is_watertight());
+        assert_eq!(m.num_nonmanifold_edges(), n, "boundary = the n rim edges");
     }
 
     #[test]
