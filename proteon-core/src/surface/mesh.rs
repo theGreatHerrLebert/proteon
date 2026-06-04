@@ -119,6 +119,123 @@ impl Mesh {
     }
 }
 
+impl Mesh {
+    /// Concatenate `other` onto `self` (triangle indices offset accordingly).
+    pub fn append(&mut self, other: &Mesh) {
+        let base = self.verts.len() as u32;
+        self.verts.extend_from_slice(&other.verts);
+        self.normals.extend_from_slice(&other.normals);
+        self.tris.extend(
+            other
+                .tris
+                .iter()
+                .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+        );
+    }
+
+    /// Reverse the winding of every triangle (flips all normals' implied side).
+    pub fn flip(&mut self) {
+        for t in &mut self.tris {
+            t.swap(1, 2);
+        }
+    }
+
+    /// Make the winding globally consistent by flood-filling orientation across
+    /// shared edges (flip a neighbor whenever it traverses the shared edge in the
+    /// same direction as the current triangle). Robust regardless of how the
+    /// input patches were individually wound — the principled alternative to a
+    /// per-curve orientation contract. Assumes a manifold (each edge ≤ 2
+    /// triangles); leaves orientation arbitrary-but-consistent (call `flip` after
+    /// if `signed_volume` should be positive).
+    pub fn orient_consistently(&mut self) {
+        // undirected edge → triangle indices sharing it
+        let mut edge_tris: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+        for (ti, t) in self.tris.iter().enumerate() {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let k = if a < b { (a, b) } else { (b, a) };
+                edge_tris.entry(k).or_default().push(ti);
+            }
+        }
+        // a triangle "has" directed edge (a,b) if (a,b) appears in its cycle
+        let has_directed = |t: &[u32; 3], a: u32, b: u32| {
+            (t[0] == a && t[1] == b) || (t[1] == a && t[2] == b) || (t[2] == a && t[0] == b)
+        };
+        let mut visited = vec![false; self.tris.len()];
+        for seed in 0..self.tris.len() {
+            if visited[seed] {
+                continue;
+            }
+            visited[seed] = true;
+            let mut stack = vec![seed];
+            while let Some(ti) = stack.pop() {
+                let t = self.tris[ti];
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    let k = if a < b { (a, b) } else { (b, a) };
+                    for &nb in &edge_tris[&k] {
+                        if nb == ti || visited[nb] {
+                            continue;
+                        }
+                        // consistent ⇔ neighbor traverses this edge the OTHER way
+                        // (b,a); if it also has (a,b), it's mis-wound → flip it.
+                        if has_directed(&self.tris[nb], a, b) {
+                            self.tris[nb].swap(1, 2);
+                        }
+                        visited[nb] = true;
+                        stack.push(nb);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Merge vertices within `eps` (a grid-snap dedup) and remap triangles,
+    /// dropping any triangle that collapses. The pragmatic glue for stitching
+    /// **non-degenerate** patches whose only coincident vertices are the intended
+    /// shared boundary rims; the explicit shared-index registry
+    /// (`TO_SES_STITCHING.md`) replaces this for crowded / arrangement cases where
+    /// coordinate welding could merge distinct near-degenerate features. Keeps the
+    /// first occurrence's normal (seam normals are an accepted artifact — mesh
+    /// invariants use positions + winding, not normals).
+    pub fn welded(&self, eps: f64) -> Mesh {
+        let key = |p: Vec3| {
+            (
+                (p.x / eps).round() as i64,
+                (p.y / eps).round() as i64,
+                (p.z / eps).round() as i64,
+            )
+        };
+        let mut rep: HashMap<(i64, i64, i64), u32> = HashMap::new();
+        let mut remap = vec![0u32; self.verts.len()];
+        let mut verts = Vec::new();
+        let mut normals = Vec::new();
+        for (i, &p) in self.verts.iter().enumerate() {
+            let idx = *rep.entry(key(p)).or_insert_with(|| {
+                verts.push(p);
+                normals.push(self.normals.get(i).copied().unwrap_or(p));
+                (verts.len() - 1) as u32
+            });
+            remap[i] = idx;
+        }
+        let tris = self
+            .tris
+            .iter()
+            .map(|t| {
+                [
+                    remap[t[0] as usize],
+                    remap[t[1] as usize],
+                    remap[t[2] as usize],
+                ]
+            })
+            .filter(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0])
+            .collect();
+        Mesh {
+            verts,
+            normals,
+            tris,
+        }
+    }
+}
+
 /// Triangulated sphere by `subdivisions` levels of icosahedron refinement,
 /// projected to the sphere of `radius` at `center`. `subdivisions=0` is the
 /// 12-vertex/20-triangle icosahedron; each level quadruples the triangles.
