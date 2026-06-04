@@ -679,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "diagnostic convergence probe; run manually with --ignored --nocapture"]
     fn sweep_resolution() {
         let single = [s(0.0, 0.0, 0.0, 1.8)];
         let pair = [s(0.0, 0.0, 0.0, 1.8), s(2.5, 0.0, 0.0, 1.8)];
