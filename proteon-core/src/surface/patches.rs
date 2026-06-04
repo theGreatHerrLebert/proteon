@@ -187,6 +187,75 @@ pub fn contact_cap_mesh(
     }
 }
 
+/// Triangulate a sphere region bounded by an arbitrary closed loop, fanned from
+/// an interior apex. `loop_dirs` are the ordered boundary unit-directions (from
+/// `center`) — kept *exactly* as ring 0 so they stay shared with the adjacent
+/// faces — and `apex_dir` is a unit direction inside the region. Interior rings
+/// slerp each boundary point toward the apex, so the patch follows the sphere
+/// (area converges) while only the interior is resampled. `outward` sets normal
+/// side.
+///
+/// This generalizes `contact_cap_mesh` to a multi-arc boundary (the exposed-cell
+/// boundary from `arrangement::exposed_arcs`). **Assumes the region is
+/// star-shaped from `apex_dir`** (every boundary point's geodesic to the apex
+/// stays inside) — true for the exposed cap of an atom with a few neighbours,
+/// with the apex taken away from them; pathological crowding needs the
+/// projection/CDT fill noted in `TO_SES_STITCHING.md`.
+pub fn fill_loop_on_sphere(
+    center: Vec3,
+    radius: f64,
+    loop_dirs: &[Vec3],
+    apex_dir: Vec3,
+    n_rings: usize,
+    outward: bool,
+) -> Mesh {
+    let n = loop_dirs.len();
+    let side = |d: Vec3| if outward { d } else { -d };
+    let mut verts: Vec<Vec3> = loop_dirs.iter().map(|&d| center + d * radius).collect();
+    let mut normals: Vec<Vec3> = loop_dirs.iter().map(|&d| side(d)).collect();
+    for r in 1..n_rings {
+        let t = r as f64 / n_rings as f64;
+        for &d in loop_dirs {
+            let id = slerp(d, apex_dir, t);
+            verts.push(center + id * radius);
+            normals.push(side(id));
+        }
+    }
+    let apex = verts.len() as u32;
+    verts.push(center + apex_dir * radius);
+    normals.push(side(apex_dir));
+
+    let ring = |r: usize, k: usize| (r * n + (k % n)) as u32;
+    let mut tris = Vec::new();
+    for r in 0..(n_rings - 1) {
+        for k in 0..n {
+            let (a0, b0) = (ring(r, k), ring(r, k + 1));
+            let (a1, b1) = (ring(r + 1, k), ring(r + 1, k + 1));
+            // wind so the `outward` normals match the triangle face direction
+            if outward {
+                tris.push([a0, b0, b1]);
+                tris.push([a0, b1, a1]);
+            } else {
+                tris.push([a0, b1, b0]);
+                tris.push([a0, a1, b1]);
+            }
+        }
+    }
+    let last = n_rings - 1;
+    for k in 0..n {
+        if outward {
+            tris.push([ring(last, k), ring(last, k + 1), apex]);
+        } else {
+            tris.push([ring(last, k), apex, ring(last, k + 1)]);
+        }
+    }
+    Mesh {
+        verts,
+        normals,
+        tris,
+    }
+}
+
 /// Spherical linear interpolation between two unit vectors (`t` in `[0,1]`).
 fn slerp(a: Vec3, b: Vec3, t: f64) -> Vec3 {
     let dot = a.dot(b).clamp(-1.0, 1.0);
@@ -354,6 +423,46 @@ mod tests {
         }
         assert!(!m.is_watertight());
         assert_eq!(m.num_nonmanifold_edges(), n, "boundary = the n rim edges");
+    }
+
+    #[test]
+    fn fill_loop_reproduces_the_spherical_cap() {
+        // Boundary = a circle at half-angle α about +z; apex = the far pole (-z).
+        // The filled region is the spherical cap, area 2πR²(1+cos α) — validating
+        // the general loop fill against the closed form and against the dedicated
+        // contact_cap_mesh.
+        let center = Vec3::new(0.5, -1.0, 2.0);
+        let radius = 1.6;
+        let alpha = PI / 4.0;
+        let n = 40;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let (u, v) = crate::surface::geom::plane_basis(axis);
+        let loop_dirs: Vec<Vec3> = (0..n)
+            .map(|k| {
+                let lon = 2.0 * PI * k as f64 / n as f64;
+                axis * alpha.cos() + (u * lon.cos() + v * lon.sin()) * alpha.sin()
+            })
+            .collect();
+        let exact = 2.0 * PI * radius * radius * (1.0 + alpha.cos());
+
+        let coarse = fill_loop_on_sphere(center, radius, &loop_dirs, -axis, 6, true).surface_area();
+        let fine = fill_loop_on_sphere(center, radius, &loop_dirs, -axis, 24, true).surface_area();
+        assert!(
+            (fine - exact).abs() < (coarse - exact).abs(),
+            "area converges"
+        );
+        assert!(
+            (fine - exact).abs() / exact < 0.01,
+            "fine within 1% of cap area"
+        );
+
+        let m = fill_loop_on_sphere(center, radius, &loop_dirs, -axis, 8, true);
+        // Boundary preserved exactly + outward normals + single boundary loop.
+        for k in 0..n {
+            assert_eq!(m.verts[k], center + loop_dirs[k] * radius);
+            assert!(m.normals[k].dot(loop_dirs[k]) > 0.999);
+        }
+        assert_eq!(m.num_nonmanifold_edges(), n, "one boundary loop = n edges");
     }
 
     #[test]
