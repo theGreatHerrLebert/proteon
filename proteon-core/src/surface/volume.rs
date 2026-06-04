@@ -29,6 +29,14 @@ use super::mesh::Mesh;
 /// radius, sampling the distance field at `spacing` Å. Returns a closed,
 /// outward-oriented mesh. Returns an empty mesh if `atoms` is empty.
 pub fn ses_mesh_sdf(atoms: &[Sphere], probe: f64, spacing: f64) -> Mesh {
+    assert!(
+        spacing.is_finite() && spacing > 0.0,
+        "grid spacing must be finite and positive"
+    );
+    assert!(
+        probe.is_finite() && probe >= 0.0,
+        "probe must be finite ≥ 0"
+    );
     if atoms.is_empty() {
         return Mesh::default();
     }
@@ -103,13 +111,13 @@ impl Grid {
     /// inside `A_p` (the union of probe-inflated atoms). The SES is `f = 0`: the
     /// points exactly `probe` deep inside the SAS, i.e. `A_p` eroded by the probe.
     ///
-    /// We anchor the transform on the *analytic* distance to the union surface so
-    /// the iso-surface sits at its true sub-voxel position (binary occupancy
-    /// would quantize the SAS to voxel centers and bias the area high). `g =
-    /// minᵢ(|x−cᵢ| − Rᵢ)` is the exact signed distance to the union outside it
-    /// and on its convex/crease surface — where overlaps make it an interior
-    /// underestimate, those nodes are deep and never the nearest-surface
-    /// minimizer, so the field stays accurate near `f = 0`.
+    /// `signed_dist` comes from a **binary** occupancy of `A_p` plus a squared
+    /// Euclidean distance transform: inside nodes get their grid-distance to the
+    /// nearest outside node (= distance to the complement of `A_p` = distance to
+    /// the SAS). This quantizes the SAS to voxel resolution, so the area/volume
+    /// converge from slightly high as `h → 0` (see `sweep_resolution`); a
+    /// sub-voxel-accurate field would need a vector/Danielsson EDT seeded with
+    /// the analytic distance to the nearest inflated atom.
     fn distance_field(&self, atoms: &[Sphere], probe: f64) -> Vec<f64> {
         let [nx, ny, nz] = self.dims;
         let h = self.spacing;
@@ -144,6 +152,11 @@ impl Grid {
 /// In-place separable squared Euclidean distance transform over a 3D grid stored
 /// `i + nx·(j + ny·k)`. Input holds the seed cost per node (0 at seeds, large
 /// elsewhere); output holds `min_q cost(q) + |p−q|²` in node² units.
+///
+/// `Grid::enclosing` pads by `probe + 2·spacing` on every side, so the first and
+/// last node of every axis line are outside `A_p` (seed cost 0). No line is ever
+/// all-`BIG`, which keeps the parabola lower-envelope finite (the `BIG` sentinel
+/// never has to compete against itself).
 fn squared_edt_3d(d: &mut [f64], dims: [usize; 3]) {
     let [nx, ny, nz] = dims;
     // along x
@@ -295,6 +308,14 @@ fn surface_nets(grid: &Grid, f: &[f64]) -> Mesh {
     // cells around that edge own the quad's corners.
     let mut tris: Vec<[u32; 3]> = Vec::new();
     let quad = |a: u32, b: u32, c: u32, d: u32, flip: bool, tris: &mut Vec<[u32; 3]>| {
+        // The four cells sharing a sign-changing grid edge each straddle that
+        // edge, so each is itself sign-changing and owns a vertex — a MAX here
+        // would mean a dropped quad (a hole), so trip the build rather than
+        // silently leave one.
+        debug_assert!(
+            a != u32::MAX && b != u32::MAX && c != u32::MAX && d != u32::MAX,
+            "sign-changing edge with a non-crossed incident cell → would hole the mesh"
+        );
         if a == u32::MAX || b == u32::MAX || c == u32::MAX || d == u32::MAX {
             return;
         }
