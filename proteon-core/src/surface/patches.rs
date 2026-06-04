@@ -4,13 +4,16 @@
 //!   triangle on the probe sphere, bounded by the three points where the probe
 //!   touches the atoms. Its outward (solvent-facing) normal points *toward* the
 //!   probe center, since the patch is concave.
+//! - **Toric face** (RS edge / probe rolling over 2 atoms): the reentrant torus
+//!   swept by the probe. Every surface point is exactly `probe_radius` from the
+//!   roll-circle (the locus of probe centers) — the defining invariant we gate
+//!   on. Normals point toward the generating probe center (concave).
 //!
-//! Toric faces (probe rolling over 2 atoms) and watertight stitching across
-//! patch boundaries are the next steps. Each patch is meshed by geodesic
-//! subdivision of a spherical triangle and gated on its closed-form area
-//! (`radius² × spherical excess`), independent of the triangulation.
+//! Watertight stitching across patch boundaries is the next step. Each patch is
+//! gated on a closed-form quantity independent of the triangulation (spheric:
+//! `radius² × spherical excess`; toric: distance-to-roll-circle + Pappus area).
 
-use super::geom::Vec3;
+use super::geom::{Circle3, Vec3};
 use super::mesh::Mesh;
 use std::collections::HashMap;
 
@@ -104,10 +107,87 @@ pub fn spheric_face_mesh(
     )
 }
 
+/// Spherical linear interpolation between two unit vectors (`t` in `[0,1]`).
+fn slerp(a: Vec3, b: Vec3, t: f64) -> Vec3 {
+    let dot = a.dot(b).clamp(-1.0, 1.0);
+    let ang = dot.acos();
+    if ang < 1e-9 {
+        return a;
+    }
+    let s = ang.sin();
+    a * (((1.0 - t) * ang).sin() / s) + b * ((t * ang).sin() / s)
+}
+
+/// Mesh the toric (reentrant) SES face: the surface swept by the probe rolling
+/// over atoms `atom_i`/`atom_j`. `roll_circle` is the locus of probe centers
+/// (the contact circle of the two probe-inflated atoms). The probe center
+/// sweeps `theta_range` around that circle; at each position the surface arc
+/// runs from the contact with `atom_i` to the contact with `atom_j`. `wrap`
+/// closes the θ direction for a free edge (full revolution). `n_theta`/`n_phi`
+/// set the grid resolution. Normals point toward the probe center (concave).
+pub fn toric_face_mesh(
+    roll_circle: Circle3,
+    probe_radius: f64,
+    atom_i: Vec3,
+    atom_j: Vec3,
+    theta_range: (f64, f64),
+    n_theta: usize,
+    n_phi: usize,
+    wrap: bool,
+) -> Mesh {
+    let (u, v) = super::geom::plane_basis(roll_circle.normal);
+    let theta_steps = if wrap { n_theta } else { n_theta + 1 };
+    let mut verts = Vec::with_capacity(theta_steps * (n_phi + 1));
+    let mut normals = Vec::with_capacity(verts.capacity());
+    for ti in 0..theta_steps {
+        let f = ti as f64 / n_theta as f64;
+        let theta = theta_range.0 + f * (theta_range.1 - theta_range.0);
+        let p = roll_circle.center + (u * theta.cos() + v * theta.sin()) * roll_circle.radius;
+        let di = (atom_i - p).normalized().unwrap();
+        let dj = (atom_j - p).normalized().unwrap();
+        for pj in 0..=n_phi {
+            let d = slerp(di, dj, pj as f64 / n_phi as f64);
+            verts.push(p + d * probe_radius);
+            normals.push(-d); // concave: toward the probe center
+        }
+    }
+
+    let row = n_phi + 1;
+    let mut tris = Vec::new();
+    // n_theta quads in θ for both modes: when wrapping, the last quad closes
+    // back to row 0 (via %); otherwise rows 0..=n_theta exist and ti+1 is valid.
+    for ti in 0..n_theta {
+        let t0 = ti % theta_steps;
+        let t1 = (ti + 1) % theta_steps;
+        for pj in 0..n_phi {
+            let a = (t0 * row + pj) as u32;
+            let b = (t1 * row + pj) as u32;
+            let c = (t1 * row + pj + 1) as u32;
+            let d = (t0 * row + pj + 1) as u32;
+            tris.push([a, b, c]);
+            tris.push([a, c, d]);
+        }
+    }
+    Mesh {
+        verts,
+        normals,
+        tris,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::surface::geom::{intersect_two_spheres, Sphere};
     use std::f64::consts::PI;
+
+    /// Min distance from a point to the circle (center, unit normal, radius).
+    fn dist_to_circle(p: Vec3, c: &Circle3) -> f64 {
+        let rel = p - c.center;
+        let h = rel.dot(c.normal);
+        let radial = (rel - c.normal * h).norm();
+        ((radial - c.radius).powi(2) + h * h).sqrt()
+    }
 
     #[test]
     fn spherical_excess_octant_is_half_pi() {
@@ -149,5 +229,56 @@ mod tests {
         }
         // It is an open patch (a triangle has a boundary), so not watertight.
         assert!(!m.is_watertight());
+    }
+
+    #[test]
+    fn toric_face_lies_on_the_probe_surface() {
+        // Two equal atoms on the z-axis; the probe rolls fully around them →
+        // a free toric ring. roll-circle = contact circle of the inflated atoms.
+        let (r_atom, probe) = (1.5, 1.4);
+        let ai = Vec3::new(0.0, 0.0, -2.0);
+        let aj = Vec3::new(0.0, 0.0, 2.0);
+        let roll = intersect_two_spheres(
+            Sphere::new(ai, r_atom + probe),
+            Sphere::new(aj, r_atom + probe),
+        )
+        .unwrap();
+        // center on the axis, radius √((r+probe)² − 2²) = √(2.9²−4) = 2.1.
+        assert!((roll.radius - 2.1).abs() < 1e-9);
+
+        let m = toric_face_mesh(roll, probe, ai, aj, (0.0, 2.0 * PI), 64, 16, true);
+
+        // DEFINING INVARIANT: every toric surface point is exactly `probe` away
+        // from the roll-circle (the locus of probe centers).
+        for &v in &m.verts {
+            assert!(
+                (dist_to_circle(v, &roll) - probe).abs() < 1e-9,
+                "toric vertex not on the probe surface"
+            );
+        }
+        // θ is closed (free ring) but the φ ends are open → 2 boundary loops.
+        assert!(!m.is_watertight());
+
+        // Area cross-check via Pappus (surface of revolution about the axis):
+        // integrate the generator arc at high resolution as ground truth.
+        let (u, _v) = crate::surface::geom::plane_basis(roll.normal);
+        let p0 = roll.center + u * roll.radius;
+        let di = (ai - p0).normalized().unwrap();
+        let dj = (aj - p0).normalized().unwrap();
+        let steps = 4000;
+        let mut pappus = 0.0;
+        let mut prev = p0 + slerp(di, dj, 0.0) * probe;
+        for s in 1..=steps {
+            let pt = p0 + slerp(di, dj, s as f64 / steps as f64) * probe;
+            let seg = (pt - prev).norm();
+            let x_mid = {
+                let m = (pt + prev) * 0.5 - roll.center;
+                (m - roll.normal * m.dot(roll.normal)).norm() // axis distance
+            };
+            pappus += 2.0 * PI * x_mid * seg;
+            prev = pt;
+        }
+        let rel = (m.surface_area() - pappus).abs() / pappus;
+        assert!(rel < 0.01, "toric mesh area within 1% of Pappus: {rel}");
     }
 }

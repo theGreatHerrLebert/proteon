@@ -131,6 +131,25 @@ pub struct Line3 {
     pub dir: Vec3,
 }
 
+/// Two orthonormal vectors spanning the plane normal to `n` (assumed nonzero).
+/// Used to parameterize circles/discs lying in that plane.
+pub fn plane_basis(n: Vec3) -> (Vec3, Vec3) {
+    // Seed with the world axis least parallel to n to avoid a degenerate cross.
+    let seed = if n.x.abs() <= n.y.abs() && n.x.abs() <= n.z.abs() {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else if n.y.abs() <= n.z.abs() {
+        Vec3::new(0.0, 1.0, 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    };
+    let u = n
+        .cross(seed)
+        .normalized()
+        .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+    let v = n.cross(u).normalized().unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+    (u, v)
+}
+
 /// Real roots of `a·x² + b·x + c = 0`, ascending. `None` if no real root
 /// (or no equation). Degenerate `a≈0` falls back to the linear root (returned
 /// as a pair of equal roots), matching BALL's `SolveQuadraticEquation`.
