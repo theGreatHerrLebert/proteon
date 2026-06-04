@@ -25,6 +25,7 @@
 //!   follows.
 
 pub mod arrangement;
+pub mod cdt;
 pub mod geom;
 pub mod mesh;
 pub mod patches;
