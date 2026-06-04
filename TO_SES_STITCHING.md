@@ -19,12 +19,13 @@
 > convergence knob; gated against `ball-py ses_area` (analytic area **and** volume,
 > an independent Connolly path). Implemented in `surface/volume.rs`.
 >
-> The analytic machinery below (`arrangement.rs`, `patches.rs`, the registry) is
-> **retained as an independent cross-check oracle**, not the mesher: e.g.
-> `arrangement::is_exposed` validates that a mesh vertex sits on the correct side
-> of an atom's buried-cap union (the ownership/pointwise gate this note argued for).
-> The stitching strategy below is preserved for the record / a possible future
-> exact-boundary mesher; it is **not** the chosen path.
+> The grid/SDF mesher (`volume.rs`) shipped as ONE output. But it does not refute
+> the boss's "BALL's triangulation isn't portable" claim — that needs the EXACT
+> analytic Connolly mesh, which is now being completed (hybrid clean-room +
+> faithful singularity cleaner — see `TO_SES_EXACT_COMPLETION.md`). So the
+> analytic machinery below (`arrangement.rs`, `patches.rs`, this registry) is back
+> to being **the mesher**, not just a cross-check oracle. The stitching strategy
+> below is the design for that registry-first assembly.
 
 ## Context
 
