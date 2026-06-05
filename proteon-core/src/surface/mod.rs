@@ -38,5 +38,6 @@ pub mod patches;
 pub mod registry;
 pub mod rs;
 pub mod ses;
+pub mod singular;
 pub mod stitch;
 pub mod volume;
