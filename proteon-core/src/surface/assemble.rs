@@ -162,6 +162,69 @@ pub fn toric_face_mesh(
     })
 }
 
+/// The full SES of **two atoms** (one free toric ring + two contact caps, no
+/// spheric faces) — the smallest end-to-end analytic assembly, and the proof that
+/// the patches stitch watertight.
+///
+/// Watertightness by **bit-identical shared samples**: the toric face's two
+/// φ-rims (`rim_a`/`rim_b`, sampled once per probe position) are passed *verbatim*
+/// as the two caps' boundary loops, so the welded vertices coincide exactly rather
+/// than within a tolerance. `n_theta` probe positions, `n_phi` toric φ-samples,
+/// `grid` cap-chart spacing.
+pub fn two_atom_ses(
+    a: Sphere,
+    b: Sphere,
+    probe: f64,
+    n_theta: usize,
+    n_phi: usize,
+    grid: f64,
+) -> Result<Mesh> {
+    use super::elements::contact_circle;
+    use super::geom::plane_basis;
+    use std::f64::consts::TAU;
+
+    let circle_a = contact_circle(a, b, probe).context("atoms share no toric face")?;
+    let (u, v) = plane_basis(circle_a.normal);
+    // One probe-position sweep defines BOTH rims (same probe → θ-aligned).
+    let mut rim_a = Vec::with_capacity(n_theta);
+    let mut rim_b = Vec::with_capacity(n_theta);
+    for t in 0..n_theta {
+        let th = TAU * t as f64 / n_theta as f64;
+        let ta = circle_a.center + (u * th.cos() + v * th.sin()) * circle_a.radius;
+        let p = probe_center_from_contact(ta, a, probe).context("degenerate rim point")?;
+        rim_a.push(ta);
+        rim_b.push(b.center + (p - b.center).normalized().context("probe at b centre")? * b.radius);
+    }
+
+    let toward_b = (b.center - a.center)
+        .normalized()
+        .context("coincident atoms")?;
+    let mut mesh = toric_face_mesh(a, &rim_a, &rim_b, probe, n_phi, true)?;
+    // Caps: boundary = the *same* rim Vec the toric used (→ exact weld). Pole away
+    // from the neighbour (the buried cap's antipode), deep in the exposed region.
+    mesh.append(&fill_spherical_region(
+        a.center,
+        a.radius,
+        &[rim_a],
+        -toward_b,
+        grid,
+    )?);
+    mesh.append(&fill_spherical_region(
+        b.center,
+        b.radius,
+        &[rim_b],
+        toward_b,
+        grid,
+    )?);
+
+    let mut mesh = mesh.welded(); // fuse the bit-identical shared rims
+    mesh.orient_consistently();
+    if mesh.signed_volume() < 0.0 {
+        mesh.flip();
+    }
+    Ok(mesh)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::elements::buried_cap;
@@ -221,6 +284,46 @@ mod tests {
         assert!(m.num_nonmanifold_edges() > 0, "open patch with a boundary");
         for v in &m.verts {
             assert!((v.distance(atom.center) - atom.radius).abs() < 1e-9);
+        }
+    }
+
+    /// The first watertight ANALYTIC SES assembled from contact caps + a toric
+    /// face, gated against `ball-py 0.1.0a6 ses_area` — the proof the patches
+    /// stitch closed and on-surface. Within 1% of BALL's analytic area/volume.
+    #[test]
+    fn two_atom_ses_is_watertight_and_matches_ball() {
+        // (atom_a, atom_b, probe, ball area, ball volume)
+        let cases = [
+            (
+                sph(0.0, 0.0, 0.0, 1.8),
+                sph(2.5, 0.0, 0.0, 1.8),
+                1.4,
+                67.7959,
+                46.6207,
+            ),
+            (
+                sph(0.0, 0.0, 0.0, 2.0),
+                sph(3.0, 0.0, 0.0, 1.2),
+                1.4,
+                64.3406,
+                42.1575,
+            ),
+        ];
+        for (a, b, probe, ball_area, ball_vol) in cases {
+            let m = two_atom_ses(a, b, probe, 96, 10, 0.05).unwrap();
+            assert!(m.is_watertight(), "assembled SES must be closed");
+            assert!(m.is_consistently_oriented());
+            assert_eq!(m.euler_characteristic(), 2, "sphere topology");
+            let (area, vol) = (m.surface_area(), m.signed_volume());
+            assert!(vol > 0.0, "outward oriented");
+            assert!(
+                (area - ball_area).abs() / ball_area < 0.01,
+                "SES area {area} within 1% of ball {ball_area}"
+            );
+            assert!(
+                (vol - ball_vol).abs() / ball_vol < 0.01,
+                "SES volume {vol} within 1% of ball {ball_vol}"
+            );
         }
     }
 
