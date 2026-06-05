@@ -87,19 +87,18 @@ spheric-only *mesh* is not):
 - **Spheric clip removes 12.9 Å²** over 35 faces (plain 573.6 → 560.7).
 - Crambin's analytic excess vs BALL is **≈26 Å²** (the +1.1%).
 
-- **Toric trim removes 5.6 Å²** over 8 arcs (0 errors; plain 910.1 → 904.5).
-- **Cleaner total removed = 18.5 Å²** (spheric 12.9 + toric 5.6), **0 errors** on
+- **Toric trim removes 12.0 Å²** over 21 arcs (0 errors; includes the spindle cap).
+- **Cleaner total removed = 24.9 Å²** (spheric 12.9 + toric 12.0), **0 errors** on
   every face/arc.
 
-⇒ the nonradial cleaner accounts for **~71 %** of the ~26 Å² excess. The residual
-**~7.5 Å²** is *not* nonradial — it is the **21 spindle (radial) faces** (the
-torus's own past-axis double-cover, needing the `singular.rs` radial treatment,
-not probe-collision clipping) plus **contact-cap trimming** (a neighbour probe
-can also bury part of an atom's contact cap), neither yet wired. So the full
-cleaned crambin needs: the **coordinated canonical-weld assembler** (spheric clip
-+ toric trim + contact caps sharing registry seams → watertight) **+ the spindle
-radial clip + contact-cap trim**, then the Stage-4 gate. The nonradial geometry
-itself is validated (18.5 Å² removed, 0 errors on real data).
+⇒ the cleaner now accounts for **~96 %** of the ~26 Å² excess. The **spindle**
+(radial) self-overlap turned out to be *also* a per-column burial cap (axis toward
+the roll-axis centre, `half = acos(R_roll/probe)`), so it trims through the same
+`toric_trim_mesh` path — adding exactly the 21 spindle arcs (5.6 → 12.0 Å²). The
+residual **~1 Å²** is contact-cap trimming + discretization. The cleaner geometry
+is essentially complete and validated on real data; what remains is the
+**coordinated canonical-weld assembler** (spheric clip + toric trim + contact caps
+sharing registry seams → a *watertight* cleaned mesh) + the Stage-4 gate.
 
 ## Open questions for review
 
