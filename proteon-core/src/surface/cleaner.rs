@@ -20,7 +20,7 @@
 //!    is the spheric half; the toric event-aligned trim is next).
 //! 4. richer gate vs BALL (volume, Euler, per-face-type area, …).
 
-use super::arrangement::{arrange_loops, is_buried, sample_loop, SphereCircle};
+use super::arrangement::{arrange_loops, sample_loop, SphereCircle};
 use super::chart::fill_spherical_region;
 use super::geom::{plane_basis, Plane3, Vec3};
 use super::mesh::Mesh;
@@ -31,6 +31,11 @@ use super::nonradial::{
 use anyhow::{ensure, Context, Result};
 use std::collections::HashMap;
 use std::f64::consts::TAU;
+
+/// One geometric angular tolerance for the toric arrangement (codex #2): merging
+/// burials, emitting kept intervals, and the overlap test all use it, so no
+/// sliver can leak between two inconsistent epsilons.
+const ANG_EPS: f64 = 1e-9;
 
 /// Unified canonical registry of SES boundary-event vertices (codex review): the
 /// single source of truth so every incident patch looks up **bit-identical**
@@ -290,8 +295,7 @@ pub fn reentrant_arc_burial(dir_a: Vec3, dir_b: Vec3, cap: &SphereCircle) -> Vec
         return Vec::new(); // dir_a ∥ dir_b: degenerate arc
     };
     let t = n.cross(dir_a); // tangent at dir_a: arc(φ) = dir_a cosφ + t sinφ
-    let at = |phi: f64| dir_a * phi.cos() + t * phi.sin();
-    // Rim crossings: A cosφ + B sinφ = cos(half) ⇒ φ = ψ ± w.
+                            // Rim crossings: A cosφ + B sinφ = cos(half) ⇒ φ = ψ ± w.
     let (a, b, cs) = (dir_a.dot(cap.axis), t.dot(cap.axis), cap.half_angle.cos());
     let h = (a * a + b * b).sqrt();
     let mut cuts = vec![0.0, arc_angle];
@@ -313,12 +317,16 @@ pub fn reentrant_arc_burial(dir_a: Vec3, dir_b: Vec3, cap: &SphereCircle) -> Vec
     let mut out: Vec<(f64, f64)> = Vec::new();
     for w in cuts.windows(2) {
         let (lo, hi) = (w[0], w[1]);
-        if hi - lo < 1e-12 {
+        if hi - lo < ANG_EPS {
             continue;
         }
-        if is_buried(at((lo + hi) / 2.0), cap) {
+        // Classify analytically from g(φ) = A cosφ + B sinφ vs cos(half) — the
+        // same quantity the crossings solve, so no separate dot-product epsilon
+        // can let a near-tangent burial leak (codex #3).
+        let mid = (lo + hi) / 2.0;
+        if a * mid.cos() + b * mid.sin() > cs {
             match out.last_mut() {
-                Some(last) if (last.1 - lo).abs() < 1e-12 => last.1 = hi,
+                Some(last) if (last.1 - lo).abs() < ANG_EPS => last.1 = hi,
                 _ => out.push((lo, hi)),
             }
         }
@@ -342,20 +350,21 @@ pub fn toric_kept_intervals(dir_a: Vec3, dir_b: Vec3, caps: &[SphereCircle]) -> 
     let mut merged: Vec<(f64, f64)> = Vec::new();
     for (lo, hi) in buried {
         match merged.last_mut() {
-            Some(last) if lo <= last.1 + 1e-12 => last.1 = last.1.max(hi),
+            Some(last) if lo <= last.1 + ANG_EPS => last.1 = last.1.max(hi),
             _ => merged.push((lo, hi)),
         }
     }
-    // Complement within [0, arc_angle].
+    // Complement within [0, arc_angle] — same ANG_EPS as the merge, so a real
+    // kept interval in (1e-12, 1e-9] cannot vanish into the gap (codex #2).
     let mut kept = Vec::new();
     let mut cursor = 0.0;
     for (lo, hi) in merged {
-        if lo - cursor > 1e-9 {
+        if lo - cursor > ANG_EPS {
             kept.push((cursor, lo));
         }
         cursor = cursor.max(hi);
     }
-    if arc_angle - cursor > 1e-9 {
+    if arc_angle - cursor > ANG_EPS {
         kept.push((cursor, arc_angle));
     }
     kept
@@ -380,20 +389,31 @@ fn toric_column_curve(
         .collect()
 }
 
+/// One θ-column's trimmed geometry: the rolling-probe frame plus its kept
+/// φ-intervals (empty `tangent` ⇒ a degenerate column with no surface).
+struct ToricColumn {
+    p: Vec3,
+    dir_a: Vec3,
+    tangent: Option<Vec3>,
+    kept: Vec<(f64, f64)>,
+}
+
 /// Stage 6 — the trimmed toric reentrant face as an open patch (variable-strip
 /// triangulation). For each θ-column (rolling probe centre `centers[t]`, contacts
 /// `contact_a[t]`/`contact_b[t]`) it takes the kept φ-intervals
-/// ([`toric_kept_intervals`] against the neighbour burial caps) and ladders each
-/// interval to the same-index interval of the next column. A column may carry
+/// ([`toric_kept_intervals`] against the neighbour burial caps). A column may carry
 /// 0/1/several intervals, so the strip count varies along θ — the topology the
 /// rectangular `toric_face_mesh` cannot express. With no neighbours it reproduces
 /// the full toric face.
 ///
-/// FIRST VERSION: at a column boundary where the interval *count* changes (a
-/// θ-event), only `min(count_t, count_{t+1})` strips are laddered by index; the
-/// exact event-aligned split/merge + the canonical cross-patch weld are the
-/// remaining refinement. So this is area-correct and self-consistent but may leave
-/// a hairline boundary at transitions (it is not yet welded to the spheric clip).
+/// Adjacent columns are connected by **φ-overlap**, not by interval index (codex
+/// #1): an interval `L` at column `t` ladders to interval `R` at `t+1` over their
+/// shared φ-range `[max(L.lo,R.lo), min(L.hi,R.hi)]`. A split (1→2) thus fans the
+/// single left interval to *both* right intervals over their respective overlaps,
+/// and a merge (2→1) does the reverse — no wrong-component diagonal, no dropped
+/// branch. The newly-buried wedge between a split's children shrinks to the event
+/// as θ→event (a hairline at the sampling resolution; the exact event-vertex
+/// triangulation + the canonical cross-patch weld are the remaining refinement).
 pub fn toric_trim_mesh(
     centers: &[Vec3],
     contact_a: &[Vec3],
@@ -407,8 +427,7 @@ pub fn toric_trim_mesh(
         contact_a.len() == cols && contact_b.len() == cols && cols >= 2 && n_phi >= 1,
         "bad toric trim inputs"
     );
-    // Per-column kept-interval sample curves.
-    let mut col_curves: Vec<Vec<Vec<Vec3>>> = Vec::with_capacity(cols);
+    let mut columns: Vec<ToricColumn> = Vec::with_capacity(cols);
     for t in 0..cols {
         let p = centers[t];
         let dir_a = (contact_a[t] - p)
@@ -422,39 +441,39 @@ pub fn toric_trim_mesh(
             .filter_map(|&q| probe_burial_cap(p, q, probe))
             .collect();
         let kept = toric_kept_intervals(dir_a, dir_b, &caps);
-        let curves: Vec<Vec<Vec3>> = match dir_a.cross(dir_b).normalized() {
-            Some(n) => {
-                let tangent = n.cross(dir_a);
-                kept.iter()
-                    .map(|&(lo, hi)| toric_column_curve(p, dir_a, tangent, probe, lo, hi, n_phi))
-                    .collect()
-            }
-            None => Vec::new(), // degenerate column (dir_a ∥ dir_b)
-        };
-        col_curves.push(curves);
+        let tangent = dir_a.cross(dir_b).normalized().map(|n| n.cross(dir_a));
+        columns.push(ToricColumn {
+            p,
+            dir_a,
+            tangent,
+            kept,
+        });
     }
-    // Ladder same-index intervals between adjacent columns into quad strips.
     let mut mesh = Mesh::default();
     for t in 0..cols - 1 {
-        let (left, right) = (&col_curves[t], &col_curves[t + 1]);
-        for k in 0..left.len().min(right.len()) {
-            let (lc, rc) = (&left[k], &right[k]);
-            if lc.len() != rc.len() {
-                continue;
-            }
-            let base = mesh.verts.len() as u32;
-            for v in lc {
-                mesh.verts.push(*v);
-            }
-            for v in rc {
-                mesh.verts.push(*v);
-            }
-            let m = lc.len() as u32;
-            for s in 0..m - 1 {
-                let (l0, l1) = (base + s, base + s + 1);
-                let (r0, r1) = (base + m + s, base + m + s + 1);
-                mesh.tris.push([l0, r0, r1]);
-                mesh.tris.push([l0, r1, l1]);
+        let (left, right) = (&columns[t], &columns[t + 1]);
+        let (Some(lt), Some(rt)) = (left.tangent, right.tangent) else {
+            continue; // a degenerate column contributes no strip
+        };
+        for &(llo, lhi) in &left.kept {
+            for &(rlo, rhi) in &right.kept {
+                let lo = llo.max(rlo);
+                let hi = lhi.min(rhi);
+                if hi - lo <= ANG_EPS {
+                    continue; // these intervals do not overlap in φ
+                }
+                let lc = toric_column_curve(left.p, left.dir_a, lt, probe, lo, hi, n_phi);
+                let rc = toric_column_curve(right.p, right.dir_a, rt, probe, lo, hi, n_phi);
+                let base = mesh.verts.len() as u32;
+                mesh.verts.extend_from_slice(&lc);
+                mesh.verts.extend_from_slice(&rc);
+                let m = lc.len() as u32;
+                for s in 0..m - 1 {
+                    let (l0, l1) = (base + s, base + s + 1);
+                    let (r0, r1) = (base + m + s, base + m + s + 1);
+                    mesh.tris.push([l0, r0, r1]);
+                    mesh.tris.push([l0, r1, l1]);
+                }
             }
         }
     }
@@ -845,6 +864,30 @@ mod tests {
         for v in &trimmed.verts {
             assert!(v.x.is_finite() && v.y.is_finite() && v.z.is_finite());
         }
+        // φ-overlap matching must not create a wrong-component diagonal strip: no
+        // transversal self-intersection (codex #1 regression).
+        assert_eq!(
+            super::super::intersect::self_intersections(&trimmed, 0.4, 1),
+            0,
+            "no wrong-component diagonal"
+        );
+    }
+
+    #[test]
+    fn toric_trim_handles_an_interior_split() {
+        // A neighbour burying the *interior* of the arc over a θ-band → the column
+        // count goes 1→2→1 (split then merge). Overlap matching must stay embedded
+        // (index laddering would cross components).
+        let (p, ta, tb, probe) = toric_columns(40);
+        let pc = ctr(0.0, 2.1, 2.1).normalized().unwrap() * 2.1; // P(45°)
+        let nb = pc + ctr(-1.0, 0.0, 0.0); // toward the atom axis → interior burial
+        let m = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], 12).unwrap();
+        assert!(m.surface_area() > 0.0);
+        assert_eq!(
+            super::super::intersect::self_intersections(&m, 0.4, 1),
+            0,
+            "split/merge stays embedded under overlap matching"
+        );
     }
 
     #[test]
