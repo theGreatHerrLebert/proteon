@@ -326,6 +326,41 @@ pub fn reentrant_arc_burial(dir_a: Vec3, dir_b: Vec3, cap: &SphereCircle) -> Vec
     out
 }
 
+/// The **kept** (exposed) φ-intervals of a toric reentrant arc at a fixed rolling
+/// angle: `[0, arc_angle]` minus the union of every neighbour's burial. This is
+/// the per-column slice of the cleaned toric face — the number of intervals can be
+/// 0 (column fully buried → its strip is deleted), 1 (the usual case), or several
+/// (a column split by interior burials), which is exactly what the rectangular
+/// `toric_face_mesh` could not represent.
+pub fn toric_kept_intervals(dir_a: Vec3, dir_b: Vec3, caps: &[SphereCircle]) -> Vec<(f64, f64)> {
+    let arc_angle = dir_a.dot(dir_b).clamp(-1.0, 1.0).acos();
+    let mut buried: Vec<(f64, f64)> = caps
+        .iter()
+        .flat_map(|c| reentrant_arc_burial(dir_a, dir_b, c))
+        .collect();
+    buried.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for (lo, hi) in buried {
+        match merged.last_mut() {
+            Some(last) if lo <= last.1 + 1e-12 => last.1 = last.1.max(hi),
+            _ => merged.push((lo, hi)),
+        }
+    }
+    // Complement within [0, arc_angle].
+    let mut kept = Vec::new();
+    let mut cursor = 0.0;
+    for (lo, hi) in merged {
+        if lo - cursor > 1e-9 {
+            kept.push((cursor, lo));
+        }
+        cursor = cursor.max(hi);
+    }
+    if arc_angle - cursor > 1e-9 {
+        kept.push((cursor, arc_angle));
+    }
+    kept
+}
+
 /// Stage 3b — rewrite one spheric (reentrant) face, trimmed by the neighbour
 /// probes that collide with its probe `p`. The face is `exposed({3 great circles}
 /// ∪ {burial caps})`; `arrange_loops` resolves the (possibly multivalent)
@@ -632,6 +667,43 @@ mod tests {
             bb[0].0 < 1e-9 && (bb[0].1 - arc).abs() < 1e-9,
             "whole arc buried"
         );
+    }
+
+    #[test]
+    fn toric_kept_intervals_split_and_delete() {
+        use super::super::arrangement::SphereCircle;
+        let da = ctr(1.0, 0.0, 0.0);
+        let db = ctr(0.0, 1.0, 0.0);
+        let arc = std::f64::consts::FRAC_PI_2;
+
+        // No neighbours → the whole arc is kept.
+        assert_eq!(toric_kept_intervals(da, db, &[]), vec![(0.0, arc)]);
+
+        // One cap burying the middle (25°,65°) → kept = two pieces.
+        let mid = SphereCircle::new(
+            ctr(1.0, 1.0, 0.0).normalized().unwrap(),
+            20.0_f64.to_radians(),
+        );
+        let k = toric_kept_intervals(da, db, &[mid]);
+        assert_eq!(k.len(), 2, "interior burial splits the column");
+        assert!(k[0].0 < 1e-9 && (k[1].1 - arc).abs() < 1e-9);
+
+        // A hemisphere cap toward the midpoint buries everything → column deleted.
+        let big = SphereCircle::new(
+            ctr(1.0, 1.0, 0.0).normalized().unwrap(),
+            89.0_f64.to_radians(),
+        );
+        assert!(
+            toric_kept_intervals(da, db, &[big]).is_empty(),
+            "fully buried column"
+        );
+
+        // Two caps near each end → kept = one central interval.
+        let cap_a = SphereCircle::new(da, 15.0_f64.to_radians());
+        let cap_b = SphereCircle::new(db, 15.0_f64.to_radians());
+        let kk = toric_kept_intervals(da, db, &[cap_a, cap_b]);
+        assert_eq!(kk.len(), 1);
+        assert!(kk[0].0 > 0.0 && kk[0].1 < arc, "both ends trimmed");
     }
 
     #[test]
