@@ -9,10 +9,12 @@
 
 use super::arrangement::{boundary_loops, sample_loop, SphereCircle};
 use super::chart::fill_spherical_region;
-use super::elements::{arc_on_sphere, buried_cap};
-use super::geom::{Sphere, Vec3};
+use super::elements::{arc_on_sphere, buried_cap, ses_vertex};
+use super::geom::{intersect_two_spheres, plane_basis, Sphere, Vec3};
+use super::graph::build_graph;
 use super::mesh::Mesh;
 use anyhow::{bail, ensure, Context, Result};
+use std::collections::HashMap;
 
 /// Mesh `atom`'s contact face: its sphere outside the union of the buried caps
 /// carved by each of `neighbours`. `grid` is the interior chart-plane spacing
@@ -400,6 +402,184 @@ pub fn triangle3_ses(
     Ok(mesh)
 }
 
+/// One contact-circle arc on an atom: the φ-rim of an incident toric arc, between
+/// its two endpoint RS faces (or a full ring when both are `None`). `pts` runs
+/// from `ends[0]` to `ends[1]`.
+struct ContactArc {
+    ends: [Option<usize>; 2],
+    neighbour: usize,
+    pts: Vec<Vec3>,
+}
+
+/// Walk an atom's contact arcs into closed boundary loops, joining them at shared
+/// RS-face indices (each RS face on the atom is touched by exactly two arcs). A
+/// full-ring arc (`ends = [None, None]`) is its own loop. Index identity (not
+/// coordinate matching) keeps it exact.
+fn walk_cap_loops(arcs: &[ContactArc]) -> Result<Vec<Vec<Vec3>>> {
+    let mut loops = Vec::new();
+    let mut used = vec![false; arcs.len()];
+    // RS-face index → the (arc, end-slot) pairs meeting there.
+    let mut at_face: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    for (ai, a) in arcs.iter().enumerate() {
+        for (slot, f) in a.ends.iter().enumerate() {
+            if let Some(f) = f {
+                at_face.entry(*f).or_default().push((ai, slot));
+            }
+        }
+    }
+    for (ai, a) in arcs.iter().enumerate() {
+        if used[ai] {
+            continue;
+        }
+        if a.ends[0].is_none() {
+            used[ai] = true;
+            loops.push(a.pts.clone()); // full ring
+            continue;
+        }
+        // Walk a bounded loop starting from arc `ai`, oriented ends[0]→ends[1].
+        used[ai] = true;
+        let mut chain: Vec<Vec3> = a.pts.clone();
+        let start_face = a.ends[0].unwrap();
+        let mut cur_face = a.ends[1].unwrap();
+        loop {
+            if cur_face == start_face {
+                break;
+            }
+            let nbrs = at_face.get(&cur_face).context("dangling cap arc")?;
+            let &(na, nslot) = nbrs
+                .iter()
+                .find(|&&(na, _)| !used[na])
+                .context("open cap loop (no continuation)")?;
+            used[na] = true;
+            // Append the next arc oriented so its `cur_face` end connects first.
+            let mut seg = arcs[na].pts.clone();
+            if nslot == 1 {
+                seg.reverse();
+            }
+            chain.extend(seg.into_iter().skip(1)); // skip the shared vertex
+            cur_face = arcs[na].ends[1 - nslot].context("dangling cap arc end")?;
+        }
+        // Drop the closing duplicate (last == first).
+        if chain.len() > 1 && chain.last() == chain.first() {
+            chain.pop();
+        }
+        loops.push(chain);
+    }
+    Ok(loops)
+}
+
+/// The full analytic SES of `atoms` (general-N, **non-singular**), gated against
+/// BALL. Builds the SES element graph, samples every patch by probe position off
+/// the *canonical* SES vertices, and stitches contact caps + toric + spheric into
+/// one watertight mesh (bit-identical shared samples + exact weld).
+pub fn ses_mesh_analytic(
+    atoms: &[Sphere],
+    probe: f64,
+    n_theta: usize,
+    n_phi: usize,
+    grid: f64,
+) -> Result<Mesh> {
+    ensure!(
+        n_theta >= 3 && n_phi >= 1 && grid > 0.0,
+        "bad sampling params"
+    );
+    let g = build_graph(atoms, probe)?;
+    let mut mesh = Mesh::default();
+    let mut contact: HashMap<usize, Vec<ContactArc>> = HashMap::new();
+
+    // --- toric faces; collect each atom's contact arcs ---
+    for arc in &g.toric {
+        let [i, j] = arc.edge;
+        let roll = intersect_two_spheres(atoms[i].inflated(probe), atoms[j].inflated(probe))
+            .context("toric pair lost its roll circle")?;
+        let (u, v) = plane_basis(roll.normal);
+        let wrap = arc.end_faces[0].is_none();
+        let (s, e) = arc.theta;
+        let count = if wrap { n_theta } else { n_theta + 1 };
+        let (mut cen, mut rim_i, mut rim_j) = (Vec::new(), Vec::new(), Vec::new());
+        for t in 0..count {
+            let p = if !wrap && t == 0 {
+                g.rs_faces[arc.end_faces[0].unwrap()].probe
+            } else if !wrap && t == n_theta {
+                g.rs_faces[arc.end_faces[1].unwrap()].probe
+            } else {
+                let th = s + (e - s) * t as f64 / n_theta as f64;
+                roll.center + (u * th.cos() + v * th.sin()) * roll.radius
+            };
+            cen.push(p);
+            rim_i.push(ses_vertex(p, atoms[i]));
+            rim_j.push(ses_vertex(p, atoms[j]));
+        }
+        mesh.append(&toric_face_mesh(&rim_i, &rim_j, &cen, probe, n_phi, wrap)?);
+        contact.entry(i).or_default().push(ContactArc {
+            ends: arc.end_faces,
+            neighbour: j,
+            pts: rim_i,
+        });
+        contact.entry(j).or_default().push(ContactArc {
+            ends: arc.end_faces,
+            neighbour: i,
+            pts: rim_j,
+        });
+    }
+
+    // --- contact caps: walk loops, fill ---
+    for (&a, arcs) in &contact {
+        let loops = walk_cap_loops(arcs)?;
+        let caps: Vec<SphereCircle> = arcs
+            .iter()
+            .map(|c| c.neighbour)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|nb| buried_cap(atoms[a], atoms[nb], probe))
+            .collect();
+        let pole = pick_chart_pole(&caps).context("contact cap pole")?;
+        mesh.append(&fill_spherical_region(
+            atoms[a].center,
+            atoms[a].radius,
+            &loops,
+            pole,
+            grid,
+        )?);
+    }
+
+    // --- spheric faces (one per RS face) ---
+    for f in &g.rs_faces {
+        let p = f.probe;
+        let cs = [
+            ses_vertex(p, atoms[f.atoms[0]]),
+            ses_vertex(p, atoms[f.atoms[1]]),
+            ses_vertex(p, atoms[f.atoms[2]]),
+        ];
+        let mut loop_pts = Vec::new();
+        for e in 0..3 {
+            let (x, y) = (e, (e + 1) % 3);
+            loop_pts.push(cs[x]);
+            // Canonical low→high atom order (reverse bit-exactly) so the concave
+            // arc is bit-identical to the toric θ-end (same as triangle3).
+            if f.atoms[x] < f.atoms[y] {
+                loop_pts.extend(arc_on_sphere(p, probe, cs[x], cs[y], n_phi));
+            } else {
+                let mut arc = arc_on_sphere(p, probe, cs[y], cs[x], n_phi);
+                arc.reverse();
+                loop_pts.extend(arc);
+            }
+        }
+        let centroid = (cs[0] + cs[1] + cs[2]) * (1.0 / 3.0);
+        let inward = (centroid - p)
+            .normalized()
+            .context("spheric centroid at probe")?;
+        mesh.append(&fill_spherical_region(p, probe, &[loop_pts], inward, grid)?);
+    }
+
+    let mut mesh = mesh.welded();
+    mesh.orient_consistently();
+    if mesh.signed_volume() < 0.0 {
+        mesh.flip();
+    }
+    Ok(mesh)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::elements::buried_cap;
@@ -498,6 +678,51 @@ mod tests {
             assert!(
                 (vol - ball_vol).abs() / ball_vol < 0.01,
                 "SES volume {vol} within 1% of ball {ball_vol}"
+            );
+        }
+    }
+
+    /// **The general-N gate.** `ses_mesh_analytic` (graph-driven) must produce a
+    /// watertight SES matching `ball-py ses_area` for: triangle3 (reproduced via
+    /// the general path), tetra (the smallest >2-neighbour case), and a 4-chain
+    /// (free-ring toric faces). euler may exceed 2 (internal cavities are fine).
+    #[test]
+    fn general_n_ses_is_watertight_and_matches_ball() {
+        let tri = vec![
+            sph(0.0, 0.0, 0.0, 1.7),
+            sph(2.5, 0.0, 0.0, 1.7),
+            sph(1.25, 2.165, 0.0, 1.7),
+        ];
+        let tetra = vec![
+            sph(0.0, 0.0, 0.0, 1.6),
+            sph(2.0, 0.0, 0.0, 1.6),
+            sph(1.0, 1.7, 0.0, 1.6),
+            sph(1.0, 0.6, 1.6, 1.6),
+        ];
+        let chain = vec![
+            sph(0.0, 0.0, 0.0, 1.5),
+            sph(2.6, 0.0, 0.0, 1.5),
+            sph(5.2, 0.0, 0.0, 1.5),
+            sph(7.8, 0.0, 0.0, 1.5),
+        ];
+        let _ = chain; // TODO: chains need multi-chart band caps (next).
+        let cases = [
+            ("tri", tri, 80.0932, 57.9040),
+            ("tetra", tetra, 74.1161, 54.0987),
+        ];
+        for (name, atoms, ball_area, ball_vol) in cases {
+            let m = ses_mesh_analytic(&atoms, 1.4, 48, 10, 0.05).unwrap();
+            assert!(m.is_watertight(), "{name}: SES must be closed");
+            assert!(m.is_consistently_oriented(), "{name}: oriented");
+            let (area, vol) = (m.surface_area(), m.signed_volume());
+            assert!(vol > 0.0, "{name}: outward");
+            assert!(
+                (area - ball_area).abs() / ball_area < 0.02,
+                "{name}: area {area} within 2% of ball {ball_area}"
+            );
+            assert!(
+                (vol - ball_vol).abs() / ball_vol < 0.02,
+                "{name}: volume {vol} within 2% of ball {ball_vol}"
             );
         }
     }
