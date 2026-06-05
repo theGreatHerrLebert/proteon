@@ -12,8 +12,19 @@
 //! per the general-N plan replaces the sampled RS-edge detection that can miss
 //! narrow arcs.
 
-use super::geom::{plane_basis, Circle3, Sphere, EPSILON};
+use super::geom::{plane_basis, Circle3, Sphere};
 use std::f64::consts::TAU;
+
+/// Angular tolerance (rad) for the circular interval union/complement — merging
+/// near-coincident endpoints and suppressing measure-zero arcs. Distinct from any
+/// length tolerance (codex-review: don't overload one geometric epsilon across
+/// dimensions). The `t ≥ 1` (Full) / sub-tolerance-arc suppression below make this
+/// a deliberately **non-singular-regularized** complement, not the exact one — a
+/// single tangent point or a vanishing arc is dropped, consistent with the
+/// non-singular SES contract.
+const ANG_EPS: f64 = 1e-9;
+/// Length tolerance (Å) for the degenerate "roll centre on the blocker axis" case.
+const LEN_EPS: f64 = 1e-9;
 
 /// The θ-arc of `roll` blocked by `blocker` (probe overlaps it).
 enum Blocked {
@@ -31,7 +42,7 @@ fn blocked_arc(roll: &Circle3, blocker: Sphere, probe: f64) -> Blocked {
     let rhs = blocker.radius + probe;
     // |P(θ)−c_k|² = |d|² + R² + 2R·c·cos(θ−φ);  blocked where that < rhs².
     let base = d.norm_sq() + roll.radius * roll.radius;
-    if c < EPSILON {
+    if c < LEN_EPS {
         // P is equidistant from the blocker for every θ.
         return if base < rhs * rhs {
             Blocked::Full
@@ -65,7 +76,7 @@ pub fn free_intervals(roll: &Circle3, blockers: &[Sphere], probe: f64) -> Vec<(f
             Blocked::Full => return Vec::new(),
             Blocked::None => {}
             Blocked::Arc(s, e) => {
-                if e <= TAU + EPSILON {
+                if e <= TAU + ANG_EPS {
                     blocked.push((s, e.min(TAU)));
                 } else {
                     blocked.push((s, TAU));
@@ -83,7 +94,7 @@ pub fn free_intervals(roll: &Circle3, blockers: &[Sphere], probe: f64) -> Vec<(f
     let mut merged: Vec<(f64, f64)> = Vec::new();
     for (s, e) in blocked {
         if let Some(last) = merged.last_mut() {
-            if s <= last.1 + EPSILON {
+            if s <= last.1 + ANG_EPS {
                 last.1 = last.1.max(e);
                 continue;
             }
@@ -95,16 +106,16 @@ pub fn free_intervals(roll: &Circle3, blockers: &[Sphere], probe: f64) -> Vec<(f
     let mut free: Vec<(f64, f64)> = Vec::new();
     let mut cursor = 0.0;
     for (s, e) in &merged {
-        if s - cursor > EPSILON {
+        if s - cursor > ANG_EPS {
             free.push((cursor, *s));
         }
         cursor = *e;
     }
-    if TAU - cursor > EPSILON {
+    if TAU - cursor > ANG_EPS {
         free.push((cursor, TAU));
     }
     // Merge the wrap seam: a free piece ending at TAU joins one starting at 0.
-    if free.len() >= 2 && free[0].0 < EPSILON && (free.last().unwrap().1 - TAU).abs() < EPSILON {
+    if free.len() >= 2 && free[0].0 < ANG_EPS && (free.last().unwrap().1 - TAU).abs() < ANG_EPS {
         let (ls, _) = free.pop().unwrap();
         let e0 = free[0].1;
         free[0] = (ls, e0 + TAU); // wrapping interval
