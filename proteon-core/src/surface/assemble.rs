@@ -12,7 +12,7 @@ use super::chart::fill_spherical_region;
 use super::elements::{arc_on_sphere, buried_cap};
 use super::geom::{Sphere, Vec3};
 use super::mesh::Mesh;
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 
 /// Mesh `atom`'s contact face: its sphere outside the union of the buried caps
 /// carved by each of `neighbours`. `grid` is the interior chart-plane spacing
@@ -240,6 +240,15 @@ pub fn triangle3_ses(
     use std::collections::HashMap;
     use std::f64::consts::TAU;
 
+    ensure!(
+        probe.is_finite()
+            && probe > 0.0
+            && n_theta >= 3
+            && n_phi >= 1
+            && grid.is_finite()
+            && grid > 0.0,
+        "triangle3 needs finite probe>0, grid>0, n_theta≥3, n_phi≥1"
+    );
     let r = rs::compute(&atoms, probe);
     ensure!(
         r.faces.len() == 2,
@@ -247,6 +256,11 @@ pub fn triangle3_ses(
         r.faces.len()
     );
     let probes = [r.faces[0].probe_center, r.faces[1].probe_center];
+    // The two probes must be distinct (degenerate/tangent triples coincide them).
+    ensure!(
+        probes[0].distance(probes[1]) > 1e-6,
+        "triangle3 probe positions coincide (tangent/degenerate triple)"
+    );
     // SES corner: the contact of probe `f` on atom `a` (bit-identical everywhere).
     let corner = |f: usize, a: usize| ses_vertex(probes[f], atoms[a]);
 
@@ -270,13 +284,26 @@ pub fn triangle3_ses(
             }
         };
         let (th0, th1) = (ang(probes[0]), ang(probes[1]));
-        // Free arc = the side where the probe clears the third atom k.
+        // Free arc = the side where the rolling probe clears the third atom k. The
+        // clearance along the roll circle is a constant plus one sinusoid, so it
+        // crosses k's inflated sphere at most twice (codex-review): the two probe
+        // positions are exactly those crossings, so one arc is wholly clear and
+        // the other wholly blocked. Classify BOTH midpoints decisively (not a
+        // single `>=`) and require them opposite — else the triple is tangent/
+        // degenerate and this is refused rather than silently mis-sided.
         let span_inc = (th1 - th0).rem_euclid(TAU);
-        let pmid = recon(th0 + span_inc / 2.0);
-        let span = if pmid.distance(atoms[k].center) >= atoms[k].radius + probe {
+        let clearance = |frac: f64| {
+            recon(th0 + span_inc * frac).distance(atoms[k].center) - (atoms[k].radius + probe)
+        };
+        let inc_mid = clearance(0.5); // midpoint of the th0→th1 (increasing) arc
+        let dec_mid = clearance(-0.5); // midpoint of the complementary arc
+        const TOL: f64 = 1e-7;
+        let span = if inc_mid > TOL && dec_mid < -TOL {
             span_inc
-        } else {
+        } else if dec_mid > TOL && inc_mid < -TOL {
             span_inc - TAU
+        } else {
+            bail!("triangle3 free arc is ambiguous (tangent/degenerate triple)");
         };
         let (mut ri, mut rj, mut cen) = (
             Vec::with_capacity(n_theta + 1),
