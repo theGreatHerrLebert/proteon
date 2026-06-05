@@ -7,9 +7,9 @@
 //! and [`chart::fill_spherical_region`] (the multi-hole interior fill). The toric
 //! and spheric faces and the full multi-atom assembly follow.
 
-use super::arrangement::{boundary_loops, is_exposed, sample_loop, SphereCircle};
+use super::arrangement::{boundary_loops, sample_loop, SphereCircle};
 use super::chart::fill_spherical_region;
-use super::elements::buried_cap;
+use super::elements::{arc_on_sphere, buried_cap};
 use super::geom::{Sphere, Vec3};
 use super::mesh::Mesh;
 use anyhow::{ensure, Context, Result};
@@ -36,20 +36,10 @@ pub fn contact_cap_mesh(
         "atom has no buried caps — a free atom's contact face is the whole sphere"
     );
     let loops = boundary_loops(&caps)?;
-
-    // Projection pole: a direction inside the exposed region, away from every
-    // neighbour (so its antipode is buried, keeping the chart well-posed).
-    let mut pole = Vec3::new(0.0, 0.0, 0.0);
-    for c in &caps {
-        pole = pole - c.axis;
-    }
-    let pole = pole
-        .normalized()
-        .context("cap axes cancel — no clear interior direction")?;
-    ensure!(
-        is_exposed(pole, &caps),
-        "interior pole is buried — contact face needs multi-chart handling"
-    );
+    let pole = pick_chart_pole(&caps).context(
+        "no single chart pole with enough clearance — contact face needs \
+         multi-chart handling (e.g. a band around an atom with opposite neighbours)",
+    )?;
 
     let world_loops: Vec<Vec<Vec3>> = loops
         .iter()
@@ -62,6 +52,114 @@ pub fn contact_cap_mesh(
         .collect();
 
     fill_spherical_region(atom.center, atom.radius, &world_loops, pole, grid)
+}
+
+/// Choose an azimuthal-chart pole deep inside the exposed region: the candidate
+/// (away from all neighbours, or the antipode of one neighbour) maximizing the
+/// **minimum angular clearance** from every buried-cap boundary. Returns `None`
+/// when no candidate clears the margin — a genuinely multi-chart region (e.g. a
+/// band around an atom with two opposite neighbours), which the `-Σ axis`
+/// heuristic would have silently mishandled (codex-review).
+fn pick_chart_pole(caps: &[SphereCircle]) -> Option<Vec3> {
+    let mut cands: Vec<Vec3> = caps.iter().map(|c| -c.axis).collect();
+    let mut sum = Vec3::new(0.0, 0.0, 0.0);
+    for c in caps {
+        sum = sum - c.axis;
+    }
+    if let Some(s) = sum.normalized() {
+        cands.push(s);
+    }
+    // Clearance = min over caps of (angle from the cap axis − its half-angle):
+    // positive ⇒ exposed, larger ⇒ deeper in the exposed region.
+    let clearance = |cand: Vec3| {
+        caps.iter()
+            .map(|c| cand.dot(c.axis).clamp(-1.0, 1.0).acos() - c.half_angle)
+            .fold(f64::INFINITY, f64::min)
+    };
+    cands
+        .into_iter()
+        .map(|c| (clearance(c), c))
+        .filter(|(s, _)| s.is_finite())
+        .max_by(|x, y| x.0.partial_cmp(&y.0).unwrap())
+        .filter(|(s, _)| *s > 0.05) // require real margin (rad) from every boundary
+        .map(|(_, c)| c)
+}
+
+/// The probe centre whose contact point on `a` is `t_a`: along the ray
+/// `a.center → t_a`, at distance `r_a + probe`. Normalizing the direction (rather
+/// than scaling `t_a − a.center` by `(r_a+probe)/r_a`) avoids amplifying any
+/// radial drift in `t_a` by that factor (codex-review).
+fn probe_center_from_contact(t_a: Vec3, a: Sphere, probe: f64) -> Option<Vec3> {
+    let dir = (t_a - a.center).normalized()?;
+    Some(a.center + dir * (a.radius + probe))
+}
+
+/// Mesh a toric (reentrant) face between atoms `a` and `b` from its two φ-rim
+/// chains: `rim_a`/`rim_b` are the **same-θ** contact points on `a`/`b` (each θ a
+/// probe position around the roll circle; shared with the two contact caps). At
+/// each θ the reentrant surface is the probe-sphere arc from `rim_a[t]` to
+/// `rim_b[t]`, sampled with `n_phi` interior points. `wrap` closes the θ-ring for
+/// a *free* toric face (no spheric faces); a bounded face leaves the two θ-end
+/// columns (the concave arcs) as its open boundary, shared with the spheric faces.
+///
+/// **Contract** (codex-review): the two rims must be the *same* probe positions —
+/// `rim_a[t]` and `rim_b[t]` are the contacts of one probe centred at `P_t`. This
+/// is enforced (`|rim_b[t] − P_t| ≈ probe`); the assembler must therefore derive
+/// both rims from one shared roll-circle (probe-centre) chain, not sample the two
+/// contact circles independently. Every vertex then lies exactly on its primitive.
+pub fn toric_face_mesh(
+    a: Sphere,
+    rim_a: &[Vec3],
+    rim_b: &[Vec3],
+    probe: f64,
+    n_phi: usize,
+    wrap: bool,
+) -> Result<Mesh> {
+    ensure!(
+        rim_a.len() == rim_b.len(),
+        "φ-rims must be θ-aligned (equal length)"
+    );
+    let n_theta = rim_a.len();
+    ensure!(
+        n_theta >= if wrap { 3 } else { 2 },
+        "toric face needs ≥{} θ columns",
+        if wrap { 3 } else { 2 }
+    );
+    let row = n_phi + 2; // rim_a + n_phi interior + rim_b
+    let mut verts = Vec::with_capacity(n_theta * row);
+    for t in 0..n_theta {
+        let p = probe_center_from_contact(rim_a[t], a, probe)
+            .context("toric rim point coincides with its atom centre")?;
+        // Misaligned rims (rim_b[t] not on P_t's probe sphere) would tear the
+        // torus — refuse rather than emit twisted geometry.
+        ensure!(
+            (rim_a[t].distance(a.center) - a.radius).abs() < 1e-6,
+            "toric rim_a[{t}] is not on atom a"
+        );
+        ensure!(
+            (rim_b[t].distance(p) - probe).abs() < 1e-6,
+            "toric rim_a/rim_b at θ={t} are not the same probe position"
+        );
+        verts.push(rim_a[t]);
+        verts.extend(arc_on_sphere(p, probe, rim_a[t], rim_b[t], n_phi));
+        verts.push(rim_b[t]);
+    }
+    let mut tris = Vec::new();
+    let cols = if wrap { n_theta } else { n_theta - 1 };
+    for t in 0..cols {
+        let t2 = (t + 1) % n_theta;
+        for p in 0..row - 1 {
+            let (a0, b0) = ((t * row + p) as u32, (t * row + p + 1) as u32);
+            let (a1, b1) = ((t2 * row + p) as u32, (t2 * row + p + 1) as u32);
+            tris.push([a0, b0, b1]);
+            tris.push([a0, b1, a1]);
+        }
+    }
+    Ok(Mesh {
+        verts,
+        normals: Vec::new(),
+        tris,
+    })
 }
 
 #[cfg(test)]
@@ -123,6 +221,69 @@ mod tests {
         assert!(m.num_nonmanifold_edges() > 0, "open patch with a boundary");
         for v in &m.verts {
             assert!((v.distance(atom.center) - atom.radius).abs() < 1e-9);
+        }
+    }
+
+    /// Two opposite neighbours leave a band (annulus) around the atom — no single
+    /// azimuthal pole charts it (its antipode is always in the region). The pole
+    /// search must report this rather than silently producing a degenerate chart.
+    #[test]
+    fn opposite_neighbours_need_multi_chart_and_error() {
+        let atom = sph(0.0, 0.0, 0.0, 1.7);
+        let n1 = sph(2.6, 0.0, 0.0, 1.7);
+        let n2 = sph(-2.6, 0.0, 0.0, 1.7);
+        assert!(contact_cap_mesh(atom, &[n1, n2], 1.4, 0.1, 24).is_err());
+    }
+
+    /// A *free* toric face (two atoms, probe rolls all the way around) from
+    /// θ-aligned φ-rims: every interior vertex is exactly `probe` from its rolling
+    /// probe centre, the rims lie on the atoms, and the ring is a clean grid whose
+    /// only boundary is the two φ-rim circles.
+    #[test]
+    fn free_toric_face_lies_on_the_probe_surface() {
+        use super::super::elements::contact_circle;
+        use super::super::geom::plane_basis;
+        use std::f64::consts::TAU;
+        let a = sph(0.0, 0.0, 0.0, 1.8);
+        let b = sph(2.5, 0.0, 0.0, 1.8);
+        let probe = 1.4;
+        let circle_a = contact_circle(a, b, probe).unwrap();
+        let (u, v) = plane_basis(circle_a.normal);
+        let n_theta = 48;
+        let n_phi = 6;
+        // rim_a sampled around contact circle A; rim_b is the same probe's contact
+        // point on B (θ-aligned by construction).
+        let mut rim_a = Vec::new();
+        let mut rim_b = Vec::new();
+        for t in 0..n_theta {
+            let th = TAU * t as f64 / n_theta as f64;
+            let ta = circle_a.center + (u * th.cos() + v * th.sin()) * circle_a.radius;
+            let p = probe_center_from_contact(ta, a, probe).unwrap();
+            rim_a.push(ta);
+            rim_b.push(b.center + (p - b.center).normalized().unwrap() * b.radius);
+        }
+        let m = toric_face_mesh(a, &rim_a, &rim_b, probe, n_phi, true).unwrap();
+        for t in 0..n_theta {
+            let p = probe_center_from_contact(rim_a[t], a, probe).unwrap();
+            let row = n_phi + 2;
+            for q in 1..=n_phi {
+                let pt = m.verts[t * row + q];
+                assert!(
+                    (pt.distance(p) - probe).abs() < 1e-9,
+                    "interior on probe sphere"
+                );
+            }
+            assert!((rim_a[t].distance(a.center) - a.radius).abs() < 1e-9);
+            assert!((rim_b[t].distance(b.center) - b.radius).abs() < 1e-9);
+        }
+        // A wrapped ring: boundary = the two φ-rim circles (2·n_theta edges).
+        assert_eq!(m.num_nonmanifold_edges(), 2 * n_theta);
+        // Consistent winding (open patch): no directed edge is traversed twice.
+        let mut seen = std::collections::HashSet::new();
+        for t in &m.tris {
+            for e in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                assert!(seen.insert(e), "a directed edge repeats — winding flipped");
+            }
         }
     }
 }
