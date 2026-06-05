@@ -20,7 +20,7 @@
 //! 4. richer gate vs BALL (volume, Euler, per-face-type area, …).
 
 use super::geom::{plane_basis, Vec3};
-use super::nonradial::{branch_sign, canonical_burial_circle, triple_sphere_intersections};
+use super::nonradial::{canonical_burial_circle, triple_sphere_intersections};
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
@@ -71,9 +71,11 @@ impl SingularVertices {
         }
         let (a, b, c) = (centers[tri[0]], centers[tri[1]], centers[tri[2]]);
         let mut ids = Vec::new();
-        for x in triple_sphere_intersections(a, b, c, probe) {
-            let key = (tri, branch_sign(x, a, b, c));
-            let id = *self.index.entry(key).or_insert_with(|| {
+        // Branch label comes from the construction order (codex review): robust
+        // against near-degenerate triples that a coordinate-derived sign could
+        // collapse onto one key.
+        for (x, branch) in triple_sphere_intersections(a, b, c, probe) {
+            let id = *self.index.entry((tri, branch)).or_insert_with(|| {
                 self.points.push(x);
                 self.points.len() - 1
             });
@@ -96,10 +98,11 @@ pub struct SingularEdge {
 /// inside any *other* probe ball (`m ∉ {i, j}`)? (Atom exclusion is a later
 /// refinement; this is the probe-probe term that dominates the defect.)
 fn singular_exposed(x: Vec3, i: usize, j: usize, centers: &[Vec3], probe: f64) -> bool {
+    let inside = probe * (1.0 - 1e-9); // scale-relative inward bias
     !centers
         .iter()
         .enumerate()
-        .any(|(m, &c)| m != i && m != j && x.distance(c) < probe - 1e-9)
+        .any(|(m, &c)| m != i && m != j && x.distance(c) < inside)
 }
 
 /// Stage 2 — the singular edges on the collision circle `C_ij` of two overlapping
@@ -151,7 +154,13 @@ pub fn singular_edges(
         };
     }
     splits.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    splits.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    // Dedup by *circular* distance, derived from a positional tolerance (raw
+    // angular tol scales as radius·Δθ), and merge the 0/2π seam (codex review).
+    let ang_tol = (1e-9 / c.radius.max(1e-9)).min(1e-6);
+    splits.dedup_by(|a, b| (*a - *b).abs() < ang_tol);
+    if splits.len() > 1 && (TAU - splits[splits.len() - 1] + splits[0]) < ang_tol {
+        splits.pop(); // first and last coincide across the seam
+    }
     // Arcs between consecutive splits (cyclic); keep the exposed ones.
     let mut edges = Vec::new();
     for w in 0..splits.len() {
@@ -220,6 +229,29 @@ mod tests {
             assert!(!t013.contains(x));
         }
         assert_eq!(reg.len(), t012.len() + t013.len());
+    }
+
+    #[test]
+    fn near_degenerate_thin_triple_keeps_two_distinct_branches() {
+        // A thin (nearly collinear) triple with circumradius < probe: the two
+        // branch vertices are well separated in space, but the plane normal is
+        // tiny so a coordinate-recomputed branch sign could merge them. The
+        // construction-order labels must keep them distinct (codex #1).
+        let probe = 1.4;
+        let centers = [ctr(0.0, 0.0, 0.0), ctr(0.3, 0.0, 0.0), ctr(0.15, 0.01, 0.0)];
+        let mut reg = SingularVertices::new();
+        let ids = reg.intern_triple(0, 1, 2, &centers, probe);
+        assert_eq!(ids.len(), 2, "two branches survive a thin triple");
+        assert_eq!(reg.len(), 2, "not merged onto one key");
+        assert!(
+            reg.point(ids[0]).distance(reg.point(ids[1])) > 1e-3,
+            "branches are genuinely distinct points"
+        );
+        for &id in &ids {
+            for ctr in &centers {
+                assert!((reg.point(id).distance(*ctr) - probe).abs() < 1e-9);
+            }
+        }
     }
 
     #[test]

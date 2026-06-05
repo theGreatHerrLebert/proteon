@@ -87,12 +87,19 @@ pub fn canonical_burial_circle(
 /// To be canonical (frame-independent), pass `a, b, c` in a fixed order — e.g.
 /// sorted by probe index — so the normal, and hence the branch labelling, is
 /// deterministic for the triple.
-pub fn triple_sphere_intersections(a: Vec3, b: Vec3, c: Vec3, r: f64) -> Vec<Vec3> {
+///
+/// Each point carries its **branch label** directly: `+1` for the `+nh` side of
+/// the canonical normal `nh = (b−a)×(c−a)`, `-1` for `−nh`, `0` for a tangent
+/// (single coincident solution). The label comes from the construction order, not
+/// a re-derived sign — so near-degenerate triples can never collapse the two
+/// branches onto one key (codex review).
+pub fn triple_sphere_intersections(a: Vec3, b: Vec3, c: Vec3, r: f64) -> Vec<(Vec3, i8)> {
     let u = b - a;
     let v = c - a;
     let uxv = u.cross(v);
     let n2 = uxv.norm_sq();
-    if n2 < 1e-18 {
+    // Scale-relative collinearity test: |u×v|² vs (|u||v|)².
+    if n2 <= 1e-18 * u.norm_sq() * v.norm_sq() {
         return Vec::new(); // collinear centres
     }
     // Circumcentre of (a,b,c): o − a = ((|u|²v − |v|²u) × (u×v)) / (2|u×v|²).
@@ -101,20 +108,22 @@ pub fn triple_sphere_intersections(a: Vec3, b: Vec3, c: Vec3, r: f64) -> Vec<Vec
         return Vec::new();
     };
     // The equidistant line is o + t·nh (nh ⊥ plane, so ⊥ (o−a)); |x−a|=r ⇒
-    // |o−a|² + t² = r².
+    // |o−a|² + t² = r². Discriminant has length² units → scale by r².
     let disc = r * r - (o - a).norm_sq();
-    if disc < -1e-12 {
+    let tol = 1e-12 * r * r;
+    if disc < -tol {
         return Vec::new(); // no common point
     }
-    let t = disc.max(0.0).sqrt();
-    if t < 1e-9 {
-        return vec![o]; // tangent: single point on the plane
+    if disc <= tol {
+        return vec![(o, 0)]; // tangent: single point on the plane
     }
-    vec![o + nh * t, o - nh * t] // branch + then −
+    let t = disc.sqrt();
+    vec![(o + nh * t, 1), (o - nh * t, -1)]
 }
 
-/// Which side of the canonical plane `(a,b,c)` a triple-vertex `x` is on: `+1` or
-/// `-1`. Stable branch label for the triple-sphere vertex registry key.
+/// Which side of the canonical plane `(a,b,c)` a point `x` is on: `+1` or `-1`.
+/// A cross-check on [`triple_sphere_intersections`]' branch labels (which are the
+/// source of truth — this can be ill-conditioned for near-degenerate triples).
 pub fn branch_sign(x: Vec3, a: Vec3, b: Vec3, c: Vec3) -> i8 {
     let n = (b - a).cross(c - a);
     if (x - a).dot(n) >= 0.0 {
@@ -209,14 +218,17 @@ mod tests {
         let c = Vec3::new(0.5, 1.5, 0.0);
         let pts = triple_sphere_intersections(a, b, c, r);
         assert_eq!(pts.len(), 2, "generic triple → two branches");
-        for x in &pts {
+        for (x, _) in &pts {
             for ctr in [a, b, c] {
                 assert!((x.distance(ctr) - r).abs() < 1e-12, "equidistant r");
             }
         }
-        // Branches are on opposite sides of plane(a,b,c) and mirror images.
-        assert_eq!(branch_sign(pts[0], a, b, c), 1);
-        assert_eq!(branch_sign(pts[1], a, b, c), -1);
+        // The construction-order branch labels match the geometric side, and the
+        // two branches are opposite.
+        assert_eq!(pts[0].1, 1);
+        assert_eq!(pts[1].1, -1);
+        assert_eq!(branch_sign(pts[0].0, a, b, c), pts[0].1);
+        assert_eq!(branch_sign(pts[1].0, a, b, c), pts[1].1);
         // Canonical: same triple in the same order → identical points (the weld
         // guarantee for triple vertices).
         let again = triple_sphere_intersections(a, b, c, r);
