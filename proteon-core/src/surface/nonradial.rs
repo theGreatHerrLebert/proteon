@@ -15,7 +15,7 @@
 //! triangle boundary builds on it.
 
 use super::arrangement::SphereCircle;
-use super::geom::Vec3;
+use super::geom::{plane_basis, Circle3, Vec3};
 
 /// The cap of probe-sphere `p` that is buried inside neighbouring probe `q` (both
 /// radius `probe`). Directions from `p` pointing toward `q` within the returned
@@ -38,6 +38,55 @@ pub fn probe_burial_cap(p: Vec3, q: Vec3, probe: f64) -> Option<SphereCircle> {
     // p's sphere at angle θ from (q−p) is inside q iff cos θ > d/(2·probe).
     let half = (d / (2.0 * probe)).clamp(-1.0, 1.0).acos();
     Some(SphereCircle::new(off.normalized()?, half))
+}
+
+/// The collision circle where two equal-radius probe spheres meet, in a form that
+/// is **identical regardless of which probe asks** — the shared-seam foundation
+/// for watertightness (codex #5/#7). Keyed by the unordered probe pair `{i, j}`:
+/// the normal always points from the lower-index probe to the higher, the centre
+/// is their midpoint (equal radii), so both faces that border this seam derive
+/// bit-identical geometry and a bit-identical [`plane_basis`]. `None` if the
+/// probes do not overlap.
+///
+/// SEAM SCOPE (worked out from the geometry): the part of `C` that is a *shared*
+/// seam between faces `i` and `j` is only the arc lying inside **both** spheric
+/// triangles and exposed w.r.t. all other spheres. Where `C` is inside `i`'s
+/// triangle but not `j`'s, that stretch is bounded by `i`'s own toric great
+/// circles, not by `j` — it is not a seam with `j`. The integration must sample
+/// the shared stretch from this canonical circle and the non-shared stretches
+/// from each face's own arrangement.
+pub fn canonical_burial_circle(
+    i: usize,
+    j: usize,
+    centers: &[Vec3],
+    probe: f64,
+) -> Option<Circle3> {
+    let (lo, hi) = if i <= j { (i, j) } else { (j, i) };
+    let (a, b) = (centers[lo], centers[hi]);
+    let off = b - a;
+    let d = off.norm();
+    if d >= 2.0 * probe || d < 1e-9 {
+        return None;
+    }
+    let normal = off.normalized()?; // canonical: lower index → higher
+    let half = d * 0.5;
+    Some(Circle3 {
+        center: (a + b) * 0.5,
+        normal,
+        radius: (probe * probe - half * half).max(0.0).sqrt(),
+    })
+}
+
+/// Sample a circle's rim at the given `thetas` using its canonical
+/// [`plane_basis`] — a pure function of the circle, so two callers that pass the
+/// same [`Circle3`] and the same `thetas` get bit-identical world points (the
+/// weld guarantee).
+pub fn sample_circle_rim(c: &Circle3, thetas: &[f64]) -> Vec<Vec3> {
+    let (u, v) = plane_basis(c.normal);
+    thetas
+        .iter()
+        .map(|&t| c.center + (u * t.cos() + v * t.sin()) * c.radius)
+        .collect()
 }
 
 /// The three great-circle caps bounding a spheric (reentrant) face, given the
@@ -83,7 +132,33 @@ pub fn burial_caps(self_idx: usize, centers: &[Vec3], probe: f64) -> Vec<(usize,
 mod tests {
     use super::super::chart::fill_spherical_region;
     use super::*;
-    use std::f64::consts::PI;
+    use std::f64::consts::{PI, TAU};
+
+    #[test]
+    fn canonical_burial_circle_is_identical_from_either_probe() {
+        let probe = 1.4;
+        let centers = [Vec3::new(0.3, -0.2, 1.1), Vec3::new(2.0, 0.5, 0.4)];
+        let from_0 = canonical_burial_circle(0, 1, &centers, probe).expect("overlap");
+        let from_1 = canonical_burial_circle(1, 0, &centers, probe).expect("overlap");
+        // Bit-identical circle regardless of which probe asks.
+        assert_eq!(from_0, from_1);
+        // And the rim it bounds lies exactly `probe` from BOTH probe centres
+        // (it is sphere_0 ∩ sphere_1).
+        let thetas: Vec<f64> = (0..64).map(|k| TAU * k as f64 / 64.0).collect();
+        let rim_a = sample_circle_rim(&from_0, &thetas);
+        let rim_b = sample_circle_rim(&from_1, &thetas);
+        assert_eq!(rim_a, rim_b, "bit-identical samples → weldable seam");
+        for x in &rim_a {
+            assert!((x.distance(centers[0]) - probe).abs() < 1e-12);
+            assert!((x.distance(centers[1]) - probe).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn no_canonical_circle_when_probes_disjoint() {
+        let centers = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0)];
+        assert!(canonical_burial_circle(0, 1, &centers, 1.4).is_none());
+    }
 
     #[test]
     fn no_cap_when_probes_too_far() {
