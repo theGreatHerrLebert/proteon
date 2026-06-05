@@ -16,7 +16,7 @@
 //!   follows and shares with the toric faces.
 
 use super::geom::{intersect_planes, plane_basis, solve_quadratic, Plane3, Vec3};
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use std::f64::consts::TAU;
 
 const EPS: f64 = 1e-9;
@@ -310,6 +310,124 @@ pub fn sample_loop(
     pts
 }
 
+/// The closed boundary loops of the exposed region, like [`boundary_loops`] but
+/// resolving **multivalent vertices** (≥3 boundary arcs meeting at one point —
+/// triple points, concurrent circles, pinches) that the greedy linker cannot.
+///
+/// Same boundary arcs (from [`exposed_arcs`], so the per-circle classification is
+/// unchanged), but the linking is a spherical DCEL walk: cluster arc endpoints
+/// into vertices, then at each vertex pick the next outgoing arc by **angular
+/// order** in the tangent plane, keeping the exposed region consistently on one
+/// side. Reduces to [`boundary_loops`] when every vertex has degree 2.
+pub fn arrange_loops(caps: &[SphereCircle]) -> Result<Vec<Vec<BoundaryArc>>> {
+    const TOL: f64 = 1e-6;
+    let mut arcs: Vec<BoundaryArc> = Vec::new();
+    let mut full_loops: Vec<Vec<BoundaryArc>> = Vec::new();
+    for (i, c) in caps.iter().enumerate() {
+        let others: Vec<SphereCircle> = caps
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, &o)| o)
+            .collect();
+        for (a, b) in exposed_arcs(c, &others) {
+            let arc = BoundaryArc {
+                circle: i,
+                theta_start: a,
+                theta_end: b,
+                start: c.rim_point(a),
+                end: c.rim_point(b),
+            };
+            if arc.start.distance(arc.end) < TOL {
+                full_loops.push(vec![arc]); // a fully-exposed rim is its own loop
+            } else {
+                arcs.push(arc);
+            }
+        }
+    }
+    if arcs.is_empty() {
+        return Ok(full_loops);
+    }
+
+    // Cluster endpoints into vertices (positions from different circles only
+    // match numerically). v0/v1 = vertex id of each arc's start/end.
+    let mut verts: Vec<Vec3> = Vec::new();
+    let vid = |p: Vec3, verts: &mut Vec<Vec3>| -> usize {
+        if let Some(k) = verts.iter().position(|q| q.distance(p) < TOL) {
+            k
+        } else {
+            verts.push(p);
+            verts.len() - 1
+        }
+    };
+    let v0: Vec<usize> = arcs.iter().map(|a| vid(a.start, &mut verts)).collect();
+    let v1: Vec<usize> = arcs.iter().map(|a| vid(a.end, &mut verts)).collect();
+
+    // Tangent (unit, +θ travel direction) of an arc at its start / end corner.
+    let leaving = |a: &BoundaryArc| caps[a.circle].axis.cross(a.start).normalized();
+    let arriving = |a: &BoundaryArc| caps[a.circle].axis.cross(a.end).normalized();
+
+    // Outgoing arcs per vertex.
+    let mut out_of: Vec<Vec<usize>> = vec![Vec::new(); verts.len()];
+    for (k, &v) in v0.iter().enumerate() {
+        out_of[v].push(k);
+    }
+
+    // Angle of a tangent `w` in the tangent plane at vertex `v` (axis = v).
+    let angle_at = |v: usize, w: Vec3| -> f64 {
+        let (e1, e2) = plane_basis(verts[v]);
+        w.dot(e2).atan2(w.dot(e1))
+    };
+
+    // The angular successor of an arc: at its end vertex, the first outgoing arc
+    // clockwise from the reversed arrival direction. A pure permutation of arcs
+    // (each vertex has #in == #out for a closed region), so its orbits are the
+    // boundary loops — and the angular pick is what resolves a multivalent vertex.
+    let next = |cur: usize| -> Result<usize> {
+        let v = v1[cur];
+        let arr = arriving(&arcs[cur]).context("degenerate arc tangent")?;
+        let r = angle_at(v, arr * -1.0);
+        let mut best: Option<(usize, f64)> = None;
+        for &o in &out_of[v] {
+            let lv = leaving(&arcs[o]).context("degenerate arc tangent")?;
+            let mut gap = r - angle_at(v, lv);
+            while gap <= EPS {
+                gap += TAU;
+            }
+            if best.map_or(true, |(_, g)| gap < g) {
+                best = Some((o, gap));
+            }
+        }
+        best.map(|(o, _)| o)
+            .context("exposed boundary does not close — degenerate caps")
+    };
+
+    let mut used = vec![false; arcs.len()];
+    let mut loops = full_loops;
+    for s in 0..arcs.len() {
+        if used[s] {
+            continue;
+        }
+        let mut chain = Vec::new();
+        let mut cur = s;
+        loop {
+            ensure!(
+                !used[cur],
+                "arrangement walk revisited an arc — non-manifold"
+            );
+            used[cur] = true;
+            chain.push(arcs[cur].clone());
+            let nxt = next(cur)?;
+            if nxt == s {
+                break; // orbit closed
+            }
+            cur = nxt;
+        }
+        loops.push(chain);
+    }
+    Ok(loops)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +569,107 @@ mod tests {
                 "sample is exposed"
             );
         }
+    }
+
+    // Sample arrange_loops' loops into world points on a unit sphere and mesh
+    // them; returns (area, euler). A single spheric patch is an open disk (χ=1).
+    // Region must fit one chart (near +z here).
+    fn fill_area(caps: &[SphereCircle], pole: Vec3) -> (f64, i64) {
+        use super::super::chart::fill_spherical_region;
+        let loops = arrange_loops(caps).expect("arrange");
+        let world: Vec<Vec<Vec3>> = loops.iter().map(|lp| sample_loop(lp, caps, 24)).collect();
+        let m =
+            fill_spherical_region(Vec3::new(0.0, 0.0, 0.0), 1.0, &world, pole, 0.06).expect("fill");
+        (m.surface_area(), m.euler_characteristic())
+    }
+
+    fn tri_caps() -> [SphereCircle; 3] {
+        let dirs = [
+            Vec3::new(0.3, 0.0, 1.0).normalized().unwrap(),
+            Vec3::new(-0.15, 0.26, 1.0).normalized().unwrap(),
+            Vec3::new(-0.15, -0.26, 1.0).normalized().unwrap(),
+        ];
+        super::super::nonradial::spheric_face_caps(dirs).unwrap()
+    }
+
+    #[test]
+    fn arrange_loops_matches_boundary_loops_on_a_triangle() {
+        let caps = tri_caps();
+        let pole = Vec3::new(0.0, 0.0, 1.0);
+        // Greedy linker succeeds here (all degree-2); the DCEL must agree.
+        let greedy: Vec<Vec<Vec3>> = boundary_loops(&caps)
+            .unwrap()
+            .iter()
+            .map(|lp| sample_loop(lp, &caps, 24))
+            .collect();
+        let g_area = super::super::chart::fill_spherical_region(
+            Vec3::new(0.0, 0.0, 0.0),
+            1.0,
+            &greedy,
+            pole,
+            0.06,
+        )
+        .unwrap()
+        .surface_area();
+        let (a_area, euler) = fill_area(&caps, pole);
+        assert_eq!(euler, 1, "spheric patch is a single open disk");
+        assert!(
+            (a_area - g_area).abs() / g_area < 0.01,
+            "DCEL area {a_area} matches greedy {g_area}"
+        );
+    }
+
+    #[test]
+    fn arrange_loops_agrees_with_greedy_across_random_configs() {
+        use super::super::chart::fill_spherical_region;
+        // Fuzz: random caps that keep +z exposed (a bounded region around +z).
+        // Wherever the trusted greedy linker succeeds, the DCEL must produce the
+        // same region (filled area) — validating the angular walk broadly without
+        // a hand-built degeneracy. A fixed LCG keeps it deterministic.
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut rng = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            ((state >> 33) as f64) / ((1u64 << 31) as f64) // [0,1)
+        };
+        let pole = Vec3::new(0.0, 0.0, 1.0);
+        let mut compared = 0;
+        for _ in 0..300 {
+            let n = 2 + (rng() * 3.0) as usize; // 2..=4 caps
+            let caps: Vec<SphereCircle> = (0..n)
+                .map(|_| {
+                    let polar = 0.5 + rng() * 0.6; // axis 0.5..1.1 from +z
+                    let azi = rng() * TAU;
+                    let ax = Vec3::new(
+                        polar.sin() * azi.cos(),
+                        polar.sin() * azi.sin(),
+                        polar.cos(),
+                    );
+                    let half = 0.25 + rng() * (polar - 0.3); // < polar ⇒ +z stays exposed
+                    SphereCircle::new(ax, half)
+                })
+                .collect();
+            if !is_exposed(pole, &caps) {
+                continue;
+            }
+            let Ok(greedy) = boundary_loops(&caps) else {
+                continue;
+            };
+            let gw: Vec<Vec<Vec3>> = greedy.iter().map(|l| sample_loop(l, &caps, 16)).collect();
+            let Ok(gm) = fill_spherical_region(Vec3::new(0.0, 0.0, 0.0), 1.0, &gw, pole, 0.06)
+            else {
+                continue;
+            };
+            let (a_area, _) = fill_area(&caps, pole);
+            assert!(
+                (a_area - gm.surface_area()).abs() / gm.surface_area().max(1e-6) < 0.02,
+                "DCEL area {a_area} vs greedy {} ({n} caps)",
+                gm.surface_area()
+            );
+            compared += 1;
+        }
+        assert!(compared >= 20, "fuzz exercised enough configs ({compared})");
     }
 
     #[test]
