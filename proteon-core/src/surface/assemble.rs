@@ -56,35 +56,18 @@ pub fn contact_cap_mesh(
     fill_spherical_region(atom.center, atom.radius, &world_loops, pole, grid)
 }
 
-/// Choose an azimuthal-chart pole deep inside the exposed region: the candidate
-/// (away from all neighbours, or the antipode of one neighbour) maximizing the
-/// **minimum angular clearance** from every buried-cap boundary. Returns `None`
-/// when no candidate clears the margin — a genuinely multi-chart region (e.g. a
-/// band around an atom with two opposite neighbours), which the `-Σ axis`
-/// heuristic would have silently mishandled (codex-review).
+/// Choose an azimuthal-chart pole for a contact cap. The chart is well-posed iff
+/// the exposed region avoids the pole's **antipode**; the pole itself need not be
+/// exposed. Taking `P = −a_k` (away from neighbour `k`) puts the antipode `a_k`
+/// at the centre of buried cap `k`, so the region stays `half_angle_k` away from
+/// it — bounded for *any* contact cap, including a band/annulus around an atom
+/// with opposite neighbours (the case the old "pole must be exposed" rule wrongly
+/// rejected). Pick the deepest cap for the largest margin.
 fn pick_chart_pole(caps: &[SphereCircle]) -> Option<Vec3> {
-    let mut cands: Vec<Vec3> = caps.iter().map(|c| -c.axis).collect();
-    let mut sum = Vec3::new(0.0, 0.0, 0.0);
-    for c in caps {
-        sum = sum - c.axis;
-    }
-    if let Some(s) = sum.normalized() {
-        cands.push(s);
-    }
-    // Clearance = min over caps of (angle from the cap axis − its half-angle):
-    // positive ⇒ exposed, larger ⇒ deeper in the exposed region.
-    let clearance = |cand: Vec3| {
-        caps.iter()
-            .map(|c| cand.dot(c.axis).clamp(-1.0, 1.0).acos() - c.half_angle)
-            .fold(f64::INFINITY, f64::min)
-    };
-    cands
-        .into_iter()
-        .map(|c| (clearance(c), c))
-        .filter(|(s, _)| s.is_finite())
-        .max_by(|x, y| x.0.partial_cmp(&y.0).unwrap())
-        .filter(|(s, _)| *s > 0.05) // require real margin (rad) from every boundary
-        .map(|(_, c)| c)
+    caps.iter()
+        .max_by(|x, y| x.half_angle.total_cmp(&y.half_angle))
+        .filter(|c| c.half_angle > 0.01)
+        .map(|c| -c.axis)
 }
 
 /// The probe centre whose contact point on `a` is `t_a`: along the ray
@@ -705,10 +688,10 @@ mod tests {
             sph(5.2, 0.0, 0.0, 1.5),
             sph(7.8, 0.0, 0.0, 1.5),
         ];
-        let _ = chain; // TODO: chains need multi-chart band caps (next).
         let cases = [
             ("tri", tri, 80.0932, 57.9040),
             ("tetra", tetra, 74.1161, 54.0987),
+            ("chain", chain, 96.7732, 58.9781),
         ];
         for (name, atoms, ball_area, ball_vol) in cases {
             let m = ses_mesh_analytic(&atoms, 1.4, 48, 10, 0.05).unwrap();
@@ -755,15 +738,19 @@ mod tests {
         );
     }
 
-    /// Two opposite neighbours leave a band (annulus) around the atom — no single
-    /// azimuthal pole charts it (its antipode is always in the region). The pole
-    /// search must report this rather than silently producing a degenerate chart.
+    /// Two opposite neighbours leave a band (annulus) around the atom. With the
+    /// pole at a buried cap's antipode the single azimuthal chart still handles it
+    /// — the band meshes, every vertex on the atom sphere, two boundary loops.
     #[test]
-    fn opposite_neighbours_need_multi_chart_and_error() {
+    fn opposite_neighbours_band_cap_meshes() {
         let atom = sph(0.0, 0.0, 0.0, 1.7);
         let n1 = sph(2.6, 0.0, 0.0, 1.7);
         let n2 = sph(-2.6, 0.0, 0.0, 1.7);
-        assert!(contact_cap_mesh(atom, &[n1, n2], 1.4, 0.1, 24).is_err());
+        let m = contact_cap_mesh(atom, &[n1, n2], 1.4, 0.1, 48).unwrap();
+        assert!(!m.tris.is_empty());
+        for v in &m.verts {
+            assert!((v.distance(atom.center) - atom.radius).abs() < 1e-9);
+        }
     }
 
     /// A *free* toric face (two atoms, probe rolls all the way around) from
