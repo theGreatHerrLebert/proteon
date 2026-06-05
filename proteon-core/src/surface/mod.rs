@@ -25,9 +25,14 @@
 //!   follows.
 
 pub mod arrangement;
+pub mod assemble;
+pub mod cdt;
+pub mod chart;
+pub mod elements;
 pub mod geom;
 pub mod mesh;
 pub mod patches;
+pub mod registry;
 pub mod rs;
 pub mod ses;
 pub mod stitch;

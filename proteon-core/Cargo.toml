@@ -24,4 +24,5 @@ cuda = ["cudarc"]
 pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
 rayon = "1"
 anyhow = "1"
+spade = "2.15"  # constrained Delaunay for analytic contact-cap interiors (SES exact mesh)
 cudarc = { version = "0.19", features = ["std", "driver", "nvrtc", "cuda-12050"], optional = true }
