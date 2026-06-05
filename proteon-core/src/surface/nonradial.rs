@@ -20,8 +20,14 @@ use super::geom::Vec3;
 /// The cap of probe-sphere `p` that is buried inside neighbouring probe `q` (both
 /// radius `probe`). Directions from `p` pointing toward `q` within the returned
 /// half-angle are inside `q` (i.e. `is_buried` against this cap). `None` if the
-/// probes do not overlap (`|p−q| ≥ 2·probe`) or are coincident (fully buried —
-/// the caller drops the whole face).
+/// probes do not overlap (`|p−q| ≥ 2·probe`) or are coincident.
+///
+/// Equal radii make `None` unambiguous: *full* burial would need `d + probe <
+/// probe` ⇒ `d < 0`, which is impossible — two equal probes can only ever cut a
+/// partial cap, never swallow each other. So there is no "fully buried" case to
+/// distinguish; `None` always means "no cap to subtract." Coincident duplicate
+/// placements (`d ≈ 0`) carry only a zero-measure burial and are an RS-dedup
+/// concern handled upstream, not here.
 pub fn probe_burial_cap(p: Vec3, q: Vec3, probe: f64) -> Option<SphereCircle> {
     let off = q - p;
     let d = off.norm();
@@ -45,12 +51,17 @@ pub fn spheric_face_caps(dirs: [Vec3; 3]) -> Option<[SphereCircle; 3]> {
     let mut caps = [SphereCircle::new(Vec3::new(1.0, 0.0, 0.0), 0.0); 3];
     for e in 0..3 {
         let (x, y, k) = (e, (e + 1) % 3, (e + 2) % 3);
-        let mut n = dirs[x].cross(dirs[y]).normalized()?;
+        let n = dirs[x].cross(dirs[y]).normalized()?;
         // Orient so the third contact is on the exposed side (d·axis < 0): a
-        // great circle is half_angle π/2, so buried ⇔ d·axis > 0.
-        if dirs[k].dot(n) > 0.0 {
-            n = n * -1.0;
+        // great circle is half_angle π/2, so buried ⇔ d·axis > 0. If the third
+        // contact lies on (or numerically near) this edge's great circle the
+        // hemisphere choice is undefined — a degenerate (near-coplanar) triple
+        // with no well-formed spheric face; reject rather than guess (codex).
+        let s = dirs[k].dot(n);
+        if s.abs() < 1e-9 {
+            return None;
         }
+        let n = if s > 0.0 { n * -1.0 } else { n };
         caps[e] = SphereCircle::new(n, std::f64::consts::FRAC_PI_2);
     }
     Some(caps)

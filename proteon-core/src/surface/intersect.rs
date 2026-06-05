@@ -47,10 +47,25 @@ fn tri_tri(a: [Vec3; 3], b: [Vec3; 3]) -> bool {
             .any(|(p, q)| seg_tri(p, q, a[0], a[1], a[2]))
 }
 
-/// Count triangle pairs that intersect (excluding vertex-adjacent pairs). `0` ⇒ a
-/// valid (non-self-intersecting) embedding. `cell` is the spatial-hash grid size
-/// (≈ a few triangle edge lengths). Stops early at `cap` if `cap > 0`.
+/// Count triangle pairs that intersect, excluding **edge-adjacent** pairs (they
+/// share an edge and cannot pierce each other transversally). `0` ⇒ no
+/// transversal self-intersection. `cell` is the spatial-hash grid size (≈ a few
+/// triangle edge lengths); must be finite and positive. Stops early at `cap` if
+/// `cap > 0`.
+///
+/// SCOPE (codex-review): this detects generic **transversal** crossings — an edge
+/// of one triangle passing through the interior of another. It intentionally does
+/// *not* catch coplanar area overlap, collinear edge-on-edge contact, or
+/// crossings within ~`EPS` of a triangle boundary. That is sufficient as the SES
+/// embedding gate, where overlapping curved reentrant patches cross transversally
+/// (it finds 5000+ on a self-intersecting crambin mesh); it is not a complete
+/// PSLG-overlap test. Vertex-only-shared pairs (a fan) are *still tested* — only
+/// the shared vertex itself is excluded by the interior-only clamp.
 pub fn self_intersections(mesh: &Mesh, cell: f64, cap: usize) -> usize {
+    assert!(
+        cell.is_finite() && cell > 0.0,
+        "spatial-hash cell must be finite and positive"
+    );
     let inv = 1.0 / cell;
     let key = |v: Vec3| {
         (
@@ -88,7 +103,10 @@ pub fn self_intersections(mesh: &Mesh, cell: f64, cap: usize) -> usize {
             }
         }
     }
-    let shares_vertex = |a: [u32; 3], b: [u32; 3]| a.iter().any(|x| b.contains(x));
+    // Skip only edge-adjacent pairs (≥2 shared vertices). Vertex-only-shared
+    // pairs can still intersect away from the shared vertex, so they are tested;
+    // the shared vertex is a boundary point excluded by the interior-only clamp.
+    let edge_adjacent = |a: [u32; 3], b: [u32; 3]| a.iter().filter(|x| b.contains(x)).count() >= 2;
     let mut hits = 0usize;
     let mut seen: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
     for ids in buckets.values() {
@@ -99,7 +117,7 @@ pub fn self_intersections(mesh: &Mesh, cell: f64, cap: usize) -> usize {
                     continue; // pair already tested (shared across cells)
                 }
                 let (ta, tb) = (mesh.tris[ai as usize], mesh.tris[bi as usize]);
-                if shares_vertex(ta, tb) {
+                if edge_adjacent(ta, tb) {
                     continue;
                 }
                 if tri_tri(tri_v(ta), tri_v(tb)) {
