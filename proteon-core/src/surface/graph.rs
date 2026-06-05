@@ -14,13 +14,64 @@
 //! so the half-edge build must compute each SES vertex **once** per RS face
 //! (canonical probe centre) and intern it — not take it from per-pair recovery.
 
-use super::geom::{intersect_two_spheres, Sphere, Vec3};
+use super::geom::{intersect_three_spheres, intersect_two_spheres, Sphere, Vec3};
 use super::intervals::free_intervals;
 use anyhow::{ensure, Result};
 use std::f64::consts::TAU;
 
 /// Tangency residual (Å) accepting an atom as touched by the probe at an endpoint.
 const TANGENT_TOL: f64 = 1e-6;
+
+/// One reduced-surface face: a probe resting on an atom triple, clear of every
+/// other atom. The `probe` centre is computed **once** here (analytically, via
+/// `intersect_three_spheres`) so all three incident toric pairs and the contact
+/// caps share the *same* SES corner positions (the canonical-vertex identity the
+/// half-edge decomposition needs — codex-review).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RsFace {
+    pub atoms: [usize; 3],
+    pub probe: Vec3,
+}
+
+/// Every RS face of `atoms` for the given `probe`: each atom triple carries 0, 1,
+/// or 2 probe positions (`intersect_three_spheres`), kept when the probe there
+/// clears every *other* atom. The canonical source of SES-corner positions.
+pub fn enumerate_rs_faces(atoms: &[Sphere], probe: f64) -> Vec<RsFace> {
+    let mut faces = Vec::new();
+    let n = atoms.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            for k in (j + 1)..n {
+                let Some((p1, p2)) = intersect_three_spheres(
+                    atoms[i].inflated(probe),
+                    atoms[j].inflated(probe),
+                    atoms[k].inflated(probe),
+                ) else {
+                    continue;
+                };
+                let mut cand = vec![p1];
+                if p1.distance(p2) > 1e-9 {
+                    cand.push(p2); // distinct above/below probes (else tangent triple)
+                }
+                for p in cand {
+                    let clear = atoms.iter().enumerate().all(|(m, a)| {
+                        m == i
+                            || m == j
+                            || m == k
+                            || p.distance(a.center) >= a.radius + probe - 1e-9
+                    });
+                    if clear {
+                        faces.push(RsFace {
+                            atoms: [i, j, k],
+                            probe: p,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    faces
+}
 
 /// One toric face: a free interval of the `[i,j]` roll circle. `ends[e]` is the
 /// third atom bounding that endpoint (so the RS face is the sorted triple), or
@@ -163,6 +214,38 @@ mod tests {
         assert_eq!(pair01.len(), 1);
         assert_eq!(pair01[0].ends, [None, None], "free ring, no RS-face ends");
         assert_eq!(pair01[0].theta, (0.0, TAU));
+    }
+
+    #[test]
+    fn rs_faces_are_canonical_and_clear_of_other_atoms() {
+        // triangle3: one triple, two probe positions (above/below the plane).
+        let tri = [
+            sph(0.0, 0.0, 0.0, 1.7),
+            sph(2.5, 0.0, 0.0, 1.7),
+            sph(1.25, 2.165, 0.0, 1.7),
+        ];
+        let f = enumerate_rs_faces(&tri, 1.4);
+        assert_eq!(f.len(), 2, "triangle3 → 2 RS faces");
+        assert!(f.iter().all(|x| x.atoms == [0, 1, 2]));
+        // The two probes are distinct and each tangent to all three atoms.
+        assert!(f[0].probe.distance(f[1].probe) > 1e-3);
+        for face in &f {
+            for &a in &face.atoms {
+                assert!((face.probe.distance(tri[a].center) - (tri[a].radius + 1.4)).abs() < 1e-9);
+            }
+        }
+        // tetra: each triple's *inner* probe is buried by the 4th atom → 4 faces.
+        let tetra = [
+            sph(0.0, 0.0, 0.0, 1.6),
+            sph(2.0, 0.0, 0.0, 1.6),
+            sph(1.0, 1.7, 0.0, 1.6),
+            sph(1.0, 0.6, 1.6, 1.6),
+        ];
+        assert_eq!(
+            enumerate_rs_faces(&tetra, 1.4).len(),
+            4,
+            "tetra → 4 RS faces"
+        );
     }
 
     #[test]
