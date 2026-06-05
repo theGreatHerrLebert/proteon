@@ -19,9 +19,10 @@
 //! 3. spheric + toric face rewrite onto the singular edges.
 //! 4. richer gate vs BALL (volume, Euler, per-face-type area, …).
 
-use super::geom::{Sphere, Vec3};
-use super::nonradial::{branch_sign, triple_sphere_intersections};
+use super::geom::{plane_basis, Vec3};
+use super::nonradial::{branch_sign, canonical_burial_circle, triple_sphere_intersections};
 use std::collections::HashMap;
+use std::f64::consts::TAU;
 
 /// Canonical registry of triple-probe SES vertices. Keyed by the **sorted** probe
 /// triple plus the branch side (`+1`/`-1`), so any permutation of a triple and
@@ -49,8 +50,9 @@ impl SingularVertices {
         self.points[id]
     }
 
-    /// Intern the triple-probe vertices of probes `(i, j, k)` (their probe
-    /// spheres all of radius `probe`), returning their registry ids. Canonical:
+    /// Intern the triple-probe vertices of probes `(i, j, k)` (probe spheres all
+    /// of radius `probe`, centres `centers`), returning their registry ids.
+    /// Canonical:
     /// the triple is sorted before computing geometry, so `intern_triple` is
     /// invariant to the argument order — `(i,j,k)` and `(k,j,i)` give the same
     /// ids and the same coordinates. Empty if the three spheres share no point.
@@ -59,7 +61,7 @@ impl SingularVertices {
         i: usize,
         j: usize,
         k: usize,
-        probes: &[Sphere],
+        centers: &[Vec3],
         probe: f64,
     ) -> Vec<usize> {
         let mut tri = [i, j, k];
@@ -67,11 +69,7 @@ impl SingularVertices {
         if tri[0] == tri[1] || tri[1] == tri[2] {
             return Vec::new(); // not three distinct probes
         }
-        let (a, b, c) = (
-            probes[tri[0]].center,
-            probes[tri[1]].center,
-            probes[tri[2]].center,
-        );
+        let (a, b, c) = (centers[tri[0]], centers[tri[1]], centers[tri[2]]);
         let mut ids = Vec::new();
         for x in triple_sphere_intersections(a, b, c, probe) {
             let key = (tri, branch_sign(x, a, b, c));
@@ -85,24 +83,109 @@ impl SingularVertices {
     }
 }
 
+/// A singular edge: an exposed θ-interval of the collision circle `C_ij`, the arc
+/// where probes `i` and `j`'s reentrant surfaces meet on the actual SES. Sample
+/// it with `nonradial::sample_circle_rim(C_ij, …)` so both incident faces weld.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SingularEdge {
+    pub theta_start: f64,
+    pub theta_end: f64,
+}
+
+/// Is a point on a collision circle exposed as a singular edge — i.e. not strictly
+/// inside any *other* probe ball (`m ∉ {i, j}`)? (Atom exclusion is a later
+/// refinement; this is the probe-probe term that dominates the defect.)
+fn singular_exposed(x: Vec3, i: usize, j: usize, centers: &[Vec3], probe: f64) -> bool {
+    !centers
+        .iter()
+        .enumerate()
+        .any(|(m, &c)| m != i && m != j && x.distance(c) < probe - 1e-9)
+}
+
+/// Stage 2 — the singular edges on the collision circle `C_ij` of two overlapping
+/// probes: split the full circle by every triple-probe vertex `(i, j, k)` (a
+/// global event, registered canonically), then keep the arcs whose midpoint is
+/// exposed. One global arrangement of the circle (codex Q1), not two per-face
+/// DCELs. Empty if the probes do not overlap or `C_ij` is wholly buried.
+pub fn singular_edges(
+    i: usize,
+    j: usize,
+    centers: &[Vec3],
+    probe: f64,
+    reg: &mut SingularVertices,
+) -> Vec<SingularEdge> {
+    let Some(c) = canonical_burial_circle(i, j, centers, probe) else {
+        return Vec::new();
+    };
+    let (u, v) = plane_basis(c.normal);
+    let theta_of = |x: Vec3| -> f64 {
+        let r = x - c.center;
+        let t = r.dot(v).atan2(r.dot(u));
+        if t < 0.0 {
+            t + TAU
+        } else {
+            t
+        }
+    };
+    // Split angles: every triple vertex (i,j,k) lies on C_ij (equidistant `probe`
+    // from i and j), so it is a split point where a third ball enters/leaves.
+    let mut splits: Vec<f64> = Vec::new();
+    for k in 0..centers.len() {
+        if k == i || k == j {
+            continue;
+        }
+        for id in reg.intern_triple(i, j, k, centers, probe) {
+            splits.push(theta_of(reg.point(id)));
+        }
+    }
+    let sample = |t: f64| c.center + (u * t.cos() + v * t.sin()) * c.radius;
+    if splits.is_empty() {
+        // No third ball crosses C_ij: it is wholly exposed or wholly buried.
+        return if singular_exposed(sample(0.0), i, j, centers, probe) {
+            vec![SingularEdge {
+                theta_start: 0.0,
+                theta_end: TAU,
+            }]
+        } else {
+            Vec::new()
+        };
+    }
+    splits.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    splits.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    // Arcs between consecutive splits (cyclic); keep the exposed ones.
+    let mut edges = Vec::new();
+    for w in 0..splits.len() {
+        let (a, b) = (splits[w], splits[(w + 1) % splits.len()]);
+        let end = if b > a { b } else { b + TAU };
+        let mid = (a + end) / 2.0;
+        if singular_exposed(sample(mid), i, j, centers, probe) {
+            edges.push(SingularEdge {
+                theta_start: a,
+                theta_end: end,
+            });
+        }
+    }
+    edges
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn sph(x: f64, y: f64, z: f64) -> Sphere {
-        Sphere::new(Vec3::new(x, y, z), 1.4)
+    fn ctr(x: f64, y: f64, z: f64) -> Vec3 {
+        Vec3::new(x, y, z)
     }
 
     #[test]
     fn interning_is_permutation_invariant_and_deduplicated() {
         let probe = 1.4;
-        let probes = [sph(0.0, 0.0, 0.0), sph(1.6, 0.0, 0.0), sph(0.5, 1.5, 0.0)];
+        let centers = [ctr(0.0, 0.0, 0.0), ctr(1.6, 0.0, 0.0), ctr(0.5, 1.5, 0.0)];
         let mut reg = SingularVertices::new();
-        let a = reg.intern_triple(0, 1, 2, &probes, probe);
+        let a = reg.intern_triple(0, 1, 2, &centers, probe);
         assert_eq!(a.len(), 2, "generic triple → two branch vertices");
         // Any permutation interns the SAME ids (no new points).
-        let b = reg.intern_triple(2, 0, 1, &probes, probe);
-        let c = reg.intern_triple(1, 2, 0, &probes, probe);
+        let b = reg.intern_triple(2, 0, 1, &centers, probe);
+        let c = reg.intern_triple(1, 2, 0, &centers, probe);
         let mut a_s = a.clone();
         a_s.sort_unstable();
         let mut b_s = b.clone();
@@ -114,8 +197,8 @@ mod tests {
         assert_eq!(reg.len(), 2, "no duplicate vertices across permutations");
         // Interned coordinates are exactly equidistant `probe` from all three.
         for &id in &a {
-            for p in &probes {
-                assert!((reg.point(id).distance(p.center) - probe).abs() < 1e-12);
+            for ctr in &centers {
+                assert!((reg.point(id).distance(*ctr) - probe).abs() < 1e-12);
             }
         }
     }
@@ -123,19 +206,61 @@ mod tests {
     #[test]
     fn distinct_triples_get_distinct_entries_and_no_phantom_points() {
         let probe = 1.4;
-        let probes = [
-            sph(0.0, 0.0, 0.0),
-            sph(1.6, 0.0, 0.0),
-            sph(0.5, 1.5, 0.0),
-            sph(0.8, 0.5, 1.4),
+        let centers = [
+            ctr(0.0, 0.0, 0.0),
+            ctr(1.6, 0.0, 0.0),
+            ctr(0.5, 1.5, 0.0),
+            ctr(0.8, 0.5, 1.4),
         ];
         let mut reg = SingularVertices::new();
-        let t012 = reg.intern_triple(0, 1, 2, &probes, probe);
-        let t013 = reg.intern_triple(0, 1, 3, &probes, probe);
+        let t012 = reg.intern_triple(0, 1, 2, &centers, probe);
+        let t013 = reg.intern_triple(0, 1, 3, &centers, probe);
         // Different triples → different vertices (no accidental merge).
         for x in &t012 {
             assert!(!t013.contains(x));
         }
         assert_eq!(reg.len(), t012.len() + t013.len());
+    }
+
+    #[test]
+    fn two_isolated_probes_give_one_full_singular_circle() {
+        // Just two overlapping probes, nothing else: C_ij is wholly exposed → one
+        // singular edge spanning the full circle.
+        let probe = 1.4;
+        let centers = [ctr(0.0, 0.0, 0.0), ctr(2.0, 0.0, 0.0)];
+        let mut reg = SingularVertices::new();
+        let edges = singular_edges(0, 1, &centers, probe, &mut reg);
+        assert_eq!(edges.len(), 1);
+        assert!((edges[0].theta_end - edges[0].theta_start - TAU).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_third_probe_splits_the_circle_and_buries_part_of_it() {
+        let probe = 1.4;
+        // 0,1 collide; probe 2 sits so its ball buries one stretch of C_01.
+        let centers = [
+            ctr(0.0, 0.0, 0.0),
+            ctr(2.0, 0.0, 0.0),
+            ctr(1.0, 0.9, 0.0), // near the +y side of C_01
+        ];
+        let mut reg = SingularVertices::new();
+        let edges = singular_edges(0, 1, &centers, probe, &mut reg);
+        // Some — but not all — of the circle survives.
+        assert!(!edges.is_empty(), "part of C_01 stays exposed");
+        let total: f64 = edges.iter().map(|e| e.theta_end - e.theta_start).sum();
+        assert!(total < TAU - 1e-3, "probe 2 buried a stretch");
+        // Every surviving edge midpoint is genuinely exposed and lies on C_01.
+        let c = canonical_burial_circle(0, 1, &centers, probe).unwrap();
+        let (u, v) = plane_basis(c.normal);
+        for e in &edges {
+            let mid = (e.theta_start + e.theta_end) / 2.0;
+            let x = c.center + (u * mid.cos() + v * mid.sin()) * c.radius;
+            assert!((x.distance(centers[0]) - probe).abs() < 1e-9);
+            assert!((x.distance(centers[1]) - probe).abs() < 1e-9);
+            assert!(
+                x.distance(centers[2]) >= probe - 1e-6,
+                "exposed (outside probe 2)"
+            );
+        }
     }
 }
