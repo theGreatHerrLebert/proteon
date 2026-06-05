@@ -20,7 +20,7 @@
 //!    is the spheric half; the toric event-aligned trim is next).
 //! 4. richer gate vs BALL (volume, Euler, per-face-type area, …).
 
-use super::arrangement::{arrange_loops, sample_loop};
+use super::arrangement::{arrange_loops, is_buried, sample_loop, SphereCircle};
 use super::chart::fill_spherical_region;
 use super::geom::{plane_basis, Plane3, Vec3};
 use super::mesh::Mesh;
@@ -270,6 +270,60 @@ pub fn sample_singular_edge(
         })
         .collect();
     sample_circle_rim(&c, &thetas)
+}
+
+/// Stage 6 (foundation) — the buried sub-interval(s) of one toric reentrant arc.
+///
+/// At a fixed rolling angle the toric reentrant arc runs along the great circle
+/// from contact direction `dir_a` to `dir_b` (unit directions from the rolling
+/// probe centre). A neighbour probe burying that probe presents as a [`SphereCircle`]
+/// `cap` in the same frame (`nonradial::probe_burial_cap(P, p_j, probe)`). Returns
+/// the φ-intervals (φ measured from `dir_a`, in `[0, arc_angle]`) where the arc is
+/// inside the cap — the per-θ-column input to the event-aligned toric trim.
+///
+/// Robust general method (like `singular_edges` on a circle): cut the arc at every
+/// rim crossing, then keep the sub-arcs whose midpoint is buried — so it handles
+/// 0/1/2 crossings, a fully-buried arc, and a clear arc uniformly.
+pub fn reentrant_arc_burial(dir_a: Vec3, dir_b: Vec3, cap: &SphereCircle) -> Vec<(f64, f64)> {
+    let arc_angle = dir_a.dot(dir_b).clamp(-1.0, 1.0).acos();
+    let Some(n) = dir_a.cross(dir_b).normalized() else {
+        return Vec::new(); // dir_a ∥ dir_b: degenerate arc
+    };
+    let t = n.cross(dir_a); // tangent at dir_a: arc(φ) = dir_a cosφ + t sinφ
+    let at = |phi: f64| dir_a * phi.cos() + t * phi.sin();
+    // Rim crossings: A cosφ + B sinφ = cos(half) ⇒ φ = ψ ± w.
+    let (a, b, cs) = (dir_a.dot(cap.axis), t.dot(cap.axis), cap.half_angle.cos());
+    let h = (a * a + b * b).sqrt();
+    let mut cuts = vec![0.0, arc_angle];
+    if h > 1e-12 {
+        let ratio = cs / h;
+        if ratio.abs() < 1.0 {
+            let (psi, w) = (b.atan2(a), ratio.acos());
+            for cand in [psi - w, psi + w] {
+                for k in -1..=1 {
+                    let phi = cand + f64::from(k) * TAU;
+                    if phi > 1e-12 && phi < arc_angle - 1e-12 {
+                        cuts.push(phi);
+                    }
+                }
+            }
+        }
+    }
+    cuts.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for w in cuts.windows(2) {
+        let (lo, hi) = (w[0], w[1]);
+        if hi - lo < 1e-12 {
+            continue;
+        }
+        if is_buried(at((lo + hi) / 2.0), cap) {
+            match out.last_mut() {
+                Some(last) if (last.1 - lo).abs() < 1e-12 => last.1 = hi,
+                _ => out.push((lo, hi)),
+            }
+        }
+    }
+    out
 }
 
 /// Stage 3b — rewrite one spheric (reentrant) face, trimmed by the neighbour
@@ -539,6 +593,45 @@ mod tests {
                 assert!((x.distance(centers[1]) - probe).abs() < 1e-9);
             }
         }
+    }
+
+    #[test]
+    fn reentrant_arc_burial_intervals() {
+        use super::super::arrangement::SphereCircle;
+        // A 90° arc from +x to +y through (0.707,0.707,0).
+        let da = ctr(1.0, 0.0, 0.0);
+        let db = ctr(0.0, 1.0, 0.0);
+        let arc = std::f64::consts::FRAC_PI_2;
+
+        // Cap toward the arc midpoint, half 20° → buries φ ∈ (25°,65°).
+        let mid = ctr(1.0, 1.0, 0.0).normalized().unwrap();
+        let cap = SphereCircle::new(mid, 20.0_f64.to_radians());
+        let b = reentrant_arc_burial(da, db, &cap);
+        assert_eq!(b.len(), 1);
+        assert!((b[0].0 - 25.0_f64.to_radians()).abs() < 1e-6, "start ≈ 25°");
+        assert!((b[0].1 - 65.0_f64.to_radians()).abs() < 1e-6, "end ≈ 65°");
+
+        // Cap toward dir_a → buries a sub-arc touching φ=0.
+        let cap_a = SphereCircle::new(da, 20.0_f64.to_radians());
+        let ba = reentrant_arc_burial(da, db, &cap_a);
+        assert_eq!(ba.len(), 1);
+        assert!(ba[0].0 < 1e-9 && ba[0].1 > 0.0, "buried at the start");
+
+        // Cap pointing away → nothing buried.
+        let away = SphereCircle::new(
+            ctr(-1.0, -1.0, 0.0).normalized().unwrap(),
+            20.0_f64.to_radians(),
+        );
+        assert!(reentrant_arc_burial(da, db, &away).is_empty());
+
+        // A hemisphere cap toward the midpoint → the whole arc buried.
+        let big = SphereCircle::new(mid, 89.0_f64.to_radians());
+        let bb = reentrant_arc_burial(da, db, &big);
+        assert_eq!(bb.len(), 1);
+        assert!(
+            bb[0].0 < 1e-9 && (bb[0].1 - arc).abs() < 1e-9,
+            "whole arc buried"
+        );
     }
 
     #[test]
