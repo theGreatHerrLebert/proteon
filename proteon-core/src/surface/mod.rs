@@ -34,6 +34,7 @@ pub mod graph;
 pub mod intersect;
 pub mod intervals;
 pub mod mesh;
+pub mod nonradial;
 pub mod patches;
 pub mod registry;
 pub mod rs;
