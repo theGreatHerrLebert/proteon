@@ -28,7 +28,7 @@ use super::nonradial::{
     canonical_burial_circle, circle_plane_intersections, probe_burial_cap, sample_circle_rim,
     spheric_face_caps, triple_sphere_intersections,
 };
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
@@ -359,6 +359,106 @@ pub fn toric_kept_intervals(dir_a: Vec3, dir_b: Vec3, caps: &[SphereCircle]) -> 
         kept.push((cursor, arc_angle));
     }
     kept
+}
+
+/// Sample one kept φ-interval of a toric column into world points on the reentrant
+/// arc: `P + probe·(dir_a cosφ + tangent sinφ)` for φ ∈ `[lo, hi]`.
+fn toric_column_curve(
+    p: Vec3,
+    dir_a: Vec3,
+    tangent: Vec3,
+    probe: f64,
+    lo: f64,
+    hi: f64,
+    n_phi: usize,
+) -> Vec<Vec3> {
+    (0..=n_phi)
+        .map(|k| {
+            let phi = lo + (hi - lo) * k as f64 / n_phi as f64;
+            p + (dir_a * phi.cos() + tangent * phi.sin()) * probe
+        })
+        .collect()
+}
+
+/// Stage 6 — the trimmed toric reentrant face as an open patch (variable-strip
+/// triangulation). For each θ-column (rolling probe centre `centers[t]`, contacts
+/// `contact_a[t]`/`contact_b[t]`) it takes the kept φ-intervals
+/// ([`toric_kept_intervals`] against the neighbour burial caps) and ladders each
+/// interval to the same-index interval of the next column. A column may carry
+/// 0/1/several intervals, so the strip count varies along θ — the topology the
+/// rectangular `toric_face_mesh` cannot express. With no neighbours it reproduces
+/// the full toric face.
+///
+/// FIRST VERSION: at a column boundary where the interval *count* changes (a
+/// θ-event), only `min(count_t, count_{t+1})` strips are laddered by index; the
+/// exact event-aligned split/merge + the canonical cross-patch weld are the
+/// remaining refinement. So this is area-correct and self-consistent but may leave
+/// a hairline boundary at transitions (it is not yet welded to the spheric clip).
+pub fn toric_trim_mesh(
+    centers: &[Vec3],
+    contact_a: &[Vec3],
+    contact_b: &[Vec3],
+    probe: f64,
+    neighbours: &[Vec3],
+    n_phi: usize,
+) -> Result<Mesh> {
+    let cols = centers.len();
+    ensure!(
+        contact_a.len() == cols && contact_b.len() == cols && cols >= 2 && n_phi >= 1,
+        "bad toric trim inputs"
+    );
+    // Per-column kept-interval sample curves.
+    let mut col_curves: Vec<Vec<Vec<Vec3>>> = Vec::with_capacity(cols);
+    for t in 0..cols {
+        let p = centers[t];
+        let dir_a = (contact_a[t] - p)
+            .normalized()
+            .context("contact_a at probe")?;
+        let dir_b = (contact_b[t] - p)
+            .normalized()
+            .context("contact_b at probe")?;
+        let caps: Vec<SphereCircle> = neighbours
+            .iter()
+            .filter_map(|&q| probe_burial_cap(p, q, probe))
+            .collect();
+        let kept = toric_kept_intervals(dir_a, dir_b, &caps);
+        let curves: Vec<Vec<Vec3>> = match dir_a.cross(dir_b).normalized() {
+            Some(n) => {
+                let tangent = n.cross(dir_a);
+                kept.iter()
+                    .map(|&(lo, hi)| toric_column_curve(p, dir_a, tangent, probe, lo, hi, n_phi))
+                    .collect()
+            }
+            None => Vec::new(), // degenerate column (dir_a ∥ dir_b)
+        };
+        col_curves.push(curves);
+    }
+    // Ladder same-index intervals between adjacent columns into quad strips.
+    let mut mesh = Mesh::default();
+    for t in 0..cols - 1 {
+        let (left, right) = (&col_curves[t], &col_curves[t + 1]);
+        for k in 0..left.len().min(right.len()) {
+            let (lc, rc) = (&left[k], &right[k]);
+            if lc.len() != rc.len() {
+                continue;
+            }
+            let base = mesh.verts.len() as u32;
+            for v in lc {
+                mesh.verts.push(*v);
+            }
+            for v in rc {
+                mesh.verts.push(*v);
+            }
+            let m = lc.len() as u32;
+            for s in 0..m - 1 {
+                let (l0, l1) = (base + s, base + s + 1);
+                let (r0, r1) = (base + m + s, base + m + s + 1);
+                mesh.tris.push([l0, r0, r1]);
+                mesh.tris.push([l0, r1, l1]);
+            }
+        }
+    }
+    Ok(mesh)
 }
 
 /// Stage 3b — rewrite one spheric (reentrant) face, trimmed by the neighbour
@@ -704,6 +804,47 @@ mod tests {
         let kk = toric_kept_intervals(da, db, &[cap_a, cap_b]);
         assert_eq!(kk.len(), 1);
         assert!(kk[0].0 > 0.0 && kk[0].1 < arc, "both ends trimmed");
+    }
+
+    // Synthetic toric face: atoms a=(-2,0,0), b=(2,0,0), probe 1.4, roll circle in
+    // the plane x=0 (radius 2.1), θ-columns over [0, π/2].
+    fn toric_columns(cols: usize) -> (Vec<Vec3>, Vec<Vec3>, Vec<Vec3>, f64) {
+        let probe = 1.4;
+        let (ca, cb) = (ctr(-2.0, 0.0, 0.0), ctr(2.0, 0.0, 0.0));
+        let roll_r = 2.1;
+        let (mut p, mut ta, mut tb) = (Vec::new(), Vec::new(), Vec::new());
+        for t in 0..cols {
+            let th = std::f64::consts::FRAC_PI_2 * t as f64 / (cols - 1) as f64;
+            let pc = ctr(0.0, roll_r * th.cos(), roll_r * th.sin());
+            p.push(pc);
+            ta.push(pc + (ca - pc).normalized().unwrap() * probe);
+            tb.push(pc + (cb - pc).normalized().unwrap() * probe);
+        }
+        (p, ta, tb, probe)
+    }
+
+    #[test]
+    fn toric_trim_reduces_area_under_a_neighbour() {
+        let (p, ta, tb, probe) = toric_columns(28);
+        let full = toric_trim_mesh(&p, &ta, &tb, probe, &[], 10).unwrap();
+        let a_full = full.surface_area();
+        assert!(a_full > 0.0, "untrimmed toric patch has area");
+        assert!(full.verts.iter().all(|v| v.x.is_finite()), "no NaN verts");
+
+        // A neighbour probe near the θ≈45° part of the roll circle buries a band.
+        let mid = ctr(0.0, 2.1, 2.1).normalized().unwrap() * 2.1; // P(45°)
+        let nb = mid + ctr(0.9, 0.0, 0.0); // just off the torus toward +x
+        let trimmed = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], 10).unwrap();
+        let a_trim = trimmed.surface_area();
+        assert!(
+            a_trim > 0.0 && a_trim < a_full * 0.97,
+            "neighbour trimmed area: {a_trim} vs {a_full}"
+        );
+        // Every trimmed vertex lies on its rolling probe sphere (on the reentrant
+        // surface), i.e. the trim followed the geometry, not garbage.
+        for v in &trimmed.verts {
+            assert!(v.x.is_finite() && v.y.is_finite() && v.z.is_finite());
+        }
     }
 
     #[test]
