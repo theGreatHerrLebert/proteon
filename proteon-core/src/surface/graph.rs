@@ -16,7 +16,7 @@
 
 use super::geom::{intersect_three_spheres, intersect_two_spheres, Sphere, Vec3};
 use super::intervals::free_intervals;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use std::f64::consts::TAU;
 
 /// Tangency residual (Å) accepting an atom as touched by the probe at an endpoint.
@@ -157,6 +157,68 @@ pub fn enumerate_toric_faces(atoms: &[Sphere], probe: f64) -> Result<Vec<ToricFa
     Ok(faces)
 }
 
+/// A toric face wired into the graph: a free interval of the `[i,j]` roll circle
+/// whose endpoints reference the **canonical** RS faces (indices into
+/// [`SesGraph::rs_faces`]), so every incident patch resolves the same SES corners.
+/// `end_faces[e] == None` only for a full free ring.
+#[derive(Clone, Debug)]
+pub struct ToricArc {
+    pub edge: [usize; 2],
+    pub theta: (f64, f64),
+    pub end_faces: [Option<usize>; 2],
+}
+
+/// The SES element graph: canonical RS faces + toric arcs wired to them. The
+/// half-edge decomposition the general-N assembler stitches.
+#[derive(Clone, Debug)]
+pub struct SesGraph {
+    pub rs_faces: Vec<RsFace>,
+    pub toric: Vec<ToricArc>,
+}
+
+/// Build the SES element graph: enumerate canonical RS faces and toric intervals,
+/// then **link each toric endpoint to its canonical RS face** (matched by atom
+/// triple + nearest probe, validated within tolerance). That shared index is what
+/// makes the incident toric pairs, contact caps and spheric faces resolve the same
+/// SES-vertex positions — the basis for a watertight general-N stitch.
+pub fn build_graph(atoms: &[Sphere], probe: f64) -> Result<SesGraph> {
+    let rs_faces = enumerate_rs_faces(atoms, probe);
+    let toric_faces = enumerate_toric_faces(atoms, probe)?;
+    let mut toric = Vec::with_capacity(toric_faces.len());
+    for tf in &toric_faces {
+        let [i, j] = tf.edge;
+        let roll = intersect_two_spheres(atoms[i].inflated(probe), atoms[j].inflated(probe))
+            .context("toric pair lost its roll circle")?;
+        let thetas = [tf.theta.0, tf.theta.1];
+        let mut end_faces = [None, None];
+        for e in 0..2 {
+            if let Some(k) = tf.ends[e] {
+                let p = roll_point(&roll, thetas[e]);
+                let mut triple = [i, j, k];
+                triple.sort_unstable();
+                let idx = rs_faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| f.atoms == triple)
+                    .min_by(|(_, x), (_, y)| p.distance(x.probe).total_cmp(&p.distance(y.probe)))
+                    .map(|(idx, _)| idx)
+                    .context("toric endpoint has no matching RS face")?;
+                ensure!(
+                    p.distance(rs_faces[idx].probe) < 1e-6,
+                    "toric endpoint probe does not match its canonical RS face"
+                );
+                end_faces[e] = Some(idx);
+            }
+        }
+        toric.push(ToricArc {
+            edge: tf.edge,
+            theta: tf.theta,
+            end_faces,
+        });
+    }
+    Ok(SesGraph { rs_faces, toric })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::geom::Vec3;
@@ -246,6 +308,44 @@ mod tests {
             4,
             "tetra → 4 RS faces"
         );
+    }
+
+    #[test]
+    fn graph_shares_each_rs_face_across_its_three_toric_arcs() {
+        // triangle3: 2 RS faces, 3 toric arcs; each RS face is an endpoint of all
+        // three toric arcs (the half-edge sharing that makes the stitch watertight).
+        let atoms = [
+            sph(0.0, 0.0, 0.0, 1.7),
+            sph(2.5, 0.0, 0.0, 1.7),
+            sph(1.25, 2.165, 0.0, 1.7),
+        ];
+        let g = build_graph(&atoms, 1.4).unwrap();
+        assert_eq!(g.rs_faces.len(), 2);
+        assert_eq!(g.toric.len(), 3);
+        for face_idx in 0..g.rs_faces.len() {
+            let refs = g
+                .toric
+                .iter()
+                .filter(|t| t.end_faces.contains(&Some(face_idx)))
+                .count();
+            assert_eq!(refs, 3, "RS face {face_idx} shared by all 3 toric arcs");
+        }
+        // tetra: every toric endpoint resolves to a canonical RS face (no None on a
+        // bounded arc), so the graph is fully wired.
+        let tetra = [
+            sph(0.0, 0.0, 0.0, 1.6),
+            sph(2.0, 0.0, 0.0, 1.6),
+            sph(1.0, 1.7, 0.0, 1.6),
+            sph(1.0, 0.6, 1.6, 1.6),
+        ];
+        let gt = build_graph(&tetra, 1.4).unwrap();
+        assert_eq!(gt.rs_faces.len(), 4);
+        for t in &gt.toric {
+            assert!(
+                t.end_faces.iter().all(Option::is_some),
+                "tetra toric arcs bounded"
+            );
+        }
     }
 
     #[test]
