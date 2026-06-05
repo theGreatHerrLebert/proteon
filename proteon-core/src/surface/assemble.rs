@@ -649,7 +649,12 @@ pub fn ses_mesh_cleaned(
             rim_i.push(ses_vertex(p, atoms[i]));
             rim_j.push(ses_vertex(p, atoms[j]));
         }
-        // Neighbours = all fixed probes except this arc's own end faces.
+        // Neighbours = all fixed probes except this arc's own end faces (whose
+        // probes coincide with the θ-end columns, so they would self-bury).
+        // KNOWN LIMITATION (codex): excluding an end-face probe globally also
+        // suppresses a genuine *nonlocal* collision if that same probe overlaps a
+        // distant part of a long/near-wrapping arc — a per-column local-vs-nonlocal
+        // distinction would be needed. Negligible on crambin (sub-Å² residual).
         let ends: Vec<usize> = arc.end_faces.iter().flatten().copied().collect();
         let nbrs: Vec<Vec3> = probe_centers
             .iter()
@@ -664,6 +669,7 @@ pub fn ses_mesh_cleaned(
             probe,
             &nbrs,
             Some(roll),
+            wrap,
             n_phi,
         )?);
         contact.entry(i).or_default().push(ContactArc {

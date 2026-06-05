@@ -400,12 +400,19 @@ fn toric_column_curve(
 /// `half = acos(R_roll/probe)`. `None` for a non-singular (ring) torus.
 pub fn spindle_cap(p: Vec3, roll: &Circle3, probe: f64) -> Option<SphereCircle> {
     if roll.radius >= probe {
+        return None; // non-singular (ring) torus: no spindle, ever
+    }
+    // Use the *actual* axial distance |p − O| (≈ R_roll, but the θ-end columns are
+    // snapped to the roll circle only within 1e-6) so the cut is consistent at the
+    // ends (codex).
+    let off = roll.center - p;
+    let len = off.norm();
+    if len >= probe {
         return None;
     }
-    let axis = (roll.center - p).normalized()?;
     Some(SphereCircle::new(
-        axis,
-        (roll.radius / probe).clamp(-1.0, 1.0).acos(),
+        off,
+        (len / probe).clamp(-1.0, 1.0).acos(),
     ))
 }
 
@@ -441,6 +448,7 @@ pub fn toric_trim_mesh(
     probe: f64,
     neighbours: &[Vec3],
     roll: Option<Circle3>,
+    wrap: bool,
     n_phi: usize,
 ) -> Result<Mesh> {
     let cols = centers.len();
@@ -475,34 +483,73 @@ pub fn toric_trim_mesh(
         });
     }
     let mut mesh = Mesh::default();
+    // Consecutive column pairs, plus the wrap pair (last→first) for a free ring
+    // (codex #1: a wrap ring was otherwise left open, losing one θ strip).
     for t in 0..cols - 1 {
-        let (left, right) = (&columns[t], &columns[t + 1]);
-        let (Some(lt), Some(rt)) = (left.tangent, right.tangent) else {
-            continue; // a degenerate column contributes no strip
-        };
-        for &(llo, lhi) in &left.kept {
-            for &(rlo, rhi) in &right.kept {
-                let lo = llo.max(rlo);
-                let hi = lhi.min(rhi);
-                if hi - lo <= ANG_EPS {
-                    continue; // these intervals do not overlap in φ
-                }
-                let lc = toric_column_curve(left.p, left.dir_a, lt, probe, lo, hi, n_phi);
-                let rc = toric_column_curve(right.p, right.dir_a, rt, probe, lo, hi, n_phi);
-                let base = mesh.verts.len() as u32;
-                mesh.verts.extend_from_slice(&lc);
-                mesh.verts.extend_from_slice(&rc);
-                let m = lc.len() as u32;
-                for s in 0..m - 1 {
-                    let (l0, l1) = (base + s, base + s + 1);
-                    let (r0, r1) = (base + m + s, base + m + s + 1);
-                    mesh.tris.push([l0, r0, r1]);
-                    mesh.tris.push([l0, r1, l1]);
-                }
+        connect_toric_columns(&mut mesh, &columns[t], &columns[t + 1], probe, n_phi);
+    }
+    if wrap {
+        connect_toric_columns(&mut mesh, &columns[cols - 1], &columns[0], probe, n_phi);
+    }
+    Ok(mesh)
+}
+
+/// Ladder the kept intervals of two adjacent θ-columns into quad strips. Intervals
+/// are matched by φ-overlap; a **1-to-1 continuation** (the common case — a
+/// boundary moving smoothly with θ) is laddered **parametrically over each
+/// interval's full range**, so the moving-boundary wedge is meshed rather than
+/// dropped (codex #2). Split/merge events (degree ≠ 1) fall back to overlap-clamp,
+/// where the tapering wedge is genuinely small.
+fn connect_toric_columns(
+    mesh: &mut Mesh,
+    left: &ToricColumn,
+    right: &ToricColumn,
+    probe: f64,
+    n_phi: usize,
+) {
+    let (Some(lt), Some(rt)) = (left.tangent, right.tangent) else {
+        return; // a degenerate column contributes no strip
+    };
+    let overlaps = |a: (f64, f64), b: (f64, f64)| a.0.max(b.0) < a.1.min(b.1) - ANG_EPS;
+    let deg = |intervals: &[(f64, f64)], others: &[(f64, f64)], idx: usize| {
+        others
+            .iter()
+            .filter(|&&o| overlaps(intervals[idx], o))
+            .count()
+    };
+    for (li, &(llo, lhi)) in left.kept.iter().enumerate() {
+        for (ri, &(rlo, rhi)) in right.kept.iter().enumerate() {
+            if !overlaps((llo, lhi), (rlo, rhi)) {
+                continue;
+            }
+            // 1-1 continuation → ladder each side over its full interval (captures
+            // the moving boundary); otherwise clamp to the shared φ-overlap.
+            let one_to_one =
+                deg(&left.kept, &right.kept, li) == 1 && deg(&right.kept, &left.kept, ri) == 1;
+            let (lc, rc) = if one_to_one {
+                (
+                    toric_column_curve(left.p, left.dir_a, lt, probe, llo, lhi, n_phi),
+                    toric_column_curve(right.p, right.dir_a, rt, probe, rlo, rhi, n_phi),
+                )
+            } else {
+                let (lo, hi) = (llo.max(rlo), lhi.min(rhi));
+                (
+                    toric_column_curve(left.p, left.dir_a, lt, probe, lo, hi, n_phi),
+                    toric_column_curve(right.p, right.dir_a, rt, probe, lo, hi, n_phi),
+                )
+            };
+            let base = mesh.verts.len() as u32;
+            mesh.verts.extend_from_slice(&lc);
+            mesh.verts.extend_from_slice(&rc);
+            let m = lc.len() as u32;
+            for s in 0..m - 1 {
+                let (l0, l1) = (base + s, base + s + 1);
+                let (r0, r1) = (base + m + s, base + m + s + 1);
+                mesh.tris.push([l0, r0, r1]);
+                mesh.tris.push([l0, r1, l1]);
             }
         }
     }
-    Ok(mesh)
 }
 
 /// Stage 3b — rewrite one spheric (reentrant) face, trimmed by the neighbour
@@ -870,7 +917,7 @@ mod tests {
     #[test]
     fn toric_trim_reduces_area_under_a_neighbour() {
         let (p, ta, tb, probe) = toric_columns(28);
-        let full = toric_trim_mesh(&p, &ta, &tb, probe, &[], None, 10).unwrap();
+        let full = toric_trim_mesh(&p, &ta, &tb, probe, &[], None, false, 10).unwrap();
         let a_full = full.surface_area();
         assert!(a_full > 0.0, "untrimmed toric patch has area");
         assert!(full.verts.iter().all(|v| v.x.is_finite()), "no NaN verts");
@@ -878,7 +925,7 @@ mod tests {
         // A neighbour probe near the θ≈45° part of the roll circle buries a band.
         let mid = ctr(0.0, 2.1, 2.1).normalized().unwrap() * 2.1; // P(45°)
         let nb = mid + ctr(0.9, 0.0, 0.0); // just off the torus toward +x
-        let trimmed = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], None, 10).unwrap();
+        let trimmed = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], None, false, 10).unwrap();
         let a_trim = trimmed.surface_area();
         assert!(
             a_trim > 0.0 && a_trim < a_full * 0.97,
@@ -944,8 +991,8 @@ mod tests {
         );
 
         // On the whole patch it removes the doubled-over sheet (area drops).
-        let raw = toric_trim_mesh(&p, &a, &b, probe, &[], None, 12).unwrap();
-        let clean = toric_trim_mesh(&p, &a, &b, probe, &[], Some(roll), 12).unwrap();
+        let raw = toric_trim_mesh(&p, &a, &b, probe, &[], None, false, 12).unwrap();
+        let clean = toric_trim_mesh(&p, &a, &b, probe, &[], Some(roll), false, 12).unwrap();
         assert!(
             clean.surface_area() < raw.surface_area() * 0.95,
             "spindle cap removed the past-axis sheet: {} vs {}",
@@ -962,7 +1009,7 @@ mod tests {
         let (p, ta, tb, probe) = toric_columns(40);
         let pc = ctr(0.0, 2.1, 2.1).normalized().unwrap() * 2.1; // P(45°)
         let nb = pc + ctr(-1.0, 0.0, 0.0); // toward the atom axis → interior burial
-        let m = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], None, 12).unwrap();
+        let m = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], None, false, 12).unwrap();
         assert!(m.surface_area() > 0.0);
         assert_eq!(
             super::super::intersect::self_intersections(&m, 0.4, 1),
