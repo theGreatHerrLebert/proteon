@@ -77,6 +77,53 @@ pub fn canonical_burial_circle(
     })
 }
 
+/// The 0, 1, or 2 points equidistant `r` from three sphere centres `a, b, c` —
+/// the **triple-probe SES vertices** where singular edges meet (BALL caches these
+/// by sorted face triple). The two solutions are the **branches**, symmetric
+/// about the plane `(a,b,c)`; `branch_sign` tags them by the side of that plane's
+/// canonical normal `(b−a)×(c−a)`. Empty if the centres are collinear or the
+/// three spheres share no common point (`r` too small for the circumradius).
+///
+/// To be canonical (frame-independent), pass `a, b, c` in a fixed order — e.g.
+/// sorted by probe index — so the normal, and hence the branch labelling, is
+/// deterministic for the triple.
+pub fn triple_sphere_intersections(a: Vec3, b: Vec3, c: Vec3, r: f64) -> Vec<Vec3> {
+    let u = b - a;
+    let v = c - a;
+    let uxv = u.cross(v);
+    let n2 = uxv.norm_sq();
+    if n2 < 1e-18 {
+        return Vec::new(); // collinear centres
+    }
+    // Circumcentre of (a,b,c): o − a = ((|u|²v − |v|²u) × (u×v)) / (2|u×v|²).
+    let o = a + (v * u.norm_sq() - u * v.norm_sq()).cross(uxv) * (1.0 / (2.0 * n2));
+    let Some(nh) = uxv.normalized() else {
+        return Vec::new();
+    };
+    // The equidistant line is o + t·nh (nh ⊥ plane, so ⊥ (o−a)); |x−a|=r ⇒
+    // |o−a|² + t² = r².
+    let disc = r * r - (o - a).norm_sq();
+    if disc < -1e-12 {
+        return Vec::new(); // no common point
+    }
+    let t = disc.max(0.0).sqrt();
+    if t < 1e-9 {
+        return vec![o]; // tangent: single point on the plane
+    }
+    vec![o + nh * t, o - nh * t] // branch + then −
+}
+
+/// Which side of the canonical plane `(a,b,c)` a triple-vertex `x` is on: `+1` or
+/// `-1`. Stable branch label for the triple-sphere vertex registry key.
+pub fn branch_sign(x: Vec3, a: Vec3, b: Vec3, c: Vec3) -> i8 {
+    let n = (b - a).cross(c - a);
+    if (x - a).dot(n) >= 0.0 {
+        1
+    } else {
+        -1
+    }
+}
+
 /// Sample a circle's rim at the given `thetas` using its canonical
 /// [`plane_basis`] — a pure function of the circle, so two callers that pass the
 /// same [`Circle3`] and the same `thetas` get bit-identical world points (the
@@ -152,6 +199,49 @@ mod tests {
             assert!((x.distance(centers[0]) - probe).abs() < 1e-12);
             assert!((x.distance(centers[1]) - probe).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn triple_sphere_vertices_are_equidistant_and_branch_symmetric() {
+        let r = 1.4;
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(1.6, 0.0, 0.0);
+        let c = Vec3::new(0.5, 1.5, 0.0);
+        let pts = triple_sphere_intersections(a, b, c, r);
+        assert_eq!(pts.len(), 2, "generic triple → two branches");
+        for x in &pts {
+            for ctr in [a, b, c] {
+                assert!((x.distance(ctr) - r).abs() < 1e-12, "equidistant r");
+            }
+        }
+        // Branches are on opposite sides of plane(a,b,c) and mirror images.
+        assert_eq!(branch_sign(pts[0], a, b, c), 1);
+        assert_eq!(branch_sign(pts[1], a, b, c), -1);
+        // Canonical: same triple in the same order → identical points (the weld
+        // guarantee for triple vertices).
+        let again = triple_sphere_intersections(a, b, c, r);
+        assert_eq!(pts, again);
+    }
+
+    #[test]
+    fn no_triple_vertex_when_spheres_too_far_or_collinear() {
+        let r = 1.4;
+        // Far apart: circumradius > r → no common point.
+        let far = triple_sphere_intersections(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(2.5, 0.0, 0.0),
+            Vec3::new(1.25, 2.5, 0.0),
+            r,
+        );
+        assert!(far.is_empty());
+        // Collinear centres → degenerate.
+        let line = triple_sphere_intersections(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(2.0, 0.0, 0.0),
+            r,
+        );
+        assert!(line.is_empty());
     }
 
     #[test]

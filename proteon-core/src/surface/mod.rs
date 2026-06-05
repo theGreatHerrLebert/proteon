@@ -28,6 +28,7 @@ pub mod arrangement;
 pub mod assemble;
 pub mod cdt;
 pub mod chart;
+pub mod cleaner;
 pub mod elements;
 pub mod geom;
 pub mod graph;
