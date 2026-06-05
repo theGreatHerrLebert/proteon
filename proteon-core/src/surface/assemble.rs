@@ -732,6 +732,12 @@ mod tests {
             let m = ses_mesh_analytic(&atoms, 1.4, 48, 10, 0.05).unwrap();
             assert!(m.is_watertight(), "{name}: SES must be closed");
             assert!(m.is_consistently_oriented(), "{name}: oriented");
+            // Valid embedding, not just combinatorially closed (codex-review).
+            assert_eq!(
+                super::super::intersect::self_intersections(&m, 0.5, 1),
+                0,
+                "{name}: SES must not self-intersect"
+            );
             let (area, vol) = (m.surface_area(), m.signed_volume());
             assert!(vol > 0.0, "{name}: outward");
             assert!(
