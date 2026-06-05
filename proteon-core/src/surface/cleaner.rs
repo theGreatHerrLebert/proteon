@@ -19,8 +19,15 @@
 //! 3. spheric + toric face rewrite onto the singular edges.
 //! 4. richer gate vs BALL (volume, Euler, per-face-type area, …).
 
+use super::arrangement::{arrange_loops, sample_loop};
+use super::chart::fill_spherical_region;
 use super::geom::{plane_basis, Vec3};
-use super::nonradial::{canonical_burial_circle, sample_circle_rim, triple_sphere_intersections};
+use super::mesh::Mesh;
+use super::nonradial::{
+    canonical_burial_circle, probe_burial_cap, sample_circle_rim, spheric_face_caps,
+    triple_sphere_intersections,
+};
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
@@ -203,6 +210,55 @@ pub fn sample_singular_edge(
     sample_circle_rim(&c, &thetas)
 }
 
+/// Stage 3b — rewrite one spheric (reentrant) face, trimmed by the neighbour
+/// probes that collide with its probe `p`. The face is `exposed({3 great circles}
+/// ∪ {burial caps})`; `arrange_loops` resolves the (possibly multivalent)
+/// boundary and `fill_spherical_region` meshes it. The burial portions of the
+/// boundary land on the collision circles `C_pj` (shared seams).
+///
+/// `p` is this RS face's probe centre, `cs` its three contact points, `centers`
+/// all RS-face probe centres, `this_idx` the index of `p` within them. With no
+/// colliding neighbour the result is the original spheric triangle (regression).
+///
+/// NOTE: this meshes the patch in `p`'s own frame; the *cross-face* weld (sampling
+/// the shared burial seam canonically via [`sample_singular_edge`], and the
+/// coordinated toric trim) is the remaining stage-3 wiring.
+pub fn clip_spheric_face(
+    p: Vec3,
+    cs: [Vec3; 3],
+    centers: &[Vec3],
+    this_idx: usize,
+    probe: f64,
+    grid: f64,
+    n_arc: usize,
+) -> Result<Mesh> {
+    let dir = |x: Vec3| (x - p).normalized().context("contact at probe centre");
+    let dirs = [dir(cs[0])?, dir(cs[1])?, dir(cs[2])?];
+    let great = spheric_face_caps(dirs).context("degenerate spheric triple")?;
+    let mut caps = great.to_vec();
+    for (j, &q) in centers.iter().enumerate() {
+        if j != this_idx {
+            if let Some(bc) = probe_burial_cap(p, q, probe) {
+                caps.push(bc);
+            }
+        }
+    }
+    let loops = arrange_loops(&caps)?;
+    let pole = ((dirs[0] + dirs[1] + dirs[2]) * (1.0 / 3.0))
+        .normalized()
+        .context("spheric centroid degenerate")?;
+    let world: Vec<Vec<Vec3>> = loops
+        .iter()
+        .map(|l| {
+            sample_loop(l, &caps, n_arc)
+                .into_iter()
+                .map(|d| p + d * probe)
+                .collect()
+        })
+        .collect();
+    fill_spherical_region(p, probe, &world, pole, grid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +311,83 @@ mod tests {
             assert!(!t013.contains(x));
         }
         assert_eq!(reg.len(), t012.len() + t013.len());
+    }
+
+    // A spheric triangle ~40° around +z (wide enough for a burial cap to bite an
+    // edge without swallowing the whole face).
+    fn wide_face() -> (Vec3, [Vec3; 3]) {
+        let p = ctr(0.0, 0.0, 0.0);
+        let probe = 1.4;
+        let (s, c) = (40.0_f64.to_radians().sin(), 40.0_f64.to_radians().cos());
+        let cs = std::array::from_fn(|k| {
+            let phi = TAU * k as f64 / 3.0;
+            p + Vec3::new(s * phi.cos(), s * phi.sin(), c) * probe
+        });
+        (p, cs)
+    }
+
+    #[test]
+    fn clip_with_no_or_far_neighbour_is_the_original_face() {
+        let (p, cs) = wide_face();
+        let probe = 1.4;
+        let alone = clip_spheric_face(p, cs, &[p], 0, probe, 0.07, 14).unwrap();
+        assert_eq!(alone.euler_characteristic(), 1, "open spheric disk");
+        let a0 = alone.surface_area();
+        assert!(a0 > 0.0);
+        // A neighbour beyond 2·probe contributes no burial cap → identical.
+        let far = clip_spheric_face(p, cs, &[p, ctr(5.0, 0.0, 0.0)], 0, probe, 0.07, 14).unwrap();
+        assert!(
+            (far.surface_area() - a0).abs() < 1e-9,
+            "far neighbour changes nothing"
+        );
+    }
+
+    #[test]
+    fn clip_with_colliding_neighbour_removes_area_and_stays_a_disk() {
+        let (p, cs) = wide_face();
+        let probe = 1.4;
+        let q = ctr(1.2, 0.0, 0.8); // |p−q| = 1.44 < 2.8, biased toward +x edge
+        let without = clip_spheric_face(p, cs, &[p], 0, probe, 0.06, 18).unwrap();
+        let with = clip_spheric_face(p, cs, &[p, q], 0, probe, 0.06, 18).unwrap();
+        assert_eq!(
+            with.euler_characteristic(),
+            1,
+            "clipped face is still a disk"
+        );
+        assert!(
+            with.surface_area() < without.surface_area() * 0.98,
+            "neighbour burial removed area: {} vs {}",
+            with.surface_area(),
+            without.surface_area()
+        );
+        // Cross-check the kept area against a grid estimate of the directions that
+        // are inside the triangle AND outside q's ball.
+        let great = spheric_face_caps([
+            (cs[0] - p).normalized().unwrap(),
+            (cs[1] - p).normalized().unwrap(),
+            (cs[2] - p).normalized().unwrap(),
+        ])
+        .unwrap();
+        let mut hit = 0usize;
+        let n = 300_000;
+        let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+        for sidx in 0..n {
+            let y = 1.0 - 2.0 * (sidx as f64 + 0.5) / n as f64;
+            let rr = (1.0 - y * y).max(0.0).sqrt();
+            let th = golden * sidx as f64;
+            let d = Vec3::new(rr * th.cos(), y, rr * th.sin());
+            let in_tri = super::super::arrangement::is_exposed(d, &great);
+            let outside_q = (p + d * probe).distance(q) >= probe;
+            if in_tri && outside_q {
+                hit += 1;
+            }
+        }
+        let grid = 4.0 * std::f64::consts::PI * probe * probe * hit as f64 / n as f64;
+        assert!(
+            (with.surface_area() - grid).abs() / grid < 0.03,
+            "clipped area {} within 3% of grid {grid}",
+            with.surface_area()
+        );
     }
 
     #[test]
