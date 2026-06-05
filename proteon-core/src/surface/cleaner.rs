@@ -20,7 +20,7 @@
 //! 4. richer gate vs BALL (volume, Euler, per-face-type area, …).
 
 use super::geom::{plane_basis, Vec3};
-use super::nonradial::{canonical_burial_circle, triple_sphere_intersections};
+use super::nonradial::{canonical_burial_circle, sample_circle_rim, triple_sphere_intersections};
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
@@ -177,6 +177,32 @@ pub fn singular_edges(
     edges
 }
 
+/// Sample one singular edge into world points on the canonical collision circle
+/// `C_ij` (`n_interior` interior points plus both corners). Because the edge θ-
+/// range and the circle are both canonical (keyed on the unordered pair), the two
+/// faces that share this seam call this and get **bit-identical** points — the
+/// weld guarantee for the stage-3 face rewrite. Caller passes the same edge from
+/// [`singular_edges`].
+pub fn sample_singular_edge(
+    i: usize,
+    j: usize,
+    centers: &[Vec3],
+    probe: f64,
+    edge: SingularEdge,
+    n_interior: usize,
+) -> Vec<Vec3> {
+    let Some(c) = canonical_burial_circle(i, j, centers, probe) else {
+        return Vec::new();
+    };
+    let thetas: Vec<f64> = (0..=n_interior + 1)
+        .map(|k| {
+            edge.theta_start
+                + (edge.theta_end - edge.theta_start) * k as f64 / (n_interior + 1) as f64
+        })
+        .collect();
+    sample_circle_rim(&c, &thetas)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +255,32 @@ mod tests {
             assert!(!t013.contains(x));
         }
         assert_eq!(reg.len(), t012.len() + t013.len());
+    }
+
+    #[test]
+    fn the_singular_seam_is_shared_identically_by_both_faces() {
+        // The collision seam between probes i and j must be the SAME canonical
+        // geometry whichever probe owns the face — the watertight weld of stage 3.
+        let probe = 1.4;
+        // 0,1 collide; a single third probe buries one stretch, leaving an arc.
+        let centers = [ctr(0.0, 0.0, 0.0), ctr(2.0, 0.0, 0.0), ctr(1.0, 0.9, 0.3)];
+        let mut r0 = SingularVertices::new();
+        let mut r1 = SingularVertices::new();
+        let e01 = singular_edges(0, 1, &centers, probe, &mut r0);
+        let e10 = singular_edges(1, 0, &centers, probe, &mut r1);
+        // Symmetric seam: identical edge intervals regardless of pair order.
+        assert_eq!(e01, e10, "singular edges are symmetric in (i,j)");
+        assert!(!e01.is_empty());
+        for &edge in &e01 {
+            let s0 = sample_singular_edge(0, 1, &centers, probe, edge, 12);
+            let s1 = sample_singular_edge(1, 0, &centers, probe, edge, 12);
+            assert_eq!(s0, s1, "bit-identical samples → weldable seam");
+            // Every sample lies on both probe spheres (it is on C_01).
+            for x in &s0 {
+                assert!((x.distance(centers[0]) - probe).abs() < 1e-9);
+                assert!((x.distance(centers[1]) - probe).abs() < 1e-9);
+            }
+        }
     }
 
     #[test]
