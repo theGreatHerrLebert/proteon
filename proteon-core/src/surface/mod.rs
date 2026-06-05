@@ -30,6 +30,7 @@ pub mod cdt;
 pub mod chart;
 pub mod elements;
 pub mod geom;
+pub mod intervals;
 pub mod mesh;
 pub mod patches;
 pub mod registry;
