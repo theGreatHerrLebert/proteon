@@ -598,6 +598,126 @@ pub fn ses_mesh_analytic(
     Ok(mesh)
 }
 
+/// The **cleaned** analytic SES: like [`ses_mesh_analytic`] but with the
+/// singularity cleaner active — toric faces trimmed against colliding neighbour
+/// probes *and* their own spindle ([`cleaner::toric_trim_mesh`]), spheric faces
+/// clipped by colliding neighbours ([`cleaner::clip_spheric_face`]). Contact caps
+/// are meshed as before.
+///
+/// This returns the **concatenated** cleaned patches (no bit-identical weld yet —
+/// the cleaner seams sample in their own frames; the canonical cross-patch weld is
+/// the remaining step). Its `surface_area()` is therefore the rigorous cleaned
+/// area (orientation-independent), the metric that proves the cleaner closes the
+/// gap to BALL; watertightness awaits the weld.
+pub fn ses_mesh_cleaned(
+    atoms: &[Sphere],
+    probe: f64,
+    n_theta: usize,
+    n_phi: usize,
+    grid: f64,
+) -> Result<Mesh> {
+    use super::cleaner::{clip_spheric_face, toric_trim_mesh};
+    ensure!(
+        n_theta >= 3 && n_phi >= 1 && grid > 0.0,
+        "bad sampling params"
+    );
+    let g = build_graph(atoms, probe)?;
+    let probe_centers: Vec<Vec3> = g.rs_faces.iter().map(|f| f.probe).collect();
+    let mut mesh = Mesh::default();
+    let mut contact: HashMap<usize, Vec<ContactArc>> = HashMap::new();
+
+    // --- toric faces: trimmed against colliding neighbours + the spindle ---
+    for arc in &g.toric {
+        let [i, j] = arc.edge;
+        let roll = intersect_two_spheres(atoms[i].inflated(probe), atoms[j].inflated(probe))
+            .context("toric pair lost its roll circle")?;
+        let (u, v) = plane_basis(roll.normal);
+        let wrap = arc.end_faces[0].is_none();
+        let (s, e) = arc.theta;
+        let count = if wrap { n_theta } else { n_theta + 1 };
+        let (mut cen, mut rim_i, mut rim_j) = (Vec::new(), Vec::new(), Vec::new());
+        for t in 0..count {
+            let p = if !wrap && t == 0 {
+                g.rs_faces[arc.end_faces[0].unwrap()].probe
+            } else if !wrap && t == n_theta {
+                g.rs_faces[arc.end_faces[1].unwrap()].probe
+            } else {
+                let th = s + (e - s) * t as f64 / n_theta as f64;
+                roll.center + (u * th.cos() + v * th.sin()) * roll.radius
+            };
+            cen.push(p);
+            rim_i.push(ses_vertex(p, atoms[i]));
+            rim_j.push(ses_vertex(p, atoms[j]));
+        }
+        // Neighbours = all fixed probes except this arc's own end faces.
+        let ends: Vec<usize> = arc.end_faces.iter().flatten().copied().collect();
+        let nbrs: Vec<Vec3> = probe_centers
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| !ends.contains(k))
+            .map(|(_, &c)| c)
+            .collect();
+        mesh.append(&toric_trim_mesh(
+            &cen,
+            &rim_i,
+            &rim_j,
+            probe,
+            &nbrs,
+            Some(roll),
+            n_phi,
+        )?);
+        contact.entry(i).or_default().push(ContactArc {
+            ends: arc.end_faces,
+            neighbour: j,
+            pts: rim_i,
+        });
+        contact.entry(j).or_default().push(ContactArc {
+            ends: arc.end_faces,
+            neighbour: i,
+            pts: rim_j,
+        });
+    }
+
+    // --- contact caps (untrimmed for now) ---
+    for (&a, arcs) in &contact {
+        let loops = walk_cap_loops(arcs)?;
+        let caps: Vec<SphereCircle> = arcs
+            .iter()
+            .map(|c| c.neighbour)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|nb| buried_cap(atoms[a], atoms[nb], probe))
+            .collect();
+        let pole = pick_chart_pole(&caps).context("contact cap pole")?;
+        mesh.append(&fill_spherical_region(
+            atoms[a].center,
+            atoms[a].radius,
+            &loops,
+            pole,
+            grid,
+        )?);
+    }
+
+    // --- spheric faces: clipped by colliding neighbours ---
+    for (idx, f) in g.rs_faces.iter().enumerate() {
+        let cs = [
+            ses_vertex(f.probe, atoms[f.atoms[0]]),
+            ses_vertex(f.probe, atoms[f.atoms[1]]),
+            ses_vertex(f.probe, atoms[f.atoms[2]]),
+        ];
+        mesh.append(&clip_spheric_face(
+            f.probe,
+            cs,
+            &probe_centers,
+            idx,
+            probe,
+            grid,
+            n_phi,
+        )?);
+    }
+    Ok(mesh)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::elements::buried_cap;
@@ -747,6 +867,32 @@ mod tests {
             assert!(
                 (vol - ball_vol).abs() / ball_vol < 0.02,
                 "{name}: volume {vol} within 2% of ball {ball_vol}"
+            );
+        }
+    }
+
+    #[test]
+    fn cleaned_assembler_is_inert_without_collisions() {
+        // tri/tetra/chain have no probe-probe collisions and no spindle, so the
+        // cleaned assembler must reproduce the analytic area (cleaner is a no-op).
+        let tetra = vec![
+            sph(0.0, 0.0, 0.0, 1.6),
+            sph(2.0, 0.0, 0.0, 1.6),
+            sph(1.0, 1.7, 0.0, 1.6),
+            sph(1.0, 0.6, 1.6, 1.6),
+        ];
+        let chain = vec![
+            sph(0.0, 0.0, 0.0, 1.5),
+            sph(2.6, 0.0, 0.0, 1.5),
+            sph(5.2, 0.0, 0.0, 1.5),
+            sph(7.8, 0.0, 0.0, 1.5),
+        ];
+        for (name, atoms, ball_area) in [("tetra", tetra, 74.1161), ("chain", chain, 96.7732)] {
+            let cleaned = ses_mesh_cleaned(&atoms, 1.4, 48, 10, 0.05).unwrap();
+            let area = cleaned.surface_area();
+            assert!(
+                (area - ball_area).abs() / ball_area < 0.02,
+                "{name}: cleaned area {area} within 2% of ball {ball_area} (cleaner inert)"
             );
         }
     }
