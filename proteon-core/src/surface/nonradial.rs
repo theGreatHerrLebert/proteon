@@ -15,7 +15,7 @@
 //! triangle boundary builds on it.
 
 use super::arrangement::SphereCircle;
-use super::geom::{plane_basis, Circle3, Vec3};
+use super::geom::{plane_basis, Circle3, Plane3, Vec3};
 
 /// The cap of probe-sphere `p` that is buried inside neighbouring probe `q` (both
 /// radius `probe`). Directions from `p` pointing toward `q` within the returned
@@ -131,6 +131,36 @@ pub fn branch_sign(x: Vec3, a: Vec3, b: Vec3, c: Vec3) -> i8 {
     } else {
         -1
     }
+}
+
+/// The 0, 1, or 2 points where a 3-D circle `c` crosses a plane — used for the
+/// **great-circle corner** where a collision circle `C_ij` meets a contact great
+/// circle (the spheric↔toric boundary). Each point carries a branch label (`+1`
+/// for the `+acos`, `-1` for `−acos`, `0` tangent) so it interns canonically.
+/// `plane` uses the geom convention `normal·x = −d`.
+pub fn circle_plane_intersections(c: &Circle3, plane: &Plane3) -> Vec<(Vec3, i8)> {
+    let (u, v) = plane_basis(c.normal);
+    // point = c.center + r(u cosθ + v sinθ); plane: n·point = −d.
+    // ⇒ A cosθ + B sinθ = C, with A,B,C below.
+    let a = c.radius * plane.normal.dot(u);
+    let b = c.radius * plane.normal.dot(v);
+    let cc = -plane.d - plane.normal.dot(c.center);
+    let h = (a * a + b * b).sqrt();
+    if h < 1e-15 {
+        return Vec::new(); // circle lies in a plane parallel to `plane`
+    }
+    let ratio = cc / h;
+    let tol = 1e-9;
+    if ratio.abs() > 1.0 + tol {
+        return Vec::new(); // no crossing
+    }
+    let base = b.atan2(a);
+    let pt = |th: f64| c.center + (u * th.cos() + v * th.sin()) * c.radius;
+    if ratio.abs() >= 1.0 - tol {
+        return vec![(pt(base), 0)]; // tangent
+    }
+    let off = ratio.clamp(-1.0, 1.0).acos();
+    vec![(pt(base + off), 1), (pt(base - off), -1)]
 }
 
 /// Sample a circle's rim at the given `thetas` using its canonical
@@ -254,6 +284,38 @@ mod tests {
             r,
         );
         assert!(line.is_empty());
+    }
+
+    #[test]
+    fn circle_plane_crossings_lie_on_both() {
+        use super::super::geom::Circle3;
+        let c = Circle3 {
+            center: Vec3::new(1.0, 0.0, 0.0),
+            normal: Vec3::new(1.0, 0.0, 0.0),
+            radius: 0.8,
+        }; // circle in the plane x=1, around (1,0,0)
+           // A plane through the circle: y = 0 (normal (0,1,0), n·x = 0 ⇒ d = 0).
+        let plane = Plane3 {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: 0.0,
+        };
+        let pts = circle_plane_intersections(&c, &plane);
+        assert_eq!(pts.len(), 2);
+        assert_eq!(pts[0].1, 1);
+        assert_eq!(pts[1].1, -1);
+        for (x, _) in &pts {
+            assert!(
+                (x.distance(c.center) - c.radius).abs() < 1e-12,
+                "on the circle"
+            );
+            assert!(x.dot(plane.normal).abs() < 1e-12, "on the plane y=0");
+        }
+        // A plane missing the circle → no crossing.
+        let far = Plane3 {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: -5.0,
+        };
+        assert!(circle_plane_intersections(&c, &far).is_empty());
     }
 
     #[test]

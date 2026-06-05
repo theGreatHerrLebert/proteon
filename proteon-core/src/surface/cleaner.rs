@@ -10,34 +10,44 @@
 //! live on the pairwise probe-intersection circles, meeting at **triple-probe
 //! vertices**. This module ports that, staged:
 //!
-//! 1. [`SingularVertices`] — the canonical triple-probe vertex registry (this
-//!    file): the 0/1/2 points equidistant `probe` from three probe centres,
-//!    interned by `(sorted triple, branch)` so every incident edge/face looks up
-//!    bit-identical coordinates (the weld guarantee). Three spheres give two
-//!    branches, so the branch bit is part of the key (codex Q2).
+//! 1. [`SingularVertices`] — the **unified boundary-event registry**: triple-probe
+//!    vertices `(sorted i,j,k, branch)` *and* great-circle corners `(owner i,
+//!    probe j, sorted atoms, branch)`, interned in one pool so every incident
+//!    patch looks up bit-identical coordinates (the weld guarantee; `welded()`
+//!    compares `to_bits()`). The branch bit is part of each key (codex Q2/Q6).
 //! 2. singular edges on each `C_ij` split by those vertices + global exposure.
-//! 3. spheric + toric face rewrite onto the singular edges.
+//! 3. spheric + toric face rewrite onto the singular edges (`clip_spheric_face`
+//!    is the spheric half; the toric event-aligned trim is next).
 //! 4. richer gate vs BALL (volume, Euler, per-face-type area, …).
 
 use super::arrangement::{arrange_loops, sample_loop};
 use super::chart::fill_spherical_region;
-use super::geom::{plane_basis, Vec3};
+use super::geom::{plane_basis, Plane3, Vec3};
 use super::mesh::Mesh;
 use super::nonradial::{
-    canonical_burial_circle, probe_burial_cap, sample_circle_rim, spheric_face_caps,
-    triple_sphere_intersections,
+    canonical_burial_circle, circle_plane_intersections, probe_burial_cap, sample_circle_rim,
+    spheric_face_caps, triple_sphere_intersections,
 };
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
-/// Canonical registry of triple-probe SES vertices. Keyed by the **sorted** probe
-/// triple plus the branch side (`+1`/`-1`), so any permutation of a triple and
-/// any incident face resolve the same interned point.
+/// Unified canonical registry of SES boundary-event vertices (codex review): the
+/// single source of truth so every incident patch looks up **bit-identical**
+/// coordinates (`Mesh::welded()` compares `f64::to_bits()`, so mathematical
+/// equality is not enough). Two event kinds, one shared point pool:
+///
+/// - **triple-probe vertices** — keyed `(sorted i,j,k, branch)`; where three
+///   collision circles / singular edges meet.
+/// - **great-circle corners** — keyed `(owner probe i, probe j, sorted atoms a,b,
+///   branch)`; where a collision circle `C_ij` crosses a contact great circle
+///   (the spheric↔toric boundary on sphere `i`). Both the spheric clip of face
+///   `i` and the toric trim along edge `(a,b)` resolve the same corner.
 #[derive(Default)]
 pub struct SingularVertices {
     points: Vec<Vec3>,
-    index: HashMap<([usize; 3], i8), usize>,
+    triple_index: HashMap<([usize; 3], i8), usize>,
+    corner_index: HashMap<(usize, usize, [usize; 2], i8), usize>,
 }
 
 impl SingularVertices {
@@ -82,10 +92,46 @@ impl SingularVertices {
         // against near-degenerate triples that a coordinate-derived sign could
         // collapse onto one key.
         for (x, branch) in triple_sphere_intersections(a, b, c, probe) {
-            let id = *self.index.entry((tri, branch)).or_insert_with(|| {
+            let id = *self.triple_index.entry((tri, branch)).or_insert_with(|| {
                 self.points.push(x);
                 self.points.len() - 1
             });
+            ids.push(id);
+        }
+        ids
+    }
+
+    /// Intern the **great-circle corner(s)** where collision circle `C_ij` crosses
+    /// a contact great circle on sphere `i` — the plane through probe `i` and the
+    /// toric axis of atoms `(a, b)` (`great_plane`). Keyed `(i, j, sorted{a,b},
+    /// branch)` so the spheric clip of face `i` and the toric trim of edge `(a,b)`
+    /// resolve the **same** interned point. The key — not the recomputed geometry —
+    /// guarantees bit-identity: the first caller fixes the coordinate, the second
+    /// looks it up. Empty if the probes do not overlap or the circle misses the
+    /// plane.
+    pub fn intern_corner(
+        &mut self,
+        i: usize,
+        j: usize,
+        atoms: [usize; 2],
+        centers: &[Vec3],
+        probe: f64,
+        great_plane: &Plane3,
+    ) -> Vec<usize> {
+        let Some(c) = canonical_burial_circle(i, j, centers, probe) else {
+            return Vec::new();
+        };
+        let mut ab = atoms;
+        ab.sort_unstable();
+        let mut ids = Vec::new();
+        for (x, branch) in circle_plane_intersections(&c, great_plane) {
+            let id = *self
+                .corner_index
+                .entry((i, j, ab, branch))
+                .or_insert_with(|| {
+                    self.points.push(x);
+                    self.points.len() - 1
+                });
             ids.push(id);
         }
         ids
@@ -388,6 +434,39 @@ mod tests {
             "clipped area {} within 3% of grid {grid}",
             with.surface_area()
         );
+    }
+
+    #[test]
+    fn great_circle_corner_is_interned_once_for_both_consumers() {
+        // C_01 lives in the plane x=1 around (1,0,0); the contact great plane y=0
+        // (through probe 0 at the origin) cuts it at (1,0,±0.98).
+        let probe = 1.4;
+        let centers = [ctr(0.0, 0.0, 0.0), ctr(2.0, 0.0, 0.0)];
+        let plane = Plane3 {
+            normal: ctr(0.0, 1.0, 0.0),
+            d: 0.0,
+        };
+        let mut reg = SingularVertices::new();
+        // Consumer A = the spheric clip of face 0; consumer B = the toric trim of
+        // edge (3,5). Same key → identical interned ids, no new points.
+        let a = reg.intern_corner(0, 1, [3, 5], &centers, probe, &plane);
+        let b = reg.intern_corner(0, 1, [5, 3], &centers, probe, &plane);
+        assert_eq!(a.len(), 2);
+        assert_eq!(a, b, "same corner key → same ids for both consumers");
+        assert_eq!(reg.len(), 2, "interned once");
+        for &id in &a {
+            let x = reg.point(id);
+            assert!((x.distance(centers[0]) - probe).abs() < 1e-9, "on sphere 0");
+            assert!(
+                (x.distance(centers[1]) - probe).abs() < 1e-9,
+                "on sphere 1 (C_01)"
+            );
+            assert!(x.dot(plane.normal).abs() < 1e-9, "on the great plane");
+        }
+        // A different edge is a different event (distinct key).
+        let other = reg.intern_corner(0, 1, [3, 9], &centers, probe, &plane);
+        assert_eq!(reg.len(), 4);
+        assert!(other.iter().all(|x| !a.contains(x)));
     }
 
     #[test]
