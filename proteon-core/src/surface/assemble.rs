@@ -94,30 +94,28 @@ fn probe_center_from_contact(t_a: Vec3, a: Sphere, probe: f64) -> Option<Vec3> {
     Some(a.center + dir * (a.radius + probe))
 }
 
-/// Mesh a toric (reentrant) face between atoms `a` and `b` from its two φ-rim
-/// chains: `rim_a`/`rim_b` are the **same-θ** contact points on `a`/`b` (each θ a
-/// probe position around the roll circle; shared with the two contact caps). At
-/// each θ the reentrant surface is the probe-sphere arc from `rim_a[t]` to
-/// `rim_b[t]`, sampled with `n_phi` interior points. `wrap` closes the θ-ring for
-/// a *free* toric face (no spheric faces); a bounded face leaves the two θ-end
-/// columns (the concave arcs) as its open boundary, shared with the spheric faces.
+/// Mesh a toric (reentrant) face from its θ-aligned probe-centre chain and the two
+/// φ-rims: `probe_centers[t]` is the probe at column `t`, `rim_a[t]`/`rim_b[t]` its
+/// contacts on the two atoms (each on `probe_centers[t]`'s sphere). At each θ the
+/// reentrant surface is the probe-sphere arc from `rim_a[t]` to `rim_b[t]` with
+/// `n_phi` interior points. `wrap` closes the θ-ring for a *free* toric face; a
+/// bounded face leaves its two θ-end columns (the concave arcs) as the open
+/// boundary shared with the spheric faces.
 ///
-/// **Contract** (codex-review): the two rims must be the *same* probe positions —
-/// `rim_a[t]` and `rim_b[t]` are the contacts of one probe centred at `P_t`. This
-/// is enforced (`|rim_b[t] − P_t| ≈ probe`); the assembler must therefore derive
-/// both rims from one shared roll-circle (probe-centre) chain, not sample the two
-/// contact circles independently. Every vertex then lies exactly on its primitive.
+/// Taking the probe-centre chain explicitly (rather than recovering it from a rim)
+/// is what makes the θ-end concave arcs **bit-identical** to the spheric faces'
+/// edges — both use the same exact probe centre — so they weld watertight.
 pub fn toric_face_mesh(
-    a: Sphere,
     rim_a: &[Vec3],
     rim_b: &[Vec3],
+    probe_centers: &[Vec3],
     probe: f64,
     n_phi: usize,
     wrap: bool,
 ) -> Result<Mesh> {
     ensure!(
-        rim_a.len() == rim_b.len(),
-        "φ-rims must be θ-aligned (equal length)"
+        rim_a.len() == rim_b.len() && rim_a.len() == probe_centers.len(),
+        "toric φ-rims and probe-centre chain must be θ-aligned (equal length)"
     );
     let n_theta = rim_a.len();
     ensure!(
@@ -128,17 +126,12 @@ pub fn toric_face_mesh(
     let row = n_phi + 2; // rim_a + n_phi interior + rim_b
     let mut verts = Vec::with_capacity(n_theta * row);
     for t in 0..n_theta {
-        let p = probe_center_from_contact(rim_a[t], a, probe)
-            .context("toric rim point coincides with its atom centre")?;
-        // Misaligned rims (rim_b[t] not on P_t's probe sphere) would tear the
-        // torus — refuse rather than emit twisted geometry.
+        let p = probe_centers[t];
+        // Both rims must lie on this probe sphere — else the torus tears.
         ensure!(
-            (rim_a[t].distance(a.center) - a.radius).abs() < 1e-6,
-            "toric rim_a[{t}] is not on atom a"
-        );
-        ensure!(
-            (rim_b[t].distance(p) - probe).abs() < 1e-6,
-            "toric rim_a/rim_b at θ={t} are not the same probe position"
+            (rim_a[t].distance(p) - probe).abs() < 1e-6
+                && (rim_b[t].distance(p) - probe).abs() < 1e-6,
+            "toric rims at θ={t} are not on probe_centers[{t}]'s sphere"
         );
         verts.push(rim_a[t]);
         verts.extend(arc_on_sphere(p, probe, rim_a[t], rim_b[t], n_phi));
@@ -185,21 +178,23 @@ pub fn two_atom_ses(
 
     let circle_a = contact_circle(a, b, probe).context("atoms share no toric face")?;
     let (u, v) = plane_basis(circle_a.normal);
-    // One probe-position sweep defines BOTH rims (same probe → θ-aligned).
+    // One probe-position sweep defines BOTH rims + the probe-centre chain.
     let mut rim_a = Vec::with_capacity(n_theta);
     let mut rim_b = Vec::with_capacity(n_theta);
+    let mut centers = Vec::with_capacity(n_theta);
     for t in 0..n_theta {
         let th = TAU * t as f64 / n_theta as f64;
         let ta = circle_a.center + (u * th.cos() + v * th.sin()) * circle_a.radius;
         let p = probe_center_from_contact(ta, a, probe).context("degenerate rim point")?;
         rim_a.push(ta);
         rim_b.push(b.center + (p - b.center).normalized().context("probe at b centre")? * b.radius);
+        centers.push(p);
     }
 
     let toward_b = (b.center - a.center)
         .normalized()
         .context("coincident atoms")?;
-    let mut mesh = toric_face_mesh(a, &rim_a, &rim_b, probe, n_phi, true)?;
+    let mut mesh = toric_face_mesh(&rim_a, &rim_b, &centers, probe, n_phi, true)?;
     // Caps: boundary = the *same* rim Vec the toric used (→ exact weld). Pole away
     // from the neighbour (the buried cap's antipode), deep in the exposed region.
     mesh.append(&fill_spherical_region(
@@ -218,6 +213,159 @@ pub fn two_atom_ses(
     )?);
 
     let mut mesh = mesh.welded(); // fuse the bit-identical shared rims
+    mesh.orient_consistently();
+    if mesh.signed_volume() < 0.0 {
+        mesh.flip();
+    }
+    Ok(mesh)
+}
+
+/// The full analytic SES of **three mutually-contacting atoms** (the triangle3
+/// case): 3 multi-hole contact caps + 3 bounded toric faces + 2 spheric faces,
+/// stitched watertight by bit-identical shared samples keyed on probe position.
+///
+/// Requires exactly two RS faces (a probe resting on the triple from each side).
+/// `n_theta` toric θ-columns, `n_phi` reentrant-arc samples (shared between toric
+/// θ-ends and spheric edges), `grid` cap/spheric chart spacing.
+pub fn triangle3_ses(
+    atoms: [Sphere; 3],
+    probe: f64,
+    n_theta: usize,
+    n_phi: usize,
+    grid: f64,
+) -> Result<Mesh> {
+    use super::elements::{arc_on_sphere, ses_vertex};
+    use super::geom::{intersect_two_spheres, plane_basis};
+    use super::rs;
+    use std::collections::HashMap;
+    use std::f64::consts::TAU;
+
+    let r = rs::compute(&atoms, probe);
+    ensure!(
+        r.faces.len() == 2,
+        "triangle3 expects two RS faces (probe on each side), got {}",
+        r.faces.len()
+    );
+    let probes = [r.faces[0].probe_center, r.faces[1].probe_center];
+    // SES corner: the contact of probe `f` on atom `a` (bit-identical everywhere).
+    let corner = |f: usize, a: usize| ses_vertex(probes[f], atoms[a]);
+
+    // For each ordered pair (i,j): the contact chain on atom i as the probe sweeps
+    // the free arc P0→P1 of the (i,j) roll circle. rim_of[(i,j)][0]=corner(0,i),
+    // last=corner(1,i); same probe positions for (i,j) and (j,i) → θ-aligned.
+    let mut rim_of: HashMap<(usize, usize), Vec<Vec3>> = HashMap::new();
+    let mut centers_of: HashMap<(usize, usize), Vec<Vec3>> = HashMap::new();
+    for &(i, j, k) in &[(0usize, 1usize, 2usize), (0, 2, 1), (1, 2, 0)] {
+        let roll = intersect_two_spheres(atoms[i].inflated(probe), atoms[j].inflated(probe))
+            .context("pair shares no roll circle")?;
+        let (u, v) = plane_basis(roll.normal);
+        let recon = |th: f64| roll.center + (u * th.cos() + v * th.sin()) * roll.radius;
+        let ang = |p: Vec3| {
+            let d = p - roll.center;
+            let t = d.dot(v).atan2(d.dot(u));
+            if t < 0.0 {
+                t + TAU
+            } else {
+                t
+            }
+        };
+        let (th0, th1) = (ang(probes[0]), ang(probes[1]));
+        // Free arc = the side where the probe clears the third atom k.
+        let span_inc = (th1 - th0).rem_euclid(TAU);
+        let pmid = recon(th0 + span_inc / 2.0);
+        let span = if pmid.distance(atoms[k].center) >= atoms[k].radius + probe {
+            span_inc
+        } else {
+            span_inc - TAU
+        };
+        let (mut ri, mut rj, mut cen) = (
+            Vec::with_capacity(n_theta + 1),
+            Vec::with_capacity(n_theta + 1),
+            Vec::with_capacity(n_theta + 1),
+        );
+        for t in 0..=n_theta {
+            let p = if t == 0 {
+                probes[0]
+            } else if t == n_theta {
+                probes[1]
+            } else {
+                recon(th0 + span * t as f64 / n_theta as f64)
+            };
+            ri.push(ses_vertex(p, atoms[i]));
+            rj.push(ses_vertex(p, atoms[j]));
+            cen.push(p);
+        }
+        rim_of.insert((i, j), ri);
+        rim_of.insert((j, i), rj);
+        centers_of.insert((i, j), cen);
+    }
+
+    let mut mesh = Mesh::default();
+
+    // 3 bounded toric faces.
+    for &(i, j) in &[(0usize, 1usize), (0, 2), (1, 2)] {
+        let rim_a = &rim_of[&(i, j)];
+        let rim_b = &rim_of[&(j, i)];
+        mesh.append(&toric_face_mesh(
+            rim_a,
+            rim_b,
+            &centers_of[&(i, j)],
+            probe,
+            n_phi,
+            false,
+        )?);
+    }
+
+    // 3 contact caps: boundary = rim toward one neighbour, then the reversed rim
+    // toward the other (sharing the two SES corners) → one loop.
+    for &(i, j, k) in &[(0usize, 1usize, 2usize), (1, 0, 2), (2, 0, 1)] {
+        let mut loop_pts = rim_of[&(i, j)].clone();
+        let back = &rim_of[&(i, k)];
+        // append the other rim reversed, dropping its shared end corners.
+        for t in (1..back.len() - 1).rev() {
+            loop_pts.push(back[t]);
+        }
+        let cap_ab = buried_cap(atoms[i], atoms[j], probe).context("cap ij")?;
+        let cap_ac = buried_cap(atoms[i], atoms[k], probe).context("cap ik")?;
+        let pole =
+            pick_chart_pole(&[cap_ab, cap_ac]).context("contact cap pole (triangle3 atom)")?;
+        mesh.append(&fill_spherical_region(
+            atoms[i].center,
+            atoms[i].radius,
+            &[loop_pts],
+            pole,
+            grid,
+        )?);
+    }
+
+    // 2 spheric faces: the concave probe-cap triangle, one per probe position.
+    for f in 0..2 {
+        let p = probes[f];
+        let cs = [corner(f, 0), corner(f, 1), corner(f, 2)];
+        let mut loop_pts = Vec::new();
+        for e in 0..3 {
+            let (i, j) = (e, (e + 1) % 3);
+            loop_pts.push(cs[i]);
+            // Sample each concave arc in the canonical (low→high atom) order the
+            // toric θ-end uses, reversing the Vec (bit-exact) when the loop runs
+            // high→low — so the shared arc points are *bit-identical* and weld.
+            // arc_on_sphere(A,B) vs arc_on_sphere(B,A) differ by float reordering.
+            if i < j {
+                loop_pts.extend(arc_on_sphere(p, probe, cs[i], cs[j], n_phi));
+            } else {
+                let mut arc = arc_on_sphere(p, probe, cs[j], cs[i], n_phi);
+                arc.reverse();
+                loop_pts.extend(arc);
+            }
+        }
+        let centroid = (cs[0] + cs[1] + cs[2]) * (1.0 / 3.0);
+        let inward = (centroid - p)
+            .normalized()
+            .context("spheric centroid at probe")?;
+        mesh.append(&fill_spherical_region(p, probe, &[loop_pts], inward, grid)?);
+    }
+
+    let mut mesh = mesh.welded();
     mesh.orient_consistently();
     if mesh.signed_volume() < 0.0 {
         mesh.flip();
@@ -327,6 +475,34 @@ mod tests {
         }
     }
 
+    /// **The triangle3 gate.** The full analytic SES of three mutually-contacting
+    /// atoms — all three patch types (contact caps, bounded toric, spheric) — must
+    /// stitch watertight and match `ball-py ses_area`. This is the case BALL's
+    /// gnarly clip-and-gift-wrap was claimed un-portable for.
+    #[test]
+    fn triangle3_ses_is_watertight_and_matches_ball() {
+        let atoms = [
+            sph(0.0, 0.0, 0.0, 1.7),
+            sph(2.5, 0.0, 0.0, 1.7),
+            sph(1.25, 2.165, 0.0, 1.7),
+        ];
+        let (ball_area, ball_vol) = (80.0932, 57.9040);
+        let m = triangle3_ses(atoms, 1.4, 48, 10, 0.05).unwrap();
+        assert!(m.is_watertight(), "triangle3 SES must be closed");
+        assert!(m.is_consistently_oriented());
+        assert_eq!(m.euler_characteristic(), 2, "sphere topology");
+        let (area, vol) = (m.surface_area(), m.signed_volume());
+        assert!(vol > 0.0, "outward");
+        assert!(
+            (area - ball_area).abs() / ball_area < 0.02,
+            "SES area {area} within 2% of ball {ball_area}"
+        );
+        assert!(
+            (vol - ball_vol).abs() / ball_vol < 0.02,
+            "SES volume {vol} within 2% of ball {ball_vol}"
+        );
+    }
+
     /// Two opposite neighbours leave a band (annulus) around the atom — no single
     /// azimuthal pole charts it (its antipode is always in the region). The pole
     /// search must report this rather than silently producing a degenerate chart.
@@ -358,16 +534,18 @@ mod tests {
         // point on B (θ-aligned by construction).
         let mut rim_a = Vec::new();
         let mut rim_b = Vec::new();
+        let mut centers = Vec::new();
         for t in 0..n_theta {
             let th = TAU * t as f64 / n_theta as f64;
             let ta = circle_a.center + (u * th.cos() + v * th.sin()) * circle_a.radius;
             let p = probe_center_from_contact(ta, a, probe).unwrap();
             rim_a.push(ta);
             rim_b.push(b.center + (p - b.center).normalized().unwrap() * b.radius);
+            centers.push(p);
         }
-        let m = toric_face_mesh(a, &rim_a, &rim_b, probe, n_phi, true).unwrap();
+        let m = toric_face_mesh(&rim_a, &rim_b, &centers, probe, n_phi, true).unwrap();
         for t in 0..n_theta {
-            let p = probe_center_from_contact(rim_a[t], a, probe).unwrap();
+            let p = centers[t];
             let row = n_phi + 2;
             for q in 1..=n_phi {
                 let pt = m.verts[t * row + q];
