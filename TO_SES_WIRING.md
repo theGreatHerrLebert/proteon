@@ -87,11 +87,19 @@ spheric-only *mesh* is not):
 - **Spheric clip removes 12.9 Å²** over 35 faces (plain 573.6 → 560.7).
 - Crambin's analytic excess vs BALL is **≈26 Å²** (the +1.1%).
 
-⇒ the spheric clip accounts for **~half** the excess; the toric trim must remove
-the other ~13 Å². Confirms W1+W3 are both required (codex), and that together
-they should close the gap. The remaining work is purely the **coordinated weld**
-(spheric clip + toric trim sharing the registry seams) so the cleaned mesh is
-watertight, then the Stage-4 gate.
+- **Toric trim removes 5.6 Å²** over 8 arcs (0 errors; plain 910.1 → 904.5).
+- **Cleaner total removed = 18.5 Å²** (spheric 12.9 + toric 5.6), **0 errors** on
+  every face/arc.
+
+⇒ the nonradial cleaner accounts for **~71 %** of the ~26 Å² excess. The residual
+**~7.5 Å²** is *not* nonradial — it is the **21 spindle (radial) faces** (the
+torus's own past-axis double-cover, needing the `singular.rs` radial treatment,
+not probe-collision clipping) plus **contact-cap trimming** (a neighbour probe
+can also bury part of an atom's contact cap), neither yet wired. So the full
+cleaned crambin needs: the **coordinated canonical-weld assembler** (spheric clip
++ toric trim + contact caps sharing registry seams → watertight) **+ the spindle
+radial clip + contact-cap trim**, then the Stage-4 gate. The nonradial geometry
+itself is validated (18.5 Å² removed, 0 errors on real data).
 
 ## Open questions for review
 
