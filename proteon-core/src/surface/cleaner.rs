@@ -22,7 +22,7 @@
 
 use super::arrangement::{arrange_loops, sample_loop, SphereCircle};
 use super::chart::fill_spherical_region;
-use super::geom::{plane_basis, Plane3, Vec3};
+use super::geom::{plane_basis, Circle3, Plane3, Vec3};
 use super::mesh::Mesh;
 use super::nonradial::{
     canonical_burial_circle, circle_plane_intersections, probe_burial_cap, sample_circle_rim,
@@ -389,6 +389,26 @@ fn toric_column_curve(
         .collect()
 }
 
+/// The **spindle** (radial) self-overlap of a singular toric face, expressed as a
+/// per-column burial cap so it trims through the same path as neighbour burials.
+///
+/// When the roll-circle radius `R_roll < probe` the torus is a spindle: the
+/// reentrant arc reaches *past* the roll axis, double-covering itself. A reentrant
+/// direction `d` from the rolling probe `p` is on the removed (past-axis) side iff
+/// `(p + probe·d − O)·(p − O) < 0` ⟺ `d·(O−p)/R_roll > R_roll/probe`, i.e. it is
+/// `is_buried` by the cap with axis `(O−p)` (toward the axis centre `O`) and
+/// `half = acos(R_roll/probe)`. `None` for a non-singular (ring) torus.
+pub fn spindle_cap(p: Vec3, roll: &Circle3, probe: f64) -> Option<SphereCircle> {
+    if roll.radius >= probe {
+        return None;
+    }
+    let axis = (roll.center - p).normalized()?;
+    Some(SphereCircle::new(
+        axis,
+        (roll.radius / probe).clamp(-1.0, 1.0).acos(),
+    ))
+}
+
 /// One θ-column's trimmed geometry: the rolling-probe frame plus its kept
 /// φ-intervals (empty `tangent` ⇒ a degenerate column with no surface).
 struct ToricColumn {
@@ -420,6 +440,7 @@ pub fn toric_trim_mesh(
     contact_b: &[Vec3],
     probe: f64,
     neighbours: &[Vec3],
+    roll: Option<Circle3>,
     n_phi: usize,
 ) -> Result<Mesh> {
     let cols = centers.len();
@@ -436,10 +457,14 @@ pub fn toric_trim_mesh(
         let dir_b = (contact_b[t] - p)
             .normalized()
             .context("contact_b at probe")?;
-        let caps: Vec<SphereCircle> = neighbours
+        let mut caps: Vec<SphereCircle> = neighbours
             .iter()
             .filter_map(|&q| probe_burial_cap(p, q, probe))
             .collect();
+        // Radial (spindle) self-overlap of a singular toric face — also a cap.
+        if let Some(spc) = roll.as_ref().and_then(|r| spindle_cap(p, r, probe)) {
+            caps.push(spc);
+        }
         let kept = toric_kept_intervals(dir_a, dir_b, &caps);
         let tangent = dir_a.cross(dir_b).normalized().map(|n| n.cross(dir_a));
         columns.push(ToricColumn {
@@ -845,7 +870,7 @@ mod tests {
     #[test]
     fn toric_trim_reduces_area_under_a_neighbour() {
         let (p, ta, tb, probe) = toric_columns(28);
-        let full = toric_trim_mesh(&p, &ta, &tb, probe, &[], 10).unwrap();
+        let full = toric_trim_mesh(&p, &ta, &tb, probe, &[], None, 10).unwrap();
         let a_full = full.surface_area();
         assert!(a_full > 0.0, "untrimmed toric patch has area");
         assert!(full.verts.iter().all(|v| v.x.is_finite()), "no NaN verts");
@@ -853,7 +878,7 @@ mod tests {
         // A neighbour probe near the θ≈45° part of the roll circle buries a band.
         let mid = ctr(0.0, 2.1, 2.1).normalized().unwrap() * 2.1; // P(45°)
         let nb = mid + ctr(0.9, 0.0, 0.0); // just off the torus toward +x
-        let trimmed = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], 10).unwrap();
+        let trimmed = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], None, 10).unwrap();
         let a_trim = trimmed.surface_area();
         assert!(
             a_trim > 0.0 && a_trim < a_full * 0.97,
@@ -874,6 +899,62 @@ mod tests {
     }
 
     #[test]
+    fn spindle_cap_removes_a_singular_torus_self_overlap() {
+        use super::super::geom::{intersect_two_spheres, Sphere};
+        // Atoms far enough apart that R_roll < probe → a SPINDLE torus (the
+        // reentrant arc self-overlaps past the axis).
+        let probe = 1.4;
+        let (ca, cb) = (ctr(-2.65, 0.0, 0.0), ctr(2.65, 0.0, 0.0));
+        let (ra, rb) = (Sphere::new(ca, 1.5), Sphere::new(cb, 1.5));
+        let roll = intersect_two_spheres(ra.inflated(probe), rb.inflated(probe)).unwrap();
+        assert!(
+            roll.radius < probe,
+            "R_roll {} < probe → spindle",
+            roll.radius
+        );
+
+        let cols = 40;
+        let (mut p, mut a, mut b) = (Vec::new(), Vec::new(), Vec::new());
+        for t in 0..cols {
+            let th = std::f64::consts::PI * t as f64 / (cols - 1) as f64;
+            let (u, v) = plane_basis(roll.normal);
+            let pc = roll.center + (u * th.cos() + v * th.sin()) * roll.radius;
+            p.push(pc);
+            a.push(pc + (ca - pc).normalized().unwrap() * probe);
+            b.push(pc + (cb - pc).normalized().unwrap() * probe);
+        }
+        // Per-column check: the deepest reentrant point (mid-arc) is past the axis
+        // ((x−O)·(P−O) < 0), and the spindle cap removes it from the kept set.
+        let pc = p[cols / 2];
+        let da = (a[cols / 2] - pc).normalized().unwrap();
+        let db = (b[cols / 2] - pc).normalized().unwrap();
+        let arc_angle = da.dot(db).clamp(-1.0, 1.0).acos();
+        let tangent = da.cross(db).normalized().unwrap().cross(da);
+        let mid = arc_angle / 2.0;
+        let deep = pc + (da * mid.cos() + tangent * mid.sin()) * probe;
+        assert!(
+            (deep - roll.center).dot(pc - roll.center) < 0.0,
+            "mid-arc is past the axis"
+        );
+        let cap = spindle_cap(pc, &roll, probe).expect("singular → spindle cap");
+        let kept = toric_kept_intervals(da, db, &[cap]);
+        assert!(
+            !kept.iter().any(|&(lo, hi)| mid > lo && mid < hi),
+            "spindle cap removes the past-axis mid-arc from the kept set"
+        );
+
+        // On the whole patch it removes the doubled-over sheet (area drops).
+        let raw = toric_trim_mesh(&p, &a, &b, probe, &[], None, 12).unwrap();
+        let clean = toric_trim_mesh(&p, &a, &b, probe, &[], Some(roll), 12).unwrap();
+        assert!(
+            clean.surface_area() < raw.surface_area() * 0.95,
+            "spindle cap removed the past-axis sheet: {} vs {}",
+            clean.surface_area(),
+            raw.surface_area()
+        );
+    }
+
+    #[test]
     fn toric_trim_handles_an_interior_split() {
         // A neighbour burying the *interior* of the arc over a θ-band → the column
         // count goes 1→2→1 (split then merge). Overlap matching must stay embedded
@@ -881,7 +962,7 @@ mod tests {
         let (p, ta, tb, probe) = toric_columns(40);
         let pc = ctr(0.0, 2.1, 2.1).normalized().unwrap() * 2.1; // P(45°)
         let nb = pc + ctr(-1.0, 0.0, 0.0); // toward the atom axis → interior burial
-        let m = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], 12).unwrap();
+        let m = toric_trim_mesh(&p, &ta, &tb, probe, &[nb], None, 12).unwrap();
         assert!(m.surface_area() > 0.0);
         assert_eq!(
             super::super::intersect::self_intersections(&m, 0.4, 1),
