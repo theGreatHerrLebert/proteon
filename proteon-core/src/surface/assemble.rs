@@ -395,21 +395,38 @@ struct ContactArc {
 }
 
 /// Walk an atom's contact arcs into closed boundary loops, joining them at shared
-/// RS-face indices (each RS face on the atom is touched by exactly two arcs). A
-/// full-ring arc (`ends = [None, None]`) is its own loop. Index identity (not
-/// coordinate matching) keeps it exact.
+/// RS-face indices. A full-ring arc (`ends = [None, None]`) is its own loop.
+/// Joining by **index** (not coordinate) keeps it exact.
+///
+/// **Fails loud** on the non-generic graph (codex-review): every bounded RS-face
+/// incidence on the atom must have degree exactly 2 (degree ≥3 ⇒ a ≥4-cospherical
+/// singular vertex the greedy walk would mis-splice); each join is bit-exact; the
+/// loop must close; every bounded arc must be consumed.
 fn walk_cap_loops(arcs: &[ContactArc]) -> Result<Vec<Vec<Vec3>>> {
-    let mut loops = Vec::new();
-    let mut used = vec![false; arcs.len()];
-    // RS-face index → the (arc, end-slot) pairs meeting there.
+    // Validate arc end-shapes and build the RS-face → incidences map.
     let mut at_face: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
     for (ai, a) in arcs.iter().enumerate() {
-        for (slot, f) in a.ends.iter().enumerate() {
-            if let Some(f) = f {
-                at_face.entry(*f).or_default().push((ai, slot));
+        match a.ends {
+            [None, None] => ensure!(a.pts.len() >= 3, "degenerate full-ring contact arc"),
+            [Some(p), Some(q)] => {
+                ensure!(p != q && a.pts.len() >= 2, "degenerate bounded contact arc");
+                at_face.entry(p).or_default().push((ai, 0));
+                at_face.entry(q).or_default().push((ai, 1));
             }
+            _ => bail!("half-ring contact arc (one end None) — invalid"),
         }
     }
+    for (f, inc) in &at_face {
+        ensure!(
+            inc.len() == 2,
+            "RS face {f} touches {} contact arcs on this atom (expected 2; \
+             ≥3 ⇒ cospherical/singular)",
+            inc.len()
+        );
+    }
+
+    let mut loops = Vec::new();
+    let mut used = vec![false; arcs.len()];
     for (ai, a) in arcs.iter().enumerate() {
         if used[ai] {
             continue;
@@ -419,35 +436,45 @@ fn walk_cap_loops(arcs: &[ContactArc]) -> Result<Vec<Vec<Vec3>>> {
             loops.push(a.pts.clone()); // full ring
             continue;
         }
-        // Walk a bounded loop starting from arc `ai`, oriented ends[0]→ends[1].
         used[ai] = true;
         let mut chain: Vec<Vec3> = a.pts.clone();
         let start_face = a.ends[0].unwrap();
         let mut cur_face = a.ends[1].unwrap();
-        loop {
-            if cur_face == start_face {
-                break;
-            }
-            let nbrs = at_face.get(&cur_face).context("dangling cap arc")?;
-            let &(na, nslot) = nbrs
+        let mut steps = 0;
+        while cur_face != start_face {
+            steps += 1;
+            ensure!(steps <= arcs.len(), "cap loop did not close");
+            // Exactly one unused continuation (degree-2 already guaranteed above).
+            let unused: Vec<_> = at_face[&cur_face]
                 .iter()
-                .find(|&&(na, _)| !used[na])
-                .context("open cap loop (no continuation)")?;
+                .filter(|&&(na, _)| !used[na])
+                .collect();
+            ensure!(
+                unused.len() == 1,
+                "ambiguous cap continuation at RS face {cur_face}"
+            );
+            let (na, nslot) = *unused[0];
             used[na] = true;
-            // Append the next arc oriented so its `cur_face` end connects first.
             let mut seg = arcs[na].pts.clone();
             if nslot == 1 {
                 seg.reverse();
             }
+            ensure!(
+                chain.last() == seg.first(),
+                "cap arcs do not meet bit-exactly at RS face {cur_face}"
+            );
             chain.extend(seg.into_iter().skip(1)); // skip the shared vertex
-            cur_face = arcs[na].ends[1 - nslot].context("dangling cap arc end")?;
+            cur_face = arcs[na].ends[1 - nslot].unwrap();
         }
-        // Drop the closing duplicate (last == first).
-        if chain.len() > 1 && chain.last() == chain.first() {
-            chain.pop();
-        }
+        // The walk closed onto start_face: the last point must equal the first.
+        ensure!(
+            chain.last() == chain.first(),
+            "cap loop closure is not bit-exact"
+        );
+        chain.pop();
         loops.push(chain);
     }
+    ensure!(used.iter().all(|&u| u), "some contact arcs left unwalked");
     Ok(loops)
 }
 
@@ -455,6 +482,14 @@ fn walk_cap_loops(arcs: &[ContactArc]) -> Result<Vec<Vec<Vec3>>> {
 /// BALL. Builds the SES element graph, samples every patch by probe position off
 /// the *canonical* SES vertices, and stitches contact caps + toric + spheric into
 /// one watertight mesh (bit-identical shared samples + exact weld).
+///
+/// CAVEAT (codex-review): the result is *combinatorially* watertight, which is
+/// **not** the same as a valid embedding. Where the probe self-intersects (tight
+/// pockets), independently-valid toric patches can geometrically overlap while the
+/// mesh stays closed — the "closed but wrong" case. On crambin this shows as a
+/// stable ≈1% area excess that does *not* shrink with finer sampling. Trimming
+/// those singular events (the geometric singularity resolver) and a self-
+/// intersection gate are required before this is correct on arbitrary proteins.
 pub fn ses_mesh_analytic(
     atoms: &[Sphere],
     probe: f64,
