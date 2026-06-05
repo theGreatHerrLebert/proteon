@@ -10,6 +10,7 @@
 //!   geodesic boundary arc (endpoints are shared registry SES vertices, so the
 //!   samplers return only the *interior* points).
 
+use super::arrangement::SphereCircle;
 use super::geom::{intersect_two_spheres, plane_basis, Circle3, Sphere, Vec3};
 use std::f64::consts::TAU;
 
@@ -39,6 +40,23 @@ pub fn contact_circle(a: Sphere, b: Sphere, probe: f64) -> Option<Circle3> {
         normal: roll.normal,
         radius: roll.radius * k,
     })
+}
+
+/// The buried cap that neighbour `b` carves out of atom `a`'s contact face: the
+/// region of `a`'s sphere the rolling probe covers, as an [`arrangement`]
+/// [`SphereCircle`] about `a.center` (directions within `half_angle` of the
+/// `a → b` axis are buried). The contact face is `a`'s sphere outside the union of
+/// these caps. `None` if `a`, `b` share no toric face.
+pub fn buried_cap(a: Sphere, b: Sphere, probe: f64) -> Option<SphereCircle> {
+    let circle = contact_circle(a, b, probe)?;
+    // Axis is the a→b direction (always well-defined). The cap's angular radius
+    // comes from the *signed* offset of the contact-circle centre along that axis,
+    // so a cap larger than a hemisphere (signed < 0, e.g. a small atom against a
+    // much larger neighbour) is represented correctly — codex-review: normalizing
+    // `circle.center − a.center` instead would flip the axis and lose the sign.
+    let axis = (b.center - a.center).normalized()?;
+    let cos_half = (circle.center - a.center).dot(axis) / a.radius;
+    Some(SphereCircle::new(axis, cos_half.clamp(-1.0, 1.0).acos()))
 }
 
 /// Angle of point `p` (assumed on `circle`) in the circle's own basis, in `[0,TAU)`.
@@ -155,6 +173,35 @@ mod tests {
             }
         }
         assert!(checked >= 2, "expected both probe positions, got {checked}");
+    }
+
+    #[test]
+    fn buried_cap_faces_the_neighbour() {
+        use super::super::arrangement::is_buried;
+        // Asymmetric radii — the case where a sign error in the cap axis bites.
+        let a = sph(0.0, 0.0, 0.0, 1.2);
+        let b = sph(3.0, 0.0, 0.0, 1.7);
+        let probe = 1.4;
+        let cap = buried_cap(a, b, probe).expect("share a toric face");
+        let to_b = (b.center - a.center).normalized().unwrap();
+        // The region facing the neighbour is buried (toric-covered); the far side
+        // is exposed.
+        assert!(is_buried(to_b, &cap), "direction toward b is buried");
+        assert!(!is_buried(-to_b, &cap), "far side is exposed");
+        // The contact circle is exactly the cap boundary: a point on the contact
+        // circle is on atom a's surface at angle `half_angle` from the cap axis.
+        let circle = contact_circle(a, b, probe).unwrap();
+        let (u, _) = plane_basis(circle.normal);
+        let rim = circle.center + u * circle.radius; // on the contact circle
+        let dir = (rim - a.center).normalized().unwrap();
+        assert!(
+            (rim.distance(a.center) - a.radius).abs() < 1e-9,
+            "on atom a"
+        );
+        assert!(
+            (dir.dot(cap.axis) - cap.half_angle.cos()).abs() < 1e-9,
+            "at the rim"
+        );
     }
 
     #[test]
