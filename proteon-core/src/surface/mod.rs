@@ -26,6 +26,7 @@
 
 pub mod arrangement;
 pub mod cdt;
+pub mod elements;
 pub mod geom;
 pub mod mesh;
 pub mod patches;
