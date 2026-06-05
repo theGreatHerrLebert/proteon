@@ -142,9 +142,19 @@ pub fn circle_plane_intersections(c: &Circle3, plane: &Plane3) -> Vec<(Vec3, i8)
     let (u, v) = plane_basis(c.normal);
     // point = c.center + r(u cosθ + v sinθ); plane: n·point = −d.
     // ⇒ A cosθ + B sinθ = C, with A,B,C below.
-    let a = c.radius * plane.normal.dot(u);
-    let b = c.radius * plane.normal.dot(v);
-    let cc = -plane.d - plane.normal.dot(c.center);
+    let (mut a, mut b, mut cc) = (
+        c.radius * plane.normal.dot(u),
+        c.radius * plane.normal.dot(v),
+        -plane.d - plane.normal.dot(c.center),
+    );
+    // Canonicalize the plane orientation: `(n,d)` and `(−n,−d)` are the same plane
+    // but would swap the ±branch labels, so pin the sign of `(A,B)` w.r.t. the
+    // circle basis. Now the labels depend only on the plane-as-a-set (codex #2).
+    if a < 0.0 || (a.abs() < 1e-15 && b < 0.0) {
+        a = -a;
+        b = -b;
+        cc = -cc;
+    }
     let h = (a * a + b * b).sqrt();
     if h < 1e-15 {
         return Vec::new(); // circle lies in a plane parallel to `plane`
@@ -155,11 +165,11 @@ pub fn circle_plane_intersections(c: &Circle3, plane: &Plane3) -> Vec<(Vec3, i8)
         return Vec::new(); // no crossing
     }
     let base = b.atan2(a);
+    let off = ratio.clamp(-1.0, 1.0).acos();
     let pt = |th: f64| c.center + (u * th.cos() + v * th.sin()) * c.radius;
     if ratio.abs() >= 1.0 - tol {
-        return vec![(pt(base), 0)]; // tangent
+        return vec![(pt(base + off), 0)]; // tangent (off ≈ 0 or π — codex #1)
     }
-    let off = ratio.clamp(-1.0, 1.0).acos();
     vec![(pt(base + off), 1), (pt(base - off), -1)]
 }
 

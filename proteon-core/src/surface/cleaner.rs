@@ -102,29 +102,45 @@ impl SingularVertices {
     }
 
     /// Intern the **great-circle corner(s)** where collision circle `C_ij` crosses
-    /// a contact great circle on sphere `i` — the plane through probe `i` and the
-    /// toric axis of atoms `(a, b)` (`great_plane`). Keyed `(i, j, sorted{a,b},
-    /// branch)` so the spheric clip of face `i` and the toric trim of edge `(a,b)`
-    /// resolve the **same** interned point. The key — not the recomputed geometry —
-    /// guarantees bit-identity: the first caller fixes the coordinate, the second
-    /// looks it up. Empty if the probes do not overlap or the circle misses the
-    /// plane.
+    /// the contact great circle on sphere `i` toward atoms `(a, b)`. Keyed `(i, j,
+    /// sorted{a,b}, branch)` so the spheric clip of face `i` and the toric trim of
+    /// edge `(a,b)` resolve the **same** interned point.
+    ///
+    /// The great-circle plane is derived **internally** (through probe `i`'s centre
+    /// and the toric axis `atom_a, atom_b`), so two consumers cannot pass
+    /// inconsistent planes that the key would then silently alias (codex #3). The
+    /// key still fixes bit-identity: first caller computes the coordinate, the
+    /// second looks it up. Empty if the probes don't overlap, the triple is
+    /// degenerate, or the circle misses the plane.
     pub fn intern_corner(
         &mut self,
         i: usize,
         j: usize,
         atoms: [usize; 2],
-        centers: &[Vec3],
+        probe_centers: &[Vec3],
+        atom_centers: &[Vec3],
         probe: f64,
-        great_plane: &Plane3,
     ) -> Vec<usize> {
-        let Some(c) = canonical_burial_circle(i, j, centers, probe) else {
+        let Some(c) = canonical_burial_circle(i, j, probe_centers, probe) else {
             return Vec::new();
         };
         let mut ab = atoms;
         ab.sort_unstable();
+        // The spheric↔toric boundary on sphere i: the great circle in the plane
+        // through probe i and the toric axis (atoms a,b).
+        let pi = probe_centers[i];
+        let Some(n) = (atom_centers[ab[0]] - pi)
+            .cross(atom_centers[ab[1]] - pi)
+            .normalized()
+        else {
+            return Vec::new(); // probe i collinear with the atom axis
+        };
+        let plane = Plane3 {
+            normal: n,
+            d: -n.dot(pi),
+        };
         let mut ids = Vec::new();
-        for (x, branch) in circle_plane_intersections(&c, great_plane) {
+        for (x, branch) in circle_plane_intersections(&c, &plane) {
             let id = *self
                 .corner_index
                 .entry((i, j, ab, branch))
@@ -438,35 +454,65 @@ mod tests {
 
     #[test]
     fn great_circle_corner_is_interned_once_for_both_consumers() {
-        // C_01 lives in the plane x=1 around (1,0,0); the contact great plane y=0
-        // (through probe 0 at the origin) cuts it at (1,0,±0.98).
+        // Probes 0,1 collide → C_01 in the plane x=1 around (1,0,0). Atoms 3,5 lie
+        // so the derived contact great plane (through probe 0 and the 3–5 axis) is
+        // y=0, cutting C_01 at (1,0,±0.98).
         let probe = 1.4;
-        let centers = [ctr(0.0, 0.0, 0.0), ctr(2.0, 0.0, 0.0)];
-        let plane = Plane3 {
-            normal: ctr(0.0, 1.0, 0.0),
-            d: 0.0,
-        };
+        let probe_centers = [ctr(0.0, 0.0, 0.0), ctr(2.0, 0.0, 0.0)];
+        let mut atom_centers = vec![ctr(0.0, 0.0, 0.0); 10];
+        atom_centers[3] = ctr(1.0, 0.0, 0.0);
+        atom_centers[5] = ctr(0.0, 0.0, 1.0); // 3–5 axis in the xz-plane ⇒ plane y=0
         let mut reg = SingularVertices::new();
-        // Consumer A = the spheric clip of face 0; consumer B = the toric trim of
-        // edge (3,5). Same key → identical interned ids, no new points.
-        let a = reg.intern_corner(0, 1, [3, 5], &centers, probe, &plane);
-        let b = reg.intern_corner(0, 1, [5, 3], &centers, probe, &plane);
+        // Consumer A = spheric clip of face 0; B = toric trim of edge (3,5) with
+        // the atoms in the opposite order. Same key → identical ids.
+        let a = reg.intern_corner(0, 1, [3, 5], &probe_centers, &atom_centers, probe);
+        let b = reg.intern_corner(0, 1, [5, 3], &probe_centers, &atom_centers, probe);
         assert_eq!(a.len(), 2);
-        assert_eq!(a, b, "same corner key → same ids for both consumers");
+        assert_eq!(a, b, "same corner, opposite atom order → same ids");
         assert_eq!(reg.len(), 2, "interned once");
         for &id in &a {
             let x = reg.point(id);
-            assert!((x.distance(centers[0]) - probe).abs() < 1e-9, "on sphere 0");
             assert!(
-                (x.distance(centers[1]) - probe).abs() < 1e-9,
-                "on sphere 1 (C_01)"
+                (x.distance(probe_centers[0]) - probe).abs() < 1e-9,
+                "on sphere 0"
             );
-            assert!(x.dot(plane.normal).abs() < 1e-9, "on the great plane");
+            assert!(
+                (x.distance(probe_centers[1]) - probe).abs() < 1e-9,
+                "on C_01"
+            );
+            assert!(x.y.abs() < 1e-9, "on the derived great plane y=0");
         }
         // A different edge is a different event (distinct key).
-        let other = reg.intern_corner(0, 1, [3, 9], &centers, probe, &plane);
-        assert_eq!(reg.len(), 4);
-        assert!(other.iter().all(|x| !a.contains(x)));
+        atom_centers[9] = ctr(0.0, 1.0, 0.5);
+        let other = reg.intern_corner(0, 1, [3, 9], &probe_centers, &atom_centers, probe);
+        assert!(
+            other.iter().all(|x| !a.contains(x)),
+            "distinct key, new entries"
+        );
+    }
+
+    #[test]
+    fn circle_plane_branch_labels_are_orientation_invariant() {
+        use super::super::geom::Circle3;
+        use super::super::nonradial::circle_plane_intersections;
+        let c = Circle3 {
+            center: ctr(1.0, 0.0, 0.0),
+            normal: ctr(1.0, 0.0, 0.0),
+            radius: 0.8,
+        };
+        let p = Plane3 {
+            normal: ctr(0.2, 1.0, 0.3),
+            d: -0.1,
+        };
+        let flip = Plane3 {
+            normal: ctr(-0.2, -1.0, -0.3),
+            d: 0.1,
+        }; // the same plane, opposite orientation
+           // Branch labels map to the SAME points regardless of orientation (codex #2).
+        assert_eq!(
+            circle_plane_intersections(&c, &p),
+            circle_plane_intersections(&c, &flip)
+        );
     }
 
     #[test]
