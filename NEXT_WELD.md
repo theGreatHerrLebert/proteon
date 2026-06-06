@@ -1,5 +1,18 @@
 # NEXT_WELD — making the cleaned SES watertight
 
+> **STATUS: DONE (2026-06-06).** The cleaned SES is watertight on crambin —
+> `watertight=TRUE, open=0, nonmanifold=0, euler=4` (= 2 components, matching the
+> independent SDF mesher), area 2319.899 (+0.04 % vs BALL), self-intersection-free.
+> Path taken: a **tolerance weld** (`Mesh::welded_within`, user-chosen over
+> bit-identity) + great-circle seam unification (spheric edge sampled with the
+> toric θ-end's `toric_column_curve`) + a **same-circle arc merge** that removed
+> the `arrange_loops` plane-basis wrap-split (the actual dominant residual — NOT
+> the neighbour-exclusion mismatch the earlier analysis feared). Commits
+> `9451983`, `42b0358`. The 3-seam-type / registry plan below was superseded by
+> this simpler route; kept for history. Remaining polish (not blocking): confirm
+> watertightness across a corpus, tune the default `weld_eps`, wire
+> `ses_mesh_cleaned_welded` into any public SES entry point.
+
 Pick-up doc for finishing the SES singularity-cleaner **weld**. The geometry is
 done and oracle-validated; what remains is the watertight topology.
 
