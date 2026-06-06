@@ -606,15 +606,24 @@ pub fn clip_spheric_face(
     let mut world: Vec<Vec<Vec3>> = Vec::with_capacity(loops.len());
     for lp in &loops {
         let mut pts = Vec::new();
-        for (circle, start, end) in merge_same_circle_runs(lp) {
+        for MergedArc {
+            circle,
+            start,
+            end,
+            span,
+        } in merge_same_circle_runs(lp)
+        {
             let burial =
                 cap_src[circle].and_then(|j| canonical_burial_circle(this_idx, j, centers, probe));
             if let Some(c) = burial {
                 // Burial arc → canonical C_ij sampling (frame-independent seam).
-                pts.extend(sample_circle_arc(
+                // `span` carries the true angular extent so a full-circle hole or a
+                // >π arc is sampled the right way round, not collapsed / short-cut.
+                pts.extend(sample_circle_seg(
                     &c,
                     p + start * probe,
                     p + end * probe,
+                    span,
                     n_arc,
                 ));
             } else if circle < 3 {
@@ -652,10 +661,11 @@ pub fn clip_spheric_face(
                     normal: cap.axis,
                     radius: cap.half_angle.sin() * probe,
                 };
-                pts.extend(sample_circle_arc(
+                pts.extend(sample_circle_seg(
                     &cc,
                     p + start * probe,
                     p + end * probe,
+                    span,
                     n_arc,
                 ));
             }
@@ -665,53 +675,115 @@ pub fn clip_spheric_face(
     fill_spherical_region(p, probe, &world, pole, grid)
 }
 
-/// Merge cyclically-consecutive [`arrangement::BoundaryArc`]s that lie on the
-/// **same** circle into one `(circle, start_dir, end_dir)` arc. Two same-circle
-/// arcs only ever meet at the θ=0 plane-basis seam (a wrapping interval split by
-/// `exposed_arcs`), never at a real corner (which is the crossing of two distinct
-/// circles), so this is always safe and restores each boundary edge to a single
-/// arc over its full angular span. Returns `(circle, start, end)` triples in loop
-/// order; the cyclic wrap (last run on the same circle as the first) is folded
-/// into the first.
-fn merge_same_circle_runs(lp: &[BoundaryArc]) -> Vec<(usize, Vec3, Vec3)> {
-    let mut out: Vec<(usize, Vec3, Vec3)> = Vec::new();
-    for arc in lp {
-        match out.last_mut() {
-            Some(last) if last.0 == arc.circle => last.2 = arc.end,
-            _ => out.push((arc.circle, arc.start, arc.end)),
-        }
-    }
-    // Cyclic fold: the loop's last run continues the first across the seam.
-    if out.len() > 1 && out.first().map(|r| r.0) == out.last().map(|r| r.0) {
-        let last = out.pop().expect("len > 1");
-        out[0].1 = last.1; // start from the wrapped run's start
-    }
-    out
+/// One boundary arc after seam-merging: a circle index, its start/end directions,
+/// and the **true angular span** (positive, may exceed π or equal `TAU` for a full
+/// rim). The span is what lets the samplers pick the correct arc rather than the
+/// shortest endpoint-to-endpoint one (codex review).
+struct MergedArc {
+    circle: usize,
+    start: Vec3,
+    end: Vec3,
+    span: f64,
 }
 
-/// Sample the short arc of a 3-D circle from world point `a` to `b` (`a` plus
-/// `n_interior` interior points; `b` omitted, the next arc's start) using the
-/// circle's canonical [`plane_basis`] — so two callers passing the same circle and
-/// endpoints get bit-identical samples (the collision-seam weld).
-fn sample_circle_arc(c: &Circle3, a: Vec3, b: Vec3, n_interior: usize) -> Vec<Vec3> {
+/// Merge cyclically-consecutive [`arrangement::BoundaryArc`]s that lie on the
+/// **same** circle **and are θ-contiguous** (one's end meets the next's start, mod
+/// `TAU`) into a single arc spanning their union. Two such arcs only ever meet at
+/// the θ=0 plane-basis seam (a wrapping interval split at 0 by `exposed_arcs`),
+/// never at a real corner — a real corner is the crossing of two *distinct*
+/// circles. So merging restores each boundary edge to one arc over its full span,
+/// matching the toric θ-end (which never has that split).
+///
+/// The **contiguity** guard matters (codex): `arrange_loops` clusters endpoints
+/// within ~1e-6 while intervals retain features to ~1e-9, so two same-circle arcs
+/// separated by a *genuine* (but sub-cluster) burial arc could end up adjacent in
+/// the walk; requiring θ-continuity refuses to merge across such a real gap. The
+/// accumulated `span` (sum of each arc's positive θ-extent) is carried so a full
+/// circle (`span ≈ TAU`) or a >π arc is sampled correctly downstream.
+fn merge_same_circle_runs(lp: &[BoundaryArc]) -> Vec<MergedArc> {
+    const TOL: f64 = 1e-6;
+    // Positive θ-extent of [a,b] on the circle, in (0, TAU]; a closed full ring
+    // (a≈b) maps to TAU, not 0.
+    let pos_span = |a: f64, b: f64| {
+        let mut d = (b - a).rem_euclid(TAU);
+        if d <= TOL {
+            d += TAU;
+        }
+        d
+    };
+    // a ≈ b (mod TAU)?
+    let contiguous = |a: f64, b: f64| {
+        let d = (a - b).rem_euclid(TAU);
+        d < TOL || TAU - d < TOL
+    };
+    // Track per run: (arc, start_θ, end_θ).
+    let mut runs: Vec<(MergedArc, f64, f64)> = Vec::new();
+    for arc in lp {
+        let sp = pos_span(arc.theta_start, arc.theta_end);
+        match runs.last_mut() {
+            Some((m, _, end_theta)) if m.circle == arc.circle && contiguous(*end_theta, arc.theta_start) => {
+                m.end = arc.end;
+                m.span += sp;
+                *end_theta = arc.theta_end;
+            }
+            _ => runs.push((
+                MergedArc {
+                    circle: arc.circle,
+                    start: arc.start,
+                    end: arc.end,
+                    span: sp,
+                },
+                arc.theta_start,
+                arc.theta_end,
+            )),
+        }
+    }
+    // Cyclic fold: the loop's last run continues the first across the seam, but
+    // only if same circle AND θ-contiguous (the wrap point), never across a corner.
+    if runs.len() > 1 {
+        let (lm, ls, _le) = (&runs[0].0, runs[0].1, runs[0].2);
+        let last = runs.last().expect("len > 1");
+        if last.0.circle == lm.circle && contiguous(last.2, ls) {
+            let (last_arc, last_start, _) = runs.pop().expect("len > 1");
+            runs[0].0.start = last_arc.start;
+            runs[0].0.span += last_arc.span;
+            runs[0].1 = last_start;
+        }
+    }
+    runs.into_iter().map(|(m, _, _)| m).collect()
+}
+
+/// Sample a circular boundary segment from world point `a`, over the angular
+/// `span`, on circle `c` (canonical [`plane_basis`], so two faces sharing the seam
+/// agree). Returns `a` plus `n_interior` interior points, end omitted (the next
+/// arc supplies it). Uses `span` — not the endpoints alone — to choose the arc:
+/// `span ≈ TAU` samples the whole rim; `span > π` takes the long way; otherwise
+/// the short way (which then equals the old endpoint-only behaviour).
+fn sample_circle_seg(c: &Circle3, a: Vec3, b: Vec3, span: f64, n_interior: usize) -> Vec<Vec3> {
     let (u, v) = plane_basis(c.normal);
     let theta_of = |x: Vec3| {
         let r = x - c.center;
         r.dot(v).atan2(r.dot(u))
     };
+    let pt = |t: f64| c.center + (u * t.cos() + v * t.sin()) * c.radius;
     let ta = theta_of(a);
-    let mut tb = theta_of(b);
-    // Shortest direction around the circle.
-    if (tb - ta) > std::f64::consts::PI {
-        tb -= TAU;
-    } else if (tb - ta) < -std::f64::consts::PI {
-        tb += TAU;
+    // Full ring: sweep the whole circle from `a` (end ≈ start, omitted to close).
+    if (span - TAU).abs() < 1e-6 {
+        return (0..=n_interior)
+            .map(|k| pt(ta + TAU * k as f64 / (n_interior + 1) as f64))
+            .collect();
+    }
+    let tb = theta_of(b);
+    let mut d = (tb - ta).rem_euclid(TAU); // signed delta in [0, TAU)
+    if d > std::f64::consts::PI {
+        d -= TAU; // shortest signed direction
+    }
+    // If the intended arc is the long one (span past π), flip to the long way.
+    if span > std::f64::consts::PI && d.abs() < std::f64::consts::PI {
+        d += if d >= 0.0 { -TAU } else { TAU };
     }
     (0..=n_interior)
-        .map(|k| {
-            let t = ta + (tb - ta) * k as f64 / (n_interior + 1) as f64;
-            c.center + (u * t.cos() + v * t.sin()) * c.radius
-        })
+        .map(|k| pt(ta + d * k as f64 / (n_interior + 1) as f64))
         .collect()
 }
 
@@ -721,6 +793,56 @@ mod tests {
 
     fn ctr(x: f64, y: f64, z: f64) -> Vec3 {
         Vec3::new(x, y, z)
+    }
+
+    fn barc(circle: usize, ts: f64, te: f64) -> BoundaryArc {
+        // Directions are only used as merge endpoints here; pin them to the θ on a
+        // unit circle so the test reads geometrically.
+        BoundaryArc {
+            circle,
+            theta_start: ts,
+            theta_end: te,
+            start: Vec3::new(ts.cos(), ts.sin(), 0.0),
+            end: Vec3::new(te.cos(), te.sin(), 0.0),
+        }
+    }
+
+    #[test]
+    fn merge_folds_wrap_seam_but_not_real_corners() {
+        // A great-circle edge wrap-split at θ=0 → [5.94,2π] then [0,0.34], with the
+        // other two edges between them in the walk. The cyclic fold must rejoin the
+        // two circle-0 pieces into ONE arc (span = 0.34+0.34), leaving 3 arcs.
+        let lp = vec![
+            barc(0, 0.0, 0.34),
+            barc(2, 1.0, 1.5),
+            barc(1, 2.0, 2.5),
+            barc(0, 5.9433, TAU),
+        ];
+        let merged = merge_same_circle_runs(&lp);
+        assert_eq!(merged.len(), 3, "wrap halves of circle 0 folded into one");
+        let c0 = merged.iter().find(|m| m.circle == 0).unwrap();
+        assert!((c0.span - (0.34 + (TAU - 5.9433))).abs() < 1e-9, "span spans the seam");
+
+        // A REAL split: circle 0 appears twice but separated by a burial arc on BOTH
+        // sides (a genuine corner), and its two pieces are NOT θ-contiguous. They
+        // must stay distinct.
+        let lp2 = vec![
+            barc(0, 0.0, 0.5),
+            barc(3, 0.5, 0.9), // burial arc (different circle) — a real corner
+            barc(0, 1.4, 2.0), // second circle-0 piece, θ-gap from the first
+            barc(3, 2.0, 2.4),
+        ];
+        let merged2 = merge_same_circle_runs(&lp2);
+        assert_eq!(merged2.len(), 4, "genuinely separate circle-0 pieces stay split");
+    }
+
+    #[test]
+    fn merge_marks_full_ring_span() {
+        // A single full-circle hole loop (θ 0→2π) → one arc with span ≈ TAU.
+        let lp = vec![barc(4, 0.0, TAU)];
+        let merged = merge_same_circle_runs(&lp);
+        assert_eq!(merged.len(), 1);
+        assert!((merged[0].span - TAU).abs() < 1e-9, "full ring carries span = TAU");
     }
 
     #[test]
@@ -912,20 +1034,20 @@ mod tests {
     #[test]
     fn burial_seam_samples_are_frame_independent_for_both_faces() {
         // Both colliding faces sample their burial boundary on the SAME canonical
-        // C_ij. Given the same world endpoints, sample_circle_arc must return
-        // bit-identical points whichever face (i,j vs j,i) computes the circle —
-        // the collision-seam weld.
+        // C_ij. Given the same world endpoints + span, sample_circle_seg must
+        // return bit-identical points whichever face (i,j vs j,i) computes the
+        // circle — the collision-seam weld.
         let probe = 1.4;
         let centers = [ctr(0.0, 0.0, 0.0), ctr(2.0, 0.0, 0.0)];
         let c_ij = canonical_burial_circle(0, 1, &centers, probe).unwrap();
         let c_ji = canonical_burial_circle(1, 0, &centers, probe).unwrap();
         assert_eq!(c_ij, c_ji, "canonical circle is pair-symmetric");
-        // Two endpoints on C_01.
+        // Two endpoints on C_01, a θ-span of 0.8 (the short arc) apart.
         let (u, v) = plane_basis(c_ij.normal);
         let a = c_ij.center + (u * 0.3_f64.cos() + v * 0.3_f64.sin()) * c_ij.radius;
         let b = c_ij.center + (u * 1.1_f64.cos() + v * 1.1_f64.sin()) * c_ij.radius;
-        let from_i = sample_circle_arc(&c_ij, a, b, 8);
-        let from_j = sample_circle_arc(&c_ji, a, b, 8);
+        let from_i = sample_circle_seg(&c_ij, a, b, 0.8, 8);
+        let from_j = sample_circle_seg(&c_ji, a, b, 0.8, 8);
         assert_eq!(from_i, from_j, "bit-identical seam samples → weldable");
         for x in &from_i {
             assert!((x.distance(centers[0]) - probe).abs() < 1e-9);
