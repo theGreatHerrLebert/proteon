@@ -20,7 +20,7 @@
 //!    is the spheric half; the toric event-aligned trim is next).
 //! 4. richer gate vs BALL (volume, Euler, per-face-type area, …).
 
-use super::arrangement::{arrange_loops, sample_loop, SphereCircle};
+use super::arrangement::{arrange_loops, SphereCircle};
 use super::chart::fill_spherical_region;
 use super::geom::{plane_basis, Circle3, Plane3, Vec3};
 use super::mesh::Mesh;
@@ -578,10 +578,13 @@ pub fn clip_spheric_face(
     let dirs = [dir(cs[0])?, dir(cs[1])?, dir(cs[2])?];
     let great = spheric_face_caps(dirs).context("degenerate spheric triple")?;
     let mut caps = great.to_vec();
+    // cap_src[c] = Some(j) if cap c is the burial cap toward neighbour probe j.
+    let mut cap_src: Vec<Option<usize>> = vec![None, None, None];
     for (j, &q) in centers.iter().enumerate() {
         if j != this_idx {
             if let Some(bc) = probe_burial_cap(p, q, probe) {
                 caps.push(bc);
+                cap_src.push(Some(j));
             }
         }
     }
@@ -589,16 +592,61 @@ pub fn clip_spheric_face(
     let pole = ((dirs[0] + dirs[1] + dirs[2]) * (1.0 / 3.0))
         .normalized()
         .context("spheric centroid degenerate")?;
-    let world: Vec<Vec<Vec3>> = loops
-        .iter()
-        .map(|l| {
-            sample_loop(l, &caps, n_arc)
-                .into_iter()
-                .map(|d| p + d * probe)
-                .collect()
-        })
-        .collect();
+    // Sample per arc: great-circle arcs in this face's frame, but **burial arcs on
+    // the canonical collision circle C_ij** — both colliding faces' burial
+    // boundaries lie on the same C_ij, so canonical sampling makes the seam
+    // interiors frame-independent (bit-identical) → weldable across faces.
+    let mut world: Vec<Vec<Vec3>> = Vec::with_capacity(loops.len());
+    for lp in &loops {
+        let mut pts = Vec::new();
+        for arc in lp {
+            let burial = cap_src[arc.circle]
+                .and_then(|j| canonical_burial_circle(this_idx, j, centers, probe));
+            if let Some(c) = burial {
+                // Burial arc → canonical C_ij sampling (frame-independent seam).
+                let ws = p + arc.start * probe;
+                let we = p + arc.end * probe;
+                pts.extend(sample_circle_arc(&c, ws, we, n_arc));
+            } else {
+                // Great-circle arc → this face's frame.
+                let cap = &caps[arc.circle];
+                pts.push(p + arc.start * probe);
+                for s in 1..=n_arc {
+                    let t = arc.theta_start
+                        + (arc.theta_end - arc.theta_start) * s as f64 / (n_arc + 1) as f64;
+                    pts.push(p + cap.rim_point(t) * probe);
+                }
+            }
+        }
+        world.push(pts);
+    }
     fill_spherical_region(p, probe, &world, pole, grid)
+}
+
+/// Sample the short arc of a 3-D circle from world point `a` to `b` (`a` plus
+/// `n_interior` interior points; `b` omitted, the next arc's start) using the
+/// circle's canonical [`plane_basis`] — so two callers passing the same circle and
+/// endpoints get bit-identical samples (the collision-seam weld).
+fn sample_circle_arc(c: &Circle3, a: Vec3, b: Vec3, n_interior: usize) -> Vec<Vec3> {
+    let (u, v) = plane_basis(c.normal);
+    let theta_of = |x: Vec3| {
+        let r = x - c.center;
+        r.dot(v).atan2(r.dot(u))
+    };
+    let ta = theta_of(a);
+    let mut tb = theta_of(b);
+    // Shortest direction around the circle.
+    if (tb - ta) > std::f64::consts::PI {
+        tb -= TAU;
+    } else if (tb - ta) < -std::f64::consts::PI {
+        tb += TAU;
+    }
+    (0..=n_interior)
+        .map(|k| {
+            let t = ta + (tb - ta) * k as f64 / (n_interior + 1) as f64;
+            c.center + (u * t.cos() + v * t.sin()) * c.radius
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -793,6 +841,30 @@ mod tests {
             circle_plane_intersections(&c, &p),
             circle_plane_intersections(&c, &flip)
         );
+    }
+
+    #[test]
+    fn burial_seam_samples_are_frame_independent_for_both_faces() {
+        // Both colliding faces sample their burial boundary on the SAME canonical
+        // C_ij. Given the same world endpoints, sample_circle_arc must return
+        // bit-identical points whichever face (i,j vs j,i) computes the circle —
+        // the collision-seam weld.
+        let probe = 1.4;
+        let centers = [ctr(0.0, 0.0, 0.0), ctr(2.0, 0.0, 0.0)];
+        let c_ij = canonical_burial_circle(0, 1, &centers, probe).unwrap();
+        let c_ji = canonical_burial_circle(1, 0, &centers, probe).unwrap();
+        assert_eq!(c_ij, c_ji, "canonical circle is pair-symmetric");
+        // Two endpoints on C_01.
+        let (u, v) = plane_basis(c_ij.normal);
+        let a = c_ij.center + (u * 0.3_f64.cos() + v * 0.3_f64.sin()) * c_ij.radius;
+        let b = c_ij.center + (u * 1.1_f64.cos() + v * 1.1_f64.sin()) * c_ij.radius;
+        let from_i = sample_circle_arc(&c_ij, a, b, 8);
+        let from_j = sample_circle_arc(&c_ji, a, b, 8);
+        assert_eq!(from_i, from_j, "bit-identical seam samples → weldable");
+        for x in &from_i {
+            assert!((x.distance(centers[0]) - probe).abs() < 1e-9);
+            assert!((x.distance(centers[1]) - probe).abs() < 1e-9);
+        }
     }
 
     #[test]
