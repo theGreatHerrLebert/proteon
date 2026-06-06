@@ -20,7 +20,7 @@
 //!    is the spheric half; the toric event-aligned trim is next).
 //! 4. richer gate vs BALL (volume, Euler, per-face-type area, …).
 
-use super::arrangement::{arrange_loops, SphereCircle};
+use super::arrangement::{arrange_loops, BoundaryArc, SphereCircle};
 use super::chart::fill_spherical_region;
 use super::geom::{plane_basis, Circle3, Plane3, Vec3};
 use super::mesh::Mesh;
@@ -592,33 +592,38 @@ pub fn clip_spheric_face(
     let pole = ((dirs[0] + dirs[1] + dirs[2]) * (1.0 / 3.0))
         .normalized()
         .context("spheric centroid degenerate")?;
-    // Sample per arc: great-circle arcs in this face's frame, but **burial arcs on
-    // the canonical collision circle C_ij** — both colliding faces' burial
-    // boundaries lie on the same C_ij, so canonical sampling makes the seam
-    // interiors frame-independent (bit-identical) → weldable across faces.
+    // Sample per arc: great-circle (reentrant) edges with the **same**
+    // `toric_column_curve` φ-parameterization as the adjacent toric θ-end, and
+    // **burial arcs on the canonical collision circle C_ij** (shared between the
+    // two colliding faces). Before sampling, merge cyclically-consecutive arcs on
+    // the same circle: a shared endpoint between two arcs of the SAME circle is
+    // never a real corner (corners are where two *different* circles cross) — it
+    // is the θ=0 basis-seam artifact of `arrange_loops` splitting a wrapping
+    // interval. Merging restores each edge to one arc over its full φ-range,
+    // matching the toric θ-end (which never has that split). A *genuinely* split
+    // edge stays split: its pieces are separated by a burial arc, so they are not
+    // consecutive and never get merged.
     let mut world: Vec<Vec<Vec3>> = Vec::with_capacity(loops.len());
     for lp in &loops {
         let mut pts = Vec::new();
-        for arc in lp {
-            let burial = cap_src[arc.circle]
-                .and_then(|j| canonical_burial_circle(this_idx, j, centers, probe));
+        for (circle, start, end) in merge_same_circle_runs(lp) {
+            let burial =
+                cap_src[circle].and_then(|j| canonical_burial_circle(this_idx, j, centers, probe));
             if let Some(c) = burial {
                 // Burial arc → canonical C_ij sampling (frame-independent seam).
-                let ws = p + arc.start * probe;
-                let we = p + arc.end * probe;
-                pts.extend(sample_circle_arc(&c, ws, we, n_arc));
-            } else if arc.circle < 3 {
-                // Great-circle (reentrant) edge: sample it with the **same**
-                // φ-parameterization as the adjacent toric θ-end
-                // ([`toric_column_curve`]) so the two polylines coincide
-                // position-for-position and the tolerance weld fuses them. `dir_a`
-                // is the lower-atom contact (contacts are atom-sorted, so the lower
-                // contact index = the lower atom), matching the toric arc's
-                // `edge=[i,j]` (i<j) φ=0 reference — `dir_a`/`dir_b`/`tangent` are
-                // then bit-identical to the toric side, leaving only the
-                // φ-endpoints (arrange_loops corner vs kept-interval) ~1e-9 apart.
-                let e = arc.circle;
-                let (lo, hi) = (e.min((e + 1) % 3), e.max((e + 1) % 3));
+                pts.extend(sample_circle_arc(
+                    &c,
+                    p + start * probe,
+                    p + end * probe,
+                    n_arc,
+                ));
+            } else if circle < 3 {
+                // Great-circle reentrant edge → toric_column_curve φ-param, dir_a =
+                // lower-atom contact (contacts are atom-sorted ⇒ lower index = lower
+                // atom), matching the toric edge=[i,j] (i<j) φ=0 reference. So
+                // dir_a/dir_b/tangent are bit-identical to the toric θ-end; only the
+                // φ-endpoints differ (~1e-9), which the tolerance weld fuses.
+                let (lo, hi) = (circle.min((circle + 1) % 3), circle.max((circle + 1) % 3));
                 let (dir_a, dir_b) = (dirs[lo], dirs[hi]);
                 if let Some(n) = dir_a.cross(dir_b).normalized() {
                     let tangent = n.cross(dir_a);
@@ -628,31 +633,60 @@ pub fn clip_spheric_face(
                         dir_a,
                         tangent,
                         probe,
-                        phi_of(arc.start),
-                        phi_of(arc.end),
+                        phi_of(start),
+                        phi_of(end),
                         n_arc,
                     );
                     // Drop the last point (end corner) — the next arc provides it.
                     let take = col.len().saturating_sub(1).max(1);
                     pts.extend_from_slice(&col[..take]);
                 } else {
-                    pts.push(p + arc.start * probe); // degenerate edge: corner only
+                    pts.push(p + start * probe); // degenerate edge: corner only
                 }
             } else {
-                // A burial cap with no canonical circle (degenerate overlap): keep
-                // the in-frame rim sampling rather than dropping the arc.
-                let cap = &caps[arc.circle];
-                pts.push(p + arc.start * probe);
-                for s in 1..=n_arc {
-                    let t = arc.theta_start
-                        + (arc.theta_end - arc.theta_start) * s as f64 / (n_arc + 1) as f64;
-                    pts.push(p + cap.rim_point(t) * probe);
-                }
+                // A burial cap with no canonical C_ij circle (degenerate overlap):
+                // sample its own small-circle rim (a Circle3 on probe p's sphere).
+                let cap = &caps[circle];
+                let cc = Circle3 {
+                    center: p + cap.axis * (cap.half_angle.cos() * probe),
+                    normal: cap.axis,
+                    radius: cap.half_angle.sin() * probe,
+                };
+                pts.extend(sample_circle_arc(
+                    &cc,
+                    p + start * probe,
+                    p + end * probe,
+                    n_arc,
+                ));
             }
         }
         world.push(pts);
     }
     fill_spherical_region(p, probe, &world, pole, grid)
+}
+
+/// Merge cyclically-consecutive [`arrangement::BoundaryArc`]s that lie on the
+/// **same** circle into one `(circle, start_dir, end_dir)` arc. Two same-circle
+/// arcs only ever meet at the θ=0 plane-basis seam (a wrapping interval split by
+/// `exposed_arcs`), never at a real corner (which is the crossing of two distinct
+/// circles), so this is always safe and restores each boundary edge to a single
+/// arc over its full angular span. Returns `(circle, start, end)` triples in loop
+/// order; the cyclic wrap (last run on the same circle as the first) is folded
+/// into the first.
+fn merge_same_circle_runs(lp: &[BoundaryArc]) -> Vec<(usize, Vec3, Vec3)> {
+    let mut out: Vec<(usize, Vec3, Vec3)> = Vec::new();
+    for arc in lp {
+        match out.last_mut() {
+            Some(last) if last.0 == arc.circle => last.2 = arc.end,
+            _ => out.push((arc.circle, arc.start, arc.end)),
+        }
+    }
+    // Cyclic fold: the loop's last run continues the first across the seam.
+    if out.len() > 1 && out.first().map(|r| r.0) == out.last().map(|r| r.0) {
+        let last = out.pop().expect("len > 1");
+        out[0].1 = last.1; // start from the wrapped run's start
+    }
+    out
 }
 
 /// Sample the short arc of a 3-D circle from world point `a` to `b` (`a` plus

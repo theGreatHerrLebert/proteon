@@ -934,23 +934,16 @@ mod tests {
         }
     }
 
-    /// The cleaned **welded** assembler ([`ses_mesh_cleaned_welded`]) must, on a
-    /// collision-free config: (a) introduce **no** true non-manifold edge — an
-    /// edge shared by ≥3 triangles — proving the tolerance merge does not
-    /// over-fuse distinct features; (b) actually **fuse** the great-circle seams
-    /// (spheric edge ↔ toric θ-end, now both sampled via `toric_column_curve`) so
-    /// the welded vertex count drops well below the raw concatenated count; and
-    /// (c) preserve the rigorous area (the weld only identifies coincident
-    /// vertices, it must not move geometry).
-    ///
-    /// NOTE: this does *not* assert full watertightness. A residual of open edges
-    /// remains because the toric θ-end trim and the spheric-edge clip use
-    /// different neighbour-exclusion sets (the toric excludes its two end faces;
-    /// the spheric face sees all neighbours), so wherever a third probe trims one
-    /// side but not the other the shared polyline desyncs. Closing that needs the
-    /// two sides to share one trimmed θ-end polyline — tracked in NEXT_WELD.md.
+    /// On a collision-free config the cleaned **welded** assembler
+    /// ([`ses_mesh_cleaned_welded`]) must produce a closed, manifold, outward
+    /// surface — the cleaned-path counterpart of the analytic watertightness gate.
+    /// It exercises the full great-circle weld (spheric edge ↔ toric θ-end, both
+    /// via `toric_column_curve`, with same-circle arc merging so the spheric edge
+    /// is one arc over its full φ-range like the θ-end) and the contact-cap ↔
+    /// φ-rim seam, all fused by the tolerance merge. Any open or ≥3-shared edge
+    /// here is a weld-sampler mismatch.
     #[test]
-    fn cleaned_welded_assembler_fuses_seams_without_overmerge() {
+    fn cleaned_welded_assembler_is_watertight_without_collisions() {
         let tetra = vec![
             sph(0.0, 0.0, 0.0, 1.6),
             sph(2.0, 0.0, 0.0, 1.6),
@@ -967,7 +960,8 @@ mod tests {
             let raw = ses_mesh_cleaned(&atoms, 1.4, 48, 10, 0.05).unwrap();
             let m = ses_mesh_cleaned_welded(&atoms, 1.4, 48, 10, 0.05, 1e-4).unwrap();
 
-            // (a) No true non-manifold edge (count ≥ 3) — the weld never over-fuses.
+            // No edge shared by ≥3 triangles (no over-merge) AND none open: the
+            // welded cleaned mesh is a closed 2-manifold.
             let mut uc: std::collections::HashMap<(u32, u32), u32> =
                 std::collections::HashMap::new();
             for t in &m.tris {
@@ -975,21 +969,20 @@ mod tests {
                     *uc.entry((a.min(b), a.max(b))).or_default() += 1;
                 }
             }
-            let true_nonmanifold = uc.values().filter(|&&c| c >= 3).count();
+            let overmerged = uc.values().filter(|&&c| c >= 3).count();
+            let open = uc.values().filter(|&&c| c == 1).count();
             assert_eq!(
-                true_nonmanifold, 0,
-                "{name}: tolerance weld must not create ≥3-shared (over-merged) edges"
+                overmerged, 0,
+                "{name}: weld must not over-fuse (≥3-shared edge)"
             );
-
-            // (b) The weld fuses seams: far fewer vertices than the raw concat.
+            assert_eq!(open, 0, "{name}: every seam must fuse (no open edge)");
             assert!(
-                m.num_vertices() < raw.num_vertices(),
-                "{name}: weld must fuse coincident seam vertices ({} !< {})",
-                m.num_vertices(),
-                raw.num_vertices()
+                m.is_watertight(),
+                "{name}: welded cleaned mesh must be closed"
             );
+            assert!(m.signed_volume() > 0.0, "{name}: outward-oriented");
 
-            // (c) Area preserved (rigorous, orientation-independent) and ≈ BALL.
+            // The weld must not move the rigorous area, and it must match BALL.
             let (a_raw, a_weld) = (raw.surface_area(), m.surface_area());
             assert!(
                 (a_weld - a_raw).abs() / a_raw < 1e-3,
