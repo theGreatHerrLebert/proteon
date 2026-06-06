@@ -607,8 +607,40 @@ pub fn clip_spheric_face(
                 let ws = p + arc.start * probe;
                 let we = p + arc.end * probe;
                 pts.extend(sample_circle_arc(&c, ws, we, n_arc));
+            } else if arc.circle < 3 {
+                // Great-circle (reentrant) edge: sample it with the **same**
+                // φ-parameterization as the adjacent toric θ-end
+                // ([`toric_column_curve`]) so the two polylines coincide
+                // position-for-position and the tolerance weld fuses them. `dir_a`
+                // is the lower-atom contact (contacts are atom-sorted, so the lower
+                // contact index = the lower atom), matching the toric arc's
+                // `edge=[i,j]` (i<j) φ=0 reference — `dir_a`/`dir_b`/`tangent` are
+                // then bit-identical to the toric side, leaving only the
+                // φ-endpoints (arrange_loops corner vs kept-interval) ~1e-9 apart.
+                let e = arc.circle;
+                let (lo, hi) = (e.min((e + 1) % 3), e.max((e + 1) % 3));
+                let (dir_a, dir_b) = (dirs[lo], dirs[hi]);
+                if let Some(n) = dir_a.cross(dir_b).normalized() {
+                    let tangent = n.cross(dir_a);
+                    let phi_of = |d: Vec3| d.dot(tangent).atan2(d.dot(dir_a));
+                    let col = toric_column_curve(
+                        p,
+                        dir_a,
+                        tangent,
+                        probe,
+                        phi_of(arc.start),
+                        phi_of(arc.end),
+                        n_arc,
+                    );
+                    // Drop the last point (end corner) — the next arc provides it.
+                    let take = col.len().saturating_sub(1).max(1);
+                    pts.extend_from_slice(&col[..take]);
+                } else {
+                    pts.push(p + arc.start * probe); // degenerate edge: corner only
+                }
             } else {
-                // Great-circle arc → this face's frame.
+                // A burial cap with no canonical circle (degenerate overlap): keep
+                // the in-frame rim sampling rather than dropping the arc.
                 let cap = &caps[arc.circle];
                 pts.push(p + arc.start * probe);
                 for s in 1..=n_arc {

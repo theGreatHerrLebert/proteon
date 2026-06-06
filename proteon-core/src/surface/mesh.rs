@@ -239,6 +239,89 @@ impl Mesh {
             tris,
         }
     }
+
+    /// Like [`Mesh::welded`] but fuses vertices within Euclidean distance `eps`
+    /// (a **tolerance** merge). Use this — not `welded` — when shared seams are
+    /// sampled by *different* parameterizations that agree mathematically but
+    /// not bit-for-bit. The cleaned SES is exactly that case: a great-circle
+    /// seam is sampled as `toric_column_curve` (φ = `dir·cos+tan·sin`) on the
+    /// toric side and `arc_on_sphere` (slerp) on the spheric side, and burial
+    /// corners are reconstructed independently by `arrange_loops` (direction
+    /// space) and the toric φ-trim — coincident points that never share f64
+    /// bits.
+    ///
+    /// `eps` MUST sit **below the minimum genuine feature separation** (the
+    /// sample spacing: chart `grid`, the reentrant `n_phi` step, the toric
+    /// `n_theta` step) and **above** the largest independent-reconstruction gap
+    /// between two samplings of the same corner. Pick it by measurement: the
+    /// smallest `eps` that closes the open edges without moving `surface_area`.
+    /// Too large false-merges distinct features (collapsing real surface); too
+    /// small leaves the seam open. The first vertex of a cluster wins (its
+    /// normal is kept — see [`Mesh::welded`] on seam normals).
+    ///
+    /// Buckets vertices on an `eps`-grid and probes the 27 neighbouring cells,
+    /// so a cluster straddling a cell boundary still merges.
+    pub fn welded_within(&self, eps: f64) -> Mesh {
+        assert!(
+            eps > 0.0 && eps.is_finite(),
+            "weld tolerance must be positive and finite"
+        );
+        let inv = 1.0 / eps;
+        let cell = |p: Vec3| {
+            (
+                (p.x * inv).floor() as i64,
+                (p.y * inv).floor() as i64,
+                (p.z * inv).floor() as i64,
+            )
+        };
+        let mut grid: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::new();
+        let mut remap = vec![0u32; self.verts.len()];
+        let mut verts: Vec<Vec3> = Vec::new();
+        let mut normals: Vec<Vec3> = Vec::new();
+        for (i, &p) in self.verts.iter().enumerate() {
+            let (cx, cy, cz) = cell(p);
+            let mut found: Option<u32> = None;
+            'search: for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if let Some(bucket) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                            for &r in bucket {
+                                if verts[r as usize].distance(p) <= eps {
+                                    found = Some(r);
+                                    break 'search;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let idx = found.unwrap_or_else(|| {
+                let r = verts.len() as u32;
+                verts.push(p);
+                normals.push(self.normals.get(i).copied().unwrap_or(p));
+                grid.entry((cx, cy, cz)).or_default().push(r);
+                r
+            });
+            remap[i] = idx;
+        }
+        let tris = self
+            .tris
+            .iter()
+            .map(|t| {
+                [
+                    remap[t[0] as usize],
+                    remap[t[1] as usize],
+                    remap[t[2] as usize],
+                ]
+            })
+            .filter(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0])
+            .collect();
+        Mesh {
+            verts,
+            normals,
+            tris,
+        }
+    }
 }
 
 /// Triangulated sphere by `subdivisions` levels of icosahedron refinement,
@@ -382,5 +465,70 @@ mod tests {
         assert!(fine.is_watertight());
         assert!(fine.is_consistently_oriented());
         assert_eq!(fine.euler_characteristic(), 2);
+    }
+
+    /// Two triangles that share an edge sampled with a sub-`eps` mismatch (the
+    /// cleaned-SES case: two parameterizations of the same seam) weld into a
+    /// closed manifold under `welded_within` but stay open under exact `welded`.
+    #[test]
+    fn welded_within_fuses_near_coincident_seams() {
+        // A unit square split into two triangles, but the shared diagonal is
+        // sampled twice with a 1e-7 jitter — bit-different, geometrically equal.
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(1.0, 0.0, 0.0);
+        let c = Vec3::new(1.0, 1.0, 0.0);
+        let d = Vec3::new(0.0, 1.0, 0.0);
+        // Patch 1 uses (a, c); patch 2 uses a jittered copy of (a, c).
+        let jit = Vec3::new(1e-7, -1e-7, 1e-7);
+        let m = Mesh {
+            verts: vec![a, b, c, a + jit, c + jit, d],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [3, 4, 5]],
+        };
+        // Exact weld leaves the diagonal split (4 + 2 = 6 verts; open).
+        let exact = m.welded();
+        assert_eq!(exact.num_vertices(), 6);
+        assert!(!exact.is_watertight());
+
+        // Tolerance weld fuses the jittered pair → 4 verts, the diagonal shared.
+        let tol = m.welded_within(1e-4);
+        assert_eq!(tol.num_vertices(), 4, "jittered diagonal endpoints fused");
+        // (Two triangles meeting on a shared edge: that edge is now manifold.)
+        let mut shared = 0;
+        let mut edges: std::collections::HashMap<(u32, u32), u32> =
+            std::collections::HashMap::new();
+        for t in &tol.tris {
+            for (x, y) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                *edges.entry((x.min(y), x.max(y))).or_default() += 1;
+            }
+        }
+        for &c in edges.values() {
+            if c == 2 {
+                shared += 1;
+            }
+        }
+        assert_eq!(
+            shared, 1,
+            "exactly the diagonal is now a shared (manifold) edge"
+        );
+
+        // Too-tight eps does NOT fuse (1e-9 < the 1e-7 jitter).
+        assert_eq!(m.welded_within(1e-9).num_vertices(), 6);
+    }
+
+    /// `welded_within` must not collapse genuinely distinct features: vertices
+    /// farther apart than `eps` stay separate.
+    #[test]
+    fn welded_within_preserves_distinct_features() {
+        let m = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2);
+        // Min vertex spacing on a level-2 icosphere is ~0.2; eps well below it.
+        let w = m.welded_within(1e-3);
+        assert_eq!(
+            w.num_vertices(),
+            m.num_vertices(),
+            "no distinct vertex merged"
+        );
+        assert!(w.is_watertight());
+        assert_eq!(w.euler_characteristic(), 2);
     }
 }
