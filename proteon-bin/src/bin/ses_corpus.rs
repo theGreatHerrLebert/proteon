@@ -111,7 +111,7 @@ fn main() {
         "{:<22} {:>5} {:>4} {:>5} {:>5} {:>5} {:>4} {:>10} {:>10} {:>9} {:>6}",
         "pdb", "atoms", "WT?", "open", "nm>=3", "euler", "comp", "area", "volume", "method", "secs"
     );
-    let (mut wt_n, mut exact_n, mut total) = (0usize, 0usize, 0usize);
+    let (mut wt_n, mut exact_n, mut processed, mut total) = (0usize, 0usize, 0usize, 0usize);
     for path in &args {
         total += 1;
         let atoms = load_spheres(path);
@@ -120,6 +120,7 @@ fn main() {
             println!("{name:<22} {:>5} LOAD/EMPTY", atoms.len());
             continue;
         }
+        processed += 1;
         if let Some(d) = &dump_dir {
             dump_spheres(&format!("{d}/{name}.json"), &atoms);
         }
@@ -172,7 +173,8 @@ fn main() {
         }
     }
     println!(
-        "\n{wt_n}/{total} watertight | {exact_n}/{total} exact-analytic | {} grid-fallback",
-        total - exact_n
+        "\n{wt_n}/{processed} watertight | {exact_n}/{processed} exact-analytic | {} grid-fallback | {} skipped",
+        processed - exact_n,
+        total - processed
     );
 }

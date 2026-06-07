@@ -377,6 +377,19 @@ pub fn triangle3_ses(
         mesh.append(&fill_spherical_region(p, probe, &[loop_pts], inward, grid)?);
     }
 
+    // Isolated atoms contribute a full vdW sphere the patch machinery never emits
+    // (see [`ses_mesh_cleaned`]) — mesh each so the analytic surface is complete.
+    // (A no-op for mutually-contacting inputs like triangle3.)
+    for (i, a) in atoms.iter().enumerate() {
+        let isolated = !atoms.iter().enumerate().any(|(j, b)| {
+            i != j && a.center.distance(b.center) < a.radius + b.radius + 2.0 * probe
+        });
+        if isolated {
+            let subdiv = ((a.radius / grid).log2().ceil() as i64).clamp(2, 5) as u32;
+            mesh.append(&super::mesh::icosphere(a.center, a.radius, subdiv));
+        }
+    }
+
     let mut mesh = mesh.welded();
     mesh.orient_consistently();
     if mesh.signed_volume() < 0.0 {
@@ -590,6 +603,19 @@ pub fn ses_mesh_analytic(
         mesh.append(&fill_spherical_region(p, probe, &[loop_pts], inward, grid)?);
     }
 
+    // Isolated atoms contribute a full vdW sphere the patch machinery never emits
+    // (see [`ses_mesh_cleaned`]) — mesh each so the analytic surface is complete.
+    // (A no-op for mutually-contacting inputs like triangle3.)
+    for (i, a) in atoms.iter().enumerate() {
+        let isolated = !atoms.iter().enumerate().any(|(j, b)| {
+            i != j && a.center.distance(b.center) < a.radius + b.radius + 2.0 * probe
+        });
+        if isolated {
+            let subdiv = ((a.radius / grid).log2().ceil() as i64).clamp(2, 5) as u32;
+            mesh.append(&super::mesh::icosphere(a.center, a.radius, subdiv));
+        }
+    }
+
     let mut mesh = mesh.welded();
     mesh.orient_consistently();
     if mesh.signed_volume() < 0.0 {
@@ -720,6 +746,21 @@ pub fn ses_mesh_cleaned(
             grid,
             n_phi,
         )?);
+    }
+
+    // Isolated atoms — those whose probe-inflated sphere overlaps no neighbour, so
+    // they generate no toric/contact/spheric face — contribute a full vdW sphere
+    // to the SES that the patch machinery never emits. Mesh each explicitly so the
+    // analytic surface is COMPLETE, not silently missing components (codex review).
+    // The icosphere subdivision is chosen so its edge length ≈ `grid`.
+    for (i, a) in atoms.iter().enumerate() {
+        let isolated = !atoms.iter().enumerate().any(|(j, b)| {
+            i != j && a.center.distance(b.center) < a.radius + b.radius + 2.0 * probe
+        });
+        if isolated {
+            let subdiv = ((a.radius / grid).log2().ceil() as i64).clamp(2, 5) as u32;
+            mesh.append(&super::mesh::icosphere(a.center, a.radius, subdiv));
+        }
     }
     Ok(mesh)
 }
@@ -1103,6 +1144,34 @@ mod tests {
                 "{name}: cleaned area {area} within 2% of ball {ball_area} (cleaner inert)"
             );
         }
+    }
+
+    #[test]
+    fn isolated_atom_sphere_is_not_dropped() {
+        // A contacting pair plus one far-away isolated atom. The isolated atom
+        // generates no toric/contact/spheric face, so the patch machinery omits
+        // it — it must be added back as a full vdW sphere (codex review), else the
+        // SES is silently missing that component.
+        let r = 1.6;
+        let atoms = vec![
+            sph(0.0, 0.0, 0.0, r),
+            sph(2.0, 0.0, 0.0, r),  // overlaps the first
+            sph(50.0, 0.0, 0.0, r), // isolated
+        ];
+        let (m, method) = ses_mesh(&atoms, 1.4, 48, 10, 0.05, 1e-4, 0.3);
+        assert!(
+            method.is_exact(),
+            "the analytic path is complete, no grid fallback"
+        );
+        let sphere = 4.0 * std::f64::consts::PI * r * r; // ≈ 32.2
+                                                         // Area ≈ pair SES (~52) + the isolated sphere (~32): well above pair-only.
+        assert!(
+            m.surface_area() > 52.0 + 0.8 * sphere,
+            "area {:.2} is missing the isolated atom's ~{sphere:.1} Å² sphere",
+            m.surface_area()
+        );
+        // The isolated sphere is its own closed component.
+        assert!(m.is_watertight(), "pair + isolated sphere are each closed");
     }
 
     #[test]
