@@ -53,9 +53,19 @@ pub fn ses_mesh_sdf(atoms: &[Sphere], probe: f64, spacing: f64) -> Mesh {
     if atoms.is_empty() {
         return Mesh::default();
     }
+    let prof = std::env::var("SES_SDF_PROF").is_ok();
     let grid = Grid::enclosing(atoms, probe, spacing);
     let f = grid.distance_field(atoms, probe);
+    let t = std::time::Instant::now();
     let mut mesh = manifold_dual_contour(&grid, &f);
+    if prof {
+        let [nx, ny, nz] = grid.dims;
+        eprintln!(
+            "  SDF dual_contour: {:.1}ms  (grid {nx}x{ny}x{nz} = {} nodes)",
+            t.elapsed().as_secs_f64() * 1e3,
+            nx * ny * nz
+        );
+    }
     // Guarantee outward (solvent-facing) orientation regardless of the seam
     // winding surface_nets emitted.
     mesh.orient_consistently();
@@ -136,7 +146,16 @@ impl Grid {
         const UNREACHED: f64 = 1e18; // finite sentinel for nodes JFA never reached
         let [nx, ny, nz] = self.dims;
         let n = nx * ny * nz;
+        let prof = std::env::var("SES_SDF_PROF").is_ok();
+        let mut t = std::time::Instant::now();
+        let lap = |name: &str, t: &mut std::time::Instant| {
+            if prof {
+                eprintln!("  SDF {name}: {:.1}ms", t.elapsed().as_secs_f64() * 1e3);
+                *t = std::time::Instant::now();
+            }
+        };
         let grid = AtomGrid::build(atoms, probe);
+        lap("atomgrid_build", &mut t);
 
         // Occupancy of A_p by rasterizing each inflated sphere into its node
         // bounding box — O(atoms · R³/h³), far cheaper than an O(neighbours)
@@ -172,6 +191,7 @@ impl Grid {
                 }
             }
         }
+        lap("occupancy", &mut t);
 
         // Seed: nodes adjacent (6-neighbour) to a sign change carry their analytic
         // nearest point on the SAS. NaN x marks "no feature yet".
@@ -205,7 +225,9 @@ impl Grid {
         // Features only need to reach nodes within ~probe of the surface (that's
         // the band straddling f = 0); beyond it the sign alone is correct.
         let reach = (probe / self.spacing).ceil() as usize + 4;
+        lap("seed", &mut t);
         jump_flood(&mut feat, self.dims, reach, &|i, j, k| self.pos(i, j, k));
+        lap("jump_flood", &mut t);
 
         // signed distance to the SAS, then erode by the probe.
         let mut f = vec![0.0f64; n];
@@ -233,6 +255,7 @@ impl Grid {
                 }
             }
         }
+        lap("finalize", &mut t);
         f
     }
 }
