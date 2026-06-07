@@ -185,3 +185,37 @@ bar must be reframed from *area* to *sign/topology*. Corrections, all adopted:
 **Net:** plan is ready to implement. First action is **CPU profiling** (which of
 K1/K2/K3 dominates) — no GPU needed — then the **K2 JFA spike** gated on
 sign/topology parity against a narrow-band exact oracle, not area.
+
+---
+
+## CPU profiling results (2026-06-07, crambin 327 atoms, `bin/sdf_prof`)
+
+Per-stage wall time of `ses_mesh_sdf` (single-threaded), `SES_SDF_PROF=1`:
+
+| h | seed | jump_flood | dual_contour | occupancy | nodes |
+|------|-----------|------------|------|------|------|
+| 0.4  | **3263 ms (90%)** | 339 ms | 18 ms | 3 ms | 0.75 M |
+| 0.2  | **13126 ms (80%)** | 2982 ms | 106 ms | 17 ms | 5.4 M |
+| 0.15 | **23051 ms (77%)** | 6277 ms | 243 ms | 39 ms | 12.5 M |
+
+**The SEED stage dominates (77–90%), NOT JFA** — codex's "K1 may rival or exceed
+JFA" was an understatement (seed is 3–4× JFA). So the GPU/parallel target is
+**K1 (`nearest_surface_point`: NEAR_REACH=2 nested exposed-projection per
+boundary node)**, not K2. Seed scales ~`1/h²` (surface band), JFA ~`1/h³·log` —
+JFA only overtakes at much finer grids than the practical range.
+
+**Key finding — the mesher is fully single-threaded** (no `par_iter` in
+`volume.rs`), yet `rayon` is already a `proteon-core` dep and the seed is
+per-node-independent over an *immutable* `AtomGrid`. **Revised sequencing:**
+
+1. **CPU rayon parallelization of seed (+ JFA passes) FIRST** — near-zero risk,
+   potentially ~Ncores× on a many-core box, and it (a) may make the SDF fast
+   enough that GPU is only for extreme scale, and (b) de-risks the GPU port by
+   proving the parallel decomposition + giving a fast multi-core baseline to beat.
+2. **Then GPU K1 (seed)** — the real bottleneck — gated on the sign/topology
+   oracle. K2 (JFA) and K3 (dual-contour) follow only if profiling after K1 shows
+   they then dominate.
+
+Tooling: `bin/sdf_prof` (this profiler) + the `SES_SDF_PROF` env timers in
+`volume.rs::distance_field`/`ses_mesh_sdf` are kept for measuring the parallel/GPU
+speedups against this CPU baseline.
