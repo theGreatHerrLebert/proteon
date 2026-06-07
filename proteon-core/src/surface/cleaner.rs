@@ -721,7 +721,9 @@ fn merge_same_circle_runs(lp: &[BoundaryArc]) -> Vec<MergedArc> {
     for arc in lp {
         let sp = pos_span(arc.theta_start, arc.theta_end);
         match runs.last_mut() {
-            Some((m, _, end_theta)) if m.circle == arc.circle && contiguous(*end_theta, arc.theta_start) => {
+            Some((m, _, end_theta))
+                if m.circle == arc.circle && contiguous(*end_theta, arc.theta_start) =>
+            {
                 m.end = arc.end;
                 m.span += sp;
                 *end_theta = arc.theta_end;
@@ -821,7 +823,10 @@ mod tests {
         let merged = merge_same_circle_runs(&lp);
         assert_eq!(merged.len(), 3, "wrap halves of circle 0 folded into one");
         let c0 = merged.iter().find(|m| m.circle == 0).unwrap();
-        assert!((c0.span - (0.34 + (TAU - 5.9433))).abs() < 1e-9, "span spans the seam");
+        assert!(
+            (c0.span - (0.34 + (TAU - 5.9433))).abs() < 1e-9,
+            "span spans the seam"
+        );
 
         // A REAL split: circle 0 appears twice but separated by a burial arc on BOTH
         // sides (a genuine corner), and its two pieces are NOT θ-contiguous. They
@@ -833,7 +838,11 @@ mod tests {
             barc(3, 2.0, 2.4),
         ];
         let merged2 = merge_same_circle_runs(&lp2);
-        assert_eq!(merged2.len(), 4, "genuinely separate circle-0 pieces stay split");
+        assert_eq!(
+            merged2.len(),
+            4,
+            "genuinely separate circle-0 pieces stay split"
+        );
     }
 
     #[test]
@@ -842,7 +851,10 @@ mod tests {
         let lp = vec![barc(4, 0.0, TAU)];
         let merged = merge_same_circle_runs(&lp);
         assert_eq!(merged.len(), 1);
-        assert!((merged[0].span - TAU).abs() < 1e-9, "full ring carries span = TAU");
+        assert!(
+            (merged[0].span - TAU).abs() < 1e-9,
+            "full ring carries span = TAU"
+        );
     }
 
     #[test]
