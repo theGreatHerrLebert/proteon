@@ -37,6 +37,7 @@
 
 use super::geom::{Sphere, Vec3};
 use super::mesh::Mesh;
+use rayon::prelude::*;
 
 /// Triangulate the SES of `atoms` (van-der-Waals spheres) for the given `probe`
 /// radius, sampling the distance field at `spacing` Å. Returns a closed,
@@ -195,32 +196,37 @@ impl Grid {
 
         // Seed: nodes adjacent (6-neighbour) to a sign change carry their analytic
         // nearest point on the SAS. NaN x marks "no feature yet".
+        //
+        // This is the profiled bottleneck (77–90% of `ses_mesh_sdf` — the per-node
+        // exposed-projection in `nearest_surface_point`). Each node writes only its
+        // own `feat[idx]` and reads only the *immutable* `inside`/`grid`, so it is
+        // embarrassingly parallel and the result is identical to the serial loop
+        // (every node computes a deterministic value regardless of thread).
         const NONE: [f64; 3] = [f64::NAN; 3];
         let mut feat = vec![NONE; n];
-        for k in 0..nz {
-            for j in 0..ny {
-                for i in 0..nx {
-                    let idx = self.idx(i, j, k);
-                    let ins = inside[idx];
-                    let boundary = [
-                        (i + 1 < nx).then(|| self.idx(i + 1, j, k)),
-                        (i > 0).then(|| self.idx(i - 1, j, k)),
-                        (j + 1 < ny).then(|| self.idx(i, j + 1, k)),
-                        (j > 0).then(|| self.idx(i, j - 1, k)),
-                        (k + 1 < nz).then(|| self.idx(i, j, k + 1)),
-                        (k > 0).then(|| self.idx(i, j, k - 1)),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .any(|nb| inside[nb] != ins);
-                    if boundary {
-                        if let Some(s) = grid.nearest_surface_point(self.pos(i, j, k)) {
-                            feat[idx] = [s.x, s.y, s.z];
-                        }
-                    }
+        let nxy = nx * ny;
+        feat.par_iter_mut().enumerate().for_each(|(idx, f)| {
+            let i = idx % nx;
+            let j = (idx / nx) % ny;
+            let k = idx / nxy;
+            let ins = inside[idx];
+            let boundary = [
+                (i + 1 < nx).then(|| self.idx(i + 1, j, k)),
+                (i > 0).then(|| self.idx(i - 1, j, k)),
+                (j + 1 < ny).then(|| self.idx(i, j + 1, k)),
+                (j > 0).then(|| self.idx(i, j - 1, k)),
+                (k + 1 < nz).then(|| self.idx(i, j, k + 1)),
+                (k > 0).then(|| self.idx(i, j, k - 1)),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|nb| inside[nb] != ins);
+            if boundary {
+                if let Some(s) = grid.nearest_surface_point(self.pos(i, j, k)) {
+                    *f = [s.x, s.y, s.z];
                 }
             }
-        }
+        });
 
         // Features only need to reach nodes within ~probe of the surface (that's
         // the band straddling f = 0); beyond it the sign alone is correct.
@@ -368,9 +374,10 @@ fn jump_flood(
     feat: &mut [[f64; 3]],
     dims: [usize; 3],
     reach: usize,
-    pos: &impl Fn(usize, usize, usize) -> Vec3,
+    pos: &(impl Fn(usize, usize, usize) -> Vec3 + Sync),
 ) {
     let [nx, ny, nz] = dims;
+    let nxy = nx * ny;
     let idx = |i: usize, j: usize, k: usize| i + nx * (j + ny * k);
     // Halving schedule next_pow2(reach) … 2, 1, then one extra unit pass — the
     // "JFA+1" variant, which cleans up the rare wrong-nearest cell vanilla JFA
@@ -387,48 +394,51 @@ fn jump_flood(
     let mut src = feat.to_vec();
     let mut dst = feat.to_vec();
     for step in schedule {
-        for k in 0..nz {
-            for j in 0..ny {
-                for i in 0..nx {
-                    let here = pos(i, j, k);
-                    let cur = src[idx(i, j, k)];
-                    let mut best = cur;
-                    let mut bestd = if cur[0].is_nan() {
-                        f64::INFINITY
-                    } else {
-                        here.square_distance(Vec3::new(cur[0], cur[1], cur[2]))
-                    };
-                    for dk in [-(step as isize), 0, step as isize] {
-                        let kk = k as isize + dk;
-                        if kk < 0 || kk as usize >= nz {
+        // Each output node reads only the immutable `src` (double-buffered) and
+        // writes only its own `dst[cell]` — independent across nodes, so the pass
+        // is data-parallel with a result identical to the serial sweep.
+        let src_ref = &src;
+        dst.par_iter_mut().enumerate().for_each(|(cell, out)| {
+            let i = cell % nx;
+            let j = (cell / nx) % ny;
+            let k = cell / nxy;
+            let here = pos(i, j, k);
+            let cur = src_ref[cell];
+            let mut best = cur;
+            let mut bestd = if cur[0].is_nan() {
+                f64::INFINITY
+            } else {
+                here.square_distance(Vec3::new(cur[0], cur[1], cur[2]))
+            };
+            for dk in [-(step as isize), 0, step as isize] {
+                let kk = k as isize + dk;
+                if kk < 0 || kk as usize >= nz {
+                    continue;
+                }
+                for dj in [-(step as isize), 0, step as isize] {
+                    let jj = j as isize + dj;
+                    if jj < 0 || jj as usize >= ny {
+                        continue;
+                    }
+                    for di in [-(step as isize), 0, step as isize] {
+                        let ii = i as isize + di;
+                        if ii < 0 || ii as usize >= nx {
                             continue;
                         }
-                        for dj in [-(step as isize), 0, step as isize] {
-                            let jj = j as isize + dj;
-                            if jj < 0 || jj as usize >= ny {
-                                continue;
-                            }
-                            for di in [-(step as isize), 0, step as isize] {
-                                let ii = i as isize + di;
-                                if ii < 0 || ii as usize >= nx {
-                                    continue;
-                                }
-                                let cand = src[idx(ii as usize, jj as usize, kk as usize)];
-                                if cand[0].is_nan() {
-                                    continue;
-                                }
-                                let d = here.square_distance(Vec3::new(cand[0], cand[1], cand[2]));
-                                if d < bestd {
-                                    bestd = d;
-                                    best = cand;
-                                }
-                            }
+                        let cand = src_ref[idx(ii as usize, jj as usize, kk as usize)];
+                        if cand[0].is_nan() {
+                            continue;
+                        }
+                        let d = here.square_distance(Vec3::new(cand[0], cand[1], cand[2]));
+                        if d < bestd {
+                            bestd = d;
+                            best = cand;
                         }
                     }
-                    dst[idx(i, j, k)] = best;
                 }
             }
-        }
+            *out = best;
+        });
         std::mem::swap(&mut src, &mut dst);
     }
     feat.copy_from_slice(&src);
