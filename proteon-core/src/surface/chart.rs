@@ -54,6 +54,40 @@ impl Chart {
     }
 }
 
+/// Center + angular radius of the **minimal enclosing spherical cap** of `dirs`
+/// (the spherical 1-center), by the iterative move-toward-farthest method seeded
+/// at `seed`. The center minimizes the maximum angle to any boundary direction,
+/// so projecting from it keeps every boundary point as close to the chart pole as
+/// possible — the least-distorted single azimuthal chart, which is what avoids the
+/// projected boundary self-crossing. A poorly-placed pole (e.g. the antipode of
+/// one buried cap) can push boundary points past 90° even when the region fits a
+/// hemisphere; this finds the pole that doesn't.
+fn enclosing_cap(dirs: &[Vec3], seed: Vec3) -> (Vec3, f64) {
+    let mut c = seed.normalized().unwrap_or(dirs[0]);
+    for step in 0..256 {
+        // Farthest boundary direction from the current center (smallest dot).
+        let far = dirs
+            .iter()
+            .copied()
+            .fold((c, 2.0_f64), |(best, mind), d| {
+                let dot = c.dot(d);
+                if dot < mind {
+                    (d, dot)
+                } else {
+                    (best, mind)
+                }
+            })
+            .0;
+        let rate = 1.0 / (step as f64 + 2.0);
+        c = (c + (far - c) * rate).normalized().unwrap_or(c);
+    }
+    let r = dirs
+        .iter()
+        .map(|&d| c.dot(d).clamp(-1.0, 1.0).acos())
+        .fold(0.0_f64, f64::max);
+    (c, r)
+}
+
 /// Crossing-number (even-odd) point-in-region test over the projected loops.
 /// Domain = inside an odd number of loops — consistent with the *sampled* polygon
 /// (no analytic-vs-chord mismatch at the boundary; codex-review).
@@ -107,8 +141,42 @@ pub fn fill_spherical_region(
     interior_dir: Vec3,
     grid: f64,
 ) -> Result<Mesh> {
-    let chart = Chart::new(interior_dir.normalized().expect("interior_dir nonzero"));
     let dir_of = |p: Vec3| (p - center).normalized().expect("boundary point at centre");
+
+    // Center the chart pole on the minimal enclosing cap of the boundary (seeded
+    // by the caller's interior hint), not on a fixed heuristic direction: an
+    // off-center pole can throw boundary points past 90°, where the azimuthal
+    // chart distorts enough that the projected polygon self-crosses (the CDT
+    // "boundary edge crosses an existing constraint" failure). The 1-center
+    // minimizes the worst boundary angle. If even that exceeds a hemisphere, the
+    // region genuinely cannot fit one azimuthal chart — bail clearly for
+    // multi-chart rather than feed the CDT a self-crossing polygon.
+    let all_dirs: Vec<Vec3> = loops.iter().flatten().map(|&w| dir_of(w)).collect();
+    ensure!(!all_dirs.is_empty(), "no boundary points to fill");
+    let hint = interior_dir.normalized().expect("interior_dir nonzero");
+    // Re-center the chart pole on the boundary's minimal enclosing cap *only* when
+    // that center lies on the region's side (same hemisphere as the trusted
+    // interior hint) AND it strictly reduces the worst boundary angle. For a
+    // disk-like region (boundary surrounds it) the enclosing-cap center is the
+    // region centre — re-centering pulls boundary points off the high-distortion
+    // rim and stops the projected polygon self-crossing. For a *complement* region
+    // (sphere minus a small cap: the boundary is a small loop, its enclosing-cap
+    // centers on the HOLE, opposite the region) the test fails and we keep the
+    // caller's deep-interior pole — the correct one there. The inner per-point
+    // antipode check remains the backstop.
+    let maxang = |p: Vec3| {
+        all_dirs
+            .iter()
+            .map(|&d| p.dot(d).clamp(-1.0, 1.0).acos())
+            .fold(0.0_f64, f64::max)
+    };
+    let (cap_c, cap_r) = enclosing_cap(&all_dirs, hint);
+    let pole = if cap_c.dot(hint) > 0.0 && cap_r < maxang(hint) {
+        cap_c
+    } else {
+        hint
+    };
+    let chart = Chart::new(pole);
 
     let mut pts: Vec<[f64; 2]> = Vec::new();
     let mut world: Vec<Vec3> = Vec::new();
