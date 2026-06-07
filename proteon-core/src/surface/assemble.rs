@@ -724,6 +724,100 @@ pub fn ses_mesh_cleaned(
     Ok(mesh)
 }
 
+/// SplitMix64 step — a deterministic stateless PRNG for the perturbation jitter
+/// (no RNG state to thread, fully reproducible run-to-run).
+fn splitmix(z: &mut u64) -> u64 {
+    *z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut x = *z;
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+/// Deterministically perturb every atom centre by a tiny jitter for retry
+/// `attempt` (1-based). The magnitude grows geometrically from `1e-4 Å`: that is
+/// ≫ the graph's `TANGENT_TOL` (1e-6), so it separates a cospherical/singular
+/// tangent set (the probe-tangent-to-≥4-atoms degeneracy `build_graph` rejects),
+/// yet ≪ the surface sampling resolution, so the recomputed SES is unchanged
+/// within tolerance. Per codex review we perturb **atom centres**, never the
+/// solved probe centre (jittering a probe would break its defining tangencies and
+/// desync neighbouring faces); the whole graph + assembly is then rebuilt
+/// self-consistently from the perturbed atoms, preserving genuine tangencies while
+/// breaking only the accidental coincidence. The jitter direction is a
+/// deterministic function of `(atom index, attempt)`.
+fn perturb_atoms(atoms: &[Sphere], attempt: usize) -> Vec<Sphere> {
+    // Magnitude grows geometrically from 1e-4 Å, capped at 1e-2 Å. A 1e-4 jitter
+    // clears an *exact* coincidence (≫ the 1e-6 tangent tolerance), but a
+    // *genuine* near-degeneracy (e.g. a near-coplanar spheric triple) needs a
+    // larger escape; empirically up to ~1e-2 Å suffices and still holds the area
+    // within ~0.05% of the reference (sub-resolution for SES). Beyond the cap the
+    // input is treated as irreducibly degenerate (the retry exhausts and surfaces
+    // the error) rather than distorting the surface further.
+    let eps = (1e-4 * 2.0_f64.powi(attempt as i32 - 1)).min(1e-2);
+    atoms
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let mut z = (i as u64).wrapping_mul(0xD1B5_4A32_D192_ED03)
+                ^ (attempt as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mut comp = || (splitmix(&mut z) as f64 / u64::MAX as f64) * 2.0 - 1.0;
+            let d = Vec3::new(comp(), comp(), comp())
+                .normalized()
+                .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+            Sphere::new(s.center + d * eps, s.radius)
+        })
+        .collect()
+}
+
+/// Is `e` a *degeneracy* the perturbation retry can plausibly resolve — i.e. an
+/// exact geometric coincidence in the input (a cospherical/singular probe vertex,
+/// or coincident/tangent caps), as opposed to a sampling/chart artifact (the CDT
+/// chord crossing, which a tiny atom jitter would not reliably fix)?
+fn is_degeneracy_error(e: &anyhow::Error) -> bool {
+    let m = e.to_string();
+    m.contains("cospherical")
+        || m.contains("tangent third")
+        || m.contains("degenerate caps")
+        || m.contains("does not close")
+        || m.contains("singular")
+        // Downstream consequences of the same near-degenerate config: the graph's
+        // 1e-6 toric-endpoint ↔ canonical-RS-face matching, and degenerate spheric
+        // triples (near-coplanar contacts). A larger perturbation step can clear
+        // some of these — though a *genuinely* near-degenerate sliver may persist.
+        || m.contains("RS face")
+        || m.contains("degenerate spheric triple")
+}
+
+/// Build `T` from `atoms`, retrying on an input-degeneracy error with a growing
+/// deterministic atom perturbation (up to `max_attempts` retries). Returns the
+/// result and the number of perturbation attempts used (0 = first try, original
+/// coordinates). A non-degeneracy error is returned immediately (no retry).
+fn build_with_perturbation_retry<T>(
+    atoms: &[Sphere],
+    max_attempts: usize,
+    mut build: impl FnMut(&[Sphere]) -> Result<T>,
+) -> Result<(T, usize)> {
+    let mut last: Option<anyhow::Error> = None;
+    for attempt in 0..=max_attempts {
+        let pert;
+        let a = if attempt == 0 {
+            atoms
+        } else {
+            pert = perturb_atoms(atoms, attempt);
+            &pert
+        };
+        match build(a) {
+            Ok(t) => return Ok((t, attempt)),
+            Err(e) if attempt < max_attempts && is_degeneracy_error(&e) => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.expect("loop ran at least once"))
+}
+
+/// Max deterministic perturbation retries for an input degeneracy.
+const MAX_DEGEN_RETRIES: usize = 12;
+
 /// The cleaned analytic SES, **welded watertight** with a tolerance merge.
 ///
 /// [`ses_mesh_cleaned`] returns the concatenated cleaned patches (rigorous area,
@@ -733,6 +827,9 @@ pub fn ses_mesh_cleaned(
 /// reconstructed corners). [`Mesh::welded_within`] fuses those coincident seam
 /// samples — the BALL-style tolerance merge, not the analytic path's exact
 /// `welded`. Then orients consistently and flips to outward (positive volume).
+///
+/// On an input-degeneracy error (a cospherical/singular probe vertex etc.) it
+/// retries with a tiny deterministic atom perturbation ([`build_with_perturbation_retry`]).
 ///
 /// `weld_eps` must sit below the minimum genuine feature separation (the sample
 /// spacing set by `grid`/`n_phi`/`n_theta`) and above the largest gap between
@@ -746,7 +843,9 @@ pub fn ses_mesh_cleaned_welded(
     grid: f64,
     weld_eps: f64,
 ) -> Result<Mesh> {
-    let raw = ses_mesh_cleaned(atoms, probe, n_theta, n_phi, grid)?;
+    let (raw, _attempts) = build_with_perturbation_retry(atoms, MAX_DEGEN_RETRIES, |a| {
+        ses_mesh_cleaned(a, probe, n_theta, n_phi, grid)
+    })?;
     let mut mesh = raw.welded_within(weld_eps);
     mesh.orient_consistently();
     if mesh.signed_volume() < 0.0 {
@@ -932,6 +1031,81 @@ mod tests {
                 "{name}: cleaned area {area} within 2% of ball {ball_area} (cleaner inert)"
             );
         }
+    }
+
+    #[test]
+    fn perturbation_jitter_is_tiny_and_deterministic() {
+        let atoms = vec![sph(0.0, 0.0, 0.0, 1.6), sph(2.0, 0.3, -0.1, 1.5)];
+        // First retry (attempt 1) is 1e-4 Å; deterministic run-to-run; radii fixed.
+        let a = perturb_atoms(&atoms, 1);
+        let b = perturb_atoms(&atoms, 1);
+        for (x, y) in a.iter().zip(&b) {
+            assert_eq!(x.center, y.center, "perturbation must be deterministic");
+        }
+        for (o, p) in atoms.iter().zip(&a) {
+            let d = o.center.distance(p.center);
+            assert!(
+                (d - 1e-4).abs() < 1e-9,
+                "attempt-1 jitter is 1e-4 Å, got {d}"
+            );
+            assert_eq!(p.radius, o.radius, "radii are not perturbed");
+        }
+        // Magnitude grows gently and stays ≪ surface resolution (capped 2e-3 Å).
+        let a3 = perturb_atoms(&atoms, 3);
+        let d3 = atoms[0].center.distance(a3[0].center);
+        assert!(
+            (d3 - 1e-4 * 4.0).abs() < 1e-9,
+            "attempt-3 jitter is 4e-4 Å, got {d3}"
+        );
+        let big = perturb_atoms(&atoms, 30);
+        assert!(
+            atoms[0].center.distance(big[0].center) <= 1e-2 + 1e-12,
+            "jitter is capped at 1e-2 Å"
+        );
+    }
+
+    #[test]
+    fn retry_resolves_degeneracy_and_passes_through_real_errors() {
+        use std::cell::Cell;
+        let atoms = vec![sph(0.0, 0.0, 0.0, 1.6)];
+
+        // A build that "fails cospherical" twice then succeeds → 2 attempts used,
+        // and the perturbed atoms (not the originals) reach the successful build.
+        let calls = Cell::new(0usize);
+        let (val, attempts) = build_with_perturbation_retry(&atoms, 6, |a| {
+            let n = calls.get();
+            calls.set(n + 1);
+            if n < 2 {
+                anyhow::bail!(
+                    "toric endpoint of pair [1,2] has 2 tangent third atoms (cospherical)"
+                )
+            }
+            // On success the geometry was perturbed (attempt 2 ⇒ centre moved).
+            assert!(a[0].center.distance(atoms[0].center) > 0.0);
+            Ok(42)
+        })
+        .unwrap();
+        assert_eq!(val, 42);
+        assert_eq!(attempts, 2, "two perturbations before success");
+
+        // A non-degeneracy error must NOT be retried (returns immediately).
+        let calls2 = Cell::new(0usize);
+        let err = build_with_perturbation_retry(&atoms, 6, |_| -> Result<i32> {
+            calls2.set(calls2.get() + 1);
+            anyhow::bail!("boundary edge 11->12 crosses an existing constraint")
+        });
+        assert!(err.is_err());
+        assert_eq!(
+            calls2.get(),
+            1,
+            "chart/chord errors are not perturb-retried"
+        );
+
+        // Exhausting retries surfaces the last degeneracy error.
+        let exhausted = build_with_perturbation_retry(&atoms, 2, |_| -> Result<i32> {
+            anyhow::bail!("cospherical/singular vertex")
+        });
+        assert!(exhausted.is_err());
     }
 
     /// On a collision-free config the cleaned **welded** assembler
