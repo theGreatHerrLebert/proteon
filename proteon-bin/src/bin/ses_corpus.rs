@@ -7,7 +7,7 @@
 //!   cargo run --release --bin ses_corpus -- --si a.pdb     # + self-intersection
 
 use proteon_core::sasa::{vdw_radius, DEFAULT_RADIUS};
-use proteon_core::surface::assemble::ses_mesh_cleaned_welded;
+use proteon_core::surface::assemble::{ses_mesh, SesMethod};
 use proteon_core::surface::geom::{Sphere, Vec3};
 use proteon_core::surface::mesh::Mesh;
 use std::collections::{HashMap, HashSet};
@@ -108,73 +108,71 @@ fn main() {
     let eps = 1e-4;
 
     println!(
-        "{:<28} {:>5} {:>4} {:>5} {:>5} {:>5} {:>4} {:>10} {:>10} {:>7}",
-        "pdb", "atoms", "WT?", "open", "nm>=3", "euler", "comp", "area", "volume", "secs"
+        "{:<22} {:>5} {:>4} {:>5} {:>5} {:>5} {:>4} {:>10} {:>10} {:>9} {:>6}",
+        "pdb", "atoms", "WT?", "open", "nm>=3", "euler", "comp", "area", "volume", "method", "secs"
     );
-    let (mut ok, mut total) = (0usize, 0usize);
+    let (mut wt_n, mut exact_n, mut total) = (0usize, 0usize, 0usize);
     for path in &args {
         total += 1;
         let atoms = load_spheres(path);
         let name = path.rsplit('/').next().unwrap_or(path);
         if atoms.len() < 2 {
-            println!("{name:<28} {:>5} LOAD/EMPTY", atoms.len());
+            println!("{name:<22} {:>5} LOAD/EMPTY", atoms.len());
             continue;
         }
         if let Some(d) = &dump_dir {
             dump_spheres(&format!("{d}/{name}.json"), &atoms);
         }
         let t = Instant::now();
-        match ses_mesh_cleaned_welded(&atoms, probe, 48, 10, 0.04, eps) {
-            Ok(m) => {
-                let (open, nm) = edge_stats(&m);
-                let wt = m.is_watertight();
-                if wt {
-                    ok += 1;
-                }
-                let si = if with_si {
-                    format!(
-                        " si={}",
-                        proteon_core::surface::intersect::self_intersections(&m, 1.0, 5000)
-                    )
-                } else {
-                    String::new()
-                };
-                println!(
-                    "{name:<28} {:>5} {:>4} {:>5} {:>5} {:>5} {:>4} {:>10.3} {:>10.3} {:>7.1}{si}",
-                    atoms.len(),
-                    if wt { "yes" } else { "NO" },
-                    open,
-                    nm,
-                    m.euler_characteristic(),
-                    components(&m),
-                    m.surface_area(),
-                    m.signed_volume(),
-                    t.elapsed().as_secs_f64(),
-                );
-                if dump_dir.is_some() {
-                    println!(
-                        "REC,{name},{},{},{},{},{:.4},ok",
-                        atoms.len(),
-                        i32::from(wt),
-                        open,
-                        nm,
-                        m.surface_area()
-                    );
-                }
-            }
-            Err(e) => {
-                println!(
-                    "{name:<28} {:>5} ERR  {:.1}s: {e}",
-                    atoms.len(),
-                    t.elapsed().as_secs_f64()
-                );
-                if dump_dir.is_some() {
-                    let msg = e.to_string();
-                    let short = msg.split(['\n', ':']).next().unwrap_or("err");
-                    println!("REC,{name},{},,,,,{short}", atoms.len());
-                }
-            }
+        // The hybrid: exact analytic (+ perturbation retry) first, numerical grid
+        // fallback otherwise. Always returns a mesh.
+        let (m, method) = ses_mesh(&atoms, probe, 48, 10, 0.04, eps, 0.30);
+        let (open, nm) = edge_stats(&m);
+        let wt = m.is_watertight();
+        if wt {
+            wt_n += 1;
+        }
+        if method.is_exact() {
+            exact_n += 1;
+        }
+        let tag = match method {
+            SesMethod::Analytic => "exact".to_string(),
+            SesMethod::AnalyticPerturbed(n) => format!("pert{n}"),
+            SesMethod::NumericalGrid(_) => "grid".to_string(),
+        };
+        let si = if with_si {
+            format!(
+                " si={}",
+                proteon_core::surface::intersect::self_intersections(&m, 1.0, 5000)
+            )
+        } else {
+            String::new()
+        };
+        println!(
+            "{name:<22} {:>5} {:>4} {:>5} {:>5} {:>5} {:>4} {:>10.3} {:>10.3} {tag:>9} {:>6.1}{si}",
+            atoms.len(),
+            if wt { "yes" } else { "NO" },
+            open,
+            nm,
+            m.euler_characteristic(),
+            components(&m),
+            m.surface_area(),
+            m.signed_volume(),
+            t.elapsed().as_secs_f64(),
+        );
+        if dump_dir.is_some() {
+            println!(
+                "REC,{name},{},{},{},{},{:.4},{tag}",
+                atoms.len(),
+                i32::from(wt),
+                open,
+                nm,
+                m.surface_area()
+            );
         }
     }
-    println!("\n{ok}/{total} watertight");
+    println!(
+        "\n{wt_n}/{total} watertight | {exact_n}/{total} exact-analytic | {} grid-fallback",
+        total - exact_n
+    );
 }

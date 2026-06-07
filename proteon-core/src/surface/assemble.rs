@@ -843,7 +843,21 @@ pub fn ses_mesh_cleaned_welded(
     grid: f64,
     weld_eps: f64,
 ) -> Result<Mesh> {
-    let (raw, _attempts) = build_with_perturbation_retry(atoms, MAX_DEGEN_RETRIES, |a| {
+    Ok(ses_mesh_cleaned_welded_tracked(atoms, probe, n_theta, n_phi, grid, weld_eps)?.0)
+}
+
+/// As [`ses_mesh_cleaned_welded`] but also returns the number of deterministic
+/// atom perturbations the build needed (0 = original coordinates) — the
+/// provenance the hybrid [`ses_mesh`] reports.
+fn ses_mesh_cleaned_welded_tracked(
+    atoms: &[Sphere],
+    probe: f64,
+    n_theta: usize,
+    n_phi: usize,
+    grid: f64,
+    weld_eps: f64,
+) -> Result<(Mesh, usize)> {
+    let (raw, attempts) = build_with_perturbation_retry(atoms, MAX_DEGEN_RETRIES, |a| {
         ses_mesh_cleaned(a, probe, n_theta, n_phi, grid)
     })?;
     let mut mesh = raw.welded_within(weld_eps);
@@ -851,7 +865,65 @@ pub fn ses_mesh_cleaned_welded(
     if mesh.signed_volume() < 0.0 {
         mesh.flip();
     }
-    Ok(mesh)
+    Ok((mesh, attempts))
+}
+
+/// How an [`ses_mesh`] result was produced — its accuracy provenance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SesMethod {
+    /// Exact analytic SES on the original coordinates (watertight, area matches
+    /// the analytic Connolly surface).
+    Analytic,
+    /// Exact analytic SES after `n` deterministic atom perturbations broke an
+    /// input degeneracy (geometry shifted ≤ 1e-2 Å; area still within ~0.05% of
+    /// the exact surface).
+    AnalyticPerturbed(usize),
+    /// Numerical signed-distance **grid** fallback at the given spacing — the
+    /// analytic path could not mesh this input (an irreducible degeneracy or a
+    /// chart-fill failure). Watertight, but the area/volume are **resolution-
+    /// limited**, not the exact analytic surface. Refine `spacing` for accuracy.
+    NumericalGrid(f64),
+}
+
+impl SesMethod {
+    /// Is this the exact analytic surface (perturbed or not), as opposed to the
+    /// resolution-limited numerical fallback?
+    pub fn is_exact(self) -> bool {
+        !matches!(self, SesMethod::NumericalGrid(_))
+    }
+}
+
+/// **The robust SES entry point** (hybrid, always succeeds for non-empty input).
+///
+/// Tries the exact analytic cleaned+welded SES first (with deterministic
+/// atom-perturbation retry for input degeneracies). If the analytic path cannot
+/// mesh the input at all — an irreducible degeneracy that exhausts the retries,
+/// or a chart-fill failure — it falls back to the numerical signed-distance grid
+/// mesher ([`volume::ses_mesh_sdf`]) at `sdf_spacing`, which has no exact-
+/// arrangement degeneracies and always produces a watertight mesh. The returned
+/// [`SesMethod`] flags which path ran (and thus whether the area is exact or
+/// resolution-limited) — callers should propagate it as provenance.
+///
+/// This mirrors the field's standard robustness pattern (exact where possible,
+/// grid/numerical where necessary): no real-protein input is left without a
+/// watertight mesh, while clean inputs still get the exact +0.05%-vs-BALL surface.
+pub fn ses_mesh(
+    atoms: &[Sphere],
+    probe: f64,
+    n_theta: usize,
+    n_phi: usize,
+    grid: f64,
+    weld_eps: f64,
+    sdf_spacing: f64,
+) -> (Mesh, SesMethod) {
+    match ses_mesh_cleaned_welded_tracked(atoms, probe, n_theta, n_phi, grid, weld_eps) {
+        Ok((mesh, 0)) => (mesh, SesMethod::Analytic),
+        Ok((mesh, n)) => (mesh, SesMethod::AnalyticPerturbed(n)),
+        Err(_) => (
+            super::volume::ses_mesh_sdf(atoms, probe, sdf_spacing),
+            SesMethod::NumericalGrid(sdf_spacing),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -1031,6 +1103,31 @@ mod tests {
                 "{name}: cleaned area {area} within 2% of ball {ball_area} (cleaner inert)"
             );
         }
+    }
+
+    #[test]
+    fn hybrid_ses_mesh_takes_the_analytic_path_on_a_clean_input() {
+        // A clean (non-degenerate) tetra → the exact analytic path, no perturbation.
+        let tetra = vec![
+            sph(0.0, 0.0, 0.0, 1.6),
+            sph(2.0, 0.0, 0.0, 1.6),
+            sph(1.0, 1.7, 0.0, 1.6),
+            sph(1.0, 0.6, 1.6, 1.6),
+        ];
+        let (mesh, method) = ses_mesh(&tetra, 1.4, 48, 10, 0.05, 1e-4, 0.25);
+        assert_eq!(method, SesMethod::Analytic, "clean input → exact analytic");
+        assert!(method.is_exact());
+        assert!(mesh.is_watertight(), "analytic path is watertight");
+        assert!((mesh.surface_area() - 74.1161).abs() / 74.1161 < 0.02);
+
+        // The numerical fallback target itself produces a watertight mesh on the
+        // same input (the property the hybrid relies on when analytic can't mesh).
+        let fallback = super::super::volume::ses_mesh_sdf(&tetra, 1.4, 0.25);
+        assert!(
+            fallback.is_watertight(),
+            "SDF grid fallback must always yield a watertight mesh"
+        );
+        assert!(!SesMethod::NumericalGrid(0.25).is_exact());
     }
 
     #[test]
