@@ -769,10 +769,17 @@ fn sample_circle_seg(c: &Circle3, a: Vec3, b: Vec3, span: f64, n_interior: usize
     };
     let pt = |t: f64| c.center + (u * t.cos() + v * t.sin()) * c.radius;
     let ta = theta_of(a);
-    // Full ring: sweep the whole circle from `a` (end ≈ start, omitted to close).
+    // Full ring: sweep the whole circle. The start point is *free* (this arc is a
+    // standalone closed loop — a fully-exposed burial hole), and the caller's `a`
+    // is derived from its own face-local arrangement frame. Anchoring the phase to
+    // `a` would make two spheric faces that share this canonical circle sample it
+    // at different phases (interleaved n-gons that never coincide → an unweldable
+    // T-seam). Anchor instead to the circle's own canonical basis (θ=0 = the `u`
+    // axis of `plane_basis(c.normal)`): `c` is `canonical_burial_circle`, identical
+    // from either face, so both samplings emit the same points and weld shut.
     if (span - TAU).abs() < 1e-6 {
         return (0..=n_interior)
-            .map(|k| pt(ta + TAU * k as f64 / (n_interior + 1) as f64))
+            .map(|k| pt(TAU * k as f64 / (n_interior + 1) as f64))
             .collect();
     }
     let tb = theta_of(b);
@@ -1061,6 +1068,37 @@ mod tests {
         let from_i = sample_circle_seg(&c_ij, a, b, 0.8, 8);
         let from_j = sample_circle_seg(&c_ji, a, b, 0.8, 8);
         assert_eq!(from_i, from_j, "bit-identical seam samples → weldable");
+        for x in &from_i {
+            assert!((x.distance(centers[0]) - probe).abs() < 1e-9);
+            assert!((x.distance(centers[1]) - probe).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn full_ring_burial_seam_welds_despite_different_start_points() {
+        // A fully-exposed burial hole (span = TAU) is a standalone closed loop, so
+        // its start point is FREE — and each colliding spheric face derives it from
+        // its own face-local arrangement frame, so the two faces pass *different*
+        // start points. Regression for the weld gap (1a5p/160l: 44/22 open edges):
+        // the full-ring sampling must anchor to the canonical circle's own basis,
+        // so both faces emit bit-identical points regardless of the start passed.
+        let probe = 1.4;
+        let centers = [ctr(0.0, 0.0, 0.0), ctr(1.5, 0.0, 0.0)];
+        let c = canonical_burial_circle(0, 1, &centers, probe).unwrap();
+        let (u, v) = plane_basis(c.normal);
+        // Face i and face j pick different (arbitrary) start directions on C_01.
+        let start_i = c.center + (u * 0.3_f64.cos() + v * 0.3_f64.sin()) * c.radius;
+        let start_j = c.center + (u * 2.7_f64.cos() + v * 2.7_f64.sin()) * c.radius;
+        let from_i = sample_circle_seg(&c, start_i, start_i, TAU, 10);
+        let from_j = sample_circle_seg(&c, start_j, start_j, TAU, 10);
+        assert_eq!(from_i.len(), from_j.len());
+        for (p, q) in from_i.iter().zip(&from_j) {
+            assert!(
+                p.distance(*q) < 1e-12,
+                "full-ring samples must be phase-independent so the seam welds"
+            );
+        }
+        // And the samples genuinely lie on the shared circle (both probe spheres).
         for x in &from_i {
             assert!((x.distance(centers[0]) - probe).abs() < 1e-9);
             assert!((x.distance(centers[1]) - probe).abs() < 1e-9);
