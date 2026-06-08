@@ -41,10 +41,22 @@ fn main() {
         })
         .collect();
 
+    // Sampling density overridable via env (coarser = far fewer triangles, e.g.
+    // for rendering): SES_NTHETA / SES_NPHI / SES_GRID. Defaults are the standard
+    // high-fidelity settings.
+    let envf = |k: &str, d: f64| {
+        std::env::var(k)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(d)
+    };
+    let n_theta = envf("SES_NTHETA", 48.0) as usize;
+    let n_phi = envf("SES_NPHI", 10.0) as usize;
+    let grid = envf("SES_GRID", 0.04);
     let (mesh, method) = if let Some(h) = sdf_h {
         (ses_mesh_sdf(&atoms, probe, h), format!("grid h={h}"))
     } else {
-        let (m, meth) = ses_mesh(&atoms, probe, 48, 10, 0.04, 1e-5, 0.30);
+        let (m, meth) = ses_mesh(&atoms, probe, n_theta, n_phi, grid, 1e-5, 0.30);
         (m, format!("{meth:?}"))
     };
 
