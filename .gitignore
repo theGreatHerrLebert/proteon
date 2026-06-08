@@ -75,3 +75,6 @@ evident/reports/dev*/
 # copy is ephemeral and would otherwise show dev*/ entries that aren't
 # in the repo.
 evident/reports/index.html
+
+# Re-fetched SES robustness repro PDBs (RCSB), local only
+ses-repro/

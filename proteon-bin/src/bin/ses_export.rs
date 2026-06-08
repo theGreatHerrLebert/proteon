@@ -51,7 +51,10 @@ fn main() {
     let name = path.rsplit('/').next().unwrap_or("surface");
     let file = std::fs::File::create(out).expect("create output");
     let mut w = BufWriter::new(file);
-    if out.ends_with(".ply") {
+    if std::path::Path::new(out)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("ply"))
+    {
         mesh.write_ply(&mut w).expect("write ply");
     } else {
         mesh.write_obj(&mut w, name).expect("write obj");
