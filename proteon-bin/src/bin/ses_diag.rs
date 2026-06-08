@@ -45,7 +45,7 @@ fn main() {
         }
         let t = Instant::now();
         // Same parameters as the hybrid's analytic attempt in ses_corpus/ses_export.
-        match ses_mesh_cleaned_welded(&atoms, probe, 48, 10, 0.04, 1e-4) {
+        match ses_mesh_cleaned_welded(&atoms, probe, 48, 10, 0.04, 1e-5) {
             Ok(m) => {
                 ok += 1;
                 println!(

@@ -44,7 +44,7 @@ fn main() {
     let (mesh, method) = if let Some(h) = sdf_h {
         (ses_mesh_sdf(&atoms, probe, h), format!("grid h={h}"))
     } else {
-        let (m, meth) = ses_mesh(&atoms, probe, 48, 10, 0.04, 1e-4, 0.30);
+        let (m, meth) = ses_mesh(&atoms, probe, 48, 10, 0.04, 1e-5, 0.30);
         (m, format!("{meth:?}"))
     };
 

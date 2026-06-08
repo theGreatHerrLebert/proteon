@@ -40,7 +40,11 @@ fn main() {
             println!("{name}: LOAD/EMPTY");
             continue;
         }
-        let m = match ses_mesh_cleaned_welded(&atoms, 1.4, 48, 10, 0.04, 1e-5) {
+        let weld_eps: f64 = std::env::var("WELD_EPS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1e-5);
+        let m = match ses_mesh_cleaned_welded(&atoms, 1.4, 48, 10, 0.04, weld_eps) {
             Ok(m) => m,
             Err(e) => {
                 println!("{name}: ERR {}", e.chain().last().unwrap());
@@ -61,6 +65,39 @@ fn main() {
             .map(|(&e, _)| e)
             .collect();
         let nm = uc.values().filter(|&&c| c >= 3).count();
+        // DEFECT dump: for a small number of defective edges, show the incident
+        // triangles (with vertex coords + areas) to reveal the local topology.
+        if std::env::var("DEFECT").is_ok() {
+            let mut etris: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+            for (ti, t) in m.tris.iter().enumerate() {
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    etris.entry((a.min(b), a.max(b))).or_default().push(ti);
+                }
+            }
+            let defective: Vec<(&(u32, u32), &u32)> = uc.iter().filter(|(_, &c)| c != 2).collect();
+            eprintln!("  DEFECT: {} edges with degree != 2", defective.len());
+            for (&(a, b), &deg) in defective.iter().take(12) {
+                let pa = m.verts[a as usize];
+                let pb = m.verts[b as usize];
+                eprintln!(
+                    "  edge ({a},{b}) deg={deg} len={:.5}  A=({:.3},{:.3},{:.3}) B=({:.3},{:.3},{:.3})",
+                    pa.distance(pb), pa.x, pa.y, pa.z, pb.x, pb.y, pb.z
+                );
+                for &ti in &etris[&(a.min(b), a.max(b))] {
+                    let t = m.tris[ti];
+                    let (p, q, r) = (
+                        m.verts[t[0] as usize],
+                        m.verts[t[1] as usize],
+                        m.verts[t[2] as usize],
+                    );
+                    let area = 0.5 * (q - p).cross(r - p).norm();
+                    eprintln!(
+                        "      tri {ti} [{},{},{}] area={:.6}",
+                        t[0], t[1], t[2], area
+                    );
+                }
+            }
+        }
         // Union-find over boundary-edge endpoints to group chains.
         let mut parent: HashMap<u32, u32> = HashMap::new();
         fn find(p: &mut HashMap<u32, u32>, x: u32) -> u32 {

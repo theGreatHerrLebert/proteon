@@ -323,6 +323,77 @@ impl Mesh {
         }
     }
 
+    /// Remove degenerate (near-zero-area) sliver triangles that the tolerance weld
+    /// leaves at **singular vertices** — points where ≥3 analytic patches terminate
+    /// and each samples the shared corner a hair (just over `eps`) apart, so the
+    /// weld can neither fully fuse the cluster nor be loosened without false-merging
+    /// real features. Those slivers carry no area but corrupt the topology (a
+    /// zero-area triangle's edges show up as boundary/non-manifold).
+    ///
+    /// **Guarded**: a sliver is dropped only when *none* of its three edges is
+    /// currently shared by exactly two triangles — i.e. all three edges are already
+    /// boundary (degree 1) or non-manifold (degree ≥3). Dropping such a triangle
+    /// therefore strictly *reduces* the defect count and can never turn a clean
+    /// degree-2 edge into a new boundary (it cannot open a hole). Iterated to a
+    /// fixpoint. A triangle is "degenerate" when its minimum altitude
+    /// (`2·area / longest edge`) falls below `eps` — i.e. it is thinner than the
+    /// weld can resolve. Returns the number removed. Vertices are left in place
+    /// (orphans are harmless); per-vertex normals stay valid.
+    pub fn remove_degenerate_triangles_guarded(&mut self, eps: f64) -> usize {
+        let key = |a: u32, b: u32| (a.min(b), a.max(b));
+        let mut counts: HashMap<(u32, u32), i32> = HashMap::new();
+        for t in &self.tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                *counts.entry(key(a, b)).or_default() += 1;
+            }
+        }
+        let degenerate = |t: &[u32; 3]| -> bool {
+            let p = self.verts[t[0] as usize];
+            let q = self.verts[t[1] as usize];
+            let r = self.verts[t[2] as usize];
+            let twice_area = (q - p).cross(r - p).norm();
+            let longest = (q - p).norm().max((r - q).norm()).max((p - r).norm());
+            longest > 0.0 && twice_area / longest < eps
+        };
+        let candidates: Vec<usize> = (0..self.tris.len())
+            .filter(|&i| degenerate(&self.tris[i]))
+            .collect();
+        let mut removed = vec![false; self.tris.len()];
+        let mut total = 0usize;
+        loop {
+            let mut progressed = false;
+            for &i in &candidates {
+                if removed[i] {
+                    continue;
+                }
+                let t = self.tris[i];
+                let edges = [key(t[0], t[1]), key(t[1], t[2]), key(t[2], t[0])];
+                // Safe iff no edge is currently degree-2 (removal would open it).
+                if edges.iter().all(|e| counts[e] != 2) {
+                    removed[i] = true;
+                    for e in edges {
+                        *counts.get_mut(&e).unwrap() -= 1;
+                    }
+                    total += 1;
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        if total > 0 {
+            let mut keep = Vec::with_capacity(self.tris.len() - total);
+            for (i, &t) in self.tris.iter().enumerate() {
+                if !removed[i] {
+                    keep.push(t);
+                }
+            }
+            self.tris = keep;
+        }
+        total
+    }
+
     /// Area-weighted per-vertex normals (smooth shading). Each triangle adds its
     /// area-scaled face normal to its three vertices; the sum is normalized. Falls
     /// back to a unit +z for any isolated/degenerate vertex.
@@ -616,6 +687,51 @@ mod tests {
         );
         assert!(w.is_watertight());
         assert_eq!(w.euler_characteristic(), 2);
+    }
+
+    #[test]
+    fn guarded_cleanup_removes_a_sliver_at_a_nonmanifold_edge() {
+        // Edge A–B shared by two real triangles plus a degenerate sliver A–B–E
+        // (E almost on segment AB) → AB is degree 3 (non-manifold), the signature
+        // of the 1a7j singular-vertex residual. The guarded cleanup must drop only
+        // the sliver, leaving AB a clean degree-2 edge.
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(1.0, 0.0, 0.0);
+        let c = Vec3::new(0.5, 1.0, 0.0);
+        let d = Vec3::new(0.5, -1.0, 0.0);
+        let e = Vec3::new(0.5, 1e-9, 0.0); // ~on AB → zero-area sliver
+        let mut m = Mesh {
+            verts: vec![a, b, c, d, e],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [0, 1, 3], [0, 1, 4]], // last is the sliver
+        };
+        assert_eq!(m.edge_use_counts()[&(0, 1)], 3, "AB non-manifold before");
+        let removed = m.remove_degenerate_triangles_guarded(1e-4);
+        assert_eq!(removed, 1, "exactly the sliver is dropped");
+        assert_eq!(m.tris.len(), 2);
+        assert_eq!(m.edge_use_counts()[&(0, 1)], 2, "AB manifold after");
+    }
+
+    #[test]
+    fn guarded_cleanup_will_not_open_a_hole() {
+        // Edge A–B shared by ONE real triangle and one degenerate sliver → AB is
+        // degree 2. Dropping the sliver would make AB a boundary (open a hole), so
+        // the guard must refuse even though the sliver is degenerate.
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(1.0, 0.0, 0.0);
+        let c = Vec3::new(0.5, 1.0, 0.0);
+        let e = Vec3::new(0.5, 1e-9, 0.0);
+        let mut m = Mesh {
+            verts: vec![a, b, c, e],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [0, 1, 3]], // real + sliver share AB (degree 2)
+        };
+        let removed = m.remove_degenerate_triangles_guarded(1e-4);
+        assert_eq!(
+            removed, 0,
+            "guard refuses — removing the sliver would open AB"
+        );
+        assert_eq!(m.tris.len(), 2);
     }
 
     #[test]

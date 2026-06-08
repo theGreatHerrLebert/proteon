@@ -902,6 +902,11 @@ fn ses_mesh_cleaned_welded_tracked(
         ses_mesh_cleaned(a, probe, n_theta, n_phi, grid)
     })?;
     let mut mesh = raw.welded_within(weld_eps);
+    // Drop the zero-area sliver triangles the weld leaves at singular vertices
+    // (≥3 patches terminating at one point, sampled a hair over `weld_eps` apart).
+    // Guarded so it can only heal defects, never open a hole. Thinner-than-weld
+    // slivers (min altitude < weld_eps) are the candidates.
+    mesh.remove_degenerate_triangles_guarded(weld_eps);
     mesh.orient_consistently();
     if mesh.signed_volume() < 0.0 {
         mesh.flip();
@@ -1158,7 +1163,7 @@ mod tests {
             sph(2.0, 0.0, 0.0, r),  // overlaps the first
             sph(50.0, 0.0, 0.0, r), // isolated
         ];
-        let (m, method) = ses_mesh(&atoms, 1.4, 48, 10, 0.05, 1e-4, 0.3);
+        let (m, method) = ses_mesh(&atoms, 1.4, 48, 10, 0.05, 1e-5, 0.3);
         assert!(
             method.is_exact(),
             "the analytic path is complete, no grid fallback"
@@ -1183,7 +1188,7 @@ mod tests {
             sph(1.0, 1.7, 0.0, 1.6),
             sph(1.0, 0.6, 1.6, 1.6),
         ];
-        let (mesh, method) = ses_mesh(&tetra, 1.4, 48, 10, 0.05, 1e-4, 0.25);
+        let (mesh, method) = ses_mesh(&tetra, 1.4, 48, 10, 0.05, 1e-5, 0.25);
         assert_eq!(method, SesMethod::Analytic, "clean input → exact analytic");
         assert!(method.is_exact());
         assert!(mesh.is_watertight(), "analytic path is watertight");
@@ -1298,7 +1303,7 @@ mod tests {
         ];
         for (name, atoms, ball_area) in [("tetra", tetra, 74.1161), ("chain", chain, 96.7732)] {
             let raw = ses_mesh_cleaned(&atoms, 1.4, 48, 10, 0.05).unwrap();
-            let m = ses_mesh_cleaned_welded(&atoms, 1.4, 48, 10, 0.05, 1e-4).unwrap();
+            let m = ses_mesh_cleaned_welded(&atoms, 1.4, 48, 10, 0.05, 1e-5).unwrap();
 
             // No edge shared by ≥3 triangles (no over-merge) AND none open: the
             // welded cleaned mesh is a closed 2-manifold.

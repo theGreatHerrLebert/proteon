@@ -105,7 +105,10 @@ fn main() {
         let _ = std::fs::create_dir_all(d);
     }
     let probe = 1.4;
-    let eps = 1e-4;
+    // Weld tolerance. With canonical seam sampling (bit-identical / ~1e-9 shared
+    // samples), 1e-5 closes every seam while 1e-4 over-merges distinct features at
+    // tight spots; the guarded degenerate-triangle cleanup handles singular vertices.
+    let eps = 1e-5;
 
     println!(
         "{:<22} {:>5} {:>4} {:>5} {:>5} {:>5} {:>4} {:>10} {:>10} {:>9} {:>6}",
