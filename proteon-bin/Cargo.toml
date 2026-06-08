@@ -15,6 +15,10 @@ description = "CLI binaries for TM-align and US-align"
 [lints]
 workspace = true
 
+[features]
+# Forward to proteon-core's CUDA kernels (e.g. the seed_gpu_spike bench).
+cuda = ["proteon-core/cuda"]
+
 [dependencies]
 proteon-align = { path = "../proteon-align" }
 proteon-arrow = { path = "../proteon-arrow" }
