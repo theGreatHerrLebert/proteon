@@ -273,10 +273,17 @@ struct AtomGrid {
     spheres: Vec<Sphere>,
     cell: f64,
     buckets: std::collections::HashMap<(i64, i64, i64), Vec<usize>>,
+    /// inclusive bucket-key bounds, so a query knows the shell radius that covers
+    /// every atom (the sound fallback for `nearest_surface_point`).
+    kmin: (i64, i64, i64),
+    kmax: (i64, i64, i64),
 }
 
-/// Bucket reach for `AtomGrid` queries — valid only while `cell` is the maximum
-/// inflated radius (see `for_each_near`).
+/// Bucket reach for `AtomGrid` *exposure* queries — sound because an atom that
+/// can bury a point has its centre within one `cell` (= max inflated radius) of
+/// it, i.e. ≤ 2 buckets after `floor` bucketing. The *nearest-surface* query does
+/// NOT use a fixed reach (an exposed point can be arbitrarily far when nearer
+/// projections are all buried); it expands until provably done.
 const NEAR_REACH: i64 = 2;
 
 impl AtomGrid {
@@ -289,16 +296,20 @@ impl AtomGrid {
         let cell = spheres.iter().map(|s| s.radius).fold(1.0_f64, f64::max);
         let mut buckets: std::collections::HashMap<(i64, i64, i64), Vec<usize>> =
             std::collections::HashMap::new();
+        let mut kmin = (i64::MAX, i64::MAX, i64::MAX);
+        let mut kmax = (i64::MIN, i64::MIN, i64::MIN);
         for (idx, s) in spheres.iter().enumerate() {
-            buckets
-                .entry(Self::key(s.center, cell))
-                .or_default()
-                .push(idx);
+            let k = Self::key(s.center, cell);
+            kmin = (kmin.0.min(k.0), kmin.1.min(k.1), kmin.2.min(k.2));
+            kmax = (kmax.0.max(k.0), kmax.1.max(k.1), kmax.2.max(k.2));
+            buckets.entry(k).or_default().push(idx);
         }
         AtomGrid {
             spheres,
             cell,
             buckets,
+            kmin,
+            kmax,
         }
     }
 
@@ -332,35 +343,88 @@ impl AtomGrid {
         }
     }
 
+    /// Visit every atom whose bucket is at Chebyshev distance **exactly** `r` from
+    /// key `k` (the shell at radius `r`; `r = 0` is the centre bucket). Used by the
+    /// expanding-ring nearest-surface search.
+    fn for_each_in_shell(&self, k: (i64, i64, i64), r: i64, mut f: impl FnMut(usize)) {
+        let visit = |kk: (i64, i64, i64), f: &mut dyn FnMut(usize)| {
+            if let Some(b) = self.buckets.get(&kk) {
+                for &i in b {
+                    f(i);
+                }
+            }
+        };
+        if r == 0 {
+            visit(k, &mut f);
+            return;
+        }
+        for dz in -r..=r {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs().max(dy.abs()).max(dz.abs()) == r {
+                        visit((k.0 + dx, k.1 + dy, k.2 + dz), &mut f);
+                    }
+                }
+            }
+        }
+    }
+
     /// The analytic nearest point on the SAS (the boundary of the union): the
-    /// closest *exposed* radial projection onto a nearby inflated sphere. Returns
-    /// `None` only if no atom is near (shouldn't happen for a boundary node).
+    /// closest *exposed* radial projection onto an inflated sphere.
+    ///
+    /// **Expanding-ring search** (correctness fix — a fixed bucket reach is
+    /// unsound here, codex/GPU-oracle review): the closest *exposed* projection can
+    /// sit on an atom several buckets away when every nearer projection is buried,
+    /// so we grow the search shell by shell and stop only once it is *provable* no
+    /// farther atom can beat the current best. An atom first appearing at shell `r`
+    /// has its centre ≥ `(r−1)·cell` from `p` (one axis bucket differs by `r`), so
+    /// its nearest surface point is ≥ `(r−2)·cell` away (radius ≤ `cell`); once that
+    /// lower bound exceeds the best exposed distance, shells ≥ `r` cannot improve
+    /// it. Exposure still uses the sound fixed `NEAR_REACH` (a burying atom is
+    /// always within one `cell`). Falls back to covering every atom (`max_r`) when
+    /// no nearby projection is exposed. `None` only if the structure has no atoms.
     fn nearest_surface_point(&self, p: Vec3) -> Option<Vec3> {
+        let (kx, ky, kz) = Self::key(p, self.cell);
+        let span = |k: i64, lo: i64, hi: i64| (k - lo).abs().max((k - hi).abs());
+        let max_r = span(kx, self.kmin.0, self.kmax.0)
+            .max(span(ky, self.kmin.1, self.kmax.1))
+            .max(span(kz, self.kmin.2, self.kmax.2));
+
         let mut best: Option<(f64, Vec3)> = None;
-        self.for_each_near(p, NEAR_REACH, |i| {
-            let s = self.spheres[i];
-            let dir = match (p - s.center).normalized() {
-                Some(d) => d,
-                None => return, // p at the centre — degenerate, skip
-            };
-            let proj = s.center + dir * s.radius;
-            // Exposed = not strictly inside any other inflated sphere.
-            let mut exposed = true;
-            self.for_each_near(proj, NEAR_REACH, |j| {
-                if j != i {
-                    let o = self.spheres[j];
-                    if proj.square_distance(o.center) < o.radius * o.radius - 1e-9 {
-                        exposed = false;
+        let mut r = 0i64;
+        while r <= max_r {
+            // Provably done: atoms in shell ≥ r are ≥ (r−2)·cell from p.
+            if let Some((d_best, _)) = best {
+                let lb = (r - 2).max(0) as f64 * self.cell;
+                if lb * lb > d_best {
+                    break;
+                }
+            }
+            self.for_each_in_shell((kx, ky, kz), r, |i| {
+                let s = self.spheres[i];
+                let Some(dir) = (p - s.center).normalized() else {
+                    return; // p at the centre — degenerate, skip
+                };
+                let proj = s.center + dir * s.radius;
+                // Exposed = not strictly inside any other inflated sphere.
+                let mut exposed = true;
+                self.for_each_near(proj, NEAR_REACH, |j| {
+                    if j != i {
+                        let o = self.spheres[j];
+                        if proj.square_distance(o.center) < o.radius * o.radius - 1e-9 {
+                            exposed = false;
+                        }
+                    }
+                });
+                if exposed {
+                    let d = p.square_distance(proj);
+                    if best.map_or(true, |(bd, _)| d < bd) {
+                        best = Some((d, proj));
                     }
                 }
             });
-            if exposed {
-                let d = p.square_distance(proj);
-                if best.map_or(true, |(bd, _)| d < bd) {
-                    best = Some((d, proj));
-                }
-            }
-        });
+            r += 1;
+        }
         best.map(|(_, pt)| pt)
     }
 }
@@ -989,6 +1053,85 @@ mod tests {
 
     fn s(x: f64, y: f64, z: f64, r: f64) -> Sphere {
         Sphere::new(Vec3::new(x, y, z), r)
+    }
+
+    /// Regression: the spatial-hash `nearest_surface_point` must return the SAME
+    /// nearest *exposed* surface point as an exhaustive (all-atoms) reference, even
+    /// in a dense cluster where deep pockets put the nearest exposed point several
+    /// buckets away. A fixed bucket reach (the old `NEAR_REACH = 2`) was unsound and
+    /// returned a point up to ~1.2 Å too far on ~1–2% of nodes (found by a GPU
+    /// brute-force oracle); the expanding-ring search must match brute force exactly.
+    #[test]
+    fn nearest_surface_point_matches_brute_force() {
+        // Exhaustive reference: nearest exposed radial projection over ALL spheres.
+        fn brute(ag: &AtomGrid, p: Vec3) -> Option<Vec3> {
+            let mut best: Option<(f64, Vec3)> = None;
+            for (i, sp) in ag.spheres.iter().enumerate() {
+                let Some(dir) = (p - sp.center).normalized() else {
+                    continue;
+                };
+                let proj = sp.center + dir * sp.radius;
+                let exposed = ag.spheres.iter().enumerate().all(|(j, o)| {
+                    j == i || proj.square_distance(o.center) >= o.radius * o.radius - 1e-9
+                });
+                if exposed {
+                    let d = p.square_distance(proj);
+                    if best.map_or(true, |(bd, _)| d < bd) {
+                        best = Some((d, proj));
+                    }
+                }
+            }
+            best.map(|(_, q)| q)
+        }
+
+        // A dense deterministic cluster (LCG) → lots of burial, deep pockets.
+        let mut z = 0x1234_5678u64;
+        let mut rng = || {
+            z = z.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            ((z >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let probe = 1.4;
+        let atoms: Vec<Sphere> = (0..150)
+            .map(|_| s(rng() * 9.0, rng() * 9.0, rng() * 9.0, 1.4 + rng() * 0.5))
+            .collect();
+        let ag = AtomGrid::build(&atoms, probe);
+
+        // Query a lattice of points spanning (and just outside) the cluster.
+        let mut checked = 0usize;
+        let mut g = -1.0;
+        while g <= 10.0 {
+            let mut h = -1.0;
+            while h <= 10.0 {
+                let mut k = -1.0;
+                while k <= 10.0 {
+                    let p = Vec3::new(g, h, k);
+                    let hash = ag.nearest_surface_point(p);
+                    let bf = brute(&ag, p);
+                    match (hash, bf) {
+                        (Some(a), Some(b)) => {
+                            // Compare nearest DISTANCE (the meaningful quantity;
+                            // equidistant ties are allowed to differ in point).
+                            let da = p.distance(a);
+                            let db = p.distance(b);
+                            assert!(
+                                (da - db).abs() < 1e-9,
+                                "hash {da} vs brute {db} at {p:?} (prune missed a closer point)"
+                            );
+                            checked += 1;
+                        }
+                        (None, None) => {}
+                        _ => panic!("hash/brute disagree on existence at {p:?}"),
+                    }
+                    k += 0.7;
+                }
+                h += 0.7;
+            }
+            g += 0.7;
+        }
+        assert!(
+            checked > 200,
+            "expected many exposed queries, got {checked}"
+        );
     }
 
     #[test]
