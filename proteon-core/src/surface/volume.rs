@@ -37,6 +37,7 @@
 
 use super::geom::{Sphere, Vec3};
 use super::mesh::Mesh;
+use rayon::prelude::*;
 
 /// Triangulate the SES of `atoms` (van-der-Waals spheres) for the given `probe`
 /// radius, sampling the distance field at `spacing` Å. Returns a closed,
@@ -53,9 +54,19 @@ pub fn ses_mesh_sdf(atoms: &[Sphere], probe: f64, spacing: f64) -> Mesh {
     if atoms.is_empty() {
         return Mesh::default();
     }
+    let prof = std::env::var("SES_SDF_PROF").is_ok();
     let grid = Grid::enclosing(atoms, probe, spacing);
     let f = grid.distance_field(atoms, probe);
+    let t = std::time::Instant::now();
     let mut mesh = manifold_dual_contour(&grid, &f);
+    if prof {
+        let [nx, ny, nz] = grid.dims;
+        eprintln!(
+            "  SDF dual_contour: {:.1}ms  (grid {nx}x{ny}x{nz} = {} nodes)",
+            t.elapsed().as_secs_f64() * 1e3,
+            nx * ny * nz
+        );
+    }
     // Guarantee outward (solvent-facing) orientation regardless of the seam
     // winding surface_nets emitted.
     mesh.orient_consistently();
@@ -136,7 +147,16 @@ impl Grid {
         const UNREACHED: f64 = 1e18; // finite sentinel for nodes JFA never reached
         let [nx, ny, nz] = self.dims;
         let n = nx * ny * nz;
+        let prof = std::env::var("SES_SDF_PROF").is_ok();
+        let mut t = std::time::Instant::now();
+        let lap = |name: &str, t: &mut std::time::Instant| {
+            if prof {
+                eprintln!("  SDF {name}: {:.1}ms", t.elapsed().as_secs_f64() * 1e3);
+                *t = std::time::Instant::now();
+            }
+        };
         let grid = AtomGrid::build(atoms, probe);
+        lap("atomgrid_build", &mut t);
 
         // Occupancy of A_p by rasterizing each inflated sphere into its node
         // bounding box — O(atoms · R³/h³), far cheaper than an O(neighbours)
@@ -172,40 +192,48 @@ impl Grid {
                 }
             }
         }
+        lap("occupancy", &mut t);
 
         // Seed: nodes adjacent (6-neighbour) to a sign change carry their analytic
         // nearest point on the SAS. NaN x marks "no feature yet".
+        //
+        // This is the profiled bottleneck (77–90% of `ses_mesh_sdf` — the per-node
+        // exposed-projection in `nearest_surface_point`). Each node writes only its
+        // own `feat[idx]` and reads only the *immutable* `inside`/`grid`, so it is
+        // embarrassingly parallel and the result is identical to the serial loop
+        // (every node computes a deterministic value regardless of thread).
         const NONE: [f64; 3] = [f64::NAN; 3];
         let mut feat = vec![NONE; n];
-        for k in 0..nz {
-            for j in 0..ny {
-                for i in 0..nx {
-                    let idx = self.idx(i, j, k);
-                    let ins = inside[idx];
-                    let boundary = [
-                        (i + 1 < nx).then(|| self.idx(i + 1, j, k)),
-                        (i > 0).then(|| self.idx(i - 1, j, k)),
-                        (j + 1 < ny).then(|| self.idx(i, j + 1, k)),
-                        (j > 0).then(|| self.idx(i, j - 1, k)),
-                        (k + 1 < nz).then(|| self.idx(i, j, k + 1)),
-                        (k > 0).then(|| self.idx(i, j, k - 1)),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .any(|nb| inside[nb] != ins);
-                    if boundary {
-                        if let Some(s) = grid.nearest_surface_point(self.pos(i, j, k)) {
-                            feat[idx] = [s.x, s.y, s.z];
-                        }
-                    }
+        let nxy = nx * ny;
+        feat.par_iter_mut().enumerate().for_each(|(idx, f)| {
+            let i = idx % nx;
+            let j = (idx / nx) % ny;
+            let k = idx / nxy;
+            let ins = inside[idx];
+            let boundary = [
+                (i + 1 < nx).then(|| self.idx(i + 1, j, k)),
+                (i > 0).then(|| self.idx(i - 1, j, k)),
+                (j + 1 < ny).then(|| self.idx(i, j + 1, k)),
+                (j > 0).then(|| self.idx(i, j - 1, k)),
+                (k + 1 < nz).then(|| self.idx(i, j, k + 1)),
+                (k > 0).then(|| self.idx(i, j, k - 1)),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|nb| inside[nb] != ins);
+            if boundary {
+                if let Some(s) = grid.nearest_surface_point(self.pos(i, j, k)) {
+                    *f = [s.x, s.y, s.z];
                 }
             }
-        }
+        });
 
         // Features only need to reach nodes within ~probe of the surface (that's
         // the band straddling f = 0); beyond it the sign alone is correct.
         let reach = (probe / self.spacing).ceil() as usize + 4;
+        lap("seed", &mut t);
         jump_flood(&mut feat, self.dims, reach, &|i, j, k| self.pos(i, j, k));
+        lap("jump_flood", &mut t);
 
         // signed distance to the SAS, then erode by the probe.
         let mut f = vec![0.0f64; n];
@@ -233,6 +261,7 @@ impl Grid {
                 }
             }
         }
+        lap("finalize", &mut t);
         f
     }
 }
@@ -244,10 +273,17 @@ struct AtomGrid {
     spheres: Vec<Sphere>,
     cell: f64,
     buckets: std::collections::HashMap<(i64, i64, i64), Vec<usize>>,
+    /// inclusive bucket-key bounds, so a query knows the shell radius that covers
+    /// every atom (the sound fallback for `nearest_surface_point`).
+    kmin: (i64, i64, i64),
+    kmax: (i64, i64, i64),
 }
 
-/// Bucket reach for `AtomGrid` queries — valid only while `cell` is the maximum
-/// inflated radius (see `for_each_near`).
+/// Bucket reach for `AtomGrid` *exposure* queries — sound because an atom that
+/// can bury a point has its centre within one `cell` (= max inflated radius) of
+/// it, i.e. ≤ 2 buckets after `floor` bucketing. The *nearest-surface* query does
+/// NOT use a fixed reach (an exposed point can be arbitrarily far when nearer
+/// projections are all buried); it expands until provably done.
 const NEAR_REACH: i64 = 2;
 
 impl AtomGrid {
@@ -260,16 +296,20 @@ impl AtomGrid {
         let cell = spheres.iter().map(|s| s.radius).fold(1.0_f64, f64::max);
         let mut buckets: std::collections::HashMap<(i64, i64, i64), Vec<usize>> =
             std::collections::HashMap::new();
+        let mut kmin = (i64::MAX, i64::MAX, i64::MAX);
+        let mut kmax = (i64::MIN, i64::MIN, i64::MIN);
         for (idx, s) in spheres.iter().enumerate() {
-            buckets
-                .entry(Self::key(s.center, cell))
-                .or_default()
-                .push(idx);
+            let k = Self::key(s.center, cell);
+            kmin = (kmin.0.min(k.0), kmin.1.min(k.1), kmin.2.min(k.2));
+            kmax = (kmax.0.max(k.0), kmax.1.max(k.1), kmax.2.max(k.2));
+            buckets.entry(k).or_default().push(idx);
         }
         AtomGrid {
             spheres,
             cell,
             buckets,
+            kmin,
+            kmax,
         }
     }
 
@@ -303,35 +343,88 @@ impl AtomGrid {
         }
     }
 
+    /// Visit every atom whose bucket is at Chebyshev distance **exactly** `r` from
+    /// key `k` (the shell at radius `r`; `r = 0` is the centre bucket). Used by the
+    /// expanding-ring nearest-surface search.
+    fn for_each_in_shell(&self, k: (i64, i64, i64), r: i64, mut f: impl FnMut(usize)) {
+        let visit = |kk: (i64, i64, i64), f: &mut dyn FnMut(usize)| {
+            if let Some(b) = self.buckets.get(&kk) {
+                for &i in b {
+                    f(i);
+                }
+            }
+        };
+        if r == 0 {
+            visit(k, &mut f);
+            return;
+        }
+        for dz in -r..=r {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs().max(dy.abs()).max(dz.abs()) == r {
+                        visit((k.0 + dx, k.1 + dy, k.2 + dz), &mut f);
+                    }
+                }
+            }
+        }
+    }
+
     /// The analytic nearest point on the SAS (the boundary of the union): the
-    /// closest *exposed* radial projection onto a nearby inflated sphere. Returns
-    /// `None` only if no atom is near (shouldn't happen for a boundary node).
+    /// closest *exposed* radial projection onto an inflated sphere.
+    ///
+    /// **Expanding-ring search** (correctness fix — a fixed bucket reach is
+    /// unsound here, codex/GPU-oracle review): the closest *exposed* projection can
+    /// sit on an atom several buckets away when every nearer projection is buried,
+    /// so we grow the search shell by shell and stop only once it is *provable* no
+    /// farther atom can beat the current best. An atom first appearing at shell `r`
+    /// has its centre ≥ `(r−1)·cell` from `p` (one axis bucket differs by `r`), so
+    /// its nearest surface point is ≥ `(r−2)·cell` away (radius ≤ `cell`); once that
+    /// lower bound exceeds the best exposed distance, shells ≥ `r` cannot improve
+    /// it. Exposure still uses the sound fixed `NEAR_REACH` (a burying atom is
+    /// always within one `cell`). Falls back to covering every atom (`max_r`) when
+    /// no nearby projection is exposed. `None` only if the structure has no atoms.
     fn nearest_surface_point(&self, p: Vec3) -> Option<Vec3> {
+        let (kx, ky, kz) = Self::key(p, self.cell);
+        let span = |k: i64, lo: i64, hi: i64| (k - lo).abs().max((k - hi).abs());
+        let max_r = span(kx, self.kmin.0, self.kmax.0)
+            .max(span(ky, self.kmin.1, self.kmax.1))
+            .max(span(kz, self.kmin.2, self.kmax.2));
+
         let mut best: Option<(f64, Vec3)> = None;
-        self.for_each_near(p, NEAR_REACH, |i| {
-            let s = self.spheres[i];
-            let dir = match (p - s.center).normalized() {
-                Some(d) => d,
-                None => return, // p at the centre — degenerate, skip
-            };
-            let proj = s.center + dir * s.radius;
-            // Exposed = not strictly inside any other inflated sphere.
-            let mut exposed = true;
-            self.for_each_near(proj, NEAR_REACH, |j| {
-                if j != i {
-                    let o = self.spheres[j];
-                    if proj.square_distance(o.center) < o.radius * o.radius - 1e-9 {
-                        exposed = false;
+        let mut r = 0i64;
+        while r <= max_r {
+            // Provably done: atoms in shell ≥ r are ≥ (r−2)·cell from p.
+            if let Some((d_best, _)) = best {
+                let lb = (r - 2).max(0) as f64 * self.cell;
+                if lb * lb > d_best {
+                    break;
+                }
+            }
+            self.for_each_in_shell((kx, ky, kz), r, |i| {
+                let s = self.spheres[i];
+                let Some(dir) = (p - s.center).normalized() else {
+                    return; // p at the centre — degenerate, skip
+                };
+                let proj = s.center + dir * s.radius;
+                // Exposed = not strictly inside any other inflated sphere.
+                let mut exposed = true;
+                self.for_each_near(proj, NEAR_REACH, |j| {
+                    if j != i {
+                        let o = self.spheres[j];
+                        if proj.square_distance(o.center) < o.radius * o.radius - 1e-9 {
+                            exposed = false;
+                        }
+                    }
+                });
+                if exposed {
+                    let d = p.square_distance(proj);
+                    if best.map_or(true, |(bd, _)| d < bd) {
+                        best = Some((d, proj));
                     }
                 }
             });
-            if exposed {
-                let d = p.square_distance(proj);
-                if best.map_or(true, |(bd, _)| d < bd) {
-                    best = Some((d, proj));
-                }
-            }
-        });
+            r += 1;
+        }
         best.map(|(_, pt)| pt)
     }
 }
@@ -345,9 +438,10 @@ fn jump_flood(
     feat: &mut [[f64; 3]],
     dims: [usize; 3],
     reach: usize,
-    pos: &impl Fn(usize, usize, usize) -> Vec3,
+    pos: &(impl Fn(usize, usize, usize) -> Vec3 + Sync),
 ) {
     let [nx, ny, nz] = dims;
+    let nxy = nx * ny;
     let idx = |i: usize, j: usize, k: usize| i + nx * (j + ny * k);
     // Halving schedule next_pow2(reach) … 2, 1, then one extra unit pass — the
     // "JFA+1" variant, which cleans up the rare wrong-nearest cell vanilla JFA
@@ -364,48 +458,51 @@ fn jump_flood(
     let mut src = feat.to_vec();
     let mut dst = feat.to_vec();
     for step in schedule {
-        for k in 0..nz {
-            for j in 0..ny {
-                for i in 0..nx {
-                    let here = pos(i, j, k);
-                    let cur = src[idx(i, j, k)];
-                    let mut best = cur;
-                    let mut bestd = if cur[0].is_nan() {
-                        f64::INFINITY
-                    } else {
-                        here.square_distance(Vec3::new(cur[0], cur[1], cur[2]))
-                    };
-                    for dk in [-(step as isize), 0, step as isize] {
-                        let kk = k as isize + dk;
-                        if kk < 0 || kk as usize >= nz {
+        // Each output node reads only the immutable `src` (double-buffered) and
+        // writes only its own `dst[cell]` — independent across nodes, so the pass
+        // is data-parallel with a result identical to the serial sweep.
+        let src_ref = &src;
+        dst.par_iter_mut().enumerate().for_each(|(cell, out)| {
+            let i = cell % nx;
+            let j = (cell / nx) % ny;
+            let k = cell / nxy;
+            let here = pos(i, j, k);
+            let cur = src_ref[cell];
+            let mut best = cur;
+            let mut bestd = if cur[0].is_nan() {
+                f64::INFINITY
+            } else {
+                here.square_distance(Vec3::new(cur[0], cur[1], cur[2]))
+            };
+            for dk in [-(step as isize), 0, step as isize] {
+                let kk = k as isize + dk;
+                if kk < 0 || kk as usize >= nz {
+                    continue;
+                }
+                for dj in [-(step as isize), 0, step as isize] {
+                    let jj = j as isize + dj;
+                    if jj < 0 || jj as usize >= ny {
+                        continue;
+                    }
+                    for di in [-(step as isize), 0, step as isize] {
+                        let ii = i as isize + di;
+                        if ii < 0 || ii as usize >= nx {
                             continue;
                         }
-                        for dj in [-(step as isize), 0, step as isize] {
-                            let jj = j as isize + dj;
-                            if jj < 0 || jj as usize >= ny {
-                                continue;
-                            }
-                            for di in [-(step as isize), 0, step as isize] {
-                                let ii = i as isize + di;
-                                if ii < 0 || ii as usize >= nx {
-                                    continue;
-                                }
-                                let cand = src[idx(ii as usize, jj as usize, kk as usize)];
-                                if cand[0].is_nan() {
-                                    continue;
-                                }
-                                let d = here.square_distance(Vec3::new(cand[0], cand[1], cand[2]));
-                                if d < bestd {
-                                    bestd = d;
-                                    best = cand;
-                                }
-                            }
+                        let cand = src_ref[idx(ii as usize, jj as usize, kk as usize)];
+                        if cand[0].is_nan() {
+                            continue;
+                        }
+                        let d = here.square_distance(Vec3::new(cand[0], cand[1], cand[2]));
+                        if d < bestd {
+                            bestd = d;
+                            best = cand;
                         }
                     }
-                    dst[idx(i, j, k)] = best;
                 }
             }
-        }
+            *out = best;
+        });
         std::mem::swap(&mut src, &mut dst);
     }
     feat.copy_from_slice(&src);
@@ -670,12 +767,371 @@ fn manifold_dual_contour(grid: &Grid, f: &[f64]) -> Mesh {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GPU-K1 spike: the seed stage (nearest exposed surface point per boundary
+// node) on the GPU, vs serial / 16-core CPU. Brute-force kernel (no GPU spatial
+// hash yet); measures raw throughput + parity. Behind the `cuda` feature.
+// ---------------------------------------------------------------------------
+
+/// Result of [`seed_bench`].
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy)]
+pub struct SeedBench {
+    pub n_atoms: usize,
+    pub n_boundary: usize,
+    pub cpu_serial_ms: f64,
+    pub cpu_parallel_ms: f64,
+    pub gpu_kernel_ms: f64,
+    pub gpu_total_ms: f64, // upload + kernel + download
+    pub max_feature_diff: f64,
+    pub mismatched: usize, // GPU vs CPU-spatial-hash, differ > 1e-6
+    // Localization: does the GPU brute-force agree with a CPU brute-force (→ the
+    // disagreement is the CPU spatial-hash prune, not the kernel)?
+    pub gpu_vs_cpubrute_mismatch: usize,
+    pub hash_vs_cpubrute_mismatch: usize,
+    /// Of the hash-vs-brute mismatches, how many have a genuinely different
+    /// nearest *distance* (a real prune bug) vs equal distance (benign tie).
+    pub hash_vs_brute_distance_bug: usize,
+    pub max_distance_error: f64,
+}
+
+/// CPU brute-force nearest exposed surface point (loops ALL inflated atoms — the
+/// exact logic the GPU kernel runs, no spatial hash). The ground-truth reference
+/// for the spike's parity localization.
+#[cfg(feature = "cuda")]
+fn nearest_surface_brute(p: Vec3, spheres: &[Sphere]) -> [f64; 3] {
+    let mut best: Option<(f64, Vec3)> = None;
+    for (i, s) in spheres.iter().enumerate() {
+        let Some(dir) = (p - s.center).normalized() else {
+            continue;
+        };
+        let proj = s.center + dir * s.radius;
+        let mut exposed = true;
+        for (j, o) in spheres.iter().enumerate() {
+            if j != i && proj.square_distance(o.center) < o.radius * o.radius - 1e-9 {
+                exposed = false;
+                break;
+            }
+        }
+        if exposed {
+            let d = p.square_distance(proj);
+            if best.map_or(true, |(bd, _)| d < bd) {
+                best = Some((d, proj));
+            }
+        }
+    }
+    best.map_or([f64::NAN; 3], |(_, pt)| [pt.x, pt.y, pt.z])
+}
+
+/// The boundary nodes (6-neighbour sign-change cells) of the SES grid, as world
+/// positions — the inputs the seed stage runs on. Shared by CPU and GPU paths.
+#[cfg(feature = "cuda")]
+fn boundary_nodes(grid: &Grid, atoms: &[Sphere], probe: f64) -> Vec<Vec3> {
+    let [nx, ny, nz] = grid.dims;
+    let ag = AtomGrid::build(atoms, probe);
+    let n = nx * ny * nz;
+    let mut inside = vec![false; n];
+    let inv_h = 1.0 / grid.spacing;
+    for s in &ag.spheres {
+        let r2 = s.radius * s.radius;
+        let lo = |c: f64, o: f64| (((c - s.radius - o) * inv_h).floor() as isize).max(0);
+        let hi = |c: f64, o: f64, m: usize| {
+            (((c - o + s.radius) * inv_h).ceil() as isize).min(m as isize - 1)
+        };
+        let (i0, i1) = (
+            lo(s.center.x, grid.origin.x),
+            hi(s.center.x, grid.origin.x, nx),
+        );
+        let (j0, j1) = (
+            lo(s.center.y, grid.origin.y),
+            hi(s.center.y, grid.origin.y, ny),
+        );
+        let (k0, k1) = (
+            lo(s.center.z, grid.origin.z),
+            hi(s.center.z, grid.origin.z, nz),
+        );
+        for k in k0..=k1 {
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    let (i, j, k) = (i as usize, j as usize, k as usize);
+                    if grid.pos(i, j, k).square_distance(s.center) <= r2 {
+                        inside[grid.idx(i, j, k)] = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                let ins = inside[grid.idx(i, j, k)];
+                let boundary = [
+                    (i + 1 < nx).then(|| grid.idx(i + 1, j, k)),
+                    (i > 0).then(|| grid.idx(i - 1, j, k)),
+                    (j + 1 < ny).then(|| grid.idx(i, j + 1, k)),
+                    (j > 0).then(|| grid.idx(i, j - 1, k)),
+                    (k + 1 < nz).then(|| grid.idx(i, j, k + 1)),
+                    (k > 0).then(|| grid.idx(i, j, k - 1)),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|nb| inside[nb] != ins);
+                if boundary {
+                    out.push(grid.pos(i, j, k));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// GPU-K1 spike: time the SES seed (nearest exposed surface point per boundary
+/// node) on serial CPU, 16-core CPU, and the GPU brute-force kernel, and report
+/// parity (max feature difference). The CPU `nearest_surface_point` uses the
+/// spatial hash; the GPU kernel is brute-force over all inflated atoms — they
+/// must agree (the hash only prunes provably-irrelevant atoms), and a production
+/// GPU kernel would add the hash. This is a *learning* spike, not production.
+#[cfg(feature = "cuda")]
+pub fn seed_bench(
+    atoms: &[Sphere],
+    probe: f64,
+    spacing: f64,
+) -> Result<SeedBench, Box<dyn std::error::Error>> {
+    use cudarc::driver::{CudaContext, LaunchConfig, PushKernelArg};
+    use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
+    use std::time::Instant;
+
+    let grid = Grid::enclosing(atoms, probe, spacing);
+    let ag = AtomGrid::build(atoms, probe);
+    let bnodes = boundary_nodes(&grid, atoms, probe);
+    let nb = bnodes.len();
+
+    // CPU serial.
+    let t = Instant::now();
+    let cpu_feat: Vec<[f64; 3]> = bnodes
+        .iter()
+        .map(|&p| {
+            ag.nearest_surface_point(p)
+                .map_or([f64::NAN; 3], |s| [s.x, s.y, s.z])
+        })
+        .collect();
+    let cpu_serial_ms = t.elapsed().as_secs_f64() * 1e3;
+
+    // CPU 16-core (the real baseline the GPU must beat).
+    let t = Instant::now();
+    let _cpu_par: Vec<[f64; 3]> = bnodes
+        .par_iter()
+        .map(|&p| {
+            ag.nearest_surface_point(p)
+                .map_or([f64::NAN; 3], |s| [s.x, s.y, s.z])
+        })
+        .collect();
+    let cpu_parallel_ms = t.elapsed().as_secs_f64() * 1e3;
+
+    // GPU brute-force.
+    let ctx = CudaContext::new(0)?;
+    let (major, minor) = ctx.compute_capability()?;
+    let arch: &'static str = Box::leak(format!("sm_{major}{minor}").into_boxed_str());
+    let opts = CompileOptions {
+        arch: Some(arch),
+        ..Default::default()
+    };
+    let ptx = compile_ptx_with_opts(include_str!("seed_kernel.cu"), opts)?;
+    let module = ctx.load_module(ptx)?;
+    let kernel = module.load_function("seed_brute")?;
+    let stream = ctx.default_stream();
+
+    let nodes_flat: Vec<f64> = bnodes.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
+    let atoms_flat: Vec<f64> = ag
+        .spheres
+        .iter()
+        .flat_map(|s| [s.center.x, s.center.y, s.center.z, s.radius])
+        .collect();
+    let m_i32 = ag.spheres.len() as i32;
+    let nb_i32 = nb as i32;
+
+    let t = Instant::now();
+    let d_nodes = stream.clone_htod(&nodes_flat)?;
+    let d_atoms = stream.clone_htod(&atoms_flat)?;
+    let mut d_feat = stream.alloc_zeros::<f64>(nb * 3)?;
+    stream.synchronize()?;
+    let tk = Instant::now();
+    {
+        let mut a = stream.launch_builder(&kernel);
+        a.arg(&d_nodes);
+        a.arg(&d_atoms);
+        a.arg(&nb_i32);
+        a.arg(&m_i32);
+        a.arg(&mut d_feat);
+        unsafe {
+            a.launch(LaunchConfig::for_num_elems(nb as u32))?;
+        }
+    }
+    stream.synchronize()?;
+    let gpu_kernel_ms = tk.elapsed().as_secs_f64() * 1e3;
+    let gpu_flat = stream.clone_dtoh(&d_feat)?;
+    let gpu_total_ms = t.elapsed().as_secs_f64() * 1e3;
+
+    // CPU brute-force reference (same logic as the kernel) to localize any
+    // disagreement: kernel bug (gpu ≠ cpu-brute) vs CPU spatial-hash prune
+    // (cpu-hash ≠ cpu-brute).
+    let cpu_brute: Vec<[f64; 3]> = bnodes
+        .par_iter()
+        .map(|&p| nearest_surface_brute(p, &ag.spheres))
+        .collect();
+
+    let differ = |a: [f64; 3], b: [f64; 3]| -> Option<f64> {
+        if a[0].is_nan() && b[0].is_nan() {
+            return None;
+        }
+        if a[0].is_nan() != b[0].is_nan() {
+            return Some(f64::INFINITY);
+        }
+        let d = (0..3).map(|k| (a[k] - b[k]).abs()).fold(0.0, f64::max);
+        (d > 1e-6).then_some(d)
+    };
+
+    let mut max_feature_diff = 0.0_f64;
+    let mut mismatched = 0usize;
+    let mut gpu_vs_cpubrute_mismatch = 0usize;
+    let mut hash_vs_cpubrute_mismatch = 0usize;
+    let mut hash_vs_brute_distance_bug = 0usize;
+    let mut max_distance_error = 0.0_f64;
+    for (i, c) in cpu_feat.iter().enumerate() {
+        let g = [gpu_flat[3 * i], gpu_flat[3 * i + 1], gpu_flat[3 * i + 2]];
+        if let Some(d) = differ(*c, g) {
+            mismatched += 1;
+            if d.is_finite() {
+                max_feature_diff = max_feature_diff.max(d);
+            }
+        }
+        if differ(g, cpu_brute[i]).is_some() {
+            gpu_vs_cpubrute_mismatch += 1;
+        }
+        if differ(*c, cpu_brute[i]).is_some() {
+            hash_vs_cpubrute_mismatch += 1;
+            // Distance from the node to each candidate nearest-surface point: if
+            // they differ, the hash genuinely missed a closer/farther point (a
+            // prune bug); if equal, it's an equidistant tie (benign).
+            let p = bnodes[i];
+            let b = cpu_brute[i];
+            if !c[0].is_nan() && !b[0].is_nan() {
+                let dh = p.distance(Vec3::new(c[0], c[1], c[2]));
+                let db = p.distance(Vec3::new(b[0], b[1], b[2]));
+                let de = (dh - db).abs();
+                if de > 1e-6 {
+                    hash_vs_brute_distance_bug += 1;
+                    max_distance_error = max_distance_error.max(de);
+                }
+            } else {
+                // One found a point, the other NaN — a real search discrepancy.
+                hash_vs_brute_distance_bug += 1;
+            }
+        }
+    }
+
+    Ok(SeedBench {
+        n_atoms: atoms.len(),
+        n_boundary: nb,
+        cpu_serial_ms,
+        cpu_parallel_ms,
+        gpu_kernel_ms,
+        gpu_total_ms,
+        max_feature_diff,
+        mismatched,
+        gpu_vs_cpubrute_mismatch,
+        hash_vs_cpubrute_mismatch,
+        hash_vs_brute_distance_bug,
+        max_distance_error,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn s(x: f64, y: f64, z: f64, r: f64) -> Sphere {
         Sphere::new(Vec3::new(x, y, z), r)
+    }
+
+    /// Regression: the spatial-hash `nearest_surface_point` must return the SAME
+    /// nearest *exposed* surface point as an exhaustive (all-atoms) reference, even
+    /// in a dense cluster where deep pockets put the nearest exposed point several
+    /// buckets away. A fixed bucket reach (the old `NEAR_REACH = 2`) was unsound and
+    /// returned a point up to ~1.2 Å too far on ~1–2% of nodes (found by a GPU
+    /// brute-force oracle); the expanding-ring search must match brute force exactly.
+    #[test]
+    fn nearest_surface_point_matches_brute_force() {
+        // Exhaustive reference: nearest exposed radial projection over ALL spheres.
+        fn brute(ag: &AtomGrid, p: Vec3) -> Option<Vec3> {
+            let mut best: Option<(f64, Vec3)> = None;
+            for (i, sp) in ag.spheres.iter().enumerate() {
+                let Some(dir) = (p - sp.center).normalized() else {
+                    continue;
+                };
+                let proj = sp.center + dir * sp.radius;
+                let exposed = ag.spheres.iter().enumerate().all(|(j, o)| {
+                    j == i || proj.square_distance(o.center) >= o.radius * o.radius - 1e-9
+                });
+                if exposed {
+                    let d = p.square_distance(proj);
+                    if best.map_or(true, |(bd, _)| d < bd) {
+                        best = Some((d, proj));
+                    }
+                }
+            }
+            best.map(|(_, q)| q)
+        }
+
+        // A dense deterministic cluster (LCG) → lots of burial, deep pockets.
+        let mut z = 0x1234_5678u64;
+        let mut rng = || {
+            z = z.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            ((z >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        let probe = 1.4;
+        let atoms: Vec<Sphere> = (0..150)
+            .map(|_| s(rng() * 9.0, rng() * 9.0, rng() * 9.0, 1.4 + rng() * 0.5))
+            .collect();
+        let ag = AtomGrid::build(&atoms, probe);
+
+        // Query a lattice of points spanning (and just outside) the cluster.
+        let mut checked = 0usize;
+        let mut g = -1.0;
+        while g <= 10.0 {
+            let mut h = -1.0;
+            while h <= 10.0 {
+                let mut k = -1.0;
+                while k <= 10.0 {
+                    let p = Vec3::new(g, h, k);
+                    let hash = ag.nearest_surface_point(p);
+                    let bf = brute(&ag, p);
+                    match (hash, bf) {
+                        (Some(a), Some(b)) => {
+                            // Compare nearest DISTANCE (the meaningful quantity;
+                            // equidistant ties are allowed to differ in point).
+                            let da = p.distance(a);
+                            let db = p.distance(b);
+                            assert!(
+                                (da - db).abs() < 1e-9,
+                                "hash {da} vs brute {db} at {p:?} (prune missed a closer point)"
+                            );
+                            checked += 1;
+                        }
+                        (None, None) => {}
+                        _ => panic!("hash/brute disagree on existence at {p:?}"),
+                    }
+                    k += 0.7;
+                }
+                h += 0.7;
+            }
+            g += 0.7;
+        }
+        assert!(
+            checked > 200,
+            "expected many exposed queries, got {checked}"
+        );
     }
 
     #[test]
