@@ -78,3 +78,4 @@ evident/reports/index.html
 
 # Re-fetched SES robustness repro PDBs (RCSB), local only
 ses-repro/
+.venv-test/
