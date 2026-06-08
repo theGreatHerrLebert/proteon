@@ -322,6 +322,92 @@ impl Mesh {
             tris,
         }
     }
+
+    /// Area-weighted per-vertex normals (smooth shading). Each triangle adds its
+    /// area-scaled face normal to its three vertices; the sum is normalized. Falls
+    /// back to a unit +z for any isolated/degenerate vertex.
+    pub fn vertex_normals(&self) -> Vec<Vec3> {
+        let mut n = vec![Vec3::new(0.0, 0.0, 0.0); self.verts.len()];
+        for t in &self.tris {
+            let (a, b, c) = self.tri_points(*t);
+            let fn_ = (b - a).cross(c - a); // length = 2·area, direction = face normal
+            for &v in t {
+                n[v as usize] = n[v as usize] + fn_;
+            }
+        }
+        n.iter()
+            .map(|&v| v.normalized().unwrap_or(Vec3::new(0.0, 0.0, 1.0)))
+            .collect()
+    }
+
+    /// Write the mesh as Wavefront **OBJ** (text, universally viewable). Includes
+    /// smooth per-vertex normals (`vn`) so viewers shade it nicely; faces are
+    /// 1-indexed `v//vn`. `name` becomes the object name.
+    pub fn write_obj(&self, mut w: impl std::io::Write, name: &str) -> std::io::Result<()> {
+        let normals = if self.normals.len() == self.verts.len() {
+            self.normals.clone()
+        } else {
+            self.vertex_normals()
+        };
+        writeln!(
+            w,
+            "# proteon SES mesh: {} verts, {} tris",
+            self.verts.len(),
+            self.tris.len()
+        )?;
+        writeln!(w, "o {name}")?;
+        for v in &self.verts {
+            writeln!(w, "v {} {} {}", v.x, v.y, v.z)?;
+        }
+        for n in &normals {
+            writeln!(w, "vn {} {} {}", n.x, n.y, n.z)?;
+        }
+        for t in &self.tris {
+            let (a, b, c) = (t[0] + 1, t[1] + 1, t[2] + 1);
+            writeln!(w, "f {a}//{a} {b}//{b} {c}//{c}")?;
+        }
+        Ok(())
+    }
+
+    /// Write the mesh as **binary little-endian PLY** with per-vertex normals —
+    /// compact for large meshes and read by MeshLab/Blender/PyMOL. Vertices and
+    /// normals are `float32`; faces are `uchar 3` + `int32×3`.
+    pub fn write_ply(&self, mut w: impl std::io::Write) -> std::io::Result<()> {
+        let normals = if self.normals.len() == self.verts.len() {
+            self.normals.clone()
+        } else {
+            self.vertex_normals()
+        };
+        for line in [
+            "ply".to_string(),
+            "format binary_little_endian 1.0".to_string(),
+            "comment proteon SES mesh".to_string(),
+            format!("element vertex {}", self.verts.len()),
+            "property float x".to_string(),
+            "property float y".to_string(),
+            "property float z".to_string(),
+            "property float nx".to_string(),
+            "property float ny".to_string(),
+            "property float nz".to_string(),
+            format!("element face {}", self.tris.len()),
+            "property list uchar int vertex_indices".to_string(),
+            "end_header".to_string(),
+        ] {
+            writeln!(w, "{line}")?;
+        }
+        for (v, n) in self.verts.iter().zip(&normals) {
+            for c in [v.x, v.y, v.z, n.x, n.y, n.z] {
+                w.write_all(&(c as f32).to_le_bytes())?;
+            }
+        }
+        for t in &self.tris {
+            w.write_all(&[3u8])?;
+            for &i in t {
+                w.write_all(&(i as i32).to_le_bytes())?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Triangulated sphere by `subdivisions` levels of icosahedron refinement,
@@ -530,5 +616,30 @@ mod tests {
         );
         assert!(w.is_watertight());
         assert_eq!(w.euler_characteristic(), 2);
+    }
+
+    #[test]
+    fn obj_and_ply_export_have_the_right_shape() {
+        let m = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1);
+        let (nv, nt) = (m.num_vertices(), m.num_triangles());
+
+        // OBJ: one `v ` and one `vn ` per vertex, one `f ` per triangle.
+        let mut obj = Vec::new();
+        m.write_obj(&mut obj, "sphere").unwrap();
+        let obj = String::from_utf8(obj).unwrap();
+        assert_eq!(obj.lines().filter(|l| l.starts_with("v ")).count(), nv);
+        assert_eq!(obj.lines().filter(|l| l.starts_with("vn ")).count(), nv);
+        assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), nt);
+
+        // PLY: header declares the right counts, body is the expected byte length
+        // (nv × 6 f32 + nt × (1 byte + 3 i32)).
+        let mut ply = Vec::new();
+        m.write_ply(&mut ply).unwrap();
+        let hdr_end = ply.windows(11).position(|w| w == b"end_header\n").unwrap() + 11;
+        let header = std::str::from_utf8(&ply[..hdr_end]).unwrap();
+        assert!(header.contains(&format!("element vertex {nv}")));
+        assert!(header.contains(&format!("element face {nt}")));
+        let body = ply.len() - hdr_end;
+        assert_eq!(body, nv * 6 * 4 + nt * (1 + 3 * 4));
     }
 }
