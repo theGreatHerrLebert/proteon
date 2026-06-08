@@ -703,6 +703,286 @@ fn manifold_dual_contour(grid: &Grid, f: &[f64]) -> Mesh {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GPU-K1 spike: the seed stage (nearest exposed surface point per boundary
+// node) on the GPU, vs serial / 16-core CPU. Brute-force kernel (no GPU spatial
+// hash yet); measures raw throughput + parity. Behind the `cuda` feature.
+// ---------------------------------------------------------------------------
+
+/// Result of [`seed_bench`].
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy)]
+pub struct SeedBench {
+    pub n_atoms: usize,
+    pub n_boundary: usize,
+    pub cpu_serial_ms: f64,
+    pub cpu_parallel_ms: f64,
+    pub gpu_kernel_ms: f64,
+    pub gpu_total_ms: f64, // upload + kernel + download
+    pub max_feature_diff: f64,
+    pub mismatched: usize, // GPU vs CPU-spatial-hash, differ > 1e-6
+    // Localization: does the GPU brute-force agree with a CPU brute-force (→ the
+    // disagreement is the CPU spatial-hash prune, not the kernel)?
+    pub gpu_vs_cpubrute_mismatch: usize,
+    pub hash_vs_cpubrute_mismatch: usize,
+    /// Of the hash-vs-brute mismatches, how many have a genuinely different
+    /// nearest *distance* (a real prune bug) vs equal distance (benign tie).
+    pub hash_vs_brute_distance_bug: usize,
+    pub max_distance_error: f64,
+}
+
+/// CPU brute-force nearest exposed surface point (loops ALL inflated atoms — the
+/// exact logic the GPU kernel runs, no spatial hash). The ground-truth reference
+/// for the spike's parity localization.
+#[cfg(feature = "cuda")]
+fn nearest_surface_brute(p: Vec3, spheres: &[Sphere]) -> [f64; 3] {
+    let mut best: Option<(f64, Vec3)> = None;
+    for (i, s) in spheres.iter().enumerate() {
+        let Some(dir) = (p - s.center).normalized() else {
+            continue;
+        };
+        let proj = s.center + dir * s.radius;
+        let mut exposed = true;
+        for (j, o) in spheres.iter().enumerate() {
+            if j != i && proj.square_distance(o.center) < o.radius * o.radius - 1e-9 {
+                exposed = false;
+                break;
+            }
+        }
+        if exposed {
+            let d = p.square_distance(proj);
+            if best.map_or(true, |(bd, _)| d < bd) {
+                best = Some((d, proj));
+            }
+        }
+    }
+    best.map_or([f64::NAN; 3], |(_, pt)| [pt.x, pt.y, pt.z])
+}
+
+/// The boundary nodes (6-neighbour sign-change cells) of the SES grid, as world
+/// positions — the inputs the seed stage runs on. Shared by CPU and GPU paths.
+#[cfg(feature = "cuda")]
+fn boundary_nodes(grid: &Grid, atoms: &[Sphere], probe: f64) -> Vec<Vec3> {
+    let [nx, ny, nz] = grid.dims;
+    let ag = AtomGrid::build(atoms, probe);
+    let n = nx * ny * nz;
+    let mut inside = vec![false; n];
+    let inv_h = 1.0 / grid.spacing;
+    for s in &ag.spheres {
+        let r2 = s.radius * s.radius;
+        let lo = |c: f64, o: f64| (((c - s.radius - o) * inv_h).floor() as isize).max(0);
+        let hi = |c: f64, o: f64, m: usize| {
+            (((c - o + s.radius) * inv_h).ceil() as isize).min(m as isize - 1)
+        };
+        let (i0, i1) = (
+            lo(s.center.x, grid.origin.x),
+            hi(s.center.x, grid.origin.x, nx),
+        );
+        let (j0, j1) = (
+            lo(s.center.y, grid.origin.y),
+            hi(s.center.y, grid.origin.y, ny),
+        );
+        let (k0, k1) = (
+            lo(s.center.z, grid.origin.z),
+            hi(s.center.z, grid.origin.z, nz),
+        );
+        for k in k0..=k1 {
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    let (i, j, k) = (i as usize, j as usize, k as usize);
+                    if grid.pos(i, j, k).square_distance(s.center) <= r2 {
+                        inside[grid.idx(i, j, k)] = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                let ins = inside[grid.idx(i, j, k)];
+                let boundary = [
+                    (i + 1 < nx).then(|| grid.idx(i + 1, j, k)),
+                    (i > 0).then(|| grid.idx(i - 1, j, k)),
+                    (j + 1 < ny).then(|| grid.idx(i, j + 1, k)),
+                    (j > 0).then(|| grid.idx(i, j - 1, k)),
+                    (k + 1 < nz).then(|| grid.idx(i, j, k + 1)),
+                    (k > 0).then(|| grid.idx(i, j, k - 1)),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|nb| inside[nb] != ins);
+                if boundary {
+                    out.push(grid.pos(i, j, k));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// GPU-K1 spike: time the SES seed (nearest exposed surface point per boundary
+/// node) on serial CPU, 16-core CPU, and the GPU brute-force kernel, and report
+/// parity (max feature difference). The CPU `nearest_surface_point` uses the
+/// spatial hash; the GPU kernel is brute-force over all inflated atoms — they
+/// must agree (the hash only prunes provably-irrelevant atoms), and a production
+/// GPU kernel would add the hash. This is a *learning* spike, not production.
+#[cfg(feature = "cuda")]
+pub fn seed_bench(
+    atoms: &[Sphere],
+    probe: f64,
+    spacing: f64,
+) -> Result<SeedBench, Box<dyn std::error::Error>> {
+    use cudarc::driver::{CudaContext, LaunchConfig, PushKernelArg};
+    use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
+    use std::time::Instant;
+
+    let grid = Grid::enclosing(atoms, probe, spacing);
+    let ag = AtomGrid::build(atoms, probe);
+    let bnodes = boundary_nodes(&grid, atoms, probe);
+    let nb = bnodes.len();
+
+    // CPU serial.
+    let t = Instant::now();
+    let cpu_feat: Vec<[f64; 3]> = bnodes
+        .iter()
+        .map(|&p| {
+            ag.nearest_surface_point(p)
+                .map_or([f64::NAN; 3], |s| [s.x, s.y, s.z])
+        })
+        .collect();
+    let cpu_serial_ms = t.elapsed().as_secs_f64() * 1e3;
+
+    // CPU 16-core (the real baseline the GPU must beat).
+    let t = Instant::now();
+    let _cpu_par: Vec<[f64; 3]> = bnodes
+        .par_iter()
+        .map(|&p| {
+            ag.nearest_surface_point(p)
+                .map_or([f64::NAN; 3], |s| [s.x, s.y, s.z])
+        })
+        .collect();
+    let cpu_parallel_ms = t.elapsed().as_secs_f64() * 1e3;
+
+    // GPU brute-force.
+    let ctx = CudaContext::new(0)?;
+    let (major, minor) = ctx.compute_capability()?;
+    let arch: &'static str = Box::leak(format!("sm_{major}{minor}").into_boxed_str());
+    let opts = CompileOptions {
+        arch: Some(arch),
+        ..Default::default()
+    };
+    let ptx = compile_ptx_with_opts(include_str!("seed_kernel.cu"), opts)?;
+    let module = ctx.load_module(ptx)?;
+    let kernel = module.load_function("seed_brute")?;
+    let stream = ctx.default_stream();
+
+    let nodes_flat: Vec<f64> = bnodes.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
+    let atoms_flat: Vec<f64> = ag
+        .spheres
+        .iter()
+        .flat_map(|s| [s.center.x, s.center.y, s.center.z, s.radius])
+        .collect();
+    let m_i32 = ag.spheres.len() as i32;
+    let nb_i32 = nb as i32;
+
+    let t = Instant::now();
+    let d_nodes = stream.clone_htod(&nodes_flat)?;
+    let d_atoms = stream.clone_htod(&atoms_flat)?;
+    let mut d_feat = stream.alloc_zeros::<f64>(nb * 3)?;
+    stream.synchronize()?;
+    let tk = Instant::now();
+    {
+        let mut a = stream.launch_builder(&kernel);
+        a.arg(&d_nodes);
+        a.arg(&d_atoms);
+        a.arg(&nb_i32);
+        a.arg(&m_i32);
+        a.arg(&mut d_feat);
+        unsafe {
+            a.launch(LaunchConfig::for_num_elems(nb as u32))?;
+        }
+    }
+    stream.synchronize()?;
+    let gpu_kernel_ms = tk.elapsed().as_secs_f64() * 1e3;
+    let gpu_flat = stream.clone_dtoh(&d_feat)?;
+    let gpu_total_ms = t.elapsed().as_secs_f64() * 1e3;
+
+    // CPU brute-force reference (same logic as the kernel) to localize any
+    // disagreement: kernel bug (gpu ≠ cpu-brute) vs CPU spatial-hash prune
+    // (cpu-hash ≠ cpu-brute).
+    let cpu_brute: Vec<[f64; 3]> = bnodes
+        .par_iter()
+        .map(|&p| nearest_surface_brute(p, &ag.spheres))
+        .collect();
+
+    let differ = |a: [f64; 3], b: [f64; 3]| -> Option<f64> {
+        if a[0].is_nan() && b[0].is_nan() {
+            return None;
+        }
+        if a[0].is_nan() != b[0].is_nan() {
+            return Some(f64::INFINITY);
+        }
+        let d = (0..3).map(|k| (a[k] - b[k]).abs()).fold(0.0, f64::max);
+        (d > 1e-6).then_some(d)
+    };
+
+    let mut max_feature_diff = 0.0_f64;
+    let mut mismatched = 0usize;
+    let mut gpu_vs_cpubrute_mismatch = 0usize;
+    let mut hash_vs_cpubrute_mismatch = 0usize;
+    let mut hash_vs_brute_distance_bug = 0usize;
+    let mut max_distance_error = 0.0_f64;
+    for (i, c) in cpu_feat.iter().enumerate() {
+        let g = [gpu_flat[3 * i], gpu_flat[3 * i + 1], gpu_flat[3 * i + 2]];
+        if let Some(d) = differ(*c, g) {
+            mismatched += 1;
+            if d.is_finite() {
+                max_feature_diff = max_feature_diff.max(d);
+            }
+        }
+        if differ(g, cpu_brute[i]).is_some() {
+            gpu_vs_cpubrute_mismatch += 1;
+        }
+        if differ(*c, cpu_brute[i]).is_some() {
+            hash_vs_cpubrute_mismatch += 1;
+            // Distance from the node to each candidate nearest-surface point: if
+            // they differ, the hash genuinely missed a closer/farther point (a
+            // prune bug); if equal, it's an equidistant tie (benign).
+            let p = bnodes[i];
+            let b = cpu_brute[i];
+            if !c[0].is_nan() && !b[0].is_nan() {
+                let dh = p.distance(Vec3::new(c[0], c[1], c[2]));
+                let db = p.distance(Vec3::new(b[0], b[1], b[2]));
+                let de = (dh - db).abs();
+                if de > 1e-6 {
+                    hash_vs_brute_distance_bug += 1;
+                    max_distance_error = max_distance_error.max(de);
+                }
+            } else {
+                // One found a point, the other NaN — a real search discrepancy.
+                hash_vs_brute_distance_bug += 1;
+            }
+        }
+    }
+
+    Ok(SeedBench {
+        n_atoms: atoms.len(),
+        n_boundary: nb,
+        cpu_serial_ms,
+        cpu_parallel_ms,
+        gpu_kernel_ms,
+        gpu_total_ms,
+        max_feature_diff,
+        mismatched,
+        gpu_vs_cpubrute_mismatch,
+        hash_vs_cpubrute_mismatch,
+        hash_vs_brute_distance_bug,
+        max_distance_error,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
