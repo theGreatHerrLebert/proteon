@@ -50,10 +50,18 @@ struct NeighborGrid {
 impl NeighborGrid {
     fn new(atoms: &[Sphere], probe: f64) -> Self {
         let r_max = atoms.iter().map(|a| a.radius).fold(0.0_f64, f64::max);
-        // Cutoff (and cell size) = the max centre-to-centre distance of two atoms
-        // that can share a probe, plus headroom so the 27-cell stencil never clips a
-        // borderline neighbour. A degenerate cell size is avoided for empty input.
-        let cell = (2.0 * (r_max + probe)).max(1e-6);
+        // Cell size = the interaction cutoff `2·(r_max+probe)` PLUS a small absolute
+        // headroom. The headroom (codex-review) guarantees the 27-cell stencil never
+        // clips a borderline atom in two edge cases the exact cutoff doesn't cover:
+        //   (a) `floor()` rounding when a query point lies exactly on a cell boundary
+        //       (the toric-blocker bound is `== cutoff`, zero margin without it);
+        //   (b) the `1e-6` tangency tolerance in `tangent_thirds`, which accepts an
+        //       owner as far as `r_k+probe+1e-6` — past `cell` only if `r_max+probe`
+        //       were sub-`1e-6` (non-molecular), which the ≥1e-3 headroom also covers.
+        // The extra candidates this admits are rejected by the exact intersect tests,
+        // so enlarging the cell cannot change the enumerated set. `max(..)` guards an
+        // empty/degenerate input.
+        let cell = (2.0 * (r_max + probe) + 1e-3).max(1e-6);
         let mut cells: std::collections::HashMap<[i64; 3], Vec<usize>> =
             std::collections::HashMap::new();
         for (i, a) in atoms.iter().enumerate() {
@@ -397,18 +405,23 @@ mod tests {
             ));
         }
         let probe = 1.4;
-        // RS faces: identical sequence (set, order, and probe positions).
+        // RS faces: identical sequence — same triples, same order, and (grid and
+        // brute call the same intersect_three_spheres on the same triple) bit-exact
+        // probe positions.
         let grid = enumerate_rs_faces(&atoms, probe);
         let brute = rs_faces_brute(&atoms, probe);
         assert_eq!(grid.len(), brute.len(), "RS face count differs");
         for (g, b) in grid.iter().zip(&brute) {
             assert_eq!(g.atoms, b.atoms, "RS face triple/order differs");
-            assert!(g.probe.distance(b.probe) < 1e-12, "RS probe position differs");
+            assert_eq!(g.probe, b.probe, "RS probe position differs (bit-exact expected)");
         }
-        // Toric faces: same set of (edge, θ-interval, ends). Order can differ (the
-        // grid outer loop is near-sorted), so compare as sets. Brute reference uses
-        // all atoms as blockers and all atoms for the tangent third.
-        let mut brute_toric: Vec<([usize; 2], [Option<usize>; 2])> = Vec::new();
+        // Toric faces: full ToricFace identity *in sequence* — edge, θ-interval bits
+        // (a missed blocker would shift an interval while keeping the same endpoint
+        // owner — codex-review), and ends. The pair sequence is identical (both
+        // iterate ascending i then ascending j; a pair with no roll yields no face in
+        // either), so a zip comparison also verifies order. Brute uses all atoms as
+        // blockers and as tangent-third candidates.
+        let mut brute_toric: Vec<ToricFace> = Vec::new();
         for i in 0..atoms.len() {
             for j in (i + 1)..atoms.len() {
                 let Some(roll) =
@@ -438,16 +451,19 @@ mod tests {
                         }
                         got
                     };
-                    brute_toric.push(([i, j], ends));
+                    brute_toric.push(ToricFace { edge: [i, j], theta: (s, e), ends });
                 }
             }
         }
         let tg = enumerate_toric_faces(&atoms, probe).unwrap();
-        let mut gset: Vec<_> = tg.iter().map(|f| (f.edge, f.ends)).collect();
-        gset.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
-        brute_toric.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
-        assert_eq!(gset, brute_toric, "toric (edge, ends) set differs from brute force");
-        assert!(!gset.is_empty(), "blob should have toric faces");
+        assert_eq!(tg.len(), brute_toric.len(), "toric face count differs");
+        for (g, b) in tg.iter().zip(&brute_toric) {
+            assert_eq!(g.edge, b.edge, "toric edge/order differs");
+            assert_eq!(g.ends, b.ends, "toric endpoint owners differ");
+            assert_eq!(g.theta.0.to_bits(), b.theta.0.to_bits(), "toric θ-start differs");
+            assert_eq!(g.theta.1.to_bits(), b.theta.1.to_bits(), "toric θ-end differs");
+        }
+        assert!(!tg.is_empty(), "blob should have toric faces");
     }
 
     #[test]
