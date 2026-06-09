@@ -43,6 +43,17 @@ fn main() {
             println!("{name:<14} LOAD/EMPTY");
             continue;
         }
+        // Oracle hook: dump the exact spheres (x y z r) to $SES_DUMP_SPHERES/<name>.xyzr
+        // so an external mesher (BALL) can be fed identical inputs (radii match).
+        if let Ok(dir) = std::env::var("SES_DUMP_SPHERES") {
+            use std::io::Write;
+            let stem = name.rsplit('.').nth(1).unwrap_or(name);
+            if let Ok(mut f) = std::fs::File::create(format!("{dir}/{stem}.xyzr")) {
+                for s in &atoms {
+                    let _ = writeln!(f, "{} {} {} {}", s.center.x, s.center.y, s.center.z, s.radius);
+                }
+            }
+        }
         let t = Instant::now();
         // Same parameters as the hybrid's analytic attempt in ses_corpus/ses_export.
         match ses_mesh_cleaned_welded(&atoms, probe, 48, 10, 0.04, 1e-5) {

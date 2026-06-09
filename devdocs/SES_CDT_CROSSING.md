@@ -31,6 +31,36 @@ measured, and reverted.
 
 The diagnosis below stands; only the chosen remedy changed.
 
+### Cost is intrinsic — a retry-budget cap is NOT viable
+
+Measured recovery depth (which perturbation attempt cleared each recovered case):
+**1ijp=5, 3lwa=8, 8t5l=9, 9hfa=9, 5qs5=11** (median 9, of 12 max). The jitter is an
+*undirected* random walk whose magnitude only reaches its 1e-2 Å cap at attempt 8,
+so the cases that recover do so deep in the budget. Capping the crossing budget at 3
+loses **all five** recoveries (verified: 9hfa ERRs at 105 s with budget 3 vs
+watertight at 158 s with budget 12). So latency and recovery trade off directly:
+each recovery costs 5–11 *whole-protein* remeshes, and a residual large protein
+(15/22 of the subset) pays up to 12 remeshes before the grid fallback.
+
+This is inherent to *undirected, whole-protein* perturbation. The real latency fix is
+one of (future work, not a quick cap):
+- **Directed perturbation** — read the near-tangent atom pair off the CDT failure and
+  move *those two* apart; should clear in 1–2 attempts instead of 5–11.
+- **Targeted per-cap perturbation** — perturb only the failing contact cap's atoms
+  and re-mesh only that patch, so 12 attempts cost ~1 whole-protein remesh, not 12.
+
+Until then the shipped fix keeps the (validated, BALL-matched) recoveries at the
+known latency cost; the residual cases reach the watertight grid fallback as before.
+
+### Oracle anchor (BALL)
+
+BALL's analytic SES (`calculateSESArea`) is robust on all 22 crossing-failure
+proteins; our 5 recovered meshes match its area to ≤0.32 % (4/5 within 0.1 %) —
+confirming the perturbed surface is *correct*, not merely watertight. BALL's
+*triangulation* path escapes the same degeneracies by the same family of remedy:
+bounded probe-radius perturbation retry (`surfaceProcessor.C:64`, ±0.01 Å, ≤10×),
+analogous to our atom-centre jitter. See the `ball-ses-oracle` note.
+
 ---
 
 ## Status / why this doc
