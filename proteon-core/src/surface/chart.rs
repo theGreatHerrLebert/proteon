@@ -265,10 +265,90 @@ pub fn fill_spherical_region(
                     }
                 }
             }
+            if std::env::var("SES_DEBUG_CROSS").is_ok() {
+                diagnose_crossing(center, radius, loops, pole0, &maxang);
+            }
             Err(e)
         }
         Err(e) => Err(e),
     }
+}
+
+/// Diagnostic (env `SES_DEBUG_CROSS`): characterise a chart-fill crossing failure
+/// — is the region bigger than a hemisphere (genuine multi-chart need) or is it a
+/// near-pinch chord artifact (two boundary stretches within a sample gap)?
+fn diagnose_crossing(
+    center: Vec3,
+    radius: f64,
+    loops: &[Vec<Vec3>],
+    pole0: Vec3,
+    maxang: &dyn Fn(Vec3) -> f64,
+) {
+    let chart = Chart::new(pole0);
+    let dir_of = |p: Vec3| (p - center).normalized().expect("boundary at centre");
+    // Project every loop to 2D, remembering (loop, index) per point.
+    let mut segs: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut tag: Vec<(usize, usize)> = Vec::new();
+    let sizes: Vec<usize> = loops.iter().map(|l| l.len()).collect();
+    for (li, lp) in loops.iter().enumerate() {
+        let pj: Vec<[f64; 2]> = lp.iter().map(|&w| chart.forward(dir_of(w))).collect();
+        for i in 0..pj.len() {
+            segs.push((pj[i], pj[(i + 1) % pj.len()]));
+            tag.push((li, i));
+        }
+    }
+    // Min gap between non-adjacent segments, and count of actual crossings.
+    let mut min_gap = f64::INFINITY;
+    let mut crossings = 0usize;
+    for a in 0..segs.len() {
+        for b in (a + 1)..segs.len() {
+            // skip shared-endpoint adjacency within the same loop
+            if tag[a].0 == tag[b].0 {
+                let n = sizes[tag[a].0];
+                let (ia, ib) = (tag[a].1, tag[b].1);
+                if ia == ib || (ia + 1) % n == ib || (ib + 1) % n == ia {
+                    continue;
+                }
+            }
+            if segs_cross(segs[a], segs[b]) {
+                crossings += 1;
+            }
+            let g = seg_seg_gap(segs[a], segs[b]);
+            if g < min_gap {
+                min_gap = g;
+            }
+        }
+    }
+    let region_deg = maxang(pole0).to_degrees();
+    eprintln!(
+        "[SES_CROSS] r={radius:.2} loops={} sizes={:?} region_halfextent={region_deg:.1}deg \
+         crossings={crossings} min_nonadj_gap={min_gap:.4} (chart units ~ angular radians)",
+        loops.len(),
+        sizes,
+    );
+}
+
+/// Do open segments p1–p2 and p3–p4 properly intersect (interior crossing)?
+fn segs_cross(s1: ([f64; 2], [f64; 2]), s2: ([f64; 2], [f64; 2])) -> bool {
+    let (p1, p2) = s1;
+    let (p3, p4) = s2;
+    let o = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    };
+    let (d1, d2, d3, d4) = (o(p3, p4, p1), o(p3, p4, p2), o(p1, p2, p3), o(p1, p2, p4));
+    ((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0))
+}
+
+/// Closest distance between two 2D segments (0 if they touch/cross).
+fn seg_seg_gap(s1: ([f64; 2], [f64; 2]), s2: ([f64; 2], [f64; 2])) -> f64 {
+    if segs_cross(s1, s2) {
+        return 0.0;
+    }
+    pt_seg_sq(s1.0, s2.0, s2.1)
+        .min(pt_seg_sq(s1.1, s2.0, s2.1))
+        .min(pt_seg_sq(s2.0, s1.0, s1.1))
+        .min(pt_seg_sq(s2.1, s1.0, s1.1))
+        .sqrt()
 }
 
 /// Candidate chart poles around `pole` — small rotations in its tangent plane,
