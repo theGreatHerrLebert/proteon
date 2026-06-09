@@ -33,15 +33,89 @@ pub struct RsFace {
     pub probe: Vec3,
 }
 
+/// A uniform spatial grid over atom centres for neighbour queries, the spatial
+/// acceleration that turns the reduced-surface enumeration from O(N³)/O(N⁴) into
+/// O(N·k²) (k = average neighbour count). **Cell size = `2·(r_max + probe)`** — the
+/// *interaction cutoff*: the three atoms of an RS face are pairwise within that
+/// distance (the probe touches all three, so each pair is ≤ 2·(r+probe) apart), and
+/// any atom that can block a probe / bury a roll circle lies within `(r_max+probe)`
+/// of it — so the 27-cell neighbourhood of any query point captures **every**
+/// relevant atom. The grid therefore prunes *only* atoms that provably cannot
+/// participate, leaving the enumerated faces bit-identical to the brute-force set.
+struct NeighborGrid {
+    cell: f64,
+    cells: std::collections::HashMap<[i64; 3], Vec<usize>>,
+}
+
+impl NeighborGrid {
+    fn new(atoms: &[Sphere], probe: f64) -> Self {
+        let r_max = atoms.iter().map(|a| a.radius).fold(0.0_f64, f64::max);
+        // Cutoff (and cell size) = the max centre-to-centre distance of two atoms
+        // that can share a probe, plus headroom so the 27-cell stencil never clips a
+        // borderline neighbour. A degenerate cell size is avoided for empty input.
+        let cell = (2.0 * (r_max + probe)).max(1e-6);
+        let mut cells: std::collections::HashMap<[i64; 3], Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, a) in atoms.iter().enumerate() {
+            cells.entry(Self::key(a.center, cell)).or_default().push(i);
+        }
+        NeighborGrid { cell, cells }
+    }
+
+    fn key(p: Vec3, cell: f64) -> [i64; 3] {
+        [
+            (p.x / cell).floor() as i64,
+            (p.y / cell).floor() as i64,
+            (p.z / cell).floor() as i64,
+        ]
+    }
+
+    /// Indices of every atom in the 27 cells around `p` — a superset of all atoms
+    /// within `cell` (= the cutoff) of `p`, so any clearance/blocker test run over
+    /// this set is exact.
+    fn near(&self, p: Vec3) -> Vec<usize> {
+        let [cx, cy, cz] = Self::key(p, self.cell);
+        let mut out = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(v) = self.cells.get(&[cx + dx, cy + dy, cz + dz]) {
+                        out.extend_from_slice(v);
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Every RS face of `atoms` for the given `probe`: each atom triple carries 0, 1,
 /// or 2 probe positions (`intersect_three_spheres`), kept when the probe there
 /// clears every *other* atom. The canonical source of SES-corner positions.
+///
+/// Spatially accelerated via [`NeighborGrid`]: only triples of mutually-near atoms
+/// are tested, and clearance is checked against the probe's 27-cell neighbourhood —
+/// both provably complete, so the result is identical to the brute-force O(N³) form
+/// (asserted by `grid_enumeration_matches_brute_force`).
 pub fn enumerate_rs_faces(atoms: &[Sphere], probe: f64) -> Vec<RsFace> {
+    let grid = NeighborGrid::new(atoms, probe);
+    let cutoff = grid.cell;
     let mut faces = Vec::new();
-    let n = atoms.len();
-    for i in 0..n {
-        for j in (i + 1)..n {
-            for k in (j + 1)..n {
+    for i in 0..atoms.len() {
+        // Near atoms with index > i, sorted ascending so the emitted triple stays
+        // [i<j<k] like the brute-force loop (downstream matches triples by order).
+        let mut near_i: Vec<usize> = grid
+            .near(atoms[i].center)
+            .into_iter()
+            .filter(|&m| m > i && atoms[i].center.distance(atoms[m].center) <= cutoff)
+            .collect();
+        near_i.sort_unstable();
+        for (jpos, &j) in near_i.iter().enumerate() {
+            for &k in &near_i[jpos + 1..] {
+                // k > j by construction; require j,k also mutually within cutoff.
+                if atoms[j].center.distance(atoms[k].center) > cutoff {
+                    continue;
+                }
                 let Some((p1, p2)) = intersect_three_spheres(
                     atoms[i].inflated(probe),
                     atoms[j].inflated(probe),
@@ -54,11 +128,11 @@ pub fn enumerate_rs_faces(atoms: &[Sphere], probe: f64) -> Vec<RsFace> {
                     cand.push(p2); // distinct above/below probes (else tangent triple)
                 }
                 for p in cand {
-                    let clear = atoms.iter().enumerate().all(|(m, a)| {
+                    let clear = grid.near(p).into_iter().all(|m| {
                         m == i
                             || m == j
                             || m == k
-                            || p.distance(a.center) >= a.radius + probe - 1e-9
+                            || p.distance(atoms[m].center) >= atoms[m].radius + probe - 1e-9
                     });
                     if clear {
                         faces.push(RsFace {
@@ -100,9 +174,13 @@ fn tangent_thirds(
     roll: &super::geom::Circle3,
     theta: f64,
     probe: f64,
+    grid: &NeighborGrid,
 ) -> Vec<usize> {
+    // A third atom tangent to the probe at `p` lies within (r+probe) < cutoff of
+    // `p`, so the probe's 27-cell neighbourhood is a complete candidate set.
     let p = roll_point(roll, theta);
-    (0..atoms.len())
+    grid.near(p)
+        .into_iter()
         .filter(|&k| k != i && k != j)
         .filter(|&k| (p.distance(atoms[k].center) - (atoms[k].radius + probe)).abs() < TANGENT_TOL)
         .collect()
@@ -113,20 +191,33 @@ fn tangent_thirds(
 /// **Errors** (rather than emit an ill-identified face) when a bounded interval's
 /// endpoint is not a clean generic RS vertex: no tangent third atom (a
 /// construction failure) or ≥2 (a cospherical-degeneracy / singular vertex).
+///
+/// Spatially accelerated via [`NeighborGrid`] (identical result to brute force,
+/// asserted by `grid_enumeration_matches_brute_force`): only near pairs roll, and a
+/// roll circle's blockers lie within the cutoff of its centre.
 pub fn enumerate_toric_faces(atoms: &[Sphere], probe: f64) -> Result<Vec<ToricFace>> {
+    let grid = NeighborGrid::new(atoms, probe);
+    let cutoff = grid.cell;
     let mut faces = Vec::new();
     for i in 0..atoms.len() {
-        for j in (i + 1)..atoms.len() {
+        let mut near_i: Vec<usize> = grid
+            .near(atoms[i].center)
+            .into_iter()
+            .filter(|&m| m > i && atoms[i].center.distance(atoms[m].center) <= cutoff)
+            .collect();
+        near_i.sort_unstable();
+        for &j in &near_i {
             let Some(roll) =
                 intersect_two_spheres(atoms[i].inflated(probe), atoms[j].inflated(probe))
             else {
                 continue;
             };
-            let blockers: Vec<Sphere> = atoms
-                .iter()
-                .enumerate()
-                .filter(|(k, _)| *k != i && *k != j)
-                .map(|(_, &a)| a)
+            // Blockers of the roll circle lie within the cutoff of its centre.
+            let blockers: Vec<Sphere> = grid
+                .near(roll.center)
+                .into_iter()
+                .filter(|&k| k != i && k != j)
+                .map(|k| atoms[k])
                 .collect();
             for (s, e) in free_intervals(&roll, &blockers, probe) {
                 let full_ring = s.abs() < 1e-12 && (e - TAU).abs() < 1e-12;
@@ -135,7 +226,7 @@ pub fn enumerate_toric_faces(atoms: &[Sphere], probe: f64) -> Result<Vec<ToricFa
                 } else {
                     let mut got = [None, None];
                     for (slot, &theta) in got.iter_mut().zip([s, e].iter()) {
-                        let owners = tangent_thirds(atoms, i, j, &roll, theta, probe);
+                        let owners = tangent_thirds(atoms, i, j, &roll, theta, probe, &grid);
                         ensure!(
                             owners.len() == 1,
                             "toric endpoint of pair [{i},{j}] has {} tangent third atoms \
@@ -240,6 +331,123 @@ mod tests {
             }
         }
         s
+    }
+
+    /// Brute-force O(N³) RS-face enumeration — the reference the grid-accelerated
+    /// [`enumerate_rs_faces`] must reproduce *exactly* (same faces, same order, same
+    /// probe positions). The grid only prunes provably-irrelevant atoms, so any
+    /// divergence is a bug in the cutoff/stencil reasoning.
+    fn rs_faces_brute(atoms: &[Sphere], probe: f64) -> Vec<RsFace> {
+        let mut faces = Vec::new();
+        let n = atoms.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                for k in (j + 1)..n {
+                    let Some((p1, p2)) = intersect_three_spheres(
+                        atoms[i].inflated(probe),
+                        atoms[j].inflated(probe),
+                        atoms[k].inflated(probe),
+                    ) else {
+                        continue;
+                    };
+                    let mut cand = vec![p1];
+                    if p1.distance(p2) > 1e-9 {
+                        cand.push(p2);
+                    }
+                    for p in cand {
+                        let clear = atoms.iter().enumerate().all(|(m, a)| {
+                            m == i
+                                || m == j
+                                || m == k
+                                || p.distance(a.center) >= a.radius + probe - 1e-9
+                        });
+                        if clear {
+                            faces.push(RsFace {
+                                atoms: [i, j, k],
+                                probe: p,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        faces
+    }
+
+    #[test]
+    fn grid_enumeration_matches_brute_force() {
+        // A deterministic blob of overlapping atoms spanning several grid cells, so
+        // the 27-cell stencil and cross-cell triples are exercised. SplitMix-style
+        // jitter (no rand dep), radii varied so r_max sets the cutoff.
+        let mut z: u64 = 0x1234_5678_9abc_def0;
+        let mut next = || {
+            z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut x = z;
+            x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            ((x ^ (x >> 31)) as f64) / (u64::MAX as f64)
+        };
+        let mut atoms = Vec::new();
+        for _ in 0..120 {
+            atoms.push(sph(
+                next() * 12.0,
+                next() * 12.0,
+                next() * 12.0,
+                1.4 + next() * 0.6,
+            ));
+        }
+        let probe = 1.4;
+        // RS faces: identical sequence (set, order, and probe positions).
+        let grid = enumerate_rs_faces(&atoms, probe);
+        let brute = rs_faces_brute(&atoms, probe);
+        assert_eq!(grid.len(), brute.len(), "RS face count differs");
+        for (g, b) in grid.iter().zip(&brute) {
+            assert_eq!(g.atoms, b.atoms, "RS face triple/order differs");
+            assert!(g.probe.distance(b.probe) < 1e-12, "RS probe position differs");
+        }
+        // Toric faces: same set of (edge, θ-interval, ends). Order can differ (the
+        // grid outer loop is near-sorted), so compare as sets. Brute reference uses
+        // all atoms as blockers and all atoms for the tangent third.
+        let mut brute_toric: Vec<([usize; 2], [Option<usize>; 2])> = Vec::new();
+        for i in 0..atoms.len() {
+            for j in (i + 1)..atoms.len() {
+                let Some(roll) =
+                    intersect_two_spheres(atoms[i].inflated(probe), atoms[j].inflated(probe))
+                else {
+                    continue;
+                };
+                let blockers: Vec<Sphere> =
+                    (0..atoms.len()).filter(|&k| k != i && k != j).map(|k| atoms[k]).collect();
+                for (s, e) in free_intervals(&roll, &blockers, probe) {
+                    let full = s.abs() < 1e-12 && (e - TAU).abs() < 1e-12;
+                    let ends = if full {
+                        [None, None]
+                    } else {
+                        let mut got = [None, None];
+                        for (slot, &th) in got.iter_mut().zip([s, e].iter()) {
+                            let p = roll_point(&roll, th);
+                            let owners: Vec<usize> = (0..atoms.len())
+                                .filter(|&k| k != i && k != j)
+                                .filter(|&k| {
+                                    (p.distance(atoms[k].center) - (atoms[k].radius + probe)).abs()
+                                        < TANGENT_TOL
+                                })
+                                .collect();
+                            assert_eq!(owners.len(), 1, "test blob must be generic");
+                            *slot = Some(owners[0]);
+                        }
+                        got
+                    };
+                    brute_toric.push(([i, j], ends));
+                }
+            }
+        }
+        let tg = enumerate_toric_faces(&atoms, probe).unwrap();
+        let mut gset: Vec<_> = tg.iter().map(|f| (f.edge, f.ends)).collect();
+        gset.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+        brute_toric.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+        assert_eq!(gset, brute_toric, "toric (edge, ends) set differs from brute force");
+        assert!(!gset.is_empty(), "blob should have toric faces");
     }
 
     #[test]

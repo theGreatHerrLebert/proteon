@@ -71,6 +71,30 @@ collapsing the attempt count.
    existing undirected retry — directed only applies to the crossing class. Confirm
    no regression to those paths.
 
+## OUTCOME — the bottleneck was `build_graph`, not the retry
+
+Profiling (env `SES_PROFILE`) overturned the premise. The latency is **not**
+attempt-count: per build on 9hfa (1558 atoms) was `build_graph` **9.2s** + toric 1.1s
++ caps 4.3s, and `build_graph` re-runs every retry. On 1sq9 (2981 atoms) `build_graph`
+**alone exceeded 120s**. Root cause: `enumerate_rs_faces` / `enumerate_toric_faces`
+brute-forced **all O(N³) atom triples/pairs** with an O(N) clearance/blocker scan —
+no spatial acceleration. (This is also why BALL, which uses spatial acceleration, is
+seconds where proteon was minutes.)
+
+**Fix (shipped): a uniform `NeighborGrid`** (cell = `2·(r_max+probe)`, the interaction
+cutoff). An RS face's three atoms are pairwise within the cutoff, and every
+clearance/blocker atom is within the cutoff of the probe/roll-centre, so the 27-cell
+stencil is provably complete — the enumerated faces are **bit-identical** to brute
+force (asserted by `grid_enumeration_matches_brute_force`, and all BALL-gated tests
+pass). Complexity O(N³)→O(N·k²).
+
+Measured: `build_graph` 9.2s→0.73s (12.6×) on 9hfa; 1sq9 went from "couldn't finish
+`build_graph` in 120s" to a full mesh in 411s. On the 22-protein crossing subset the
+analytic recoveries went 5→11 and timeouts 15→7. This also attacks the general
+large-protein slowness behind the original 163/317 corpus timeouts — not just the
+crossing cases. The remaining 7 timeouts are the 4000–6000-atom proteins where the
+cap-loop (chart fill) × retries is now the dominant cost.
+
 ## Validation plan
 
 - Re-run the 22-protein crossing subset; expect the 5 current recoveries to clear in

@@ -651,7 +651,18 @@ pub fn ses_mesh_cleaned(
         n_theta >= 3 && n_phi >= 1 && grid > 0.0,
         "bad sampling params"
     );
+    let _prof = std::env::var("SES_PROFILE").is_ok();
+    let _t0 = std::time::Instant::now();
     let g = build_graph(atoms, probe)?;
+    if _prof {
+        eprintln!(
+            "[SES_PROFILE] build_graph {:.2}s ({} rs_faces, {} toric)",
+            _t0.elapsed().as_secs_f64(),
+            g.rs_faces.len(),
+            g.toric.len()
+        );
+    }
+    let _t_toric = std::time::Instant::now();
     let probe_centers: Vec<Vec3> = g.rs_faces.iter().map(|f| f.probe).collect();
     let mut mesh = Mesh::default();
     // BTreeMap (not HashMap): contact caps are filled in iteration order, and on a
@@ -718,6 +729,10 @@ pub fn ses_mesh_cleaned(
         });
     }
 
+    if _prof {
+        eprintln!("[SES_PROFILE] toric loop {:.2}s", _t_toric.elapsed().as_secs_f64());
+    }
+    let _t_caps = std::time::Instant::now();
     // --- contact caps (untrimmed for now) ---
     for (&a, arcs) in &contact {
         let loops = walk_cap_loops(arcs)?;
@@ -729,13 +744,20 @@ pub fn ses_mesh_cleaned(
             .filter_map(|nb| buried_cap(atoms[a], atoms[nb], probe))
             .collect();
         let pole = pick_chart_pole(&caps).context("contact cap pole")?;
-        mesh.append(&fill_spherical_region(
-            atoms[a].center,
-            atoms[a].radius,
-            &loops,
-            pole,
-            grid,
-        )?);
+        let filled = fill_spherical_region(atoms[a].center, atoms[a].radius, &loops, pole, grid)
+            .map_err(|e| {
+                if _prof {
+                    eprintln!(
+                        "[SES_PROFILE] caps to crossing (atom {a}) {:.2}s",
+                        _t_caps.elapsed().as_secs_f64()
+                    );
+                }
+                e
+            })?;
+        mesh.append(&filled);
+    }
+    if _prof {
+        eprintln!("[SES_PROFILE] cap loop (full) {:.2}s", _t_caps.elapsed().as_secs_f64());
     }
 
     // --- spheric faces: clipped by colliding neighbours ---
