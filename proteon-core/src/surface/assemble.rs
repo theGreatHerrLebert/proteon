@@ -827,6 +827,13 @@ fn is_degeneracy_error(e: &anyhow::Error) -> bool {
         // some of these — though a *genuinely* near-degenerate sliver may persist.
         || m.contains("RS face")
         || m.contains("degenerate spheric triple")
+        // A contact/spheric boundary loop that nearly self-pinches (two surface
+        // stretches passing within a sub-sample-spacing gap, ~0.1 Å) projects to a
+        // self-crossing polygon the CDT rejects ("boundary edge … crosses an
+        // existing constraint"). That is a near-degenerate input, not a logic error
+        // (the duplicate-loop cause is fixed), so a tiny atom perturbation re-samples
+        // it clear.
+        || m.contains("crosses an existing constraint")
 }
 
 /// Build `T` from `atoms`, retrying on an input-degeneracy error with a growing
@@ -1259,18 +1266,27 @@ mod tests {
         assert_eq!(val, 42);
         assert_eq!(attempts, 2, "two perturbations before success");
 
-        // A non-degeneracy error must NOT be retried (returns immediately).
+        // A genuine non-degeneracy error must NOT be retried (returns immediately).
         let calls2 = Cell::new(0usize);
         let err = build_with_perturbation_retry(&atoms, 6, |_| -> Result<i32> {
             calls2.set(calls2.get() + 1);
-            anyhow::bail!("boundary edge 11->12 crosses an existing constraint")
+            anyhow::bail!("non-finite projection")
         });
         assert!(err.is_err());
         assert_eq!(
             calls2.get(),
             1,
-            "chart/chord errors are not perturb-retried"
+            "non-degeneracy errors are not perturb-retried"
         );
+
+        // A CDT boundary self-crossing is a near-pinch degeneracy and IS retried
+        // (e.g. 1aaj): 1 initial + `max_attempts` perturbed calls before giving up.
+        let calls3 = Cell::new(0usize);
+        let _ = build_with_perturbation_retry(&atoms, 3, |_| -> Result<i32> {
+            calls3.set(calls3.get() + 1);
+            anyhow::bail!("boundary edge 11->12 crosses an existing constraint")
+        });
+        assert_eq!(calls3.get(), 4, "CDT crossing is perturb-retried");
 
         // Exhausting retries surfaces the last degeneracy error.
         let exhausted = build_with_perturbation_retry(&atoms, 2, |_| -> Result<i32> {
