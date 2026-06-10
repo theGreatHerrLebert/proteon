@@ -35,7 +35,10 @@
 //! - **P3** ✅ — [`quadrature`] (Radon 7-point, L0) + [`yukawa`]: gated vs NESSie
 //!   `yukawa_dump`, an independent single-layer quadrature oracle, the `r → 0`
 //!   limits, and series/closed-form continuity.
-//! - **P4+** — [`system`], [`solve`], [`post`], [`analytic`] remain `unimplemented!()`
+//! - **P4 (local)** ✅ — [`system`] (collocation matrices + the implicit local
+//!   operator) + [`solve`] (matrix-free GMRES, two-stage local solve): Cauchy data
+//!   gated vs NESSie `solve_dump`, LU-vs-GMRES, and a true-residual gate.
+//! - **P5+** — [`post`], [`analytic`], and the nonlocal solve remain `unimplemented!()`
 //!   stubs keyed to their gating phase. The convention spec still gates anything
 //!   energy-level: a single convention bug hides behind close parity.
 
@@ -58,7 +61,11 @@ pub use model::{BemModel, Charge, Domain, Locality, Params, PotentialKind, Tri};
 pub use post::{espotential, rfenergy};
 pub use quadrature::{radon7, TriangleQuad};
 pub use solve::{
-    solve_local, solve_nonlocal, CauchyData, LocalResult, NonlocalResult, SolveConfig, SolveStats,
+    solve_local, solve_local_elements, solve_nonlocal, CauchyData, LocalResult, NonlocalResult,
+    SolveConfig, SolveError, SolveStats,
 };
-pub use system::{BlockLayout, LinearOperator, Preconditioner};
+pub use system::{
+    laplace_matrices, mol_potentials, BlockLayout, DenseOperator, JacobiPreconditioner,
+    LinearOperator, LocalOperator, Preconditioner, TWO_PI,
+};
 pub use yukawa::regular_yukawa_collocation;

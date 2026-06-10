@@ -1,35 +1,172 @@
-//! BEM system assembly — implicit (matrix-free) 2-block / 3-block operators (L3).
+//! BEM system assembly — collocation matrices + the implicit local operator (L3).
 //!
-//! Port of NESSie's `BEM` assembly (`src/bem/{local,nonlocal,implicit}.jl`). The
-//! local system is 2-block `(u, q)`; the nonlocal is 3-block `(u, q, w)` of size
-//! `3·numelem`. Production uses the **implicit** (matrix-free) operator (O(N)
-//! memory); an **explicit** dense assembly exists for small-fixture parity.
+//! Port of NESSie's `BEM` assembly (`src/bem/{local,implicit}.jl`). The local solve
+//! is two sequential `numelem × numelem` systems (`M·u = b₁`, then `V·q = b₂`), not
+//! a coupled block system; this module builds the pieces and [`solve`](crate::solve)
+//! drives the two stages.
 //!
-//! The exact block structure, RHS vectors, dielectric factors, and ½-jump terms
-//! are pinned by the §1b formulation spec — **do not infer them here**.
+//! The block structure, RHS, dielectric factors, and ½-jump (`2π`) terms are pinned
+//! by `devdocs/ELECTROSTATICS_FORMULATION.md` §5.
 //!
-//! # Gates (P4), three distinct checks — don't conflate:
-//! 1. *operator parity* — `implicit·x == explicit·x` (indexing/matvec only).
-//! 2. *assembly correctness* — proteon's blocks + RHS **entrywise** vs NESSie
-//!    `system_dump`. (A dense LU of our own matrix can NOT validate assembly.)
-//! 3. *solver correctness* — handled in `solve.rs` (LU vs GMRES).
+//! **Scaling ceiling:** the dense `K`/`V` are O(N²) memory; each matvec is O(N²)
+//! time without a fast-summation method (FMM/treecode). Fine at fixture scale; the
+//! O(N) matrix-free `K·x` and a fast summation backend are the plan §6 follow-ups.
 
-use crate::model::{BemModel, Locality};
+use crate::laplace::laplace_collocation;
+use crate::model::{Charge, PotentialKind, Tri};
 
-/// A matrix-free linear operator: `y ← A·x`. The GMRES in `solve.rs` consumes this.
-///
-/// **Scaling ceiling:** each `matvec` is O(N²) without a fast-summation method
-/// (FMM/treecode/H-matrix). O(N) memory, O(N²) time — see plan §6. Keep this
-/// interface open to a fast-summation backend.
+/// `2π = 4π·σ` with NESSie's `σ = 1/2` — the ½-solid-angle jump constant.
+pub const TWO_PI: f64 = 2.0 * std::f64::consts::PI;
+
+/// A matrix-free linear operator: `y ← A·x`. The GMRES in [`crate::solve`] consumes
+/// this. Each `matvec` is O(N²) without fast summation (plan §6).
 pub trait LinearOperator {
     /// Side length of the (square) system.
     fn dim(&self) -> usize;
-    /// In-place matvec `y = A·x` (`x`, `y` length [`Self::dim`]).
+    /// `y = A·x` (`x`, `y` length [`Self::dim`]).
     fn matvec(&self, x: &[f64], y: &mut [f64]);
+    /// The operator's diagonal (for the Jacobi preconditioner).
+    fn diagonal(&self) -> Vec<f64>;
 }
 
-/// Block structure of the system: `num_blocks · num_elements` unknowns, with the
-/// per-block ranges GMRES uses for per-block residuals and a block preconditioner.
+/// A dense row-major `n × n` matrix as a [`LinearOperator`] — the collocation
+/// matrices `V` (single layer) and `K` (double layer).
+#[derive(Debug, Clone)]
+pub struct DenseOperator {
+    /// Side length.
+    pub n: usize,
+    /// Row-major entries (`data[i*n + j] = A[i][j]`).
+    pub data: Vec<f64>,
+}
+
+impl DenseOperator {
+    /// `n × n` zero matrix.
+    #[must_use]
+    pub fn zeros(n: usize) -> Self {
+        Self {
+            n,
+            data: vec![0.0; n * n],
+        }
+    }
+    /// `A[i][j]`.
+    #[must_use]
+    pub fn get(&self, i: usize, j: usize) -> f64 {
+        self.data[i * self.n + j]
+    }
+    /// Set `A[i][j]`.
+    pub fn set(&mut self, i: usize, j: usize, v: f64) {
+        self.data[i * self.n + j] = v;
+    }
+}
+
+impl LinearOperator for DenseOperator {
+    fn dim(&self) -> usize {
+        self.n
+    }
+    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        for i in 0..self.n {
+            let row = &self.data[i * self.n..(i + 1) * self.n];
+            let mut acc = 0.0;
+            for (j, &xj) in x.iter().enumerate() {
+                acc += row[j] * xj;
+            }
+            y[i] = acc;
+        }
+    }
+    fn diagonal(&self) -> Vec<f64> {
+        (0..self.n).map(|i| self.get(i, i)).collect()
+    }
+}
+
+/// The implicit first local system operator `M_u` (NESSie `LocalSystemMatrix`):
+/// `M·x = 2π(1 + εΩ/εΣ)·x + (εΩ/εΣ − 1)·(K·x)`, `diag(M) = 2π(1 + εΩ/εΣ)`.
+/// Matrix-free over the stored `K` (the only O(N²) object).
+#[derive(Debug, Clone)]
+pub struct LocalOperator {
+    /// Double-layer collocation matrix `K`.
+    pub k: DenseOperator,
+    /// Dielectric ratio `εΩ/εΣ`.
+    pub frac: f64,
+}
+
+impl LinearOperator for LocalOperator {
+    fn dim(&self) -> usize {
+        self.k.n
+    }
+    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        self.k.matvec(x, y); // y = K·x
+        let diag = TWO_PI * (1.0 + self.frac);
+        let off = self.frac - 1.0;
+        for i in 0..y.len() {
+            y[i] = diag * x[i] + off * y[i];
+        }
+    }
+    fn diagonal(&self) -> Vec<f64> {
+        vec![TWO_PI * (1.0 + self.frac); self.k.n]
+    }
+}
+
+/// Build the single- and double-layer Laplace collocation matrices `(V, K)` over
+/// the element centroids `Ξ` (NESSie `_get_laplace_matrices`). `V[i][j]` / `K[i][j]`
+/// are the single/double-layer collocation of element `j` at centroid of element `i`.
+#[must_use]
+pub fn laplace_matrices(elements: &[Tri]) -> (DenseOperator, DenseOperator) {
+    let n = elements.len();
+    let centroids: Vec<_> = elements
+        .iter()
+        .map(|e| (e.v1 + e.v2 + e.v3) * (1.0 / 3.0))
+        .collect();
+    let mut v = DenseOperator::zeros(n);
+    let mut k = DenseOperator::zeros(n);
+    for (i, &xi) in centroids.iter().enumerate() {
+        for (j, ej) in elements.iter().enumerate() {
+            v.set(i, j, laplace_collocation(PotentialKind::Single, xi, ej));
+            k.set(i, j, laplace_collocation(PotentialKind::Double, xi, ej));
+        }
+    }
+    (v, k)
+}
+
+/// Molecular potential traces at the element centroids (NESSie `_molpotential` /
+/// `_molpotential_dn`, divided by `εΩ`):
+///
+/// ```text
+/// umol_i = (1/εΩ) · Σ_c  q_c / max(|ξ_i − r_c|, tol)
+/// qmol_i = −(1/εΩ) · Σ_c  q_c · (ξ_i − r_c)·n_i / max(|ξ_i − r_c|³, tol)
+/// ```
+///
+/// `tol = 1e-10` matches NESSie; for non-coincident charges (the usual case) it
+/// never triggers.
+#[must_use]
+pub fn mol_potentials(
+    elements: &[Tri],
+    charges: &[Charge],
+    eps_omega: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    const TOL: f64 = 1e-10;
+    let inv = 1.0 / eps_omega;
+    let mut umol = vec![0.0; elements.len()];
+    let mut qmol = vec![0.0; elements.len()];
+    for (i, e) in elements.iter().enumerate() {
+        let center = (e.v1 + e.v2 + e.v3) * (1.0 / 3.0);
+        let mut u = 0.0;
+        let mut q = 0.0;
+        for c in charges {
+            let d = center - c.pos;
+            let r = d.norm();
+            u += c.val / r.max(TOL);
+            // ddot(center, pos, n) = (center − pos)·n
+            q += c.val * d.dot(e.normal) / (r * r * r).max(TOL);
+        }
+        umol[i] = inv * u;
+        qmol[i] = -inv * q;
+    }
+    (umol, qmol)
+}
+
+/// Block structure of the system: `num_blocks · num_elements` unknowns. Local solves
+/// use two single-block stages; the nonlocal 3-block system (P6) is one coupled
+/// system where this indexes the `(u, q, w)` blocks.
 #[derive(Debug, Clone, Copy)]
 pub struct BlockLayout {
     /// Surface elements (= collocation points).
@@ -44,7 +181,7 @@ impl BlockLayout {
     pub fn dim(&self) -> usize {
         self.num_blocks * self.num_elements
     }
-    /// Half-open index range of block `b` within a length-[`Self::dim`] vector.
+    /// Half-open index range of block `b`.
     #[must_use]
     pub fn block_range(&self, b: usize) -> std::ops::Range<usize> {
         let n = self.num_elements;
@@ -52,45 +189,100 @@ impl BlockLayout {
     }
 }
 
-/// Preconditioner `z ← M⁻¹·r`. Scalar Jacobi to start (mirrors NESSie); the trait
-/// leaves room for a **block-diagonal** preconditioner without reshaping callers
-/// (plan §2 — Jacobi is weak on refined / nonlocal systems).
+/// Preconditioner `z ← M⁻¹·r`. Scalar Jacobi to start (mirrors NESSie's
+/// `DiagonalPreconditioner`); the trait leaves room for a block-diagonal one.
 pub trait Preconditioner {
     /// Apply `z = M⁻¹·r`.
     fn apply(&self, r: &[f64], z: &mut [f64]);
 }
 
-/// Scalar Jacobi: `z_i = r_i / diag_i`.
+/// Scalar Jacobi: `z_i = r_i / diag_i` (NESSie `DiagonalPreconditioner`).
 pub struct JacobiPreconditioner {
-    /// System diagonal (NESSie `DiagonalPreconditioner`).
+    /// System diagonal.
     pub diag: Vec<f64>,
+}
+
+impl JacobiPreconditioner {
+    /// Build from an operator's diagonal.
+    #[must_use]
+    pub fn from_operator(op: &dyn LinearOperator) -> Self {
+        Self {
+            diag: op.diagonal(),
+        }
+    }
 }
 
 impl Preconditioner for JacobiPreconditioner {
     fn apply(&self, r: &[f64], z: &mut [f64]) {
-        unimplemented!("P4: scalar Jacobi apply")
+        for i in 0..r.len() {
+            z[i] = r[i] / self.diag[i];
+        }
     }
 }
 
-/// Assembled BEM system: the matrix-free operator, RHS, preconditioner, and block
-/// layout — everything `solve::gmres` needs. The operator is boxed so a
-/// fast-summation backend can replace the naive O(N²) matvec later.
-pub struct BemSystem {
-    /// Matrix-free system operator.
-    pub op: Box<dyn LinearOperator>,
-    /// Right-hand side (the molecular-potential source terms).
-    pub rhs: Vec<f64>,
-    /// Preconditioner (boxed so Jacobi → block-diagonal is non-breaking).
-    pub precond: Box<dyn Preconditioner>,
-    /// Block structure (for per-block residuals + block preconditioning).
-    pub layout: BlockLayout,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proteon_core::surface::geom::Vec3;
 
-/// Assemble the implicit local (2-block) or nonlocal (3-block) system + RHS.
-///
-/// TODO(P4): port `BEM._solve_implicit` assembly (the implicit block operators
-/// over `Rjasanow`/`Radon` collocation) and the molecular-potential RHS.
-#[must_use]
-pub fn assemble(model: &BemModel, locality: Locality) -> BemSystem {
-    unimplemented!("P4: port BEM implicit system assembly (src/bem/)")
+    #[test]
+    fn local_operator_matches_explicit_matvec() {
+        // The implicit LocalOperator must equal an explicitly assembled M = 2π(1+f)I
+        // + (f−1)K applied densely (operator-parity, separate from any oracle).
+        let n = 4;
+        let mut k = DenseOperator::zeros(n);
+        for i in 0..n {
+            for j in 0..n {
+                k.set(i, j, (i as f64 + 1.0) * 0.1 - (j as f64) * 0.07);
+            }
+        }
+        let frac = 0.013;
+        let op = LocalOperator { k: k.clone(), frac };
+
+        // explicit M
+        let diag = TWO_PI * (1.0 + frac);
+        let mut m = k.clone();
+        for i in 0..n {
+            for j in 0..n {
+                let kv = k.get(i, j);
+                m.set(i, j, (frac - 1.0) * kv + if i == j { diag } else { 0.0 });
+            }
+        }
+        let x = [0.3, -1.2, 0.7, 2.1];
+        let mut y_op = vec![0.0; n];
+        let mut y_ex = vec![0.0; n];
+        op.matvec(&x, &mut y_op);
+        m.matvec(&x, &mut y_ex);
+        for i in 0..n {
+            assert!(
+                (y_op[i] - y_ex[i]).abs() < 1e-13,
+                "{i}: {} vs {}",
+                y_op[i],
+                y_ex[i]
+            );
+        }
+        assert!(op.diagonal().iter().all(|&d| (d - diag).abs() < 1e-13));
+    }
+
+    #[test]
+    fn mol_potential_single_charge() {
+        // One unit charge at the origin; a single element whose centroid is at
+        // distance 2 along +z with +z normal. umol = (1/εΩ)·q/r; qmol = −(1/εΩ)·q·(c−p)·n/r³.
+        let t = Tri::new(
+            Vec3::new(-1.0, 0.0, 2.0),
+            Vec3::new(1.0, -1.0, 2.0),
+            Vec3::new(1.0, 1.0, 2.0),
+        );
+        let centroid = (t.v1 + t.v2 + t.v3) * (1.0 / 3.0); // z = 2
+        let charges = [Charge {
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            val: 1.0,
+        }];
+        let eps_omega = 2.0;
+        let (umol, qmol) = mol_potentials(std::slice::from_ref(&t), &charges, eps_omega);
+        let r = centroid.norm();
+        assert!((umol[0] - (1.0 / eps_omega) / r).abs() < 1e-12);
+        let expected_q = -(1.0 / eps_omega) * centroid.dot(t.normal) / (r * r * r);
+        assert!((qmol[0] - expected_q).abs() < 1e-12);
+    }
 }

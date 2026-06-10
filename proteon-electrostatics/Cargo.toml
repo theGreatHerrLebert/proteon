@@ -29,8 +29,8 @@ proteon-core = { path = "../proteon-core" }
 # Load the checked-in NESSie oracle fixtures (tests/fixtures/nessie/*.json).
 serde_json = "1"
 
-# TODO(P4): dense LU/QR as the *solver* oracle (LU-vs-GMRES), test-only.
-#   NOTE: this is NOT the assembly oracle — assembly is gated entrywise against
-#   NESSie `system_dump` (TO_ELECTROSTATICS.md §4 L3). LU of our own matrix would
-#   inherit any assembly bug.
-# nalgebra = "0.33"
+# Dense LU as the *solver* oracle (LU-vs-GMRES parity), test-only. NOTE: this is
+# NOT the assembly oracle — when LU solves proteon's *own* explicit M it inherits
+# any assembly bug; the assembly is gated by solving against NESSie's checked-in
+# Cauchy-data fixture (whose values encode NESSie's assembly).
+nalgebra = "0.33"
