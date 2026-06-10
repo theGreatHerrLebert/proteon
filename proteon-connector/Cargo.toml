@@ -29,6 +29,7 @@ cuda = ["cudarc", "proteon-core/cuda", "proteon-search/cuda"]
 proteon-align = { path = "../proteon-align" }
 proteon-arrow = { path = "../proteon-arrow" }
 proteon-core = { path = "../proteon-core" }
+proteon-electrostatics = { path = "../proteon-electrostatics" }
 proteon-io = { path = "../proteon-io" }
 proteon-search = { path = "../proteon-search" }
 pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
