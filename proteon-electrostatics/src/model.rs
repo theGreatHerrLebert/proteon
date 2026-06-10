@@ -83,6 +83,78 @@ impl Params {
     }
 }
 
+/// A flat triangle plus the geometric props the collocation kernels need. Mirrors
+/// NESSie's `Triangle` (`v1`, `v2`, `v3`, unit `normal`, `distorig = normal·v1`,
+/// `area`). Shared by the Laplace ([`crate::laplace`]) and Yukawa ([`crate::yukawa`])
+/// kernels (the latter needs `area` and `normal` for the Radon cubature).
+///
+/// Vertices must be counter-clockwise wrt. the outward `normal` (NESSie convention);
+/// the double-layer sign depends on it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tri {
+    /// First vertex.
+    pub v1: Vec3,
+    /// Second vertex (CCW after `v1`).
+    pub v2: Vec3,
+    /// Third vertex (CCW after `v2`).
+    pub v3: Vec3,
+    /// Unit outward normal.
+    pub normal: Vec3,
+    /// Signed plane–origin distance, `normal·v1` (NESSie `props`).
+    pub distorig: f64,
+    /// Triangle area, `|(v2−v1)×(v3−v1)| / 2` (NESSie `props`).
+    pub area: f64,
+}
+
+impl Tri {
+    /// Build from three vertices, computing the props exactly as NESSie's `props`:
+    /// `normal = (v2−v1)×(v3−v1) / |·|` (plain division), `distorig = normal·v1`,
+    /// `area = |(v2−v1)×(v3−v1)| / 2`.
+    ///
+    /// NESSie divides by the cross-product norm with no epsilon floor (it guards
+    /// degeneracy separately). proteon-core's `Vec3::normalized()` rejects norms
+    /// below `1e-6` — stricter than NESSie, and it would drop valid small mesh
+    /// triangles — so this divides directly and only rejects a zero / non-finite
+    /// normal.
+    ///
+    /// # Panics
+    /// If the three vertices are collinear (zero-area / non-finite normal).
+    #[must_use]
+    pub fn new(v1: Vec3, v2: Vec3, v3: Vec3) -> Self {
+        let cross = (v2 - v1).cross(v3 - v1);
+        let vnorm = cross.norm();
+        assert!(
+            vnorm > 0.0 && vnorm.is_finite(),
+            "degenerate triangle: zero-area / non-finite normal"
+        );
+        let normal = cross * (1.0 / vnorm);
+        Self {
+            v1,
+            v2,
+            v3,
+            normal,
+            distorig: normal.dot(v1),
+            area: vnorm / 2.0,
+        }
+    }
+
+    /// Build with an explicit, already-normalized `normal` consumed verbatim (e.g. a
+    /// mesh/fixture normal), so the geometry is bit-identical to the source rather
+    /// than recomputed. `distorig = normal·v1` and `area = |(v2−v1)×(v3−v1)| / 2`,
+    /// as in NESSie `props`.
+    #[must_use]
+    pub fn with_normal(v1: Vec3, v2: Vec3, v3: Vec3, normal: Vec3) -> Self {
+        Self {
+            v1,
+            v2,
+            v3,
+            normal,
+            distorig: normal.dot(v1),
+            area: (v2 - v1).cross(v3 - v1).norm() / 2.0,
+        }
+    }
+}
+
 /// A BEM problem instance: surface mesh + charges + parameters.
 ///
 /// The mesh is proteon's own index `Mesh` (from `proteon-core::surface`), produced

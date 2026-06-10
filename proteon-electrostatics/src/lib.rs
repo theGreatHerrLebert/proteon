@@ -19,9 +19,9 @@
 //!
 //! # Pipeline (the layers, bottom-up)
 //! - [`model`]      — `BemModel`, `Charge`, `Params`, `Domain`, Yukawa exponent.
-//! - [`quadrature`] — Radon 7-point triangle cubature (L0).
+//! - [`quadrature`] — Radon 7-point triangle cubature (L0) ✅ P3.
 //! - [`laplace`]    — Rjasanow analytic single/double-layer Laplace collocation (L1) ✅ P2.
-//! - [`yukawa`]     — Radon regular-Yukawa (Yukawa − Laplace) collocation (L2).
+//! - [`yukawa`]     — Radon regular-Yukawa (Yukawa − Laplace) collocation (L2) ✅ P3.
 //! - [`system`]     — implicit (matrix-free) 2-block / 3-block operators (L3).
 //! - [`solve`]      — rolled matrix-free GMRES + preconditioner; result types (L3).
 //! - [`post`]       — reaction-field energy and potentials (L4).
@@ -32,9 +32,12 @@
 //!   formulation/convention spec (`devdocs/ELECTROSTATICS_FORMULATION.md`, plan §1b).
 //! - **P2** ✅ — [`laplace`]: gated vs NESSie `collocation_dump`, an independent
 //!   numerical-quadrature oracle, and metamorphic invariants.
-//! - **P3+** — [`yukawa`], [`system`], [`solve`], [`post`], [`analytic`] remain
-//!   `unimplemented!()` stubs keyed to their gating phase. The convention spec still
-//!   gates anything energy-level: a single convention bug hides behind close parity.
+//! - **P3** ✅ — [`quadrature`] (Radon 7-point, L0) + [`yukawa`]: gated vs NESSie
+//!   `yukawa_dump`, an independent single-layer quadrature oracle, the `r → 0`
+//!   limits, and series/closed-form continuity.
+//! - **P4+** — [`system`], [`solve`], [`post`], [`analytic`] remain `unimplemented!()`
+//!   stubs keyed to their gating phase. The convention spec still gates anything
+//!   energy-level: a single convention bug hides behind close parity.
 
 // Scaffolding: the stubs below intentionally take parameters they do not yet use.
 // Remove this allow as each phase (P2 = laplace, P3 = yukawa, P4 = system/solve,
@@ -50,10 +53,12 @@ pub mod solve;
 pub mod system;
 pub mod yukawa;
 
-pub use laplace::{laplace_collocation, Tri};
-pub use model::{BemModel, Charge, Domain, Locality, Params, PotentialKind};
+pub use laplace::laplace_collocation;
+pub use model::{BemModel, Charge, Domain, Locality, Params, PotentialKind, Tri};
 pub use post::{espotential, rfenergy};
+pub use quadrature::{radon7, TriangleQuad};
 pub use solve::{
     solve_local, solve_nonlocal, CauchyData, LocalResult, NonlocalResult, SolveConfig, SolveStats,
 };
 pub use system::{BlockLayout, LinearOperator, Preconditioner};
+pub use yukawa::regular_yukawa_collocation;

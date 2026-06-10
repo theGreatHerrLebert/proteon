@@ -27,73 +27,12 @@
 use crate::model::PotentialKind;
 use proteon_core::surface::geom::Vec3;
 
+// The triangle element type is shared with the Yukawa kernel + quadrature, so it
+// lives in `model`; re-exported here so `laplace::Tri` keeps resolving.
+pub use crate::model::Tri;
+
 /// Common Laplace tolerance (NESSie `_etol` for f64).
 pub const ETOL_F64: f64 = 1.45e-8;
-
-/// A flat triangle plus the geometric props the Rjasanow kernel needs. Mirrors
-/// NESSie's `Triangle` (`v1`, `v2`, `v3`, unit `normal`, `distorig = normal·v1`).
-///
-/// Vertices must be counter-clockwise wrt. the outward `normal` (NESSie convention);
-/// the double layer's sign depends on it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Tri {
-    /// First vertex.
-    pub v1: Vec3,
-    /// Second vertex (CCW after `v1`).
-    pub v2: Vec3,
-    /// Third vertex (CCW after `v2`).
-    pub v3: Vec3,
-    /// Unit outward normal.
-    pub normal: Vec3,
-    /// Signed plane–origin distance, `normal·v1` (NESSie `props`).
-    pub distorig: f64,
-}
-
-impl Tri {
-    /// Build from three vertices, computing the normal and `distorig` exactly as
-    /// NESSie's `props`: `normal = (v2−v1)×(v3−v1) / |·|` (plain division),
-    /// `distorig = normal·v1`.
-    ///
-    /// NESSie divides by the cross-product norm with no epsilon floor (it guards
-    /// degeneracy separately). proteon-core's `Vec3::normalized()` rejects norms
-    /// below `1e-6` — stricter than NESSie, and it would drop valid small mesh
-    /// triangles — so this divides directly and only rejects a zero / non-finite
-    /// normal.
-    ///
-    /// # Panics
-    /// If the three vertices are collinear (zero-area / non-finite normal).
-    #[must_use]
-    pub fn new(v1: Vec3, v2: Vec3, v3: Vec3) -> Self {
-        let cross = (v2 - v1).cross(v3 - v1);
-        let vnorm = cross.norm();
-        assert!(
-            vnorm > 0.0 && vnorm.is_finite(),
-            "degenerate triangle: zero-area / non-finite normal"
-        );
-        let normal = cross * (1.0 / vnorm);
-        Self {
-            v1,
-            v2,
-            v3,
-            normal,
-            distorig: normal.dot(v1),
-        }
-    }
-
-    /// Build with an explicit, already-normalized `normal` consumed verbatim (e.g. a
-    /// mesh/fixture normal), so the geometry is bit-identical to the source rather
-    /// than recomputed. `distorig = normal·v1`, as in NESSie `props`.
-    #[must_use]
-    pub fn with_normal(v1: Vec3, v2: Vec3, v3: Vec3, normal: Vec3) -> Self {
-        Self {
-            v1,
-            v2,
-            v3,
-            normal,
-            distorig: normal.dot(v1),
-        }
-    }
-}
 
 /// Julia `sign`: `-1`/`0`/`+1`, and `NaN` for `NaN` (differs from `f64::signum`,
 /// which never returns `0` and maps `±0.0` to `±1.0`). Propagating `NaN` rather than
