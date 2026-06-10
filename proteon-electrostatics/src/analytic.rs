@@ -8,16 +8,20 @@
 //! not only against NESSie — porting the formulas into Rust re-introduces shared
 //! transcription + Bessel-function risk ("an oracle for the oracle", plan §6).
 
-use crate::model::Params;
+use crate::model::{Locality, Params};
 use proteon_core::surface::geom::Vec3;
 use proteon_core::surface::mesh::{icosphere, Mesh};
 
 /// Closed-form Born solvation energy (kJ/mol) of a single ion. NESSie: `BornIon` +
 /// `rfenergy(LocalES|NonlocalES, ion)`.
 ///
+/// NESSie's Born formula assumes a **vacuum solute** (`εΩ = 1`): the local energy
+/// carries `(1/εΣ − 1)`, not `(1/εΣ − 1/εΩ)`. Reject (or special-case) `eps_omega
+/// != 1` rather than silently evaluating an unvalidated generalization (plan §6).
+///
 /// TODO(P5): port the Born closed form (local); P6 for nonlocal.
 #[must_use]
-pub fn born_rfenergy(charge: f64, radius: f64, params: &Params, nonlocal: bool) -> f64 {
+pub fn born_rfenergy(charge: f64, radius: f64, params: &Params, locality: Locality) -> f64 {
     unimplemented!("P5/P6: port Born closed-form energy (src/testmodel/born/)")
 }
 

@@ -12,7 +12,9 @@ use proteon_core::surface::mesh::Mesh;
 pub enum PotentialKind {
     /// Single-layer (`V`) — the weakly-singular kernel.
     Single,
-    /// Double-layer (`K`) — the normal-derivative kernel (principal value + jump).
+    /// Double-layer (`K`) — the normal-derivative kernel. The collocation value is
+    /// the **principal value only**; the ½ solid-angle jump (`2π`) is added during
+    /// system assembly, **not** baked into the kernel (NESSie `Rjasanow`; see §1b).
     Double,
 }
 
@@ -47,9 +49,12 @@ pub struct Charge {
 
 /// System parameters. NESSie: `Option{T}` (`εΩ`, `εΣ`, `ε∞`, `λ`).
 ///
-/// `eps_inf == eps_sigma` and `lambda → 0` should reduce the nonlocal model to the
-/// local one — an L4 invariant, but **confirm algebraically from the formulation
-/// first** (plan §4). NESSie default `λ = 20 Å`.
+/// Note: `eps_sigma == eps_inf` + `lambda → 0` is **not** a clean operator-level
+/// collapse of nonlocal → local (the `w` block survives and the regular parts tend
+/// to `Vy → −V`, `Ky → −K`, leaving a degenerate 3-field system). Only the limiting
+/// physical *potential* may converge, after eliminating `w` — gate that, not an
+/// operator identity. See `ELECTROSTATICS_FORMULATION.md` §10. NESSie `defaultopt`:
+/// `εΩ=2, εΣ=78, ε∞=1.8, λ=20 Å`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Params {
     /// Dielectric constant of the solute (εΩ).

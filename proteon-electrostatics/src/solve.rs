@@ -131,6 +131,9 @@ pub struct SolveStats {
 /// Solve the local (Poisson) BEM system. NESSie: `solve(LocalES, model)`.
 ///
 /// TODO(P4): assemble via [`assemble`], run the rolled GMRES, package Cauchy data.
+/// Codex review: return `Result` — non-convergence / non-finite must be a hard
+/// error, not a `(result, stats{converged:false})` a caller can ignore — and have
+/// the success value bind the model it was solved on (see [`crate::post`] API note).
 pub fn solve_local(model: &BemModel, cfg: &SolveConfig) -> (LocalResult, SolveStats) {
     let _system = assemble(model, Locality::Local);
     unimplemented!("P4: rolled matrix-free GMRES + local Cauchy data (src/bem/local.jl)")

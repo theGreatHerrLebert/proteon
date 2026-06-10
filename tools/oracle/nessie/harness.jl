@@ -36,6 +36,9 @@ using Pkg
 
 const PTYPES = (SingleLayer, DoubleLayer)
 const PTYPE_NAME = Dict(SingleLayer => "single", DoubleLayer => "double")
+# `string(LocalES)` yields the module-qualified "NESSie.LocalES"; use clean names in
+# fixtures + filenames (matches the README table).
+const LOC_NAME = Dict(LocalES => "LocalES", NonlocalES => "NonlocalES")
 
 # The kernel-parity dumps (collocation / yukawa / assembly_kernels) use only the
 # first `KERNEL_SUBSET` elements of the mesh. The collocation operator is purely
@@ -97,12 +100,21 @@ end
 obspoints(model) = [e.center for e in model.elements]   # collocation points Ξ
 
 "First-`n` elements + their centroids as collocation points — a bit-exact submatrix
- of the full collocation operator (kernels depend only on element/obs-point pairs)."
+ of the full collocation operator (kernels depend only on element/obs-point pairs).
+ Asserts the mesh actually has ≥ n elements (no silent truncation of a broken mesh)."
 function kernel_subset(model, n::Int)
-    elements = model.elements[1:min(n, length(model.elements))]
+    nfull = length(model.elements)
+    nfull >= n || error("mesh has $nfull elements, need >= $n for the kernel subset")
+    elements = model.elements[1:n]
     Ξ = [e.center for e in elements]
     (elements, Ξ)
 end
+
+"Provenance for a subset kernel dump: the full mesh size + the selected indices, so
+ a reader can tell a subset from a small input and reproduce the selection."
+subset_meta(model, n::Int) =
+    Dict("full_num_elements" => length(model.elements),
+         "subset_size" => n, "subset_indices" => collect(1:n))
 
 "Collocation matrix (|Ξ| × |elements|) for a kernel-matrix `!` routine."
 function _coll_matrix(fill!, nrow::Int, ncol::Int)
@@ -120,6 +132,7 @@ function collocation_dump(model; nmax::Int = KERNEL_SUBSET)
         _coll_matrix(d -> laplacecoll!(p, d, elements, Ξ), length(Ξ), length(elements))
         for p in PTYPES)
     Dict("kind" => "collocation", "provenance" => provenance(),
+         "subset" => subset_meta(model, nmax),
          "observation_points" => Ξ, "elements" => elements_json(elements),
          "matrices" => mats)
 end
@@ -131,6 +144,7 @@ function yukawa_dump(model, yukawa::Float64; nmax::Int = KERNEL_SUBSET)
         _coll_matrix(d -> regularyukawacoll!(p, d, elements, Ξ, yukawa), length(Ξ), length(elements))
         for p in PTYPES)
     Dict("kind" => "yukawa", "provenance" => provenance(), "yukawa" => yukawa,
+         "subset" => subset_meta(model, nmax),
          "observation_points" => Ξ, "elements" => elements_json(elements),
          "matrices" => mats)
 end
@@ -141,7 +155,7 @@ end
 function solve_dump(model, locality::Type{<:LocalityType}, method::Symbol)
     bem = solve(locality, model; method = method)
     out = Dict("kind" => "solve", "provenance" => provenance(),
-               "locality" => string(locality), "method" => string(method),
+               "locality" => LOC_NAME[locality], "method" => string(method),
                "num_elements" => length(model.elements),
                "elements" => elements_json(model.elements),
                "observation_points" => obspoints(model),
@@ -161,8 +175,9 @@ function assembly_kernels_dump(model, locality::Type{<:LocalityType})
     yuk = NESSie.yukawa(model.params)
     elements, Ξ = kernel_subset(model, KERNEL_SUBSET)   # match the kernel matrices
     out = Dict("kind" => "assembly_kernels", "provenance" => provenance(),
-               "locality" => string(locality), "yukawa" => yuk,
+               "locality" => LOC_NAME[locality], "yukawa" => yuk,
                "params" => params_json(model.params),
+               "subset" => subset_meta(model, KERNEL_SUBSET),
                "elements" => elements_json(elements),
                "observation_points" => Ξ,
                "laplace" => collocation_dump(model)["matrices"])
@@ -178,15 +193,23 @@ end
  a general molecule."
 function post_dump(model, locality::Type{<:LocalityType};
                    omega = nothing, sigma = nothing, gamma = nothing)
-    bem = solve(locality, model)
+    # Direct dense solve (:blas), not the default GMRES — the post fixture must be
+    # reproducible regardless of IterativeSolvers/threading/tolerance drift.
+    bem = solve(locality, model; method = :blas)
     surf = obspoints(model)
     Ω = omega === nothing ? [0.5 .* c for c in surf] : omega   # pulled inward
     Σ = sigma === nothing ? [1.5 .* c for c in surf] : sigma   # pushed outward
     Γ = gamma === nothing ? surf : gamma                       # on the surface
     samp = Dict("Ω" => Ω, "Σ" => Σ, "Γ" => Γ)
     pot = Dict(string(d) => espotential(d, samp[string(d)], bem) for d in (:Ω, :Σ, :Γ))
+    # Self-contained like solve_dump: a reader reproduces the energy/potentials from
+    # the fixture alone (model + method + params), not from harness defaults.
     Dict("kind" => "post", "provenance" => provenance(),
-         "locality" => string(locality), "rfenergy" => rfenergy(bem),
+         "locality" => LOC_NAME[locality], "method" => "blas",
+         "num_elements" => length(model.elements),
+         "elements" => elements_json(model.elements),
+         "charges" => charges_json(model), "params" => params_json(model.params),
+         "rfenergy" => rfenergy(bem),
          "sample_points" => samp, "espotential" => pot)
 end
 
@@ -229,7 +252,7 @@ function generate(out_dir::AbstractString)
     writejson(out_dir, "assembly_kernels_local_na.json",    assembly_kernels_dump(model, LocalES))
     writejson(out_dir, "assembly_kernels_nonlocal_na.json", assembly_kernels_dump(model, NonlocalES))
     for loc in (LocalES, NonlocalES), m in (:gmres, :blas)
-        writejson(out_dir, "solve_$(loc)_$(m)_na.json", solve_dump(model, loc, m))
+        writejson(out_dir, "solve_$(LOC_NAME[loc])_$(m)_na.json", solve_dump(model, loc, m))
     end
     writejson(out_dir, "post_local_na.json",    post_dump(model, LocalES))
     writejson(out_dir, "post_nonlocal_na.json", post_dump(model, NonlocalES))

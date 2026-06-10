@@ -15,6 +15,13 @@
 //! - vs `analytic` closed forms on the analytic-sphere ladder (science gate);
 //!   convergence by **rate in a stated norm**, not monotonicity; validate
 //!   geometric refinement, not density alone.
+//!
+//! # API note (P5, codex review)
+//! These free functions take `model` and `cauchy` **independently**, so a caller can
+//! pair Cauchy data with the wrong model (mismatched mesh size/order, charges, or
+//! params) and get a silently-wrong energy. When implementing, bind them: have
+//! [`crate::solve`] return a value that **owns or borrows the model it was solved
+//! on** (e.g. `SolvedBem<'a>`), and take that here — don't keep the two-arg form.
 
 use crate::model::{BemModel, Domain};
 use crate::solve::CauchyData;
