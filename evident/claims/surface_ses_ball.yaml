@@ -46,7 +46,7 @@ claims:
           comparison meaningful.
     pinned_versions:
       proteon: "PENDING-PIN-AT-NEXT-RELEASE"
-      BALL: "PENDING-PIN-BALL-PY-0.1.0a6"
+      BALL: "ball-py 0.1.0a6"
       python: "3.12"
     claim: >
       Across five structures spanning 327 to ~3804 atoms (crambin, BPTI,
@@ -108,8 +108,8 @@ claims:
         ball.ses_area(spheres, probe_radius) returning a dict with
         "area" and "volume" keys, where spheres is a list of [x,y,z,r].
         Added in ball-py 0.1.0a6 (the ses_mesh/ses_area/ses_graph
-        bindings — commits 8d8a9d27/73c21e88). Earlier wheels (the CI pin
-        was 0.1.0a4) lack it; the test skips with a clear reason via
+        bindings — commits 8d8a9d27/73c21e88), which is the current CI pin.
+        Earlier wheels lack it; the test skips with a clear reason via
         pytest.importorskip("ball") + hasattr(ball, "ses_area").
       - The proteon connector exposes py_surface.ses_mesh_py(coords,
         radii=, probe=) returning a dict with "area", "volume",

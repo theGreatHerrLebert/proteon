@@ -99,7 +99,9 @@ jobs:
           # stabilises. The wheel bundles BALL's data tree under
           # share/BALL/ and auto-discovers it at module init via
           # dladdr — no BALL_DATA_PATH env-var ceremony required.
-          pip install biopython gemmi pydssp freesasa "ball-py==0.1.0a4"
+          # 0.1.0a6 adds the SES bindings (ses_area/ses_mesh/ses_graph)
+          # that back the surface_ses_ball oracle.
+          pip install biopython gemmi pydssp freesasa "ball-py==0.1.0a6"
       - name: Build connector
         run: |
           source .venv/bin/activate
