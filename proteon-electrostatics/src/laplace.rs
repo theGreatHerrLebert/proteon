@@ -51,16 +51,26 @@ pub struct Tri {
 
 impl Tri {
     /// Build from three vertices, computing the normal and `distorig` exactly as
-    /// NESSie's `props`: `normal = (v2−v1)×(v3−v1)` normalized, `distorig = normal·v1`.
+    /// NESSie's `props`: `normal = (v2−v1)×(v3−v1) / |·|` (plain division),
+    /// `distorig = normal·v1`.
+    ///
+    /// NESSie divides by the cross-product norm with no epsilon floor (it guards
+    /// degeneracy separately). proteon-core's `Vec3::normalized()` rejects norms
+    /// below `1e-6` — stricter than NESSie, and it would drop valid small mesh
+    /// triangles — so this divides directly and only rejects a zero / non-finite
+    /// normal.
     ///
     /// # Panics
-    /// If the three vertices are collinear (zero-area / non-normalizable normal).
+    /// If the three vertices are collinear (zero-area / non-finite normal).
     #[must_use]
     pub fn new(v1: Vec3, v2: Vec3, v3: Vec3) -> Self {
-        let normal = (v2 - v1)
-            .cross(v3 - v1)
-            .normalized()
-            .expect("degenerate triangle: collinear vertices");
+        let cross = (v2 - v1).cross(v3 - v1);
+        let vnorm = cross.norm();
+        assert!(
+            vnorm > 0.0 && vnorm.is_finite(),
+            "degenerate triangle: zero-area / non-finite normal"
+        );
+        let normal = cross * (1.0 / vnorm);
         Self {
             v1,
             v2,
@@ -85,16 +95,19 @@ impl Tri {
     }
 }
 
-/// Julia `sign`: `-1`/`0`/`+1` (note: differs from `f64::signum`, which never
-/// returns `0` and maps `±0.0` to `±1.0`).
+/// Julia `sign`: `-1`/`0`/`+1`, and `NaN` for `NaN` (differs from `f64::signum`,
+/// which never returns `0` and maps `±0.0` to `±1.0`). Propagating `NaN` rather than
+/// collapsing it to `0` keeps invalid geometry from being silently masked.
 #[inline]
 fn jsign(x: f64) -> f64 {
     if x > 0.0 {
         1.0
     } else if x < 0.0 {
         -1.0
-    } else {
+    } else if x == 0.0 {
         0.0
+    } else {
+        f64::NAN
     }
 }
 
@@ -187,7 +200,10 @@ fn laplacepot_edge(
     let h = cathetus(u1norm, sinphi1);
 
     // Degenerate sub-triangles (ξ on the line through x1,x2; or x1,x2 colinear with ξ).
-    if h.max(0.0) < ETOL_F64
+    // `h = √(non-negative)` is ≥ 0 or NaN, so a bare `h < ETOL` reproduces NESSie's
+    // `max(0, h) < etol` for finite h and, like Julia, lets a NaN h fall through
+    // (NaN < etol is false) so the result stays NaN instead of being masked to 0.
+    if h < ETOL_F64
         || 1.0 - sinphi1.abs() < ETOL_F64
         || 1.0 - sinphi2.abs() < ETOL_F64
         || (sinphi1 - sinphi2).abs() < ETOL_F64
@@ -297,5 +313,32 @@ mod tests {
             let b = laplace_collocation(k, xi, &cyc);
             assert!((a - b).abs() < 1e-12, "{k:?}: {a} vs {b}");
         }
+    }
+
+    #[test]
+    fn scaling_law() {
+        // Dimensional analysis on the 4π-premultiplied integrals: scaling (triangle,
+        // ξ) by s scales the single layer (∫1/|ξ−r'| dA, units of length) by s, and
+        // leaves the double layer (∫(ξ−r')·n/|ξ−r'|³ dA, dimensionless) invariant.
+        let t = equilateral();
+        let xi = Vec3::new(0.2, -0.1, 0.7);
+        let s = 2.5;
+        let ts = Tri::new(t.v1 * s, t.v2 * s, t.v3 * s);
+        let xis = xi * s;
+
+        let s0 = laplace_collocation(PotentialKind::Single, xi, &t);
+        let s1 = laplace_collocation(PotentialKind::Single, xis, &ts);
+        assert!(
+            (s1 - s * s0).abs() / (s * s0).abs() < 1e-12,
+            "single not ∝ length: {s1} vs {}",
+            s * s0
+        );
+
+        let d0 = laplace_collocation(PotentialKind::Double, xi, &t);
+        let d1 = laplace_collocation(PotentialKind::Double, xis, &ts);
+        assert!(
+            (d1 - d0).abs() < 1e-12,
+            "double not scale-invariant: {d1} vs {d0}"
+        );
     }
 }

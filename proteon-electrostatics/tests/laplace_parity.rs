@@ -79,6 +79,12 @@ fn check_layer(layer: &str, kind: PotentialKind) {
         for (eidx, tri) in tris.iter().enumerate() {
             let want = row[eidx].as_f64().unwrap();
             let got = laplace_collocation(kind, *xi, tri);
+            // A NaN would slip past the max-tracking below (every `>` is false), so
+            // the maxima could stay finite and the test pass on garbage. Gate it.
+            assert!(
+                got.is_finite() && want.is_finite(),
+                "{layer}[{oidx},{eidx}]: non-finite value got={got} want={want}"
+            );
             let abs = (got - want).abs();
             let rel = abs / want.abs().max(1e-300);
             if abs > max_abs {
