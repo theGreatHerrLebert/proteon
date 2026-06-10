@@ -1,6 +1,15 @@
 # P6.5 — Near-singular remediation for the regular-Yukawa collocation
 
-**Status:** design (pre-implementation). Reviewed by: codex (round 1, incorporated below).
+**Status:** implemented (opt-in). Reviewed by: codex on the design (round 1, §§ below)
+and on the implementation (round 2). Implementation-review fixes, all landed:
+- **[P2a]** `point_to_triangle_distance` now has a degenerate-triangle fallback (closest
+  over the three edges) — the Voronoi divisions could divide by zero on collinear
+  vertices that `Tri::with_normal` does not reject.
+- **[P2b]** the matrix assembly treats the **self** term by index identity (`j == i`),
+  not the `d ≤ ETOL` distance test (which kept only as a direct-call safety net) — so a
+  sub-ETOL cleft can never be misclassified as self.
+- **[P3]** `Quadrature::Adaptive(AdaptiveConfig)` carries its config, so a caller who
+  sees `SolveStats::capped_panels > 0` can raise `max_depth`/`rtol`.
 
 ## 0. Key correction from review — the kernel is *not* smooth
 

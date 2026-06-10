@@ -26,10 +26,46 @@ pub fn point_to_triangle_distance(p: Vec3, v1: Vec3, v2: Vec3, v3: Vec3) -> f64 
     (closest_point_on_triangle(p, v1, v2, v3) - p).norm()
 }
 
+/// Closest point on segment `[a, b]` to `p` (with a degenerate-segment guard).
+fn closest_point_on_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
+    let ab = b - a;
+    let denom = ab.dot(ab);
+    if denom <= 0.0 {
+        return a; // a == b
+    }
+    let t = (ab.dot(p - a) / denom).clamp(0.0, 1.0);
+    a + ab * t
+}
+
+/// Closest point of a **degenerate** (zero-area) triangle to `p`: the nearest point over
+/// its three edges as segments. Keeps `point_to_triangle_distance` finite on collinear
+/// vertices that `Tri::with_normal` does not reject (the Voronoi divisions would
+/// otherwise divide by zero — review [P2]).
+fn closest_point_degenerate(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    [
+        closest_point_on_segment(p, a, b),
+        closest_point_on_segment(p, b, c),
+        closest_point_on_segment(p, c, a),
+    ]
+    .into_iter()
+    .min_by(|x, y| {
+        (*x - p)
+            .norm()
+            .partial_cmp(&(*y - p).norm())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+    .unwrap_or(a)
+}
+
 /// Closest point of triangle `(a, b, c)` to `p` (barycentric Voronoi-region method).
 fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     let ab = b - a;
     let ac = c - a;
+    // Degenerate (collinear / zero-area) triangle ⇒ the Voronoi divisions below can
+    // divide by zero; fall back to the three edges as segments.
+    if ab.cross(ac).norm() <= 0.0 {
+        return closest_point_degenerate(p, a, b, c);
+    }
     let ap = p - a;
     let d1 = ab.dot(ap);
     let d2 = ac.dot(ap);
@@ -47,8 +83,7 @@ fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     // Edge region AB.
     let vc = d1 * d4 - d3 * d2;
     if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        let v = d1 / (d1 - d3);
-        return a + ab * v;
+        return closest_point_on_segment(p, a, b);
     }
     // Vertex region C.
     let cp = p - c;
@@ -60,16 +95,14 @@ fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     // Edge region AC.
     let vb = d5 * d2 - d1 * d6;
     if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        let w = d2 / (d2 - d6);
-        return a + ac * w;
+        return closest_point_on_segment(p, a, c);
     }
     // Edge region BC.
     let va = d3 * d6 - d5 * d4;
     if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return b + (c - b) * w;
+        return closest_point_on_segment(p, b, c);
     }
-    // Face interior — barycentric combination.
+    // Face interior — barycentric combination (denominator > 0, triangle non-degenerate).
     let denom = 1.0 / (va + vb + vc);
     let v = vb * denom;
     let w = vc * denom;
@@ -128,7 +161,7 @@ impl Status {
 
 /// Adaptive-quadrature tuning. The defaults are the corpus-calibrated starting point;
 /// `min_depth`/`near_factor` are validated by the estimator-effectivity gate.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AdaptiveConfig {
     /// Relative tolerance on the coarse-vs-refined estimate (scaled to the local
     /// non-cancelling magnitude `Σ|wᵢfᵢ|`).
@@ -238,10 +271,13 @@ fn interior_projection(xi: Vec3, tri: &Tri) -> Option<Vec3> {
 /// signed collocation (premultiplied by 4π, same convention) and a [`Status`].
 ///
 /// Strategy (design `devdocs/NEAR_SINGULAR_QUADRATURE.md`):
-/// 1. **On-panel** (`d ≤ ETOL`, the self/coincident term) → the existing analytic-limit
+/// 1. **On-panel** (`d ≤ ETOL`, ξ numerically on the panel) → the existing analytic-limit
 ///    fixed value. The cusp lies *on* the integration domain there, where pure
-///    subdivision cannot converge (it would cap); a polar/graded rule for this case is
-///    documented future work. This is the regularised self-term, not a near-field peak.
+///    subdivision cannot converge (it would cap); a polar/graded rule is documented
+///    future work. This is a **direct-call safety net**: in the matrix assembly the self
+///    term is handled by index identity (`j == i`), not this distance test, so a genuine
+///    sub-ETOL cleft can never be misclassified as self (a mesh has no overlapping
+///    non-self panels anyway).
 /// 2. **Far** panel → one fixed Radon eval (bit-identical to the non-adaptive path).
 /// 3. Cusp **interior** but off-panel (`d > ETOL`; the cleft / opposing-surface case) →
 ///    centroid fan, then resolution-floor recursion on each fan triangle.
@@ -395,6 +431,26 @@ mod tests {
                 exact <= brute + 1e-9 && (brute - exact) < 0.02,
                 "p={p:?}: exact={exact} brute={brute}"
             );
+        }
+    }
+
+    #[test]
+    fn distance_finite_on_degenerate_triangle() {
+        // Collinear vertices (zero area) — the Voronoi divisions would divide by zero, so
+        // the degenerate fallback (closest over the three edges) must keep the result
+        // finite and correct (review [P2]).
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(2.0, 0.0, 0.0);
+        let c = Vec3::new(4.0, 0.0, 0.0); // collinear with a, b
+        for (p, want) in [
+            (Vec3::new(1.0, 1.0, 0.0), 1.0),   // above the segment interior
+            (Vec3::new(5.0, 0.0, 0.0), 1.0),   // beyond c → distance to c
+            (Vec3::new(-1.0, 0.0, 0.0), 1.0),  // before a → distance to a
+            (Vec3::new(3.0, 0.0, 0.0), 0.0),   // on the collinear span
+        ] {
+            let d = point_to_triangle_distance(p, a, b, c);
+            assert!(d.is_finite(), "degenerate distance must be finite, got {d}");
+            assert!((d - want).abs() < 1e-12, "p={p:?}: d={d} want={want}");
         }
     }
 

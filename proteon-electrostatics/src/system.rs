@@ -155,14 +155,15 @@ pub fn laplace_matrices_cpu(elements: &[Tri]) -> (DenseOperator, DenseOperator) 
 
 /// Regular-Yukawa quadrature mode for the nonlocal assembly. `Fixed` is the verbatim
 /// 7-point Radon rule; `Adaptive` is the P6.5 near-singular remediation
-/// ([`crate::adaptive`]) that subdivides near-field panels to lift the Radon floor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// ([`crate::adaptive`]) that subdivides near-field panels to lift the Radon floor, and
+/// carries its [`AdaptiveConfig`] so a caller who sees capped panels can raise the depth.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Quadrature {
     /// Fixed 7-point Radon cubature (fast; the documented near-singular floor).
     #[default]
     Fixed,
     /// Adaptive near-singular subdivision (accurate near-field; slower).
-    Adaptive,
+    Adaptive(crate::adaptive::AdaptiveConfig),
 }
 
 /// Build the regular single/double-layer Yukawa collocation matrices `(Vy, Ky)` over
@@ -196,16 +197,28 @@ pub fn yukawa_matrices_q(
         .zip(ky.data.par_chunks_mut(n))
         .zip(&centroids)
         .zip(capped_rows.par_iter_mut())
-        .for_each(|(((vrow, krow), &xi), capped)| match quad {
+        .enumerate()
+        .for_each(|(i, (((vrow, krow), &xi), capped))| match quad {
             Quadrature::Fixed => {
                 for (j, ej) in elements.iter().enumerate() {
                     vrow[j] = regular_yukawa_collocation(PotentialKind::Single, xi, ej, yukawa);
                     krow[j] = regular_yukawa_collocation(PotentialKind::Double, xi, ej, yukawa);
                 }
             }
-            Quadrature::Adaptive => {
-                let cfg = crate::adaptive::AdaptiveConfig::default();
+            Quadrature::Adaptive(cfg) => {
                 for (j, ej) in elements.iter().enumerate() {
+                    // The self entry (`j == i`, the observation point is this panel's own
+                    // centroid) is the on-panel coincident term: the cusp lies on the
+                    // integration domain, where subdivision cannot converge. Take the
+                    // analytic-limit fixed value by identity — not by a distance threshold
+                    // (review: an absolute ETOL would also catch a sub-ETOL cleft, and a
+                    // mesh has no overlapping non-self panels) — and apply adaptive only
+                    // to the genuine off-panel near pairs.
+                    if i == j {
+                        vrow[j] = regular_yukawa_collocation(PotentialKind::Single, xi, ej, yukawa);
+                        krow[j] = regular_yukawa_collocation(PotentialKind::Double, xi, ej, yukawa);
+                        continue;
+                    }
                     let (vs, ss) = crate::adaptive::adaptive_regular_yukawa_collocation(
                         PotentialKind::Single,
                         xi,
