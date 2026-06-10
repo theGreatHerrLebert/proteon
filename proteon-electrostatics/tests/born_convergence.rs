@@ -109,11 +109,14 @@ fn bem_energy_converges_to_born() {
 
 #[test]
 fn nonlocal_bem_energy_matches_born_within_radon_floor() {
-    // P6 science gate: the *nonlocal* BEM energy agrees with the closed-form nonlocal
-    // Born energy to a few percent across mesh resolutions — validating the whole
-    // nonlocal stack (Laplace + regular-Yukawa kernels → 3-block assembly → GMRES →
-    // post) against analytic physics. A sign or coefficient error in the 3-block
-    // assembly would give a wildly wrong energy, not a few-percent one.
+    // P6 physics sanity gate: the *nonlocal* BEM energy agrees with the closed-form
+    // nonlocal Born energy to a few percent across mesh resolutions — a broad check
+    // that the whole nonlocal stack (Laplace + regular-Yukawa kernels → 3-block
+    // assembly → GMRES → post) produces a physically right energy. It is NOT evidence
+    // of discretisation convergence (see the note below) and covers only a centred,
+    // highly symmetric charge; the entrywise assembly + Cauchy-data parity gates are
+    // what pin the operator/RHS. A gross block-placement or sign error would land far
+    // outside the few-percent band, but a subtle one need not.
     //
     // NOTE — unlike the local case (analytic Laplace collocation, monotone
     // convergence), the nonlocal energy does NOT converge monotonically: the fixed

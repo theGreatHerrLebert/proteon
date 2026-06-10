@@ -185,11 +185,47 @@ function assembly_kernels_dump(model, locality::Type{<:LocalityType})
     locality === NonlocalES && (out["regular_yukawa"] = yukawa_dump(model, yuk)["matrices"])
     if locality === LocalES
         merge!(out, local_assembly(model, elements, Ξ))
-        out["_todo"] = "nonlocal assembled block system + RHS still owed (P6)"
     else
-        out["_todo"] = "P6: emit the assembled nonlocal block system + RHS"
+        merge!(out, nonlocal_assembly(model, elements, Ξ))
     end
+    out["_todo"] = "assembled local + nonlocal systems emitted entrywise"
     out
+end
+
+"Entrywise assembled NONLOCAL 3-block system on the element subset (spec §6). The
+ `3n×3n` system matrix `M` is materialized by applying NESSie's own
+ `NonlocalSystemMatrix` operator to the unit vectors (so it is NESSie's assembly, not
+ a re-derivation), and `b = [b1; 0; 0]` is the explicit RHS. Lets the Rust port gate
+ its 3-block operator + RHS entrywise, independent of the solve."
+function nonlocal_assembly(model, elements, Ξ)
+    εΩ, εΣ, ε∞ = model.params.εΩ, model.params.εΣ, model.params.ε∞
+    n = length(elements)
+
+    submodel = Model{Float64, NESSie.Triangle{Float64}}(
+        Vector{Float64}[], elements, model.charges, model.params)
+    umol = εΩ .\ _molpotential(submodel; tolerance = _etol(Float64))
+    qmol = εΩ .\ _molpotential_dn(submodel)
+
+    A = NESSie.BEM.NonlocalSystemMatrix{Float64}(Ξ, elements, model.params)
+    # Materialize the 3n×3n operator one column at a time: M[:,j] = A·e_j.
+    M = zeros(Float64, 3n, 3n)
+    for j in 1:(3n)
+        ej = zeros(Float64, 3n)
+        ej[j] = 1.0
+        M[:, j] = A * ej
+    end
+    # Explicit RHS first block (nonlocal.jl:277–278); b = [b1; 0; 0].
+    b1 = A.K * umol .+ (1 - εΩ/εΣ) .* (A.Ky * umol) .- 2π .* umol .-
+        (εΩ/ε∞) .* (A.V * qmol) .+ (εΩ/εΣ - εΩ/ε∞) .* (A.Vy * qmol)
+    b = vcat(b1, zeros(Float64, n), zeros(Float64, n))
+
+    Dict(
+        "charges" => charges_json(model),
+        "nonlocal_umol" => umol,
+        "nonlocal_qmol" => qmol,
+        "nonlocal_M" => [collect(row) for row in eachrow(M)],
+        "nonlocal_b" => b,
+    )
 end
 
 "Entrywise assembled LOCAL system on the element subset (formulation spec §5): the

@@ -1,10 +1,13 @@
 //! Solve: rolled matrix-free GMRES + the two-stage local solve, and result types (L3).
 //!
 //! Decided (plan Q2): **roll our own** matrix-free GMRES for op-order control + zero
-//! dep — modified Gram-Schmidt, restart, happy-breakdown, Givens rotations, left
-//! (Jacobi) preconditioning, and a **true (unpreconditioned) residual** gate. NESSie
-//! uses `IterativeSolvers.gmres` + `DiagonalPreconditioner`; the local system is well
-//! enough conditioned (diagonally dominant `M`, self-dominant `V`) for scalar Jacobi.
+//! dep — modified Gram-Schmidt, restart, happy-breakdown, Givens rotations, **right**
+//! (Jacobi) preconditioning, and a true-residual gate. Right preconditioning is chosen
+//! so the residual the iteration tracks *is* the true `‖b − A·x‖` — converging on it
+//! gives the gate directly. NESSie uses `IterativeSolvers.gmres` with a *left* `Pl`
+//! `DiagonalPreconditioner`, so the iteration path differs, but the solution is the
+//! same. The local system is well conditioned (diagonally dominant `M`, self-dominant
+//! `V`) for scalar Jacobi.
 //!
 //! # Gates (P4)
 //! - Cauchy data `u,q` vs NESSie `solve_dump` (the `:blas` fixture is the exact LU
@@ -186,7 +189,7 @@ struct GmresSolution {
     iterations: usize,
 }
 
-/// Left-preconditioned restarted GMRES solving `A·x = b`. Converges on the
+/// Right-preconditioned restarted GMRES solving `A·x = b`. Converges on the
 /// **right**-preconditioned relative residual `‖b − A·x‖ / ‖b‖` — which, for right
 /// preconditioning, is exactly the *true* residual the gate cares about (left
 /// preconditioning would track `‖M⁻¹(b−Ax)‖`, a different quantity). Returns

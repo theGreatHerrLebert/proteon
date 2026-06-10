@@ -43,6 +43,14 @@ claims:
           The nonlocal BEM reaction-field energy of a central unit charge in a
           triangulated sphere vs the closed-form nonlocal Born energy, across mesh
           resolutions. The whole nonlocal stack against analytic physics.
+      assembly_entrywise:
+        unit: absolute
+        description: >
+          proteon's 3-block NonlocalOperator (materialized 96x96) and the RHS b =
+          [b1;0;0], plus umol/qmol, vs NESSie's own assembled NonlocalSystemMatrix and
+          RHS (assembly_kernels_nonlocal dump), element by element on the 32-element
+          subset. Independent of the solve -- rules out a compensating operator/RHS
+          error that the solution-level gate could miss.
     pinned_versions:
       proteon: "PENDING-PIN-AT-NEXT-RELEASE"
       NESSie: "NESSie.jl 1.5.1 (tree-hash c6c0c478; Manifest pinned in tools/oracle/nessie)"
@@ -93,6 +101,16 @@ claims:
           = 0 itself is not numerically reachable by the closed form -- sinh overflows
           -- in NESSie either). The operator-level collapse is NOT asserted (spec
           section 10: it is not a clean identity).
+      - metric: absolute_error
+        op: "<"
+        value: 1.0e-10
+        output: assembly_entrywise
+        prose: >
+          "max |proteon - NESSie| < 1e-10" on the materialized 3-block operator M, the
+          RHS b, and umol/qmol entrywise vs NESSie's own NonlocalSystemMatrix. The
+          solution-level (Cauchy-data) gate proves the assembled system has NESSie's
+          solution but not that every operator/RHS entry is right; this closes that --
+          a solution-preserving compensating error in A and b is ruled out.
       - metric: relative_error
         op: "<"
         value: 0.05
