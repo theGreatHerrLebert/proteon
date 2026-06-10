@@ -13,10 +13,11 @@
 //! effort: the assembly + matvecs are **rayon-parallel** across rows (bit-identical
 //! to serial); the Laplace assembly — the bottleneck — also has a **GPU** build
 //! ([`crate::gpu`], feature `cuda`, ~4× over 16-core CPU on large meshes, silent CPU
-//! fallback; NESSie's `CuNESSie.jl` move, lowers the constant not the asymptote);
-//! still to come are an O(N) **matrix-free** `K·x` (lifts the memory cap) and a
-//! GPU matrix-free matvec, and **fast summation** (the only thing that beats O(N²);
-//! plan §6/P8).
+//! fallback; NESSie's `CuNESSie.jl` move, lowers the constant not the asymptote); and
+//! an O(N)-memory **matrix-free** GPU local solve ([`crate::gpu::solve_local_gpu`])
+//! that recomputes `K·x`/`V·x` on the fly instead of storing the matrices — slower
+//! per solve, but lifts the O(N²) memory cap to scale past the dense build's limit.
+//! Still to come is **fast summation** (the only thing that beats O(N²); plan §6/P8).
 
 use crate::laplace::{laplace_collocation, ETOL_F64};
 use crate::model::{Charge, PotentialKind, Tri};

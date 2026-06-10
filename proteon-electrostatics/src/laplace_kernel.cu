@@ -114,3 +114,30 @@ extern "C" __global__ void laplace_matrices(
     V[idx] = laplace_collocation(0, xi, v1, v2, v3, nrm, dorig);
     K[idx] = laplace_collocation(1, xi, v1, v2, v3, nrm, dorig);
 }
+
+// Matrix-free matvec: y[i] = Σ_j collocation(kind, ξ_i, elem_j) · x[j]. One thread per
+// output row i, looping all elements j — the collocation is recomputed every call (no
+// stored matrix → O(N) memory). `kind`: 0 = single (V·x), 1 = double (K·x).
+extern "C" __global__ void laplace_matvec(
+    const double* __restrict__ verts,    // nf*9
+    const double* __restrict__ normals,  // nf*3
+    const double* __restrict__ distorig, // nf
+    const double* __restrict__ cent,     // nf*3
+    const double* __restrict__ x,        // nf
+    int nf,
+    int kind,
+    double* __restrict__ y)              // nf
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nf) return;
+    const double* xi = &cent[i * 3];
+    double acc = 0.0;
+    for (int j = 0; j < nf; j++) {
+        const double* v1 = &verts[j * 9];
+        const double* v2 = &verts[j * 9 + 3];
+        const double* v3 = &verts[j * 9 + 6];
+        acc += laplace_collocation(kind, xi, v1, v2, v3, &normals[j * 3], distorig[j]) * x[j];
+    }
+    y[i] = acc;
+}
+

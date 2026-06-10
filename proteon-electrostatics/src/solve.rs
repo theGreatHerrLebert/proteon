@@ -184,9 +184,9 @@ fn givens(a: f64, b: f64) -> (f64, f64) {
 
 /// Solution of one `gmres` run.
 #[derive(Debug, PartialEq)]
-struct GmresSolution {
-    x: Vec<f64>,
-    iterations: usize,
+pub(crate) struct GmresSolution {
+    pub(crate) x: Vec<f64>,
+    pub(crate) iterations: usize,
 }
 
 /// Right-preconditioned restarted GMRES solving `A·x = b`. Converges on the
@@ -195,7 +195,10 @@ struct GmresSolution {
 /// preconditioning would track `‖M⁻¹(b−Ax)‖`, a different quantity). Returns
 /// [`SolveError::NotConverged`] if `max_iter` is reached before `tol`, and
 /// [`SolveError::NonFinite`] on a non-finite residual or a zero pivot.
-fn gmres(
+///
+/// `pub(crate)` so the GPU matrix-free solver ([`crate::gpu`]) can reuse the exact
+/// same iteration over its own [`LinearOperator`]s.
+pub(crate) fn gmres(
     op: &dyn LinearOperator,
     b: &[f64],
     precond: &dyn Preconditioner,
@@ -312,7 +315,7 @@ fn gmres(
 }
 
 /// True (unpreconditioned) relative residual `‖A·x − b‖ / ‖b‖`.
-fn true_residual(op: &dyn LinearOperator, x: &[f64], b: &[f64]) -> f64 {
+pub(crate) fn true_residual(op: &dyn LinearOperator, x: &[f64], b: &[f64]) -> f64 {
     let n = op.dim();
     let mut ax = vec![0.0; n];
     op.matvec(x, &mut ax);
@@ -389,6 +392,47 @@ pub fn solve_local_elements(
     Ok((LocalResult { u, q, umol, qmol }, stats))
 }
 
+/// Above this many bytes, the dense `V`+`K` pair (`2·N²·8`) is treated as too large to
+/// materialize and [`solve_local_elements_auto`] routes to the matrix-free GPU path
+/// (feature `cuda`). Matches [`crate::gpu`]'s own build budget so the two decisions
+/// agree; below it the cached dense matvec is faster than recomputing each step.
+pub const DENSE_MATRIX_BUDGET: u128 = 7 * (1 << 30); // 7 GiB
+
+/// Bytes a dense `V`+`K` pair needs for `n` elements: `2·N²·8`.
+#[must_use]
+pub fn dense_matrix_bytes(n: usize) -> u128 {
+    2 * (n as u128).saturating_mul(n as u128) * 8
+}
+
+/// Size-aware local solve: the dense [`solve_local_elements`] while the `V`+`K` pair
+/// fits [`DENSE_MATRIX_BUDGET`], else the O(N)-memory matrix-free GPU solve
+/// ([`crate::gpu::solve_local_gpu`], feature `cuda`) — which lifts the dense memory
+/// ceiling at the cost of recomputing each matvec.
+///
+/// The matrix-free path is tried **only** when dense would exceed the budget (dense is
+/// faster when it fits). If the GPU path declines (no device, CUDA error — it returns
+/// `None`), this falls back to dense, which for a very large mesh may itself exhaust
+/// host RAM: that is the honest "this size needs a GPU you don't have" outcome.
+///
+/// # Errors
+/// See [`solve_local_elements`].
+pub fn solve_local_elements_auto(
+    elements: &[Tri],
+    charges: &[Charge],
+    params: &Params,
+    cfg: &SolveConfig,
+) -> Result<(LocalResult, SolveStats), SolveError> {
+    #[cfg(feature = "cuda")]
+    if !elements.is_empty() && dense_matrix_bytes(elements.len()) > DENSE_MATRIX_BUDGET {
+        // Some(..) = the GPU path ran (Ok solution or a genuine numerical failure);
+        // None = it declined (no device / CUDA error) → fall through to dense.
+        if let Some(res) = crate::gpu::solve_local_gpu(elements, charges, params, cfg) {
+            return res;
+        }
+    }
+    solve_local_elements(elements, charges, params, cfg)
+}
+
 /// Triangle elements of a [`BemModel`]'s mesh (normals recomputed via `Tri::new`).
 fn model_elements(model: &BemModel) -> Vec<Tri> {
     model
@@ -407,6 +451,10 @@ fn model_elements(model: &BemModel) -> Vec<Tri> {
 
 /// Solve the local (Poisson) BEM system. NESSie: `solve(LocalES, model)`.
 ///
+/// Routes through [`solve_local_elements_auto`], so a mesh too large for the dense
+/// `V`+`K` transparently uses the matrix-free GPU path (feature `cuda`) when a device
+/// is present; the dense solve is used otherwise.
+///
 /// # Errors
 /// See [`solve_local_elements`].
 pub fn solve_local(
@@ -414,7 +462,7 @@ pub fn solve_local(
     cfg: &SolveConfig,
 ) -> Result<(LocalResult, SolveStats), SolveError> {
     let elements = model_elements(model);
-    solve_local_elements(&elements, &model.charges, &model.params, cfg)
+    solve_local_elements_auto(&elements, &model.charges, &model.params, cfg)
 }
 
 /// Core nonlocal solve over explicit triangle elements. NESSie
@@ -567,6 +615,47 @@ mod tests {
         ] {
             assert_eq!(gmres(&a, &b, &pre, &cfg), Err(SolveError::NotConverged));
         }
+    }
+
+    #[test]
+    fn dispatcher_equals_dense_below_budget() {
+        // The size-aware `solve_local_elements_auto` must equal the explicit dense
+        // solve when the mesh fits the budget (always true without the `cuda` feature),
+        // so wiring it into `solve_local` cannot regress the common path.
+        use crate::analytic::analytic_sphere_mesh;
+        use proteon_core::surface::geom::Vec3;
+
+        let mesh = analytic_sphere_mesh(2.0, 1); // 80 triangles
+        let elements: Vec<Tri> = mesh
+            .tris
+            .iter()
+            .map(|t| {
+                Tri::new(
+                    mesh.verts[t[0] as usize],
+                    mesh.verts[t[1] as usize],
+                    mesh.verts[t[2] as usize],
+                )
+            })
+            .collect();
+        assert!(dense_matrix_bytes(elements.len()) <= DENSE_MATRIX_BUDGET);
+        let charges = [Charge {
+            pos: Vec3::new(0.2, -0.3, 0.1),
+            val: 1.0,
+        }];
+        let params = Params {
+            eps_omega: 1.0,
+            eps_sigma: 78.0,
+            eps_inf: 1.8,
+            lambda: 20.0,
+        };
+        let cfg = SolveConfig {
+            tol: 1e-9,
+            ..Default::default()
+        };
+        let (auto, _) = solve_local_elements_auto(&elements, &charges, &params, &cfg).unwrap();
+        let (dense, _) = solve_local_elements(&elements, &charges, &params, &cfg).unwrap();
+        assert_eq!(auto.u, dense.u);
+        assert_eq!(auto.q, dense.q);
     }
 
     #[test]

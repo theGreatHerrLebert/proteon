@@ -18,7 +18,7 @@ use pyo3::types::PyDict;
 use proteon_core::surface::geom::Vec3;
 use proteon_core::surface::mesh::Mesh;
 use proteon_electrostatics::{
-    born_rfenergy, espotential, rfenergy, solve_local_elements, solve_nonlocal_elements, Charge,
+    born_rfenergy, espotential, rfenergy, solve_local_elements_auto, solve_nonlocal_elements, Charge,
     Domain, Locality, Params, SolveConfig, Tri,
 };
 
@@ -170,13 +170,15 @@ fn solve_surface_py<'py>(
     }
     if nf >= N_WARN {
         let warnings = py.import("warnings")?;
-        warnings.call_method1(
-            "warn",
-            (format!(
-                "{nf} triangles: the dense BEM is O(N²) in memory and time — this will be \
-                 slow/RAM-heavy (matrix-free / GPU paths are the plan §6/P6.5 follow-ups)."
-            ),),
-        )?;
+        let tail = if nonlocal_ {
+            "the dense BEM is O(N²) in memory and time — this will be slow/RAM-heavy \
+             (the nonlocal matrix-free path is a plan §6/P6.5 follow-up)."
+        } else {
+            "the dense BEM is O(N²) in memory and time — this will be slow/RAM-heavy. \
+             Over the dense budget it switches to the O(N)-memory matrix-free GPU solve \
+             if a CUDA device is present (slower per solve, but uncapped in mesh size)."
+        };
+        warnings.call_method1("warn", (format!("{nf} triangles: {tail}"),))?;
     }
 
     let vflat = vertices
@@ -267,7 +269,7 @@ fn solve_surface_py<'py>(
                 let e = rfenergy(&elements, &charges, &r);
                 (Box::new(r), e, s)
             } else {
-                let (r, s) = solve_local_elements(&elements, &charges, &params, &cfg)
+                let (r, s) = solve_local_elements_auto(&elements, &charges, &params, &cfg)
                     .map_err(|e| e.to_string())?;
                 let e = rfenergy(&elements, &charges, &r);
                 (Box::new(r), e, s)

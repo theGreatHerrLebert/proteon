@@ -69,13 +69,16 @@ pub mod system;
 pub mod yukawa;
 
 pub use analytic::{analytic_sphere_mesh, born_rfenergy};
+#[cfg(feature = "cuda")]
+pub use gpu::solve_local_gpu;
 pub use laplace::laplace_collocation;
 pub use model::{BemModel, Charge, Domain, Locality, Params, PotentialKind, Tri};
 pub use post::{espotential, rfenergy, ENERGY_FACTOR, POTPREFACTOR};
 pub use quadrature::{radon7, TriangleQuad};
 pub use solve::{
-    solve_local, solve_local_elements, solve_nonlocal, solve_nonlocal_elements, CauchyData,
-    LocalResult, NonlocalResult, SolveConfig, SolveError, SolveStats,
+    dense_matrix_bytes, solve_local, solve_local_elements, solve_local_elements_auto,
+    solve_nonlocal, solve_nonlocal_elements, CauchyData, LocalResult, NonlocalResult, SolveConfig,
+    SolveError, SolveStats, DENSE_MATRIX_BUDGET,
 };
 pub use system::{
     laplace_matrices, mol_potentials, yukawa_matrices, BlockLayout, DenseOperator,
