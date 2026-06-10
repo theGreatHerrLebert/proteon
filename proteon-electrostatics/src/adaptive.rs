@@ -14,7 +14,7 @@
 
 use crate::laplace::ETOL_F64;
 use crate::model::{PotentialKind, Tri};
-use crate::yukawa::regular_yukawa_collocation_parts;
+use crate::yukawa::{regular_yukawa_collocation_parts, regular_yukawa_pot};
 use proteon_core::surface::geom::Vec3;
 
 /// Exact distance from point `p` to the closest point of triangle `(v1, v2, v3)`
@@ -266,18 +266,111 @@ fn interior_projection(xi: Vec3, tri: &Tri) -> Option<Vec3> {
     }
 }
 
+// ---- Duffy graded rule for the single-layer self / on-panel term -------------------
+//
+// On the self panel ξ = centroid lies ON the integration domain, so the single-layer
+// regular kernel (e^{−κr}−1)/r = −κ + κ²r/2 − … carries the cusp r = |x−ξ| INSIDE the
+// panel — where polynomial cubature and midpoint subdivision lose accuracy / cap. In
+// polar coordinates about the cusp the area element ρ dρ dθ absorbs the cusp (ρ·ρ = ρ²
+// is smooth); the Duffy transform realises exactly that on a triangle, collapsing one
+// vertex so its Jacobian provides the radial grading. The double-layer self term is NOT
+// handled here: with ξ and x coplanar, (x−ξ)·n ≡ 0, so its integrand is zero a.e. and
+// NESSie's κ²/(2√3) coincident value is a regularisation convention to preserve, not a
+// quadrature target.
+
+/// Positive-half Gauss–Legendre nodes/weights on `[-1, 1]` (the rule is symmetric).
+/// Order 8 (production) and order 16 (the convergence-study reference).
+const GL8_HALF: [(f64, f64); 4] = [
+    (0.183_434_642_495_649_8, 0.362_683_783_378_362),
+    (0.525_532_409_916_329, 0.313_706_645_877_887_3),
+    (0.796_666_477_413_626_7, 0.222_381_034_453_374_5),
+    (0.960_289_856_497_536_3, 0.101_228_536_290_376_3),
+];
+const GL16_HALF: [(f64, f64); 8] = [
+    (0.095_012_509_837_637_4, 0.189_450_610_455_068_5),
+    (0.281_603_550_779_258_9, 0.182_603_415_044_923_6),
+    (0.458_016_777_657_227_4, 0.169_156_519_395_002_5),
+    (0.617_876_244_402_643_8, 0.149_595_988_816_576_7),
+    (0.755_404_408_355_003, 0.124_628_971_255_533_9),
+    (0.865_631_202_387_831_8, 0.095_158_511_682_492_8),
+    (0.944_575_023_073_232_6, 0.062_253_523_938_647_9),
+    (0.989_400_934_991_649_9, 0.027_152_459_411_754_1),
+];
+
+/// Gauss–Legendre nodes/weights mapped to `[0, 1]` for `order ∈ {8, 16}`.
+fn gauss_legendre_01(order: usize) -> Vec<(f64, f64)> {
+    let half: &[(f64, f64)] = match order {
+        8 => &GL8_HALF,
+        16 => &GL16_HALF,
+        _ => panic!("unsupported Gauss–Legendre order {order}"),
+    };
+    let mut out = Vec::with_capacity(half.len() * 2);
+    for &(x, w) in half {
+        out.push(((1.0 - x) / 2.0, w / 2.0));
+        out.push(((1.0 + x) / 2.0, w / 2.0));
+    }
+    out
+}
+
+/// Duffy-transformed single-layer regular-Yukawa **self** collocation of `tri` (∫ over
+/// the panel of the ×4π kernel, with ξ = the panel centroid). Fans the panel at the
+/// centroid so the cusp sits at a vertex of each sub-triangle, then Duffy-maps each
+/// (singular vertex → collapsed edge, Jacobian `u` grades toward the cusp) with a tensor
+/// Gauss–Legendre rule of the given `order`. Recovers the cusp-limited accuracy the
+/// fixed 7-point rule loses on the self panel.
+#[must_use]
+pub fn duffy_self_single(tri: &Tri, yukawa: f64, order: usize) -> f64 {
+    let xi = (tri.v1 + tri.v2 + tri.v3) * (1.0 / 3.0); // self observation point = cusp
+    let gl = gauss_legendre_01(order);
+    let mut value = 0.0;
+    for sub in centroid_fan(tri, xi) {
+        // sub = (p0 = xi, p1, p2); Duffy with the singular vertex p0.
+        let (p0, a, b) = (sub.v1, sub.v2 - sub.v1, sub.v3 - sub.v1);
+        let jac = a.cross(b).norm(); // |a×b| = 2·area(sub); dA = jac · u du dv
+        let mut acc = 0.0;
+        for &(u, wu) in &gl {
+            for &(v, wv) in &gl {
+                let (s, t) = (u * (1.0 - v), u * v);
+                let x = p0 + a * s + b * t;
+                let pot = regular_yukawa_pot(PotentialKind::Single, x, xi, yukawa, tri.normal);
+                acc += pot * u * wu * wv;
+            }
+        }
+        value += jac * acc;
+    }
+    value
+}
+
+/// Production Gauss–Legendre order for the Duffy self rule. GL-16 (256 pts × 3 fan
+/// triangles per diagonal entry — negligible against the O(N²) off-diagonal) stays well
+/// converged even on poorly-shaped (sliver) panels, where GL-8 degrades.
+const DUFFY_ORDER: usize = 16;
+
+/// The on-panel self collocation used by the adaptive path: Duffy for the single layer
+/// (cusped integrand, resolved), NESSie's fixed regularised value for the double layer
+/// (zero-integrand-plus-coincident-limit convention). Shared by the direct API and the
+/// matrix assembly so the self term is computed one way.
+pub(crate) fn self_collocation(kind: PotentialKind, tri: &Tri, yukawa: f64) -> f64 {
+    match kind {
+        PotentialKind::Single => duffy_self_single(tri, yukawa, DUFFY_ORDER),
+        PotentialKind::Double => {
+            let xi = (tri.v1 + tri.v2 + tri.v3) * (1.0 / 3.0);
+            regular_yukawa_collocation_parts(kind, xi, tri, yukawa).0
+        }
+    }
+}
+
 /// Adaptive regular-Yukawa collocation of `tri` at `xi` (exponent `yukawa`): the
 /// near-singular remediation for the fixed [`regular_yukawa_collocation`]. Returns the
 /// signed collocation (premultiplied by 4π, same convention) and a [`Status`].
 ///
 /// Strategy (design `devdocs/NEAR_SINGULAR_QUADRATURE.md`):
-/// 1. **On-panel** (`d ≤ ETOL`, ξ numerically on the panel) → the existing analytic-limit
-///    fixed value. The cusp lies *on* the integration domain there, where pure
-///    subdivision cannot converge (it would cap); a polar/graded rule is documented
-///    future work. This is a **direct-call safety net**: in the matrix assembly the self
-///    term is handled by index identity (`j == i`), not this distance test, so a genuine
-///    sub-ETOL cleft can never be misclassified as self (a mesh has no overlapping
-///    non-self panels anyway).
+/// 1. **On-panel** (`d ≤ ETOL`, ξ numerically on the panel) → [`self_collocation`]:
+///    the **Duffy** graded rule for the single layer (the cusp lies *on* the integration
+///    domain, where subdivision cannot converge) and NESSie's fixed regularised value
+///    for the double layer (integrand zero a.e.). This is also a **direct-call safety
+///    net**: the matrix assembly routes the self term by index identity (`j == i`), not
+///    this distance test, so a sub-ETOL cleft can never be misclassified as self.
 /// 2. **Far** panel → one fixed Radon eval (bit-identical to the non-adaptive path).
 /// 3. Cusp **interior** but off-panel (`d > ETOL`; the cleft / opposing-surface case) →
 ///    centroid fan, then resolution-floor recursion on each fan triangle.
@@ -291,12 +384,10 @@ pub fn adaptive_regular_yukawa_collocation(
     cfg: &AdaptiveConfig,
 ) -> (f64, Status) {
     let d = point_to_triangle_distance(xi, tri.v1, tri.v2, tri.v3);
-    // On-panel self/coincident term — keep the analytic-limit fixed value (see above).
+    // On-panel self/coincident term: Duffy for the single layer (cusp on the domain),
+    // NESSie's fixed regularised value for the double layer (zero a.e.) — see above.
     if d <= ETOL_F64 {
-        return (
-            regular_yukawa_collocation_parts(kind, xi, tri, yukawa).0,
-            Status::Converged,
-        );
+        return (self_collocation(kind, tri, yukawa), Status::Converged);
     }
     if d >= NEAR_FACTOR * longest_edge(tri) {
         return (
@@ -485,6 +576,42 @@ mod tests {
         )
     }
 
+    fn skinny() -> Tri {
+        // High aspect-ratio sliver (review [R7] shape diversity).
+        Tri::new(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(4.0, 0.0, 0.0),
+            Vec3::new(2.0, 0.25, 0.0),
+        )
+    }
+
+    fn obtuse() -> Tri {
+        Tri::new(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(3.0, 0.0, 0.0),
+            Vec3::new(-1.0, 1.0, 0.0),
+        )
+    }
+
+    /// Independent reference for the single-layer self integral `∫_T (e^{−κr}−1)/r dA`
+    /// (ξ = centroid): a high-resolution **barycentric midpoint** quadrature — a method
+    /// entirely distinct from the Duffy/Gauss rule (different mapping, different base
+    /// rule), so agreement is genuine cross-validation, not a shared-error artifact. `m`
+    /// is chosen not divisible by 3 so no sample lands exactly on the centroid; the cusp
+    /// is guarded to its `−κ` limit regardless.
+    fn polar_self_single_reference(tri: &Tri, y: f64, m: usize) -> f64 {
+        let xi = (tri.v1 + tri.v2 + tri.v3) * (1.0 / 3.0);
+        let f = |x: Vec3| {
+            let d = (x - xi).norm();
+            if d <= 1e-13 {
+                -y // limit r → 0
+            } else {
+                ((-y * d).exp() - 1.0) / d
+            }
+        };
+        integrate_tri(tri.v1, tri.v2, tri.v3, m, &f)
+    }
+
     #[test]
     fn midpoint_split_conserves_area_and_normal() {
         let t = equilateral();
@@ -613,6 +740,62 @@ mod tests {
                 assert!(
                     e_adapt < e_fixed,
                     "{kind:?} d/h={frac}: adaptive {e_adapt:.2e} not better than fixed {e_fixed:.2e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn duffy_self_single_matches_independent_reference() {
+        // The production Duffy rule (GL-16) must match an INDEPENDENT high-resolution
+        // barycentric quadrature of the same integral on well-shaped panels (where that
+        // reference is itself trustworthy). Agreement to ≤1e-4 across the Yukawa-scale
+        // range proves the Duffy rule converged to the right value, by a different method.
+        // (The barycentric reference is cusp/sliver-limited to ~1e-3, so the sliver is
+        // covered by the relative-improvement gate, not an absolute tolerance here.)
+        for (name, tri) in [("equi", equilateral()), ("obtuse", obtuse())] {
+            for &y in &[0.4_f64, 1.3, 3.0] {
+                let duffy = duffy_self_single(&tri, y, DUFFY_ORDER);
+                let reference = polar_self_single_reference(&tri, y, 4001);
+                let rel = (duffy - reference).abs() / reference.abs().max(1e-300);
+                eprintln!("{name} y={y}: Duffy vs reference {rel:.2e}");
+                assert!(rel < 1e-4, "{name} y={y}: Duffy vs reference {rel:.2e}");
+            }
+        }
+        // Higher Gauss order must not hurt on a sliver (GL-16 ≤ GL-8 error) — the only
+        // shape where the lower order would degrade.
+        let sk = skinny();
+        let s_ref = polar_self_single_reference(&sk, 1.3, 4001);
+        assert!(
+            (duffy_self_single(&sk, 1.3, 16) - s_ref).abs()
+                <= (duffy_self_single(&sk, 1.3, 8) - s_ref).abs(),
+            "GL-16 must not be worse than GL-8 on a sliver"
+        );
+    }
+
+    #[test]
+    fn duffy_self_single_improves_on_fixed_7point() {
+        // The whole point: the fixed 7-point self term loses accuracy to the on-panel
+        // cusp (badly for larger κ — observed up to ~28%); Duffy must be substantially
+        // closer to an INDEPENDENT high-resolution barycentric quadrature of the same
+        // integral (a different mapping + base rule, so not a shared-error artifact). The
+        // barycentric reference is itself cusp/sliver-limited (~1e-3 on slivers), so this
+        // asserts a clear relative improvement, not an absolute Duffy tolerance — the
+        // tight Duffy convergence is proved separately above.
+        for (name, tri) in [("equi", equilateral()), ("skinny", skinny()), ("obtuse", obtuse())] {
+            for &y in &[0.4_f64, 1.3, 3.0] {
+                let xi = (tri.v1 + tri.v2 + tri.v3) * (1.0 / 3.0);
+                let reference = polar_self_single_reference(&tri, y, 4001);
+                let duffy = duffy_self_single(&tri, y, DUFFY_ORDER);
+                let fixed = regular_yukawa_collocation_parts(PotentialKind::Single, xi, &tri, y).0;
+                let e_duffy = (duffy - reference).abs();
+                let e_fixed = (fixed - reference).abs();
+                eprintln!(
+                    "{name} y={y}: duffy err {e_duffy:.2e}, fixed err {e_fixed:.2e} (ref {reference:.6})"
+                );
+                assert!(
+                    e_duffy < e_fixed,
+                    "{name} y={y}: Duffy {e_duffy:.2e} not better than fixed {e_fixed:.2e}"
                 );
             }
         }

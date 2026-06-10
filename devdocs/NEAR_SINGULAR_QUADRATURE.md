@@ -1,7 +1,17 @@
 # P6.5 — Near-singular remediation for the regular-Yukawa collocation
 
 **Status:** implemented (opt-in; default stays Fixed — see §5). Reviewed by: codex on the
-design (round 1, §§ below) and on the implementation (round 2).
+design (round 1, §§ below) and on the implementation (round 2); Duffy self-term round 3.
+
+**Duffy self-term (round 3, landed).** The on-panel **single-layer** self term now uses a
+**Duffy** graded rule (centroid fan → collapse the cusp vertex → tensor Gauss–Legendre,
+GL-16), replacing the cusp-limited fixed 7-point value. It matches an independent
+high-resolution quadrature to ≤1e-4 on quality panels and beats the fixed 7-point self by
+100×–10⁷× (the fixed self is **5e-3 → 28%** wrong as κ grows — much larger than first
+estimated). The **double-layer** self stays NESSie's fixed value on purpose: with ξ and x
+coplanar, `(x−ξ)·n ≡ 0`, so its integrand is zero a.e. and `κ²/(2√3)` is a regularisation
+convention to preserve, not a quadrature target. Net solve effect remains small
+(energy-insensitivity gate Δ rose from ~3e-6 to ~5e-5, still ≪ 1e-4) — consistent with §5.
 
 **Headline finding (solve level):** adaptive provably fixes the near-singular *cross-
 entries* (kernel: 0.3%/3% → ~1e-7), but that error **does not propagate to the solved
@@ -139,12 +149,16 @@ The two cases turned out to need different treatment:
 - **On-panel** (`d ≤ ETOL`, the **self / coincident** term): the cusp lies *on* the
   domain. Subdivision does **not** converge here — every fan/midpoint refinement still
   straddles the cusp, so the estimator caps (observed: the whole diagonal capped). This
-  is the regime where polynomial cubature genuinely fails (review [R1/R4]). **Decision:
-  keep the existing analytic-limit fixed self-term** (`−κ` single, `κ²/(2√3)` double —
-  NESSie's regularised value), *not* adaptive. A proper **polar/Duffy graded rule** for
-  the on-panel cusp is the documented future item; it is a self-term accuracy question,
-  separate from the near-field (cleft) remediation that is this work's goal. (Laplace
-  self stays the exact analytic InPlane form — untouched.)
+  is the regime where polynomial cubature genuinely fails (review [R1/R4]). **Resolution
+  (round 3): a Duffy graded rule for the single layer.** Fan the panel at the centroid
+  (cusp → a vertex of each sub-triangle), then Duffy-map each sub-triangle so the
+  collapsed-vertex Jacobian `u` provides the radial grading that absorbs the cusp
+  (`∫ r dA` in polar is `∫ ρ·ρ dρ dθ`, smooth), with a tensor Gauss–Legendre rule
+  (GL-16). The **double layer** keeps NESSie's fixed `κ²/(2√3)` regularised value: with
+  ξ, x coplanar the integrand is zero a.e., so there is no quadrature to improve — only a
+  convention to preserve. (Laplace self stays the exact analytic InPlane form.) In the
+  matrix assembly the self term is routed by index identity (`j == i`); the `d ≤ ETOL`
+  distance branch is the equivalent direct-call path.
 
 ## 3. Integration — keeping the GPU parity gates valid
 

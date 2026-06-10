@@ -207,16 +207,16 @@ pub fn yukawa_matrices_q(
             }
             Quadrature::Adaptive(cfg) => {
                 for (j, ej) in elements.iter().enumerate() {
-                    // The self entry (`j == i`, the observation point is this panel's own
+                    // The self entry (`j == i`, observation point = this panel's own
                     // centroid) is the on-panel coincident term: the cusp lies on the
-                    // integration domain, where subdivision cannot converge. Take the
-                    // analytic-limit fixed value by identity — not by a distance threshold
-                    // (review: an absolute ETOL would also catch a sub-ETOL cleft, and a
-                    // mesh has no overlapping non-self panels) — and apply adaptive only
-                    // to the genuine off-panel near pairs.
+                    // integration domain. Route it by index identity — not a distance
+                    // threshold (an absolute ETOL would also catch a sub-ETOL cleft, and a
+                    // mesh has no overlapping non-self panels) — to the Duffy single-layer
+                    // rule + NESSie's fixed double-layer value; adaptive subdivision then
+                    // applies only to the genuine off-panel near pairs.
                     if i == j {
-                        vrow[j] = regular_yukawa_collocation(PotentialKind::Single, xi, ej, yukawa);
-                        krow[j] = regular_yukawa_collocation(PotentialKind::Double, xi, ej, yukawa);
+                        vrow[j] = crate::adaptive::self_collocation(PotentialKind::Single, ej, yukawa);
+                        krow[j] = crate::adaptive::self_collocation(PotentialKind::Double, ej, yukawa);
                         continue;
                     }
                     let (vs, ss) = crate::adaptive::adaptive_regular_yukawa_collocation(

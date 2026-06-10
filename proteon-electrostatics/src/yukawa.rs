@@ -82,9 +82,16 @@ fn regular_yukawa_pot_double(x: Vec3, xi: Vec3, yukawa: f64, normal: Vec3) -> f6
     (1.0 - (1.0 + scalednorm) * (-scalednorm).exp()) * cosovernorm2
 }
 
-/// Regular part of the single/double-layer Yukawa potential at `x` for `ξ`.
+/// Regular part of the single/double-layer Yukawa potential at `x` for `ξ` (×4π). Used
+/// by the fixed Radon collocation and by the adaptive/Duffy rules ([`crate::adaptive`]).
 #[inline]
-fn regular_yukawa_pot(kind: PotentialKind, x: Vec3, xi: Vec3, yukawa: f64, normal: Vec3) -> f64 {
+pub(crate) fn regular_yukawa_pot(
+    kind: PotentialKind,
+    x: Vec3,
+    xi: Vec3,
+    yukawa: f64,
+    normal: Vec3,
+) -> f64 {
     match kind {
         PotentialKind::Single => regular_yukawa_pot_single(x, xi, yukawa),
         PotentialKind::Double => regular_yukawa_pot_double(x, xi, yukawa, normal),

@@ -87,5 +87,5 @@ pub use system::{
     DenseOperator, JacobiPreconditioner, LinearOperator, LocalOperator, NonlocalOperator,
     Preconditioner, Quadrature, TWO_PI,
 };
-pub use adaptive::{adaptive_regular_yukawa_collocation, AdaptiveConfig};
+pub use adaptive::{adaptive_regular_yukawa_collocation, duffy_self_single, AdaptiveConfig};
 pub use yukawa::regular_yukawa_collocation;
