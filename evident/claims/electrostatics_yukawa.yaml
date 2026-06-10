@@ -37,10 +37,12 @@ claims:
       limit_and_continuity:
         unit: bool
         description: >
-          The r->0 limits (single -> -yukawa, double -> yukawa^2/(2 sqrt 3)) and
-          series/closed-form continuity across the scalednorm = 0.1 cancellation-
-          guard boundary, plus the L0 cubature gate (weights sum to 1/2, points
-          inside the reference triangle, monomials exact to total degree 5).
+          The r->0 limits (single -> -yukawa, double -> yukawa^2/(2 sqrt 3)), the
+          series matching the directly-evaluated closed form within the cancellation-
+          guard region (scalednorm < 0.1, off-plane so the double-layer projection is
+          nonzero), well-behaved deep-series values just above the r=0 branch, plus
+          the L0 cubature gate (weights sum to 1/2, points inside the reference
+          triangle, monomials exact to total degree 5).
     pinned_versions:
       proteon: "PENDING-PIN-AT-NEXT-RELEASE"
       NESSie: "NESSie.jl 1.5.1 (tree-hash c6c0c478; Manifest pinned in tools/oracle/nessie)"
@@ -97,12 +99,12 @@ claims:
         value: 1.0
         output: limit_and_continuity
         prose: >
-          All limit/continuity/cubature invariants must hold (pass_rate == 1.0):
-          the r->0 single (-yukawa) and double (yukawa^2/(2 sqrt 3)) limits, the
-          series/closed-form continuity across scalednorm 0.1, and the L0 cubature
-          (weights sum to 1/2, points in the reference triangle, degree-5 exact).
-          These pin the cancellation guard and the rule itself, independent of any
-          oracle.
+          All limit/series/cubature invariants must hold (pass_rate == 1.0): the
+          r->0 single (-yukawa) and double (yukawa^2/(2 sqrt 3)) limits, the series
+          matching the closed form within the guard region (off-plane, both layers),
+          and the L0 cubature (weights sum to 1/2, points in the reference triangle,
+          degree-5 exact). These pin the cancellation guard and the rule itself,
+          independent of any oracle.
     evidence:
       oracle:
         - NESSie

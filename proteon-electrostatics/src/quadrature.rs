@@ -78,7 +78,9 @@ pub fn radon7(tri: &Tri) -> TriangleQuad {
     let e2 = tri.v3 - tri.v1;
     let mut points = [tri.v1; RADON7_N];
     for j in 0..RADON7_N {
-        points[j] = tri.v1 + e1 * x[j] + e2 * y[j];
+        // NESSie order `x·e1 + y·e2 + v1` (left-assoc) — matched exactly so the
+        // mapped points are bit-identical, not just ULP-close.
+        points[j] = e1 * x[j] + e2 * y[j] + tri.v1;
     }
     TriangleQuad {
         points,

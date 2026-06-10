@@ -138,10 +138,12 @@ impl Tri {
         }
     }
 
-    /// Build with an explicit, already-normalized `normal` consumed verbatim (e.g. a
-    /// mesh/fixture normal), so the geometry is bit-identical to the source rather
-    /// than recomputed. `distorig = normal·v1` and `area = |(v2−v1)×(v3−v1)| / 2`,
-    /// as in NESSie `props`.
+    /// Build with an explicit, already-normalized `normal` consumed **verbatim** (e.g.
+    /// a mesh/fixture normal) rather than recomputed — this is what gives the kernels
+    /// bit-parity with NESSie on the projection and double-layer sign. `distorig =
+    /// normal·v1` and `area = |(v2−v1)×(v3−v1)| / 2` are still *derived* (as in NESSie
+    /// `props`), so they match a source `area`/`distorig` only to rounding (~1e-18),
+    /// not bit-for-bit — negligible for the collocation gates.
     #[must_use]
     pub fn with_normal(v1: Vec3, v2: Vec3, v3: Vec3, normal: Vec3) -> Self {
         Self {

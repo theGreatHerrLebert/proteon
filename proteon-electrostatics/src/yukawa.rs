@@ -134,30 +134,89 @@ mod tests {
         assert!((v - yuk * yuk / 2.0 / 3.0_f64.sqrt()).abs() < 1e-15, "{v}");
     }
 
+    // Closed-form regular kernels (no series guard) — the reference for the in-guard
+    // series test, valid where the closed form still keeps enough f64 precision
+    // (c ≳ 0.03 loses only ~3 of ~16 digits to cancellation).
+    fn closed_single(x: Vec3, xi: Vec3, yukawa: f64) -> f64 {
+        let r = (x - xi).norm();
+        ((-yukawa * r).exp() - 1.0) / r
+    }
+    fn closed_double(x: Vec3, xi: Vec3, yukawa: f64, n: Vec3) -> f64 {
+        let r = (x - xi).norm();
+        let c = yukawa * r;
+        (1.0 - (1.0 + c) * (-c).exp()) * (x - xi).dot(n) / (r * r * r)
+    }
+
     #[test]
-    fn series_matches_closed_form_at_boundary() {
-        // The series and closed form must agree across the 0.1 branch boundary —
-        // straddle it and check continuity (the series is there to avoid the
-        // cancellation the closed form suffers, so where both are accurate they match).
+    fn series_matches_closed_form_in_guard_region() {
+        // In the cancellation-guard region (scalednorm < 0.1) the kernel takes the
+        // alternating series. Validate it against the directly-evaluated closed form
+        // at c values where the closed form is still accurate. The observation point
+        // is OFF the element plane (nonzero z), so the double-layer (x−ξ)·n term is
+        // genuinely nonzero — an in-plane point would make it 0 and test nothing.
         let xi = Vec3::new(0.0, 0.0, 0.0);
-        let normal = Vec3::new(0.0, 0.0, 1.0);
-        for &yukawa in &[0.5_f64, 1.0, 2.0] {
-            // Pick r so scalednorm sits just below / above 0.1.
-            let r_below = (SERIES_THRESHOLD - 1e-4) / yukawa;
-            let r_above = (SERIES_THRESHOLD + 1e-4) / yukawa;
-            let x_b = Vec3::new(r_below, 0.0, 0.0);
-            let x_a = Vec3::new(r_above, 0.0, 0.0);
-            for kind in [PotentialKind::Single, PotentialKind::Double] {
-                let below = regular_yukawa_pot(kind, x_b, xi, yukawa, normal);
-                let above = regular_yukawa_pot(kind, x_a, xi, yukawa, normal);
-                // The two points are 2e-4/yukawa apart; the kernel is smooth there,
-                // so the values are close — a discontinuity at the branch would blow up.
-                assert!(
-                    (below - above).abs() < 1e-2,
-                    "{kind:?} discontinuous at boundary: {below} vs {above}"
-                );
-            }
+        let n = Vec3::new(0.0, 0.0, 1.0);
+        let yukawa = 1.3;
+        for &c in &[0.03_f64, 0.05, 0.09] {
+            let r = c / yukawa;
+            // |x| = r with a nonzero normal projection (0.8·r).
+            let x = Vec3::new(0.6 * r, 0.0, 0.8 * r);
+            assert!(
+                yukawa * x.norm() < SERIES_THRESHOLD,
+                "must be in the series branch"
+            );
+
+            // The series truncates at NESSie's `etol·|term|` tolerance, so its
+            // intrinsic accuracy vs the (here-still-accurate) closed form is ~etol
+            // ≈ 1.5e-8 relative, not full f64 — a 1e-7 band confirms the series has
+            // the right coefficients/recurrence without tripping on its own tail.
+            let s_series = regular_yukawa_pot(PotentialKind::Single, x, xi, yukawa, n);
+            let s_closed = closed_single(x, xi, yukawa);
+            assert!(
+                (s_series - s_closed).abs() / s_closed.abs() < 1e-7,
+                "single c={c}: series={s_series} closed={s_closed}"
+            );
+
+            let d_series = regular_yukawa_pot(PotentialKind::Double, x, xi, yukawa, n);
+            let d_closed = closed_double(x, xi, yukawa, n);
+            assert!(
+                d_closed.abs() > 1e-6,
+                "double-layer reference must be nonzero"
+            );
+            assert!(
+                (d_series - d_closed).abs() / d_closed.abs() < 1e-7,
+                "double c={c}: series={d_series} closed={d_closed}"
+            );
         }
+    }
+
+    #[test]
+    fn near_zero_series_is_well_behaved() {
+        // Just ABOVE ETOL (deep in the series, NOT the exact r=0 branch). The series
+        // must stay finite where the closed form would catastrophically cancel.
+        //
+        // Single → −yukawa as r→0. Double: approaching along the normal, the *pointwise*
+        // value is yukawa²/2 (from (1−(1+c)e^(−c)) ≈ c²/2 times (x·n)/r³ = 1/r²). Note
+        // this is NOT NESSie's exact-coincidence branch value yukawa²/(2√3) — that
+        // constant is a self-element regularization for when a quadrature point lands
+        // exactly on ξ (tested separately in double_layer_zero_distance_limit).
+        let xi = Vec3::new(0.0, 0.0, 0.0);
+        let n = Vec3::new(0.0, 0.0, 1.0);
+        let yukawa = 1.3;
+        let r = 1e-7; // > ETOL_F64 = 1.45e-8
+
+        let s = regular_yukawa_pot_single(Vec3::new(r, 0.0, 0.0), xi, yukawa);
+        assert!(
+            s.is_finite() && (s + yukawa).abs() < 1e-5,
+            "single near 0: {s}"
+        );
+
+        let d = regular_yukawa_pot_double(Vec3::new(0.0, 0.0, r), xi, yukawa, n);
+        let pointwise = yukawa * yukawa / 2.0;
+        assert!(
+            d.is_finite() && (d - pointwise).abs() / pointwise < 1e-3,
+            "double near 0 (pointwise along normal): {d} vs {pointwise}"
+        );
     }
 
     #[test]
