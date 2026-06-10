@@ -1,0 +1,150 @@
+claims:
+  - id: proteon-laplace-collocation-vs-nessie
+    title: Proteon's Rjasanow analytic Laplace collocation reproduces NESSie's collocation matrices to libm precision
+    kind: measurement
+    subsystem: electrostatics.laplace
+    case: claims/electrostatics_laplace.md
+    source: ..
+    tier: ci
+    trust_strategy:
+      - validation
+    capabilities:
+      - laplace-collocation-parity
+    inputs:
+      corpus: nessie-collocation-fixture
+      n: 2048
+      class: fixture
+      fixture_paths:
+        - proteon-electrostatics/tests/fixtures/nessie/collocation_na.json
+    outputs:
+      collocation_value:
+        unit: A or dimensionless
+        description: >
+          Per-element analytic Laplace collocation value, premultiplied by 4pi:
+          the single-layer entry is the integral of 1/|xi - r'| over the triangle
+          (units of length, A), the double-layer entry is the integral of
+          (xi - r').n / |xi - r'|^3 (dimensionless). Gated over both 32x32 matrices
+          (single + double) of NESSie's collocation_dump on the Born-ion mesh subset
+          = 2048 entries, rebuilt on byte-identical geometry (the fixture's own
+          vertices + stored normals).
+      quadrature_residual:
+        unit: relative
+        description: >
+          Independent check: the same analytic value vs a direct numerical surface
+          integral of the defining kernel (1/|xi-r'| for single, (xi-r').n/|xi-r'|^3
+          for double) at non-singular observation points. Catches a transcription
+          error shared between proteon and NESSie's identical closed form, which the
+          fixture parity alone cannot.
+      metamorphic_invariants:
+        unit: bool
+        description: >
+          Convention/orientation invariants the closed form must satisfy: NESSie's
+          props normal/distorig formula; in-plane double layer = 0; rigid-motion
+          invariance; odd vertex permutation flips the double layer (single
+          unchanged); cyclic permutation invariant.
+    pinned_versions:
+      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      NESSie: "NESSie.jl 1.5.1 (tree-hash c6c0c478; Manifest pinned in tools/oracle/nessie)"
+      physics-invariant: "analytic == direct numerical surface integral of the Laplace kernel at non-singular points (256x256 centroid subdivision), < 1e-4 relative"
+      julia: "1.11.5 (fixture generation only; not needed at gate time)"
+      rust: "stable"
+    claim: >
+      proteon's pure-Rust port of NESSie's Rjasanow analytic single/double-layer
+      Laplace collocation (projection onto the element plane, the InPlane/InSpace
+      closed forms, degenerate-triangle guards, 3-edge sub-triangle sum) reproduces
+      every entry of NESSie's collocation_dump single + double matrices (2048 values
+      on the Born-ion mesh subset, byte-identical geometry) to max absolute error
+      < 1e-10 and max relative error < 1e-11 — the only residual being asin/log/sqrt
+      libm divergence (openlibm vs Rust). The same values independently match a
+      direct numerical quadrature of the defining surface integrals at non-singular
+      points to < 1e-4 relative, and satisfy five metamorphic convention invariants.
+      This is the L1 kernel gate of the BEM electrostatics port (P2).
+    tolerances:
+      - metric: absolute_error
+        op: "<"
+        value: 1.0e-10
+        output: collocation_value
+        prose: >
+          "max |proteon - NESSie| < 1e-10" over all 2048 collocation entries. The
+          port mirrors NESSie operation-for-operation, so geometry, projection, and
+          the rational/polynomial terms are bit-identical; only the transcendental
+          calls (asin/log/sqrt) can differ, by <= 1 ULP. The 1e-10 band is ~orders
+          of magnitude looser than observed and trips only on a structural error
+          (wrong branch, sign, or missing term), not on libm noise.
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-11
+        output: collocation_value
+        prose: >
+          "max |proteon - NESSie| / |NESSie| < 1e-11" on entries whose reference
+          magnitude exceeds 1e-9 (relative error of a near-zero entry is meaningless;
+          the absolute gate covers those). Guards the larger-magnitude diagonal /
+          self terms where an absolute band alone could hide a small relative drift.
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-4
+        output: quadrature_residual
+        prose: >
+          "|analytic - numerical| / |numerical| < 1e-4" at well-separated points,
+          where centroid-subdivision quadrature (256x256 sub-triangles) of the
+          defining integral converges. This is the NESSie-independent gate: it would
+          catch a closed-form transcription bug that proteon and NESSie share. The
+          near-singular / self quadrature (slow to converge) is a documented
+          follow-up, not part of this band.
+      - metric: pass_rate
+        op: ">="
+        value: 1.0
+        output: metamorphic_invariants
+        prose: >
+          All five metamorphic invariants must hold (pass_rate == 1.0). These pin the
+          conventions the fixture parity assumes: orientation (double-layer sign vs
+          vertex order), the vanishing in-plane double layer, and rigid-motion
+          invariance. A convention bug that happened to match NESSie's stored normals
+          would still break at least one of these.
+    evidence:
+      oracle:
+        - NESSie
+        - physics-invariant
+      command: cargo test -p proteon-electrostatics
+      artifact: cargo test console output (CI-tier; no persisted artifact)
+    provenance: automatic
+    last_verified:
+      commit: null
+      date: null
+      value: null
+      corpus_sha: null
+    assumptions:
+      - The fixture proteon-electrostatics/tests/fixtures/nessie/collocation_na.json
+        is NESSie's own laplacecoll! output (single + double, 32-element subset of
+        the bundled Born sodium mesh), emitted by tools/oracle/nessie/harness.jl and
+        pinned to NESSie.jl 1.5.1 via the committed Manifest.toml + the per-fixture
+        tree-hash. Regenerating with a different NESSie would change the oracle; the
+        pin makes it reproducible.
+      - The kernel subset is a bit-exact top-left block of NESSie's full collocation
+        operator. NESSie's laplacecoll! assigns each dest[o,e] from a single
+        per-(observation, element) evaluation with no global normalization, ordering
+        dependence, or accumulation, so restricting to the first 32 elements yields
+        the exact submatrix (confirmed by codex review).
+      - The test consumes the fixture's stored per-element normal verbatim
+        (Tri::with_normal), not a recomputed one, so projection and the double-layer
+        sign use byte-identical geometry. distorig = normal . v1 reproduces NESSie's
+        props.
+      - The gate needs no Julia at run time — the NESSie values are the checked-in
+        fixture, so `cargo test` reproduces parity in the standard Rust CI job.
+    failure_modes:
+      - One mesh (NESSie's Born sodium sphere) at one parameter set. A kernel branch
+        only reachable on a very different geometry (e.g. obtuse slivers, extreme
+        aspect ratios) is not exercised here; the metamorphic + quadrature gates use
+        a synthetic equilateral and far points, which broadens but does not exhaust
+        coverage. The near-singular numerical corpus (the regime that actually
+        stresses the InSpace forms near the surface) is the natural P2 follow-up.
+      - The numerical-quadrature gate runs only at non-singular points, where
+        centroid subdivision converges; it does NOT independently verify the singular
+        self/diagonal (InPlane) term. That term is gated against NESSie only. An
+        independent singular oracle (Duffy / corrected quadrature, or a CAS closed
+        form for the equilateral self entry) is owed before the assembled energies
+        are trusted (plan P4/P5).
+      - libm differences are bounded but not zero; a future toolchain whose asin/log
+        drifts more than ~1e-12 relative could in principle approach the 1e-11 rel
+        band on a pathological entry. If that surfaces, widen the band with a
+        recorded measurement, do not silently loosen it.

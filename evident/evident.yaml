@@ -43,6 +43,7 @@ vocabularies:
     - supervision
     - pipeline.batch
     - surface.ses
+    - electrostatics.laplace
   oracle:
     - Biopython
     - FreeSASA
@@ -57,6 +58,7 @@ vocabularies:
     - proteon-slow-path
     - physics-invariant
     - mkdssp
+    - NESSie
   capability:
     - sasa-accuracy-pointwise
     - sasa-accuracy-distributional
@@ -85,6 +87,7 @@ vocabularies:
     - sasa-cross-tool-parity
     - acceleration-paths-parity
     - surface-ses-area-parity
+    - laplace-collocation-parity
   input_class:
     # Extends the base vocabulary. A convenience sample is a non-random
     # selection (e.g. the alphabetically-first N files) — distinguished from
@@ -117,3 +120,4 @@ include:
   - claims/fold_preservation_amber_50k.yaml
   - claims/geometry_rmsd_ball.yaml
   - claims/surface_ses_ball.yaml
+  - claims/electrostatics_laplace.yaml
