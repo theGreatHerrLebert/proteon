@@ -27,6 +27,13 @@ use proteon_core::surface::mesh::{icosphere, Mesh};
 /// vacuum-solute ion (the model defaults do).
 #[must_use]
 pub fn born_rfenergy(charge: f64, radius: f64, params: &Params, locality: Locality) -> f64 {
+    // The Born model is derived for a vacuum solute; the local term is (1/εΣ − 1),
+    // not (1/εΣ − 1/εΩ). `eps_omega` is deliberately unused — flag a non-vacuum value
+    // rather than silently returning an unvalidated generalization.
+    debug_assert!(
+        (params.eps_omega - 1.0).abs() < 1e-9,
+        "Born model assumes a vacuum solute (eps_omega = 1)"
+    );
     let pre = POTPREFACTOR * ENERGY_FACTOR * charge * charge / radius;
     match locality {
         Locality::Local => pre * (1.0 / params.eps_sigma - 1.0),

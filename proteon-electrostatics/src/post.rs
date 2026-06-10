@@ -141,9 +141,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prefactors_are_physical() {
-        // potprefactor ≈ 1.145·4π ≈ 14.39; energy_factor ≈ ec·Nₐ/2000.
-        assert!((POTPREFACTOR - 14.3996).abs() < 1e-3, "{POTPREFACTOR}");
-        assert!(ENERGY_FACTOR > 0.0 && ENERGY_FACTOR.is_finite());
+    fn prefactors_match_independent_si_derivation() {
+        // The crate folds Å→m / J→kJ into ec and the Avogadro literal; re-derive the
+        // SAME prefactors from base SI constants stated independently so a wrong
+        // exponent or a missing ½ cannot hide (every oracle gate shares the crate's
+        // own constants, so this is the only place that pins them).
+        let pi = std::f64::consts::PI;
+        let e = 1.602_176e-19; // elementary charge, C
+        let na = 6.022_140_857e23; // Avogadro, 1/mol
+        let c = 299_792_458.0; // speed of light, m/s
+        let eps0 = 1.0 / (4.0 * pi * 1e-7 * c * c); // F/m
+
+        // energy_factor = e·Nₐ / 2 / 1000  (J→kJ, ½ for double-counted interactions).
+        let ef = e * na / 2.0 / 1000.0;
+        assert!(
+            (ENERGY_FACTOR - ef).abs() / ef < 1e-12,
+            "energy_factor {ENERGY_FACTOR} vs SI-derived {ef}"
+        );
+        // potprefactor = e / (4π·ε0) · 1e10  (Coulomb prefactor in V·Å per e).
+        let pp = e / (4.0 * pi * eps0) * 1e10;
+        assert!(
+            (POTPREFACTOR - pp).abs() / pp < 1e-12,
+            "potprefactor {POTPREFACTOR} vs SI-derived {pp}"
+        );
+        // Sanity anchors to the documented magnitudes (potprefactor ≈ 1.145·4π;
+        // energy_factor ≈ ½·Faraday in kJ/mol·V⁻¹).
+        assert!((POTPREFACTOR - 14.3997).abs() < 1e-3, "{POTPREFACTOR}");
+        assert!((ENERGY_FACTOR - 48.2426).abs() < 1e-3, "{ENERGY_FACTOR}");
     }
 }

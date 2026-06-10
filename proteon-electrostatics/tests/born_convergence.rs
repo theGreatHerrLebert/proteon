@@ -57,20 +57,33 @@ fn bem_energy_converges_to_born() {
         "Born energy should be negative solvation: {born}"
     );
 
-    // Refine the icosphere: subdivision 2 (320 triangles) → 3 (1280).
-    let e2 = sphere_bem_energy(radius, 2);
-    let e3 = sphere_bem_energy(radius, 3);
+    // Three refinement levels: icosphere subdivisions 1 → 2 → 3 (80 → 320 → 1280
+    // triangles). Require the error to fall *monotonically* toward the analytic value
+    // at every step — two levels alone could improve by accident or limit to a wrong
+    // value within a loose band.
+    let rels: Vec<f64> = [1u32, 2, 3]
+        .iter()
+        .map(|&s| {
+            let e = sphere_bem_energy(radius, s);
+            assert!(e < 0.0, "BEM energy sign wrong at subdiv {s}: {e}");
+            (e - born).abs() / born.abs()
+        })
+        .collect();
 
-    let rel2 = (e2 - born).abs() / born.abs();
-    let rel3 = (e3 - born).abs() / born.abs();
-
-    // Right sign + ballpark already at the coarse mesh.
-    assert!(e2 < 0.0 && e3 < 0.0, "BEM energy sign wrong: {e2}, {e3}");
-    assert!(rel2 < 0.10, "coarse mesh too far from Born: {rel2:.3}");
-    // Refinement must move toward the analytic value, and the fine mesh be close.
-    assert!(rel3 < rel2, "not converging: {rel2:.4} → {rel3:.4}");
     assert!(
-        rel3 < 0.03,
-        "subdivision 3 not within 3% of Born: {rel3:.4} (e3={e3}, born={born})"
+        rels[0] > rels[1] && rels[1] > rels[2],
+        "error not monotonically decreasing: {rels:?}"
+    );
+    // Each refinement must cut the error appreciably — a method limiting to the wrong
+    // value would stall instead of keep shrinking.
+    assert!(
+        rels[2] / rels[1] < 0.8,
+        "refinement stalled (ratio {:.3}): {rels:?}",
+        rels[2] / rels[1]
+    );
+    assert!(
+        rels[2] < 0.03,
+        "subdivision 3 not within 3% of Born: {:.4} (rels={rels:?}, born={born})",
+        rels[2]
     );
 }
