@@ -730,7 +730,10 @@ pub fn ses_mesh_cleaned(
     }
 
     if _prof {
-        eprintln!("[SES_PROFILE] toric loop {:.2}s", _t_toric.elapsed().as_secs_f64());
+        eprintln!(
+            "[SES_PROFILE] toric loop {:.2}s",
+            _t_toric.elapsed().as_secs_f64()
+        );
     }
     let _t_caps = std::time::Instant::now();
     // --- contact caps (untrimmed for now) ---
@@ -757,7 +760,10 @@ pub fn ses_mesh_cleaned(
         mesh.append(&filled);
     }
     if _prof {
-        eprintln!("[SES_PROFILE] cap loop (full) {:.2}s", _t_caps.elapsed().as_secs_f64());
+        eprintln!(
+            "[SES_PROFILE] cap loop (full) {:.2}s",
+            _t_caps.elapsed().as_secs_f64()
+        );
     }
 
     // --- spheric faces: clipped by colliding neighbours ---
@@ -1283,7 +1289,7 @@ mod tests {
     fn perturbation_jitter_is_tiny_and_deterministic() {
         let atoms = vec![sph(0.0, 0.0, 0.0, 1.6), sph(2.0, 0.3, -0.1, 1.5)];
         let eps = |attempt| perturb_magnitude(attempt, false); // input-degeneracy ramp
-        // First retry (attempt 1) is 1e-4 Å; deterministic run-to-run; radii fixed.
+                                                               // First retry (attempt 1) is 1e-4 Å; deterministic run-to-run; radii fixed.
         let a = perturb_atoms(&atoms, 1, eps(1));
         let b = perturb_atoms(&atoms, 1, eps(1));
         for (x, y) in a.iter().zip(&b) {
@@ -1345,7 +1351,11 @@ mod tests {
             anyhow::bail!("some unrelated geometry error")
         });
         assert!(err.is_err());
-        assert_eq!(calls2.get(), 1, "non-degeneracy errors are not perturb-retried");
+        assert_eq!(
+            calls2.get(),
+            1,
+            "non-degeneracy errors are not perturb-retried"
+        );
 
         // A CDT "crosses an existing constraint" IS a (near-tangency) degeneracy the
         // perturbation can open — the chart pole-retry handles it first, but a
@@ -1360,12 +1370,18 @@ mod tests {
             if n < 1 {
                 anyhow::bail!("boundary edge 11->12 crosses an existing constraint")
             }
-            assert!(a[0].center.distance(atoms[0].center) > 0.0, "succeeds on perturbed atoms");
+            assert!(
+                a[0].center.distance(atoms[0].center) > 0.0,
+                "succeeds on perturbed atoms"
+            );
             Ok(7)
         })
         .unwrap();
         assert_eq!(val3, 7);
-        assert_eq!(attempts3, 1, "a boundary crossing recovers after one perturbation");
+        assert_eq!(
+            attempts3, 1,
+            "a boundary crossing recovers after one perturbation"
+        );
 
         // Exhausting retries surfaces the last error — a crossing that never clears
         // is bounded (it reaches the grid fallback in the hybrid, not an infinite loop).
@@ -1375,7 +1391,11 @@ mod tests {
             anyhow::bail!("boundary edge 11->12 crosses an existing constraint")
         });
         assert!(exhausted.is_err());
-        assert_eq!(calls4.get(), 3, "a persistent crossing is bounded at 1 + max_attempts");
+        assert_eq!(
+            calls4.get(),
+            3,
+            "a persistent crossing is bounded at 1 + max_attempts"
+        );
     }
 
     /// On a collision-free config the cleaned **welded** assembler

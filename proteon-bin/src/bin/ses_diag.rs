@@ -50,7 +50,11 @@ fn main() {
             let stem = name.rsplit('.').nth(1).unwrap_or(name);
             if let Ok(mut f) = std::fs::File::create(format!("{dir}/{stem}.xyzr")) {
                 for s in &atoms {
-                    let _ = writeln!(f, "{} {} {} {}", s.center.x, s.center.y, s.center.z, s.radius);
+                    let _ = writeln!(
+                        f,
+                        "{} {} {} {}",
+                        s.center.x, s.center.y, s.center.z, s.radius
+                    );
                 }
             }
         }

@@ -413,7 +413,10 @@ mod tests {
         assert_eq!(grid.len(), brute.len(), "RS face count differs");
         for (g, b) in grid.iter().zip(&brute) {
             assert_eq!(g.atoms, b.atoms, "RS face triple/order differs");
-            assert_eq!(g.probe, b.probe, "RS probe position differs (bit-exact expected)");
+            assert_eq!(
+                g.probe, b.probe,
+                "RS probe position differs (bit-exact expected)"
+            );
         }
         // Toric faces: full ToricFace identity *in sequence* — edge, θ-interval bits
         // (a missed blocker would shift an interval while keeping the same endpoint
@@ -429,8 +432,10 @@ mod tests {
                 else {
                     continue;
                 };
-                let blockers: Vec<Sphere> =
-                    (0..atoms.len()).filter(|&k| k != i && k != j).map(|k| atoms[k]).collect();
+                let blockers: Vec<Sphere> = (0..atoms.len())
+                    .filter(|&k| k != i && k != j)
+                    .map(|k| atoms[k])
+                    .collect();
                 for (s, e) in free_intervals(&roll, &blockers, probe) {
                     let full = s.abs() < 1e-12 && (e - TAU).abs() < 1e-12;
                     let ends = if full {
@@ -451,7 +456,11 @@ mod tests {
                         }
                         got
                     };
-                    brute_toric.push(ToricFace { edge: [i, j], theta: (s, e), ends });
+                    brute_toric.push(ToricFace {
+                        edge: [i, j],
+                        theta: (s, e),
+                        ends,
+                    });
                 }
             }
         }
@@ -460,8 +469,16 @@ mod tests {
         for (g, b) in tg.iter().zip(&brute_toric) {
             assert_eq!(g.edge, b.edge, "toric edge/order differs");
             assert_eq!(g.ends, b.ends, "toric endpoint owners differ");
-            assert_eq!(g.theta.0.to_bits(), b.theta.0.to_bits(), "toric θ-start differs");
-            assert_eq!(g.theta.1.to_bits(), b.theta.1.to_bits(), "toric θ-end differs");
+            assert_eq!(
+                g.theta.0.to_bits(),
+                b.theta.0.to_bits(),
+                "toric θ-start differs"
+            );
+            assert_eq!(
+                g.theta.1.to_bits(),
+                b.theta.1.to_bits(),
+                "toric θ-end differs"
+            );
         }
         assert!(!tg.is_empty(), "blob should have toric faces");
     }
