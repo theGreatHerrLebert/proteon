@@ -149,7 +149,7 @@ claims:
         catch a non-converged solution (it errors via SolveError::NotConverged), but
         the threshold/preconditioner may need revisiting for harder systems.
       - The LU oracle solves proteon's OWN explicit M/V, so on its own it cannot catch
-        an assembly bug shared with the matrix build. Two independent checks cover
-        that: the LU is gated against NESSie's fixture solution, and M/b1/umol/qmol
-        are gated ENTRYWISE against NESSie's assembly_kernels_local dump (so a
+        an assembly bug shared with the matrix build. Two independent checks cover it
+        -- the LU is gated against NESSie's fixture solution, and M/b1/umol/qmol are
+        gated ENTRYWISE against NESSie's assembly_kernels_local dump (so a
         solution-preserving compensating error in M and b1 is ruled out).
