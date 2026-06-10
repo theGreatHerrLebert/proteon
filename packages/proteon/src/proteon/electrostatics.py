@@ -6,16 +6,20 @@ reference/research tier alongside proteon's fast GB/EEF1 solvation.
 
 Typical use — colour a surface mesh by its electrostatic potential::
 
-    import proteon
-    mesh = proteon.ses_mesh(coords, elements=elems)          # or any triangle mesh
+    import proteon, proteon_connector
+    mesh = proteon_connector.py_surface.ses_mesh_coarse_py(
+        coords, elements=elems, spacing=1.0,                 # coarse SES for the BEM
+    )
     out = proteon.surface_potential(
         mesh["vertices"], mesh["triangles"], charge_xyz, charge_q,
     )
     phi = out["surface_potential"]                           # volts, per vertex
 
-Scaling caveat: the dense BEM is O(N²) in memory and time, so `surface_potential`
-warns past ~15k triangles. Pass a watertight, consistently outward-oriented mesh
-(e.g. `proteon.ses_mesh` output) — the double-layer sign depends on the winding.
+Scaling caveat: the dense BEM is O(N²) in memory and time. `surface_potential` refuses
+a job past a ~6 GiB matrix budget (override with `allow_large=True`) and warns past
+~15k triangles. Use a *coarse* mesh — the exact analytic SES is easily millions of
+triangles. The result dict carries `watertight` / `oriented` diagnostics; a mesh that
+is not consistently outward-oriented can give a sign-wrong potential (and warns).
 """
 
 from typing import Dict
@@ -71,6 +75,7 @@ def surface_potential(
     tol: float = 1e-7,
     restart: int = 200,
     max_iter: int = 10000,
+    allow_large: bool = False,
 ) -> Dict[str, object]:
     """Solve the BEM on a surface mesh with point charges and read off the potential.
 
@@ -79,17 +84,19 @@ def surface_potential(
         triangles: (F, 3) int triangle indices (CCW wrt. the outward normal).
         charge_positions: (Q, 3) float64 point-charge positions.
         charge_values: (Q,) float64 charges (elementary charges).
-        eps_*/lambda_: dielectric parameters (see `born_energy`).
+        eps_*/lambda_: dielectric parameters (finite, > 0; see `born_energy`).
         nonlocal_: nonlocal (Lorentz/Yukawa) solve instead of local Poisson.
         tol/restart/max_iter: GMRES controls (converges on the true residual).
+        allow_large: override the ~6 GiB dense-matrix memory guard.
 
     Returns:
         Dict with `surface_potential` (V, float64, volts), `rfenergy` (kJ/mol),
-        `iterations`, `residual`, `converged` (bool), `n_elements`.
+        `iterations`, `residual`, `converged` (bool), `n_elements`, and the mesh
+        diagnostics `watertight` / `oriented` (bool).
 
     Raises:
-        ValueError: bad shapes, out-of-range triangle index, or a non-converged /
-            non-finite solve.
+        ValueError: bad shapes/values, a degenerate triangle, an over-budget mesh
+            (without `allow_large`), or a non-converged / non-finite solve.
     """
     out = _el.solve_surface_py(
         np.ascontiguousarray(vertices, dtype=np.float64),
@@ -104,6 +111,7 @@ def surface_potential(
         tol,
         restart,
         max_iter,
+        allow_large,
     )
     out["surface_potential"] = np.asarray(out["surface_potential"])
     return out

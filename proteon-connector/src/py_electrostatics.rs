@@ -5,9 +5,10 @@
 //! can colour an SES by its electrostatic potential without a JSON round-trip.
 //!
 //! **Scaling caveat (plan §6 / P6.5).** The dense BEM is O(N²) in memory and time;
-//! `solve_surface_py` warns past a triangle budget. Pass a watertight, consistently
-//! outward-oriented mesh (e.g. `proteon.surface.ses_mesh` output) — the double-layer
-//! sign depends on the winding.
+//! `solve_surface_py` refuses an over-budget mesh (unless `allow_large`) and warns
+//! past a triangle budget. Pass a watertight, consistently outward-oriented mesh
+//! (e.g. `ses_mesh_coarse_py` output) — the double-layer sign depends on the winding;
+//! the result's `oriented` diagnostic flags (and warns on) a bad one.
 
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
@@ -15,6 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use proteon_core::surface::geom::Vec3;
+use proteon_core::surface::mesh::Mesh;
 use proteon_electrostatics::{
     born_rfenergy, espotential, rfenergy, solve_local_elements, solve_nonlocal_elements, Charge,
     Domain, Locality, Params, SolveConfig, Tri,
@@ -25,8 +27,9 @@ const N_WARN: usize = 15_000;
 
 /// Closed-form Born reaction-field (solvation) energy of a single ion (kJ/mol).
 ///
-/// The Born model assumes a vacuum solute (`eps_omega = 1`); `eps_omega` is accepted
-/// for symmetry but ignored. `nonlocal_=True` uses the structured-solvent form.
+/// The Born model assumes a **vacuum solute**: the formula uses `(1/εΣ − 1)`, so a
+/// non-1 `eps_omega` is rejected (`ValueError`) rather than silently ignored.
+/// `nonlocal_=True` uses the structured-solvent form.
 #[pyfunction]
 #[pyo3(signature = (charge, radius, eps_omega=1.0, eps_sigma=78.0, eps_inf=1.8, lambda_=20.0, nonlocal_=false))]
 #[allow(clippy::too_many_arguments)]
@@ -39,9 +42,18 @@ fn born_energy_py(
     lambda_: f64,
     nonlocal_: bool,
 ) -> PyResult<f64> {
+    if !charge.is_finite() {
+        return Err(PyValueError::new_err("charge must be finite"));
+    }
     if !(radius.is_finite() && radius > 0.0) {
         return Err(PyValueError::new_err("radius must be finite and > 0"));
     }
+    if (eps_omega - 1.0).abs() > 1e-9 {
+        return Err(PyValueError::new_err(
+            "the Born model assumes a vacuum solute: eps_omega must be 1",
+        ));
+    }
+    validate_params(eps_omega, eps_sigma, eps_inf, lambda_)?;
     let params = Params {
         eps_omega,
         eps_sigma,
@@ -56,6 +68,23 @@ fn born_energy_py(
     Ok(born_rfenergy(charge, radius, &params, loc))
 }
 
+/// Finite + positive dielectric / correlation-length parameters.
+fn validate_params(eps_omega: f64, eps_sigma: f64, eps_inf: f64, lambda_: f64) -> PyResult<()> {
+    for (name, v) in [
+        ("eps_omega", eps_omega),
+        ("eps_sigma", eps_sigma),
+        ("eps_inf", eps_inf),
+        ("lambda_", lambda_),
+    ] {
+        if !(v.is_finite() && v > 0.0) {
+            return Err(PyValueError::new_err(format!(
+                "{name} must be finite and > 0"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Owned solve result (no Python types — built off the GIL).
 struct SolveOut {
     phi: Vec<f64>,
@@ -63,6 +92,8 @@ struct SolveOut {
     iterations: usize,
     residual: f64,
     converged: bool,
+    watertight: bool,
+    oriented: bool,
 }
 
 /// Solve the local/nonlocal BEM on a surface mesh with point charges and return the
@@ -76,7 +107,7 @@ struct SolveOut {
 #[pyo3(signature = (
     vertices, triangles, charge_positions, charge_values,
     eps_omega=1.0, eps_sigma=78.0, eps_inf=1.8, lambda_=20.0,
-    nonlocal_=false, tol=1e-7, restart=200, max_iter=10000,
+    nonlocal_=false, tol=1e-7, restart=200, max_iter=10000, allow_large=false,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn solve_surface_py<'py>(
@@ -93,8 +124,9 @@ fn solve_surface_py<'py>(
     tol: f64,
     restart: usize,
     max_iter: usize,
+    allow_large: bool,
 ) -> PyResult<Py<PyDict>> {
-    // --- validate shapes + values --------------------------------------------
+    // --- validate shapes -----------------------------------------------------
     if vertices.shape().len() != 2 || vertices.shape()[1] != 3 {
         return Err(PyValueError::new_err("vertices must be V×3"));
     }
@@ -117,18 +149,32 @@ fn solve_surface_py<'py>(
             "need at least one triangle and one charge",
         ));
     }
-    if !(tol.is_finite() && tol > 0.0) || max_iter == 0 {
-        return Err(PyValueError::new_err("need tol > 0 and max_iter > 0"));
+    if !(tol.is_finite() && tol > 0.0) || max_iter == 0 || restart == 0 {
+        return Err(PyValueError::new_err(
+            "need tol > 0, max_iter > 0, and restart > 0",
+        ));
     }
+    validate_params(eps_omega, eps_sigma, eps_inf, lambda_)?;
 
-    if nf > N_WARN {
+    // Memory guard: the dense BEM holds 2 (local) or 4 (nonlocal) N×N f64 matrices.
+    // Refuse a job that would blow past the budget unless the caller opts in.
+    const MEM_BUDGET: u128 = 6 * (1 << 30); // 6 GiB
+    let blocks: u128 = if nonlocal_ { 4 } else { 2 };
+    let est = (nf as u128).saturating_mul(nf as u128).saturating_mul(8) * blocks;
+    if est > MEM_BUDGET && !allow_large {
+        return Err(PyValueError::new_err(format!(
+            "{nf} triangles would allocate ~{} GiB of dense matrices (the BEM is O(N²)); \
+             coarsen the SES mesh or pass allow_large=True to override.",
+            est >> 30
+        )));
+    }
+    if nf >= N_WARN {
         let warnings = py.import("warnings")?;
         warnings.call_method1(
             "warn",
             (format!(
-                "{nf} triangles: the dense BEM is O(N²) in memory and time — this will \
-                 be slow/RAM-heavy. Coarsen the SES mesh, or wait for the matrix-free / \
-                 GPU paths (plan §6/P6.5)."
+                "{nf} triangles: the dense BEM is O(N²) in memory and time — this will be \
+                 slow/RAM-heavy (matrix-free / GPU paths are the plan §6/P6.5 follow-ups)."
             ),),
         )?;
     }
@@ -150,10 +196,34 @@ fn solve_surface_py<'py>(
         .map_err(|e| PyValueError::new_err(format!("charge_values not C-contiguous: {e}")))?
         .to_vec();
 
-    // Bounds-check the triangle indices before the off-GIL block (no panics there).
-    for &i in &tflat {
-        if i < 0 || i as usize >= nv {
-            return Err(PyValueError::new_err("triangle index out of range"));
+    // Finite checks (a NaN/inf would otherwise propagate silently into the solve).
+    if vflat
+        .iter()
+        .chain(&qpos)
+        .chain(&qval)
+        .any(|v| !v.is_finite())
+    {
+        return Err(PyValueError::new_err(
+            "non-finite value in vertices / charge_positions / charge_values",
+        ));
+    }
+    // Triangle indices in range, and each triangle non-degenerate (so `Tri::new` —
+    // which asserts on a zero / non-finite normal — cannot panic off the GIL).
+    for f in 0..nf {
+        let mut idx = [0usize; 3];
+        for (k, slot) in idx.iter_mut().enumerate() {
+            let i = tflat[f * 3 + k];
+            if i < 0 || i as usize >= nv {
+                return Err(PyValueError::new_err("triangle index out of range"));
+            }
+            *slot = i as usize;
+        }
+        let p = |k: usize| Vec3::new(vflat[k * 3], vflat[k * 3 + 1], vflat[k * 3 + 2]);
+        let cross = (p(idx[1]) - p(idx[0])).cross(p(idx[2]) - p(idx[0]));
+        if !(cross.norm() > 0.0 && cross.norm().is_finite()) {
+            return Err(PyValueError::new_err(format!(
+                "degenerate (zero-area / collinear) triangle at index {f}"
+            )));
         }
     }
 
@@ -217,16 +287,53 @@ fn solve_surface_py<'py>(
             })
             .collect();
 
+        if !engy.is_finite() || phi.iter().any(|v| !v.is_finite()) {
+            return Err("solve produced a non-finite energy / potential".to_string());
+        }
+
+        // Mesh-quality diagnostics: the double-layer sign depends on the winding, so a
+        // non-watertight or inconsistently-oriented mesh can give silently-wrong
+        // potentials. Surface these so the caller can trust (or distrust) the result.
+        let mesh = Mesh {
+            verts: (0..nv).map(vert).collect(),
+            normals: Vec::new(),
+            tris: (0..nf)
+                .map(|f| {
+                    [
+                        tflat[f * 3] as u32,
+                        tflat[f * 3 + 1] as u32,
+                        tflat[f * 3 + 2] as u32,
+                    ]
+                })
+                .collect(),
+        };
+
         Ok(SolveOut {
             phi,
             rfenergy: engy,
             iterations: stats.iterations,
             residual: stats.residual,
             converged: stats.converged,
+            watertight: mesh.is_watertight(),
+            oriented: mesh.is_consistently_oriented(),
         })
     });
 
     let out = result.map_err(PyValueError::new_err)?;
+
+    // A bad winding silently flips the double-layer sign — warn loudly rather than
+    // hand back a wrong-but-plausible potential.
+    if !out.oriented {
+        let warnings = py.import("warnings")?;
+        warnings.call_method1(
+            "warn",
+            (
+                "mesh is not consistently oriented: the double-layer sign depends on the \
+              triangle winding, so the potential may be wrong. Pass a watertight, \
+              outward-oriented mesh (e.g. ses_mesh_coarse_py output).",
+            ),
+        )?;
+    }
 
     let dict = PyDict::new(py);
     dict.set_item("surface_potential", PyArray1::from_vec(py, out.phi))?;
@@ -235,6 +342,8 @@ fn solve_surface_py<'py>(
     dict.set_item("residual", out.residual)?;
     dict.set_item("converged", out.converged)?;
     dict.set_item("n_elements", nf)?;
+    dict.set_item("watertight", out.watertight)?;
+    dict.set_item("oriented", out.oriented)?;
     Ok(dict.unbind())
 }
 
