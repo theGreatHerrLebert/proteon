@@ -31,10 +31,20 @@ using NESSie.Format: readoff, readpqr
 using NESSie.BEM: solve
 using NESSie.Rjasanow: laplacecoll!
 using NESSie.Radon: regularyukawacoll!
+using NESSie.TestModel: bornion
 using Pkg
 
 const PTYPES = (SingleLayer, DoubleLayer)
 const PTYPE_NAME = Dict(SingleLayer => "single", DoubleLayer => "double")
+
+# The kernel-parity dumps (collocation / yukawa / assembly_kernels) use only the
+# first `KERNEL_SUBSET` elements of the mesh. The collocation operator is purely
+# pairwise-geometric, so a K×K block is the *bit-exact* top-left submatrix of the
+# full operator — it exercises self (InPlane), adjacent (near-singular), and far
+# pairs while keeping fixtures committable. The full 512-element Born mesh would
+# emit ~11–22 MB dense matrices. solve/post run on the *full* mesh (their outputs
+# are vectors, not N×N matrices, so they stay small).
+const KERNEL_SUBSET = 32
 
 # --- provenance ----------------------------------------------------------------
 
@@ -77,43 +87,51 @@ function load_model(off_path::AbstractString, pqr_path::AbstractString;
 end
 
 "Triangle elements → plain arrays (so the Rust side is fully determined)."
-function elements_json(model)
+function elements_json(elements)
     [Dict(
         "v1"     => e.v1,  "v2" => e.v2, "v3" => e.v3,
         "center" => e.center, "normal" => e.normal, "area" => e.area,
-    ) for e in model.elements]
+    ) for e in elements]
 end
 
 obspoints(model) = [e.center for e in model.elements]   # collocation points Ξ
 
+"First-`n` elements + their centroids as collocation points — a bit-exact submatrix
+ of the full collocation operator (kernels depend only on element/obs-point pairs)."
+function kernel_subset(model, n::Int)
+    elements = model.elements[1:min(n, length(model.elements))]
+    Ξ = [e.center for e in elements]
+    (elements, Ξ)
+end
+
 "Collocation matrix (|Ξ| × |elements|) for a kernel-matrix `!` routine."
-function _coll_matrix(fill!, model)
-    elements = model.elements
-    Ξ = obspoints(model)
-    dest = zeros(Float64, length(Ξ), length(elements))
+function _coll_matrix(fill!, nrow::Int, ncol::Int)
+    dest = zeros(Float64, nrow, ncol)
     fill!(dest)
     [collect(row) for row in eachrow(dest)]   # row-major nested arrays for JSON
 end
 
 # --- the six dumps --------------------------------------------------------------
 
-"L1: analytic Laplace single/double-layer collocation matrices."
-function collocation_dump(model)
-    elements, Ξ = model.elements, obspoints(model)
+"L1: analytic Laplace single/double-layer collocation matrices (kernel subset)."
+function collocation_dump(model; nmax::Int = KERNEL_SUBSET)
+    elements, Ξ = kernel_subset(model, nmax)
     mats = Dict(PTYPE_NAME[p] =>
-        _coll_matrix(d -> laplacecoll!(p, d, elements, Ξ), model) for p in PTYPES)
+        _coll_matrix(d -> laplacecoll!(p, d, elements, Ξ), length(Ξ), length(elements))
+        for p in PTYPES)
     Dict("kind" => "collocation", "provenance" => provenance(),
-         "observation_points" => Ξ, "elements" => elements_json(model),
+         "observation_points" => Ξ, "elements" => elements_json(elements),
          "matrices" => mats)
 end
 
-"L2: regular-Yukawa single/double-layer collocation matrices at a given yukawa."
-function yukawa_dump(model, yukawa::Float64)
-    elements, Ξ = model.elements, obspoints(model)
+"L2: regular-Yukawa single/double-layer collocation matrices (kernel subset)."
+function yukawa_dump(model, yukawa::Float64; nmax::Int = KERNEL_SUBSET)
+    elements, Ξ = kernel_subset(model, nmax)
     mats = Dict(PTYPE_NAME[p] =>
-        _coll_matrix(d -> regularyukawacoll!(p, d, elements, Ξ, yukawa), model) for p in PTYPES)
+        _coll_matrix(d -> regularyukawacoll!(p, d, elements, Ξ, yukawa), length(Ξ), length(elements))
+        for p in PTYPES)
     Dict("kind" => "yukawa", "provenance" => provenance(), "yukawa" => yukawa,
-         "observation_points" => Ξ, "elements" => elements_json(model),
+         "observation_points" => Ξ, "elements" => elements_json(elements),
          "matrices" => mats)
 end
 
@@ -125,7 +143,7 @@ function solve_dump(model, locality::Type{<:LocalityType}, method::Symbol)
     out = Dict("kind" => "solve", "provenance" => provenance(),
                "locality" => string(locality), "method" => string(method),
                "num_elements" => length(model.elements),
-               "elements" => elements_json(model),
+               "elements" => elements_json(model.elements),
                "observation_points" => obspoints(model),
                "charges" => charges_json(model), "params" => params_json(model.params),
                "u" => collect(bem.u), "q" => collect(bem.q),
@@ -141,11 +159,12 @@ end
  once the blocks are written down."
 function assembly_kernels_dump(model, locality::Type{<:LocalityType})
     yuk = NESSie.yukawa(model.params)
+    elements, Ξ = kernel_subset(model, KERNEL_SUBSET)   # match the kernel matrices
     out = Dict("kind" => "assembly_kernels", "provenance" => provenance(),
                "locality" => string(locality), "yukawa" => yuk,
                "params" => params_json(model.params),
-               "elements" => elements_json(model),
-               "observation_points" => obspoints(model),
+               "elements" => elements_json(elements),
+               "observation_points" => Ξ,
                "laplace" => collocation_dump(model)["matrices"])
     locality === NonlocalES && (out["regular_yukawa"] = yukawa_dump(model, yuk)["matrices"])
     out["_todo"] = "P0.5: emit the assembled block system + RHS once formulation is pinned"
@@ -177,7 +196,7 @@ end
 function analytic_dump(; ions = ["li", "na", "k", "rb", "cs", "mg", "ca", "sr", "ba"])
     born = Dict(name => begin
             ion = bornion(name)
-            Dict("charge" => ion.charge, "radius" => ion.radius,
+            Dict("charge" => ion.charge.val, "radius" => ion.radius,
                  "params" => params_json(ion.params),
                  "local"    => rfenergy(LocalES, ion),
                  "nonlocal" => rfenergy(NonlocalES, ion))

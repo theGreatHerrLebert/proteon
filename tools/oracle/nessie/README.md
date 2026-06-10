@@ -24,7 +24,9 @@ a regeneration reproducible.
 ## Generate fixtures
 
 ```bash
-julia --project=tools/oracle/nessie tools/oracle/nessie/harness.jl <out_dir>
+# canonical out_dir = the crate's checked-in fixture tree
+julia --project=tools/oracle/nessie tools/oracle/nessie/harness.jl \
+  proteon-electrostatics/tests/fixtures/nessie
 ```
 
 Writes the starter corpus (one Born ion, from NESSie's bundled `data/born`):
@@ -49,6 +51,14 @@ parity of energy/potentials (L4), and `analytic` is the closed-form science gate
 
 ## Caveats / TODO
 
+- **Kernel dumps use a 32-element subset (`KERNEL_SUBSET`).** The collocation /
+  yukawa / assembly_kernels matrices are emitted on the first 32 elements of the
+  512-element Born mesh, not the whole thing. The collocation operator is purely
+  pairwise-geometric, so a K×K block is the *bit-exact* top-left submatrix of the
+  full operator — it still exercises self (InPlane), adjacent (near-singular), and
+  far pairs, but a fixture stays ~55 KB instead of ~11 MB. `solve` / `post` run on
+  the **full** mesh (their outputs are vectors, not N×N matrices). Bump the const
+  in `harness.jl` if a phase needs more kernel coverage.
 - **`assembly_kernels_dump` is a PARTIAL assembly oracle until P0.5.** It gates
   kernel-block parity only — the full assembled 2/3-block system + RHS + dielectric
   factors + jump terms are pinned by the formulation spec (`devdocs/
