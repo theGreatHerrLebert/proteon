@@ -15,13 +15,18 @@ use proteon_electrostatics::{
 };
 use serde_json::json;
 
-/// Illustrative per-atom partial charge by atom name (chemistry, not a force field):
-/// carbonyl/carboxyl O is electronegative, amide/amine N slightly positive, S mild.
-fn illustrative_charge(name: &str) -> f64 {
-    match name.trim().chars().next() {
-        Some('O') => -0.55,
-        Some('N') => 0.35,
-        Some('S') => -0.20,
+/// Illustrative **formal** charges on the titratable side-chain groups (chemistry,
+/// not a force field): Asp/Glu carboxylates negative, Arg/Lys/His amines positive,
+/// split across the relevant atoms. This gives the strong, localized acidic (red) /
+/// basic (blue) surface patches you expect of a protein, rather than a diffuse field.
+fn illustrative_charge(resname: &str, atom: &str) -> f64 {
+    let atom = atom.trim();
+    match (resname.trim(), atom) {
+        ("ASP", "OD1" | "OD2") => -0.5,
+        ("GLU", "OE1" | "OE2") => -0.5,
+        ("ARG", "NH1" | "NH2") => 0.5,
+        ("LYS", "NZ") => 1.0,
+        ("HIS", "ND1" | "NE2") => 0.25,
         _ => 0.0,
     }
 }
@@ -42,7 +47,8 @@ fn main() {
     let mut charges = Vec::new();
     for chain in model.chains() {
         for res in chain.residues() {
-            if matches!(res.name().unwrap_or(""), "HOH" | "WAT" | "DOD") {
+            let resname = res.name().unwrap_or("");
+            if matches!(resname, "HOH" | "WAT" | "DOD") {
                 continue;
             }
             for a in res.atoms() {
@@ -50,7 +56,7 @@ fn main() {
                 let p = Vec3::new(x, y, z);
                 let elem = a.element().map(|e| e.symbol()).unwrap_or("");
                 atoms.push(Sphere::new(p, vdw_radius(elem).unwrap_or(DEFAULT_RADIUS)));
-                let q = illustrative_charge(a.name());
+                let q = illustrative_charge(resname, a.name());
                 if q != 0.0 {
                     charges.push(Charge { pos: p, val: q });
                 }
