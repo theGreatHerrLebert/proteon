@@ -1279,6 +1279,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteon-electrostatics"
+version = "0.2.1"
+dependencies = [
+ "proteon-core",
+]
+
+[[package]]
 name = "proteon-io"
 version = "0.2.1"
 dependencies = [
