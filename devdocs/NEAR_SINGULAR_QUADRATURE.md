@@ -1,7 +1,14 @@
 # P6.5 — Near-singular remediation for the regular-Yukawa collocation
 
-**Status:** implemented (opt-in). Reviewed by: codex on the design (round 1, §§ below)
-and on the implementation (round 2). Implementation-review fixes, all landed:
+**Status:** implemented (opt-in; default stays Fixed — see §5). Reviewed by: codex on the
+design (round 1, §§ below) and on the implementation (round 2).
+
+**Headline finding (solve level):** adaptive provably fixes the near-singular *cross-
+entries* (kernel: 0.3%/3% → ~1e-7), but that error **does not propagate to the solved
+energy** (~1e-6 on a two-sphere cleft, even charges-at-cleft / gap 0.1). So the default
+stays Fixed/fast; adaptive is opt-in. Details in §5.
+
+Implementation-review fixes, all landed:
 - **[P2a]** `point_to_triangle_distance` now has a degenerate-triangle fallback (closest
   over the three edges) — the Voronoi divisions could divide by zero on collinear
   vertices that `Tri::with_normal` does not reject.
@@ -215,11 +222,22 @@ ports adaptive (or a corrected near-singular rule) to the GPU.
 - **In:** adaptive regular-Yukawa collocation (resolution-floor recursion + centroid
   fan for self/near-self); point-to-triangle distance; the five gates incl. the cleft
   corpus; `Quadrature` selector reported in stats.
-- **[R7] default policy is itself gated.** Adaptive becomes the CPU nonlocal **default**
-  *only after* gate 1 (cleft corpus) and gate 3 (operator-level cleft error) pass.
-  Until then it ships **opt-in** (`Quadrature::Adaptive`), with `Fixed` the default and
-  the floor documented — avoids a silent slowdown shipping before the accuracy is
-  actually proven on the failure mode. Once those gates are green, flip the default.
+- **Default policy — RESOLVED by experiment: stays opt-in, do NOT flip.** The solve-level
+  investigation (`tests/cleft_solve.rs`) found that although adaptive fixes the
+  near-singular *cross-entries* (0.3%/3% → ~1e-7, kernel gate), that error **does not
+  propagate to the integrated reaction-field energy**: on two close spheres, even with
+  the charges *at* the cleft and the gap squeezed to 0.1, the solved nonlocal energy
+  moves by only ~1e-6 between fixed and adaptive. The global GMRES solution averages out
+  a few slightly-wrong entries, and the energy is dominated by each component's
+  self-solvation (identical under both). So flipping the default would impose adaptive's
+  subdivision cost on **every** nonlocal solve for ~1e-6 of energy accuracy on every
+  testable geometry — not worth it. Adaptive stays **opt-in** (`Quadrature::Adaptive`),
+  correct and available for callers who want it. Whether near-singular *ever* materially
+  moves an energy is reopened only by a true **SES re-entrant** (toric/saddle) mesh,
+  where near-singular pairs form a connected concave region rather than a few weakly-
+  coupled facing caps — not generable analytically in-tree today (awaits the SES mesher).
+  This refines the plan's "single highest failure risk" framing with evidence: the
+  per-entry floor is real, but its **energy impact is small** for separable geometries.
 - **Out (this round):** Laplace near-singular (analytic/exact); GPU adaptive; Duffy
   coordinate transforms (value is finite — the fan suffices); the full P6.5 mesh-
   acceptance gate (separate work item).
