@@ -42,11 +42,12 @@
 //!   closed form): energy + potentials gated vs NESSie `post_dump`, and the BEM
 //!   energy converges to the analytic Born energy on refined sphere meshes — the
 //!   science gate, independent of any BEM path.
-//! - **P6 (nonlocal)** ✅ — the coupled 3-block `(u,q,w)` solve ([`system::NonlocalOperator`]
-//!   + [`solve::solve_nonlocal`]) and nonlocal post-processing: Cauchy data + energy +
-//!   potentials gated vs NESSie, the nonlocal→local Born limit, and BEM-vs-Born to a
-//!   few % (Radon-floor-limited; tight nonlocal convergence is the P6.5 follow-up).
-//!   The genuine differentiator — APBS/DelPhi do local PB only.
+//! - **P6 (nonlocal)** ✅ — the coupled 3-block `(u,q,w)` solve
+//!   ([`system::NonlocalOperator`] and [`solve::solve_nonlocal`]) plus nonlocal
+//!   post-processing: Cauchy data, energy, and potentials gated vs NESSie, the
+//!   nonlocal→local Born limit, and BEM-vs-Born to a few % (Radon-floor-limited;
+//!   tight nonlocal convergence is the P6.5 follow-up). The genuine differentiator —
+//!   APBS/DelPhi do local PB only.
 //! - **Follow-ups** — P6.5 near-singular remediation (adaptive quadrature) for tight
 //!   nonlocal convergence + protein-scale meshes; P7 Python/CLI exposure; the Xie
 //!   multi-charge analytic model. The convention spec still gates anything energy-level.
