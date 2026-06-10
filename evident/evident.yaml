@@ -47,6 +47,7 @@ vocabularies:
     - electrostatics.yukawa
     - electrostatics.bem.local
     - electrostatics.post
+    - electrostatics.bem.nonlocal
   oracle:
     - Biopython
     - FreeSASA
@@ -94,6 +95,7 @@ vocabularies:
     - regular-yukawa-collocation-parity
     - local-cauchy-data-parity
     - born-energy-converges-to-analytic
+    - nonlocal-cauchy-data-parity
   input_class:
     # Extends the base vocabulary. A convenience sample is a non-random
     # selection (e.g. the alphabetically-first N files) — distinguished from
@@ -130,3 +132,4 @@ include:
   - claims/electrostatics_yukawa.yaml
   - claims/electrostatics_local_solve.yaml
   - claims/electrostatics_post.yaml
+  - claims/electrostatics_nonlocal.yaml

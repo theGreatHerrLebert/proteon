@@ -1,0 +1,144 @@
+claims:
+  - id: proteon-nonlocal-cauchy-data-vs-nessie
+    title: Proteon's nonlocal 3-block BEM solve reproduces NESSie's Cauchy data and energy, with the nonlocal-to-local limit
+    kind: measurement
+    subsystem: electrostatics.bem.nonlocal
+    case: claims/electrostatics_nonlocal.md
+    source: ..
+    tier: ci
+    trust_strategy:
+      - validation
+    capabilities:
+      - nonlocal-cauchy-data-parity
+    inputs:
+      corpus: nessie-nonlocal-solve-and-post
+      n: 512
+      class: fixture
+      fixture_paths:
+        - proteon-electrostatics/tests/fixtures/nessie/solve_NonlocalES_blas_na.json
+        - proteon-electrostatics/tests/fixtures/nessie/post_nonlocal_na.json
+    outputs:
+      cauchy_data:
+        unit: 4pi*eps0 (relative)
+        description: >
+          The nonlocal surface Cauchy data u, q, and the genuinely-nonlocal third
+          block w = gamma0ext(Psi), plus the molecular-potential traces umol/qmol, on
+          the 512-element Born sodium mesh. proteon assembles the coupled 3n nonlocal
+          system (NonlocalOperator, formulation spec section 6) and solves it with the
+          matrix-free GMRES; NESSie's :blas fixture is the exact dense-LU solution.
+      nonlocal_post:
+        unit: V and kJ/mol (relative)
+        description: >
+          proteon's rfenergy and espotential over Omega/Sigma/Gamma vs NESSie's
+          post_nonlocal dump. The Sigma branch is the genuinely-nonlocal one (it pulls
+          in w and the regular-Yukawa kernels).
+      nonlocal_to_local_limit:
+        unit: relative
+        description: >
+          The nonlocal-to-local limit at the analytic level: as the correlation length
+          lambda shrinks, the nonlocal Born energy approaches the local Born energy.
+      bem_vs_born_nonlocal:
+        unit: relative
+        description: >
+          The nonlocal BEM reaction-field energy of a central unit charge in a
+          triangulated sphere vs the closed-form nonlocal Born energy, across mesh
+          resolutions. The whole nonlocal stack against analytic physics.
+    pinned_versions:
+      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      NESSie: "NESSie.jl 1.5.1 (tree-hash c6c0c478; Manifest pinned in tools/oracle/nessie)"
+      physics-invariant: "nonlocal Born energy approaches local Born energy as lambda shrinks; nonlocal BEM rfenergy agrees with the nonlocal Born energy to a few percent (Radon-cubature floor); negative solvation energy"
+      julia: "1.11.5 (fixture generation only; not needed at gate time)"
+      rust: "stable"
+    claim: >
+      proteon's pure-Rust nonlocal (Lorentz cavity / Yukawa) continuum-electrostatics
+      solve -- the coupled 3-block system A.[u;q;w] = [b1;0;0] over the Laplace and
+      regular-Yukawa collocation matrices, with NESSie's distinct preconditioner
+      diagonal (the +diag(V) middle block) -- reproduces NESSie's nonlocal Cauchy data
+      including the differentiator block w on the 512-element Born sodium mesh (to
+      1e-6), and its rfenergy and espotential over the three domains match NESSie's
+      post_nonlocal dump (to 1e-6). The nonlocal Born energy approaches the local one
+      as the correlation length shrinks, and the nonlocal BEM energy of a central
+      charge in a triangulated sphere agrees with the closed-form nonlocal Born energy
+      to within a few percent across mesh resolutions. Nonlocal continuum
+      electrostatics is the genuine differentiator over local Poisson-Boltzmann
+      (APBS/DelPhi do local only). This is the L3b/L4 nonlocal gate of the port (P6).
+    tolerances:
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-6
+        output: cauchy_data
+        prose: >
+          "||proteon - NESSie|| / ||NESSie|| < 1e-6" on u, q, AND the nonlocal third
+          block w (umol/qmol match to 1e-10). NESSie's :blas fixture is the exact LU
+          solution of the same 3n system; the gap is proteon's GMRES convergence.
+          Getting w right is the load-bearing nonlocal check -- it is the unknown that
+          does not exist in the local problem.
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-6
+        output: nonlocal_post
+        prose: >
+          "||proteon - NESSie|| / ||NESSie|| < 1e-6" on rfenergy and on espotential
+          over each domain, after solving for u/q/w. The Sigma branch exercises the
+          nonlocal post path (w + the regular-Yukawa kernels Vy/Ky); Omega/Gamma and
+          rfenergy are locality-generic.
+      - metric: relative_error
+        op: "<"
+        value: 0.01
+        output: nonlocal_to_local_limit
+        prose: >
+          "|nonlocal Born - local Born| / |local Born| < 1% at lambda = 0.1", with the
+          gap shrinking monotonically as lambda decreases over {20, 5, 1, 0.1}. This is
+          the nonlocal-to-local limit at the analytic level, where it is clean (lambda
+          = 0 itself is not numerically reachable by the closed form -- sinh overflows
+          -- in NESSie either). The operator-level collapse is NOT asserted (spec
+          section 10: it is not a clean identity).
+      - metric: relative_error
+        op: "<"
+        value: 0.05
+        output: bem_vs_born_nonlocal
+        prose: >
+          "|nonlocal BEM energy - nonlocal Born| / |nonlocal Born| < 5% at subdivisions
+          1, 2, 3". Unlike the analytic-Laplace local case (monotone convergence), the
+          nonlocal energy does NOT converge monotonically here: the fixed 7-point Radon
+          cubature for the regular-Yukawa kernel loses accuracy for near-neighbour
+          elements as the mesh refines, so agreement plateaus at the few-percent level.
+          This gate pins the physics (a sign/coefficient error in the 3-block assembly
+          would be wildly off, not a few percent); tight nonlocal convergence is the
+          P6.5 adaptive-quadrature follow-up.
+    evidence:
+      oracle:
+        - NESSie
+        - physics-invariant
+      command: cargo test -p proteon-electrostatics
+      artifact: cargo test console output (CI-tier; no persisted artifact)
+    provenance: automatic
+    last_verified:
+      commit: null
+      date: null
+      value: null
+      corpus_sha: null
+    assumptions:
+      - The solve_NonlocalES and post_nonlocal fixtures are NESSie's own outputs
+        (the :blas exact-LU path for the solve), pinned to NESSie.jl 1.5.1. The tests
+        consume the stored normals, charges, and params verbatim.
+      - The nonlocal RHS is [b1; 0; 0] with only the first block nonzero (the explicit
+        assembly's dimensionally-sound form); NESSie's implicit path builds only the
+        length-n b1, an apparent source defect resolved against the running oracle
+        (spec section 6).
+      - The preconditioner uses NESSie's diag() vector [2pi - diag(Ky); +diag(V); 2pi]
+        -- the +diag(V) middle block, NOT the algebraic matrix diagonal -diag(V). Since
+        proteon's GMRES converges on the true residual, the preconditioner only affects
+        speed, so this faithful choice does not change the solution.
+    failure_modes:
+      - The nonlocal BEM-vs-Born gate is Radon-cubature-floor-limited to a few percent
+        and is NOT a convergence-rate measurement; tight nonlocal convergence (and
+        protein-scale nonlocal solves) need the P6.5 near-singular remediation
+        (adaptive subdivision / corrected quadrature for the regular-Yukawa kernel).
+      - One structure (Born sodium sphere) at one parameter set. Multiple charges,
+        off-centre charges, and diverse dielectric/correlation regimes are not
+        exercised here.
+      - The headline nonlocal analytic model in the plan is Xie's multi-charge sphere
+        (Bessel functions); only the single-charge Born nonlocal model is gated so far.
+        The Xie convergence (and an independent CAS/mpmath nonlocal reference) is the
+        owed strengthening.
