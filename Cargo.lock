@@ -1283,6 +1283,7 @@ name = "proteon-electrostatics"
 version = "0.2.1"
 dependencies = [
  "proteon-core",
+ "serde_json",
 ]
 
 [[package]]
