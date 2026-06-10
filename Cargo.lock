@@ -1318,6 +1318,7 @@ dependencies = [
  "nalgebra",
  "proteon-core",
  "proteon-io",
+ "rayon",
  "serde_json",
 ]
 

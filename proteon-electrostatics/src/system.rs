@@ -8,13 +8,18 @@
 //! The block structure, RHS, dielectric factors, and ½-jump (`2π`) terms are pinned
 //! by `devdocs/ELECTROSTATICS_FORMULATION.md` §5.
 //!
-//! **Scaling ceiling:** the dense `K`/`V` are O(N²) memory; each matvec is O(N²)
-//! time without a fast-summation method (FMM/treecode). Fine at fixture scale; the
-//! O(N) matrix-free `K·x` and a fast summation backend are the plan §6 follow-ups.
+//! **Scaling ceiling.** The dense `K`/`V` are O(N²) memory; each matvec is O(N²)
+//! time without a fast-summation method (FMM/treecode). The assembly and matvecs are
+//! **rayon-parallel** across rows (results bit-identical to serial) — the cheapest
+//! large speedup. The remaining levers, in increasing effort: an O(N) **matrix-free**
+//! `K·x` (lifts the memory cap; NESSie's `:gmres` design), a **GPU** matvec
+//! (cudarc/NVRTC — NESSie's `CuNESSie.jl` move, lowers the constant not the
+//! asymptote), and **fast summation** (the only thing that beats O(N²); plan §6/P8).
 
 use crate::laplace::{laplace_collocation, ETOL_F64};
 use crate::model::{Charge, PotentialKind, Tri};
 use crate::yukawa::regular_yukawa_collocation;
+use rayon::prelude::*;
 
 /// `2π = 4π·σ` with NESSie's `σ = 1/2` — the ½-solid-angle jump constant.
 pub const TWO_PI: f64 = 2.0 * std::f64::consts::PI;
@@ -65,14 +70,13 @@ impl LinearOperator for DenseOperator {
         self.n
     }
     fn matvec(&self, x: &[f64], y: &mut [f64]) {
-        for i in 0..self.n {
-            let row = &self.data[i * self.n..(i + 1) * self.n];
-            let mut acc = 0.0;
-            for (j, &xj) in x.iter().enumerate() {
-                acc += row[j] * xj;
-            }
-            y[i] = acc;
-        }
+        // Parallel over output rows; the inner dot product stays sequential so the
+        // result is bit-identical to the serial version (gates unaffected).
+        y.par_iter_mut()
+            .zip(self.data.par_chunks(self.n))
+            .for_each(|(yi, row)| {
+                *yi = row.iter().zip(x).map(|(a, b)| a * b).sum();
+            });
     }
     fn diagonal(&self) -> Vec<f64> {
         (0..self.n).map(|i| self.get(i, i)).collect()
@@ -119,12 +123,17 @@ pub fn laplace_matrices(elements: &[Tri]) -> (DenseOperator, DenseOperator) {
         .collect();
     let mut v = DenseOperator::zeros(n);
     let mut k = DenseOperator::zeros(n);
-    for (i, &xi) in centroids.iter().enumerate() {
-        for (j, ej) in elements.iter().enumerate() {
-            v.set(i, j, laplace_collocation(PotentialKind::Single, xi, ej));
-            k.set(i, j, laplace_collocation(PotentialKind::Double, xi, ej));
-        }
-    }
+    // Assemble row i (observation point = centroid i) in parallel.
+    v.data
+        .par_chunks_mut(n)
+        .zip(k.data.par_chunks_mut(n))
+        .zip(&centroids)
+        .for_each(|((vrow, krow), &xi)| {
+            for (j, ej) in elements.iter().enumerate() {
+                vrow[j] = laplace_collocation(PotentialKind::Single, xi, ej);
+                krow[j] = laplace_collocation(PotentialKind::Double, xi, ej);
+            }
+        });
     (v, k)
 }
 
@@ -139,20 +148,16 @@ pub fn yukawa_matrices(elements: &[Tri], yukawa: f64) -> (DenseOperator, DenseOp
         .collect();
     let mut vy = DenseOperator::zeros(n);
     let mut ky = DenseOperator::zeros(n);
-    for (i, &xi) in centroids.iter().enumerate() {
-        for (j, ej) in elements.iter().enumerate() {
-            vy.set(
-                i,
-                j,
-                regular_yukawa_collocation(PotentialKind::Single, xi, ej, yukawa),
-            );
-            ky.set(
-                i,
-                j,
-                regular_yukawa_collocation(PotentialKind::Double, xi, ej, yukawa),
-            );
-        }
-    }
+    vy.data
+        .par_chunks_mut(n)
+        .zip(ky.data.par_chunks_mut(n))
+        .zip(&centroids)
+        .for_each(|((vrow, krow), &xi)| {
+            for (j, ej) in elements.iter().enumerate() {
+                vrow[j] = regular_yukawa_collocation(PotentialKind::Single, xi, ej, yukawa);
+                krow[j] = regular_yukawa_collocation(PotentialKind::Double, xi, ej, yukawa);
+            }
+        });
     (vy, ky)
 }
 

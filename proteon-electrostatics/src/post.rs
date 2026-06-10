@@ -25,6 +25,7 @@ use crate::model::{Charge, Domain, Params, PotentialKind, Tri};
 use crate::solve::CauchyData;
 use crate::yukawa::regular_yukawa_collocation;
 use proteon_core::surface::geom::Vec3;
+use rayon::prelude::*;
 
 /// `10¹⁰·e` (Å→m folded in), NESSie `ec` (C).
 const EC: f64 = 1.602_176e-9;
@@ -49,7 +50,8 @@ fn collocate_contract(
     elements: &[Tri],
     fvals: &[f64],
 ) -> Vec<f64> {
-    obs.iter()
+    // Parallel over observation points (each independent; inner sum sequential).
+    obs.par_iter()
         .map(|&xi| {
             elements
                 .iter()
@@ -68,7 +70,7 @@ fn yukawa_contract(
     fvals: &[f64],
     yuk: f64,
 ) -> Vec<f64> {
-    obs.iter()
+    obs.par_iter()
         .map(|&xi| {
             elements
                 .iter()

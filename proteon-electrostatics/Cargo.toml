@@ -20,6 +20,11 @@ workspace = true
 # (Vec3, Sphere, Mesh, icosphere) — do NOT re-derive (TO_ELECTROSTATICS.md §2).
 proteon-core = { path = "../proteon-core" }
 
+# Multicore matrix assembly + matvecs. The dense BEM is O(N^2) in both; rayon
+# parallelizes across independent output rows (results bit-identical — inner sums
+# stay sequential), the cheapest large speedup before matrix-free / GPU / FMM.
+rayon = "1"
+
 # TODO(P5): Bessel I/K for the Xie nonlocal analytic model (analytic.rs).
 #   Validate the chosen impl against NESSie's SpecialFunctions before trusting it
 #   as ground truth ("an oracle for the oracle", §6). e.g. `puruspe` or similar.
