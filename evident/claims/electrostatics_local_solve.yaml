@@ -1,0 +1,133 @@
+claims:
+  - id: proteon-local-cauchy-data-vs-nessie
+    title: Proteon's local BEM solve reproduces NESSie's Cauchy data, with LU-vs-GMRES and a true-residual gate
+    kind: measurement
+    subsystem: electrostatics.bem.local
+    case: claims/electrostatics_local_solve.md
+    source: ..
+    tier: ci
+    trust_strategy:
+      - validation
+    capabilities:
+      - local-cauchy-data-parity
+    inputs:
+      corpus: nessie-local-solve-fixture
+      n: 512
+      class: fixture
+      fixture_paths:
+        - proteon-electrostatics/tests/fixtures/nessie/solve_LocalES_blas_na.json
+    outputs:
+      cauchy_data:
+        unit: 4pi*eps0 (relative)
+        description: >
+          The local surface Cauchy data u = gamma0int(phi*), q = gamma1int(phi*),
+          and the molecular-potential traces umol, qmol, on the 512-element Born
+          sodium mesh. proteon assembles the two-stage local system (M.u = b1 then
+          V.q = b2; formulation spec section 5) over byte-identical geometry and
+          solves it with a rolled matrix-free GMRES; NESSie's :blas fixture is the
+          exact dense-LU solution of the same system.
+      lu_vs_gmres:
+        unit: relative
+        description: >
+          A dense LU (nalgebra, test-only) of proteon's OWN explicit M and V vs
+          proteon's GMRES solution on the same assembled system - the solver-parity
+          check (iterative vs direct), independent of the oracle.
+      true_residual:
+        unit: relative
+        description: >
+          The true (unpreconditioned) relative residual ||M.u - b1|| / ||b1|| and
+          ||V.q - b2|| / ||b2||, gated directly rather than by iteration count.
+    pinned_versions:
+      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      NESSie: "NESSie.jl 1.5.1 (tree-hash c6c0c478; Manifest pinned in tools/oracle/nessie)"
+      physics-invariant: "dense LU of proteon's own explicit M/V == proteon GMRES (LU-vs-GMRES); true residual ||A.x-b||/||b|| < 1e-8"
+      nalgebra: "0.33 (dev-dependency, LU solver oracle; test-only)"
+      julia: "1.11.5 (fixture generation only; not needed at gate time)"
+      rust: "stable"
+    claim: >
+      proteon's pure-Rust local boundary-element solve - molecular potentials
+      (umol, qmol), the single/double-layer collocation matrices V and K, the
+      two-stage implicit system (M = 2pi(1 + epsOmega/epsSigma)I + (epsOmega/epsSigma
+      - 1)K, then V), and a rolled left-preconditioned restarted GMRES - reproduces
+      NESSie's local Cauchy data on the 512-element Born sodium mesh. umol/qmol match
+      to 1e-10 relative, u/q to 1e-7 (GMRES-converged vs NESSie's exact :blas LU). A
+      dense LU of proteon's own explicit M/V matches the fixture to 1e-9 (so the
+      assembly reproduces NESSie's) and the GMRES solution to 1e-7, and the true
+      relative residual is below 1e-8. This is the L3a local-solve gate of the BEM
+      electrostatics port (P4).
+    tolerances:
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-7
+        output: cauchy_data
+        prose: >
+          "||proteon - NESSie|| / ||NESSie|| < 1e-7" on u and q (vector relative
+          error to the reference norm). NESSie's :blas fixture is the exact LU
+          solution; proteon's GMRES is converged to 1e-11 preconditioned, so the gap
+          is GMRES convergence plus the collocation libm divergence propagated
+          through two solves. umol/qmol (direct evaluations, no solve) match much
+          tighter, to 1e-10 - that sub-gate is asserted separately in the test.
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-7
+        output: lu_vs_gmres
+        prose: >
+          "||GMRES - LU|| / ||LU|| < 1e-7" on u and q. A dense LU of proteon's own M
+          and V is the direct-solver oracle; agreement with the iterative GMRES
+          confirms the solver converged to the true solution of the assembled system
+          (not merely to a self-consistent but wrong fixed point). The LU also
+          matches NESSie's fixture to 1e-9, which is the entrywise-assembly check:
+          since the fixture is NESSie's LU solution, an assembly bug would show up
+          there.
+      - metric: absolute_error
+        op: "<"
+        value: 1.0e-8
+        output: true_residual
+        prose: >
+          "||A.x - b|| / ||b|| < 1e-8" for both stages. This is the gate that the
+          solution actually solves the assembled system - the load-bearing
+          correctness check that does not depend on the oracle or the LU. Iteration
+          count is reported as a measured stat, not gated.
+    evidence:
+      oracle:
+        - NESSie
+        - physics-invariant
+      command: cargo test -p proteon-electrostatics
+      artifact: cargo test console output (CI-tier; no persisted artifact)
+    provenance: automatic
+    last_verified:
+      commit: null
+      date: null
+      value: null
+      corpus_sha: null
+    assumptions:
+      - The fixture proteon-electrostatics/tests/fixtures/nessie/solve_LocalES_blas_na.json
+        is NESSie's _solve_explicit(LocalES) output (the :blas dense-LU path), which
+        is algebraically identical to the implicit/GMRES path proteon ports but solved
+        exactly, so it is the right parity target. Emitted by tools/oracle/nessie and
+        pinned to NESSie.jl 1.5.1.
+      - The test consumes the fixture's stored per-element normals verbatim
+        (Tri::with_normal) and the fixture's charges + params, so geometry and the
+        molecular-potential / double-layer terms are byte-identical to NESSie.
+      - ep0 does not enter numerically -- NESSie labels u/q as premultiplied by
+        4pi.ep0 but the code never multiplies by ep0 (it divides the raw charge sum by
+        epsOmega only), so the fixture values -- and proteon's -- carry no ep0 factor.
+      - The molecular-potential tolerance (min distance 1e-10) never triggers for the
+        Born ion (one charge at the origin, centroids ~1 A away), so umol/qmol are
+        independent of that guard here.
+    failure_modes:
+      - One structure (Born sodium sphere, 512 elements), one parameter set
+        (epsOmega=1, epsSigma=78). A bug that only manifests on multi-charge systems,
+        very different dielectric ratios, or ill-conditioned meshes would not surface.
+        A protein-scale solve with diverse charges/params is a natural follow-up
+        (gated on the P6.5 mesh-acceptance + scaling work first).
+      - The dense O(N^2) assembly + dense matvec are used here; the O(N) matrix-free
+        K.x and a fast-summation backend (the plan section 6 scaling work) are not yet
+        implemented, so this gate says nothing about large-N memory/time behaviour.
+      - Jacobi-preconditioned GMRES converges well on this well-conditioned system;
+        it may stagnate on refined or nonlocal systems. The true-residual gate would
+        catch a non-converged solution (it errors via SolveError::NotConverged), but
+        the threshold/preconditioner may need revisiting for harder systems.
+      - The LU oracle solves proteon's OWN explicit M/V, so it cannot catch an
+        assembly bug shared with the matrix build; that is why the LU is also gated
+        against NESSie's independent fixture, not only against GMRES.

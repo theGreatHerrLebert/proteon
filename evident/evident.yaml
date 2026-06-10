@@ -45,6 +45,7 @@ vocabularies:
     - surface.ses
     - electrostatics.laplace
     - electrostatics.yukawa
+    - electrostatics.bem.local
   oracle:
     - Biopython
     - FreeSASA
@@ -90,6 +91,7 @@ vocabularies:
     - surface-ses-area-parity
     - laplace-collocation-parity
     - regular-yukawa-collocation-parity
+    - local-cauchy-data-parity
   input_class:
     # Extends the base vocabulary. A convenience sample is a non-random
     # selection (e.g. the alphabetically-first N files) — distinguished from
@@ -124,3 +126,4 @@ include:
   - claims/surface_ses_ball.yaml
   - claims/electrostatics_laplace.yaml
   - claims/electrostatics_yukawa.yaml
+  - claims/electrostatics_local_solve.yaml
