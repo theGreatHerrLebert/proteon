@@ -26,12 +26,13 @@ module NESSieOracle
 
 using JSON
 using NESSie
-using NESSie: ε0
+using NESSie: ε0, _molpotential, _molpotential_dn, _etol
 using NESSie.Format: readoff, readpqr
 using NESSie.BEM: solve
 using NESSie.Rjasanow: laplacecoll!
 using NESSie.Radon: regularyukawacoll!
 using NESSie.TestModel: bornion
+using LinearAlgebra: I
 using Pkg
 
 const PTYPES = (SingleLayer, DoubleLayer)
@@ -182,8 +183,46 @@ function assembly_kernels_dump(model, locality::Type{<:LocalityType})
                "observation_points" => Ξ,
                "laplace" => collocation_dump(model)["matrices"])
     locality === NonlocalES && (out["regular_yukawa"] = yukawa_dump(model, yuk)["matrices"])
-    out["_todo"] = "P0.5: emit the assembled block system + RHS once formulation is pinned"
+    if locality === LocalES
+        merge!(out, local_assembly(model, elements, Ξ))
+        out["_todo"] = "nonlocal assembled block system + RHS still owed (P6)"
+    else
+        out["_todo"] = "P6: emit the assembled nonlocal block system + RHS"
+    end
     out
+end
+
+"Entrywise assembled LOCAL system on the element subset (formulation spec §5): the
+ system matrix `M = 2π(1+εΩ/εΣ)I + (εΩ/εΣ−1)K`, the stage-1 RHS `b1 = K·umol − 2π·umol
+ − (εΩ/εΣ)·V·qmol`, and the molecular-potential traces `umol, qmol`. Lets the Rust port
+ gate its assembly *entrywise* against NESSie, not only via a solution that the
+ assembled system happens to reproduce."
+function local_assembly(model, elements, Ξ)
+    εΩ, εΣ = model.params.εΩ, model.params.εΣ
+    frac = εΩ / εΣ
+    n = length(elements)
+
+    # umol/qmol on the subset (NESSie implicit path: umol tol = _etol, qmol default).
+    submodel = Model{Float64, NESSie.Triangle{Float64}}(
+        Vector{Float64}[], elements, model.charges, model.params)
+    umol = εΩ .\ _molpotential(submodel; tolerance = _etol(Float64))
+    qmol = εΩ .\ _molpotential_dn(submodel)
+
+    # Dense V, K, then M and b1.
+    V = zeros(Float64, n, n)
+    K = zeros(Float64, n, n)
+    laplacecoll!(SingleLayer, V, elements, Ξ)
+    laplacecoll!(DoubleLayer, K, elements, Ξ)
+    M = (2π * (1 + frac)) .* Matrix{Float64}(I, n, n) .+ (frac - 1) .* K
+    b1 = K * umol .- (2π .* umol) .- (frac .* (V * qmol))
+
+    Dict(
+        "charges" => charges_json(model),
+        "umol" => umol,
+        "qmol" => qmol,
+        "M"  => [collect(row) for row in eachrow(M)],
+        "b1" => b1,
+    )
 end
 
 "L4: reaction-field energy + potentials, each domain sampled at points that

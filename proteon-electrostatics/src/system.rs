@@ -12,7 +12,7 @@
 //! time without a fast-summation method (FMM/treecode). Fine at fixture scale; the
 //! O(N) matrix-free `K·x` and a fast summation backend are the plan §6 follow-ups.
 
-use crate::laplace::laplace_collocation;
+use crate::laplace::{laplace_collocation, ETOL_F64};
 use crate::model::{Charge, PotentialKind, Tri};
 
 /// `2π = 4π·σ` with NESSie's `σ = 1/2` — the ½-solid-angle jump constant.
@@ -131,19 +131,21 @@ pub fn laplace_matrices(elements: &[Tri]) -> (DenseOperator, DenseOperator) {
 /// `_molpotential_dn`, divided by `εΩ`):
 ///
 /// ```text
-/// umol_i = (1/εΩ) · Σ_c  q_c / max(|ξ_i − r_c|, tol)
-/// qmol_i = −(1/εΩ) · Σ_c  q_c · (ξ_i − r_c)·n_i / max(|ξ_i − r_c|³, tol)
+/// umol_i = (1/εΩ) · Σ_c  q_c / max(|ξ_i − r_c|, U_TOL)
+/// qmol_i = −(1/εΩ) · Σ_c  q_c · (ξ_i − r_c)·n_i / max(|ξ_i − r_c|³, Q_TOL)
 /// ```
 ///
-/// `tol = 1e-10` matches NESSie; for non-coincident charges (the usual case) it
-/// never triggers.
+/// The degenerate-distance guards match NESSie's **implicit** local path: `umol`
+/// uses `_etol` (`1.45e-8`), `qmol` the default `1e-10` applied to the *cubed*
+/// distance. For non-coincident charges (the usual case) neither triggers.
 #[must_use]
 pub fn mol_potentials(
     elements: &[Tri],
     charges: &[Charge],
     eps_omega: f64,
 ) -> (Vec<f64>, Vec<f64>) {
-    const TOL: f64 = 1e-10;
+    const Q_TOL: f64 = 1e-10; // applied to |ξ−r|³
+    let u_tol = ETOL_F64; // applied to |ξ−r| (NESSie `_molpotential(..., tolerance=_etol)`)
     let inv = 1.0 / eps_omega;
     let mut umol = vec![0.0; elements.len()];
     let mut qmol = vec![0.0; elements.len()];
@@ -154,9 +156,9 @@ pub fn mol_potentials(
         for c in charges {
             let d = center - c.pos;
             let r = d.norm();
-            u += c.val / r.max(TOL);
+            u += c.val / r.max(u_tol);
             // ddot(center, pos, n) = (center − pos)·n
-            q += c.val * d.dot(e.normal) / (r * r * r).max(TOL);
+            q += c.val * d.dot(e.normal) / (r * r * r).max(Q_TOL);
         }
         umol[i] = inv * u;
         qmol[i] = -inv * q;

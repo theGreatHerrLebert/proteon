@@ -36,7 +36,15 @@ claims:
         unit: relative
         description: >
           The true (unpreconditioned) relative residual ||M.u - b1|| / ||b1|| and
-          ||V.q - b2|| / ||b2||, gated directly rather than by iteration count.
+          ||V.q - b2|| / ||b2||, gated directly rather than by iteration count. The
+          GMRES is right-preconditioned, so the residual it converges on IS this true
+          residual, and a successful return guarantees it is below tol.
+      assembly_entrywise:
+        unit: absolute
+        description: >
+          proteon's assembled M, b1, umol, and qmol vs NESSie's assembly_kernels_local
+          dump, element by element on the 32-element subset. This rules out a
+          compensating M/b1 error that the solution-level gate could miss.
     pinned_versions:
       proteon: "PENDING-PIN-AT-NEXT-RELEASE"
       NESSie: "NESSie.jl 1.5.1 (tree-hash c6c0c478; Manifest pinned in tools/oracle/nessie)"
@@ -86,8 +94,20 @@ claims:
         prose: >
           "||A.x - b|| / ||b|| < 1e-8" for both stages. This is the gate that the
           solution actually solves the assembled system - the load-bearing
-          correctness check that does not depend on the oracle or the LU. Iteration
-          count is reported as a measured stat, not gated.
+          correctness check that does not depend on the oracle or the LU. The GMRES
+          returns Err(NotConverged) rather than a converged=false result if it cannot
+          meet this, so a non-converged solution cannot pass. Iteration count is a
+          measured stat, not gated.
+      - metric: absolute_error
+        op: "<"
+        value: 1.0e-10
+        output: assembly_entrywise
+        prose: >
+          "max |proteon - NESSie| < 1e-10" on M, b1, umol, qmol entrywise vs NESSie's
+          assembly_kernels_local dump. The solution-level gate (LU vs fixture) proves
+          the assembled system has NESSie's solution but not that M/b1 are entrywise
+          correct - a compensating pair of errors could preserve one solution vector.
+          This gate closes that: every assembled entry matches NESSie's own.
     evidence:
       oracle:
         - NESSie
@@ -128,6 +148,8 @@ claims:
         it may stagnate on refined or nonlocal systems. The true-residual gate would
         catch a non-converged solution (it errors via SolveError::NotConverged), but
         the threshold/preconditioner may need revisiting for harder systems.
-      - The LU oracle solves proteon's OWN explicit M/V, so it cannot catch an
-        assembly bug shared with the matrix build; that is why the LU is also gated
-        against NESSie's independent fixture, not only against GMRES.
+      - The LU oracle solves proteon's OWN explicit M/V, so on its own it cannot catch
+        an assembly bug shared with the matrix build. Two independent checks cover
+        that: the LU is gated against NESSie's fixture solution, and M/b1/umol/qmol
+        are gated ENTRYWISE against NESSie's assembly_kernels_local dump (so a
+        solution-preserving compensating error in M and b1 is ruled out).

@@ -180,27 +180,31 @@ fn givens(a: f64, b: f64) -> (f64, f64) {
 }
 
 /// Solution of one `gmres` run.
+#[derive(Debug, PartialEq)]
 struct GmresSolution {
     x: Vec<f64>,
     iterations: usize,
 }
 
 /// Left-preconditioned restarted GMRES solving `A·x = b`. Converges on the
-/// preconditioned relative residual; the caller checks the true residual for the
-/// gate. Returns [`SolveError::NotConverged`] if `max_iter` is hit first.
+/// **right**-preconditioned relative residual `‖b − A·x‖ / ‖b‖` — which, for right
+/// preconditioning, is exactly the *true* residual the gate cares about (left
+/// preconditioning would track `‖M⁻¹(b−Ax)‖`, a different quantity). Returns
+/// [`SolveError::NotConverged`] if `max_iter` is reached before `tol`, and
+/// [`SolveError::NonFinite`] on a non-finite residual or a zero pivot.
 fn gmres(
     op: &dyn LinearOperator,
     b: &[f64],
     precond: &dyn Preconditioner,
     cfg: &SolveConfig,
 ) -> Result<GmresSolution, SolveError> {
+    if !(cfg.tol > 0.0 && cfg.tol.is_finite()) || cfg.max_iter == 0 {
+        return Err(SolveError::NotConverged);
+    }
     let n = op.dim();
     let m = cfg.restart.clamp(1, n.max(1));
 
-    // Preconditioned rhs norm (= initial residual norm for x0 = 0).
-    let mut mb = vec![0.0; n];
-    precond.apply(b, &mut mb);
-    let bnorm = norm(&mb);
+    let bnorm = norm(b);
     let mut x = vec![0.0; n];
     if bnorm == 0.0 {
         return Ok(GmresSolution { x, iterations: 0 });
@@ -208,23 +212,26 @@ fn gmres(
 
     let mut iterations = 0;
     loop {
-        // r = M⁻¹(b − A·x)
+        // True residual r = b − A·x (right preconditioning keeps this the tracked one).
         let mut ax = vec![0.0; n];
         op.matvec(&x, &mut ax);
-        let resid: Vec<f64> = (0..n).map(|i| b[i] - ax[i]).collect();
-        let mut mr = vec![0.0; n];
-        precond.apply(&resid, &mut mr);
-        let beta = norm(&mr);
+        let r: Vec<f64> = (0..n).map(|i| b[i] - ax[i]).collect();
+        let beta = norm(&r);
         if !beta.is_finite() {
             return Err(SolveError::NonFinite);
         }
         if beta / bnorm <= cfg.tol {
             return Ok(GmresSolution { x, iterations });
         }
+        if iterations >= cfg.max_iter {
+            return Err(SolveError::NotConverged);
+        }
 
-        // Arnoldi basis + Hessenberg (column-major access via h[i][j]).
+        // Arnoldi on `A·M⁻¹` with v₁ = r/β; the Hessenberg least-squares residual
+        // |g[j+1]| then equals ‖b − A·x‖ directly.
         let mut v: Vec<Vec<f64>> = Vec::with_capacity(m + 1);
-        v.push(mr.iter().map(|&r| r / beta).collect());
+        v.push(r.iter().map(|&ri| ri / beta).collect());
+        let mut zs: Vec<Vec<f64>> = Vec::with_capacity(m); // M⁻¹·v_j, reused to build x
         let mut h = vec![vec![0.0_f64; m]; m + 1];
         let mut cs = vec![0.0; m];
         let mut sn = vec![0.0; m];
@@ -233,11 +240,13 @@ fn gmres(
         let mut k = m;
 
         for j in 0..m {
-            // w = M⁻¹·A·v_j
-            let mut avj = vec![0.0; n];
-            op.matvec(&v[j], &mut avj);
+            // w = A·M⁻¹·v_j
+            let mut z = vec![0.0; n];
+            precond.apply(&v[j], &mut z);
             let mut w = vec![0.0; n];
-            precond.apply(&avj, &mut w);
+            op.matvec(&z, &mut w);
+            zs.push(z);
+            let wnorm0 = norm(&w); // pre-orthogonalization scale, for breakdown
 
             // Modified Gram–Schmidt.
             for i in 0..=j {
@@ -250,18 +259,19 @@ fn gmres(
             h[j + 1][j] = hnext;
             iterations += 1;
 
-            let breakdown = hnext <= 1e-14 * beta.max(1.0);
+            // Lucky breakdown: the new direction is (numerically) in the span already,
+            // scaled to the operator norm so it is dimensionally meaningful.
+            let breakdown = hnext <= 1e-14 * wnorm0.max(1e-300);
             if !breakdown {
                 v.push(w.iter().map(|&wi| wi / hnext).collect());
             }
 
-            // Apply earlier Givens rotations to column j.
+            // Apply earlier Givens rotations to column j, then a new one zeroing h[j+1][j].
             for i in 0..j {
                 let temp = cs[i] * h[i][j] + sn[i] * h[i + 1][j];
                 h[i + 1][j] = -sn[i] * h[i][j] + cs[i] * h[i + 1][j];
                 h[i][j] = temp;
             }
-            // New rotation zeroing h[j+1][j].
             let (c, s) = givens(h[j][j], h[j + 1][j]);
             cs[j] = c;
             sn[j] = s;
@@ -271,19 +281,19 @@ fn gmres(
             g[j + 1] = -s * g[j] + c * g[j + 1];
             g[j] = temp;
 
-            if g[j + 1].abs() / bnorm <= cfg.tol || breakdown {
-                k = j + 1;
-                break;
-            }
-            if iterations >= cfg.max_iter {
+            if g[j + 1].abs() / bnorm <= cfg.tol || breakdown || iterations >= cfg.max_iter {
                 k = j + 1;
                 break;
             }
         }
 
-        // Back-substitute H[0..k,0..k]·y = g[0..k], then x += Σ y_i v_i.
+        // Back-substitute H[0..k,0..k]·yk = g[0..k] (guard a zero pivot), then
+        // x += M⁻¹·(Σ yk_i v_i) = Σ yk_i z_i.
         let mut y = vec![0.0; k];
         for i in (0..k).rev() {
+            if h[i][i].abs() <= 1e-300 {
+                return Err(SolveError::NonFinite); // singular projected system
+            }
             let mut s = g[i];
             for t in (i + 1)..k {
                 s -= h[i][t] * y[t];
@@ -292,12 +302,8 @@ fn gmres(
         }
         for (i, &yi) in y.iter().enumerate() {
             for t in 0..n {
-                x[t] += yi * v[i][t];
+                x[t] += yi * zs[i][t];
             }
-        }
-
-        if iterations >= cfg.max_iter {
-            return Err(SolveError::NotConverged);
         }
     }
 }
@@ -369,11 +375,13 @@ pub fn solve_local_elements(
         return Err(SolveError::NonFinite);
     }
 
+    // `gmres` returns `Ok` only once the true relative residual is ≤ `cfg.tol`, so a
+    // successful return already guarantees convergence — no silent loosening here.
     let stats = SolveStats {
         iterations: u_sol.iterations + q_sol.iterations,
         residual: res_u.max(res_q),
         per_block_residual: vec![res_u, res_q],
-        converged: res_u <= cfg.tol.max(1e-6) && res_q <= cfg.tol.max(1e-6),
+        converged: res_u <= cfg.tol && res_q <= cfg.tol,
     };
     Ok((LocalResult { u, q, umol, qmol }, stats))
 }
@@ -417,4 +425,79 @@ pub fn solve_nonlocal(
     _cfg: &SolveConfig,
 ) -> Result<(NonlocalResult, SolveStats), SolveError> {
     unimplemented!("P6: nonlocal 3-block solve (src/bem/nonlocal.jl)")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::system::{DenseOperator, JacobiPreconditioner};
+
+    fn op_3x3() -> DenseOperator {
+        // Diagonally dominant, non-symmetric — a well-posed small system.
+        let rows = [[4.0, 1.0, 0.0], [-1.0, 5.0, 1.0], [0.0, 2.0, 6.0]];
+        let mut a = DenseOperator::zeros(3);
+        for (i, r) in rows.iter().enumerate() {
+            for (j, &val) in r.iter().enumerate() {
+                a.set(i, j, val);
+            }
+        }
+        a
+    }
+
+    #[test]
+    fn gmres_converges_to_true_solution() {
+        let a = op_3x3();
+        let b = [1.0, 2.0, 3.0];
+        let pre = JacobiPreconditioner::from_operator(&a);
+        let cfg = SolveConfig {
+            tol: 1e-13,
+            restart: 10,
+            max_iter: 100,
+        };
+        let sol = gmres(&a, &b, &pre, &cfg).expect("converge");
+        // The returned solution must actually solve A·x = b (not just stop early).
+        assert!(true_residual(&a, &sol.x, &b) <= 1e-13);
+        let mut ax = vec![0.0; 3];
+        a.matvec(&sol.x, &mut ax);
+        for i in 0..3 {
+            assert!((ax[i] - b[i]).abs() < 1e-11, "row {i}");
+        }
+    }
+
+    #[test]
+    fn gmres_rejects_bad_config() {
+        let a = op_3x3();
+        let b = [1.0, 2.0, 3.0];
+        let pre = JacobiPreconditioner::from_operator(&a);
+        // max_iter == 0 and tol <= 0 must fail, not silently return a wrong/zero x.
+        for cfg in [
+            SolveConfig {
+                tol: 1e-10,
+                restart: 10,
+                max_iter: 0,
+            },
+            SolveConfig {
+                tol: 0.0,
+                restart: 10,
+                max_iter: 100,
+            },
+        ] {
+            assert_eq!(gmres(&a, &b, &pre, &cfg), Err(SolveError::NotConverged));
+        }
+    }
+
+    #[test]
+    fn gmres_not_converged_when_capped_below_need() {
+        // A system that needs more than `max_iter` iterations must report
+        // NotConverged, never a silently-wrong Ok.
+        let a = op_3x3();
+        let b = [1.0, 2.0, 3.0];
+        let pre = JacobiPreconditioner::from_operator(&a);
+        let cfg = SolveConfig {
+            tol: 1e-15,
+            restart: 1, // restart(1) + 1 iter caps progress hard
+            max_iter: 1,
+        };
+        assert_eq!(gmres(&a, &b, &pre, &cfg), Err(SolveError::NotConverged));
+    }
 }
