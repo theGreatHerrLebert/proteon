@@ -1316,6 +1316,7 @@ dependencies = [
 name = "proteon-electrostatics"
 version = "0.2.1"
 dependencies = [
+ "cudarc",
  "nalgebra",
  "proteon-core",
  "proteon-io",

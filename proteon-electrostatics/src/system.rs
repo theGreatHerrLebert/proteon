@@ -9,12 +9,14 @@
 //! by `devdocs/ELECTROSTATICS_FORMULATION.md` §5.
 //!
 //! **Scaling ceiling.** The dense `K`/`V` are O(N²) memory; each matvec is O(N²)
-//! time without a fast-summation method (FMM/treecode). The assembly and matvecs are
-//! **rayon-parallel** across rows (results bit-identical to serial) — the cheapest
-//! large speedup. The remaining levers, in increasing effort: an O(N) **matrix-free**
-//! `K·x` (lifts the memory cap; NESSie's `:gmres` design), a **GPU** matvec
-//! (cudarc/NVRTC — NESSie's `CuNESSie.jl` move, lowers the constant not the
-//! asymptote), and **fast summation** (the only thing that beats O(N²); plan §6/P8).
+//! time without a fast-summation method (FMM/treecode). Speedups, in increasing
+//! effort: the assembly + matvecs are **rayon-parallel** across rows (bit-identical
+//! to serial); the Laplace assembly — the bottleneck — also has a **GPU** build
+//! ([`crate::gpu`], feature `cuda`, ~4× over 16-core CPU on large meshes, silent CPU
+//! fallback; NESSie's `CuNESSie.jl` move, lowers the constant not the asymptote);
+//! still to come are an O(N) **matrix-free** `K·x` (lifts the memory cap) and a
+//! GPU matrix-free matvec, and **fast summation** (the only thing that beats O(N²);
+//! plan §6/P8).
 
 use crate::laplace::{laplace_collocation, ETOL_F64};
 use crate::model::{Charge, PotentialKind, Tri};
@@ -116,6 +118,19 @@ impl LinearOperator for LocalOperator {
 /// are the single/double-layer collocation of element `j` at centroid of element `i`.
 #[must_use]
 pub fn laplace_matrices(elements: &[Tri]) -> (DenseOperator, DenseOperator) {
+    // GPU build of the O(N²) collocation matrices when the `cuda` feature is on and a
+    // device is present; otherwise the rayon CPU path. Both are entrywise-equal to
+    // libm precision.
+    #[cfg(feature = "cuda")]
+    if let Some(vk) = crate::gpu::laplace_matrices_gpu(elements) {
+        return vk;
+    }
+    laplace_matrices_cpu(elements)
+}
+
+/// Multicore CPU assembly of the Laplace collocation matrices `(V, K)`.
+#[must_use]
+pub fn laplace_matrices_cpu(elements: &[Tri]) -> (DenseOperator, DenseOperator) {
     let n = elements.len();
     let centroids: Vec<_> = elements
         .iter()

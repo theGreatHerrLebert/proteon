@@ -58,6 +58,8 @@
 #![allow(unused_variables, dead_code, clippy::needless_pass_by_value)]
 
 pub mod analytic;
+#[cfg(feature = "cuda")]
+pub mod gpu;
 pub mod laplace;
 pub mod model;
 pub mod post;

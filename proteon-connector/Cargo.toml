@@ -23,7 +23,7 @@ workspace = true
 # Propagates to proteon-search so its GPU search kernels are compiled in;
 # without that forward, `maturin build --features cuda` would only pull
 # cudarc into the connector crate and leave proteon-search CPU-only.
-cuda = ["cudarc", "proteon-core/cuda", "proteon-search/cuda"]
+cuda = ["cudarc", "proteon-core/cuda", "proteon-search/cuda", "proteon-electrostatics/cuda"]
 
 [dependencies]
 proteon-align = { path = "../proteon-align" }
