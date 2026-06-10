@@ -14,6 +14,7 @@
 
 use crate::laplace::{laplace_collocation, ETOL_F64};
 use crate::model::{Charge, PotentialKind, Tri};
+use crate::yukawa::regular_yukawa_collocation;
 
 /// `2π = 4π·σ` with NESSie's `σ = 1/2` — the ½-solid-angle jump constant.
 pub const TWO_PI: f64 = 2.0 * std::f64::consts::PI;
@@ -125,6 +126,106 @@ pub fn laplace_matrices(elements: &[Tri]) -> (DenseOperator, DenseOperator) {
         }
     }
     (v, k)
+}
+
+/// Build the regular single/double-layer Yukawa collocation matrices `(Vy, Ky)` over
+/// the element centroids at exponent `yukawa` (NESSie `_get_yukawa_matrices`).
+#[must_use]
+pub fn yukawa_matrices(elements: &[Tri], yukawa: f64) -> (DenseOperator, DenseOperator) {
+    let n = elements.len();
+    let centroids: Vec<_> = elements
+        .iter()
+        .map(|e| (e.v1 + e.v2 + e.v3) * (1.0 / 3.0))
+        .collect();
+    let mut vy = DenseOperator::zeros(n);
+    let mut ky = DenseOperator::zeros(n);
+    for (i, &xi) in centroids.iter().enumerate() {
+        for (j, ej) in elements.iter().enumerate() {
+            vy.set(
+                i,
+                j,
+                regular_yukawa_collocation(PotentialKind::Single, xi, ej, yukawa),
+            );
+            ky.set(
+                i,
+                j,
+                regular_yukawa_collocation(PotentialKind::Double, xi, ej, yukawa),
+            );
+        }
+    }
+    (vy, ky)
+}
+
+/// The implicit nonlocal 3-block operator `A·[x1;x2;x3]` (NESSie `NonlocalSystemMatrix`,
+/// formulation spec §6). `x1=u`, `x2=q`, `x3=w`; `V,K` Laplace, `Vy,Ky` regular Yukawa.
+///
+/// ```text
+/// row1 = Ky·((ε∞/εΣ)x3 − x1) − K·x1 + (εΩ/ε∞ − εΩ/εΣ)·(Vy·x2) + (εΩ/ε∞)·(V·x2) + 2π·x1
+/// row2 = K·x1 − V·x2 + 2π·x1
+/// row3 = (εΩ/ε∞)·(V·x2) − K·x3 + 2π·x3
+/// ```
+#[derive(Debug, Clone)]
+pub struct NonlocalOperator {
+    /// Single-layer Laplace.
+    pub v: DenseOperator,
+    /// Double-layer Laplace.
+    pub k: DenseOperator,
+    /// Regular single-layer Yukawa.
+    pub vy: DenseOperator,
+    /// Regular double-layer Yukawa.
+    pub ky: DenseOperator,
+    /// Solute dielectric `εΩ`.
+    pub eps_omega: f64,
+    /// Solvent dielectric `εΣ`.
+    pub eps_sigma: f64,
+    /// Bulk solvent response `ε∞`.
+    pub eps_inf: f64,
+}
+
+impl LinearOperator for NonlocalOperator {
+    fn dim(&self) -> usize {
+        3 * self.v.n
+    }
+    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        let n = self.v.n;
+        let (x1, x2, x3) = (&x[0..n], &x[n..2 * n], &x[2 * n..3 * n]);
+        let (eo, es, ei) = (self.eps_omega, self.eps_sigma, self.eps_inf);
+
+        let mut kx1 = vec![0.0; n];
+        self.k.matvec(x1, &mut kx1);
+        let mut kx3 = vec![0.0; n];
+        self.k.matvec(x3, &mut kx3);
+        let mut vx2 = vec![0.0; n];
+        self.v.matvec(x2, &mut vx2);
+        let mut vyx2 = vec![0.0; n];
+        self.vy.matvec(x2, &mut vyx2);
+        // Ky·((ε∞/εΣ)·x3 − x1).
+        let comb: Vec<f64> = (0..n).map(|i| (ei / es) * x3[i] - x1[i]).collect();
+        let mut kycomb = vec![0.0; n];
+        self.ky.matvec(&comb, &mut kycomb);
+
+        for i in 0..n {
+            y[i] = kycomb[i] - kx1[i]
+                + (eo / ei - eo / es) * vyx2[i]
+                + (eo / ei) * vx2[i]
+                + TWO_PI * x1[i];
+            y[n + i] = kx1[i] - vx2[i] + TWO_PI * x1[i];
+            y[2 * n + i] = (eo / ei) * vx2[i] - kx3[i] + TWO_PI * x3[i];
+        }
+    }
+    /// NESSie's **preconditioner** diagonal `[2π − diag(Ky); +diag(V); 2π]`
+    /// (`bem/nonlocal.jl:210`). Note the middle block is `+diag(V)`, *not* the
+    /// algebraic matrix diagonal `−diag(V)` — see spec §6. Since [`crate::solve`]'s
+    /// GMRES converges on the true residual, the preconditioner only affects speed,
+    /// so this faithful choice is safe.
+    fn diagonal(&self) -> Vec<f64> {
+        let n = self.v.n;
+        let mut d = Vec::with_capacity(3 * n);
+        d.extend((0..n).map(|i| TWO_PI - self.ky.get(i, i)));
+        d.extend((0..n).map(|i| self.v.get(i, i)));
+        d.extend(std::iter::repeat(TWO_PI).take(n));
+        d
+    }
 }
 
 /// Molecular potential traces at the element centroids (NESSie `_molpotential` /

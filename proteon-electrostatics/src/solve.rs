@@ -14,8 +14,8 @@
 
 use crate::model::{BemModel, Charge, Params, Tri};
 use crate::system::{
-    laplace_matrices, mol_potentials, JacobiPreconditioner, LinearOperator, LocalOperator,
-    Preconditioner, TWO_PI,
+    laplace_matrices, mol_potentials, yukawa_matrices, JacobiPreconditioner, LinearOperator,
+    LocalOperator, NonlocalOperator, Preconditioner, TWO_PI,
 };
 
 /// Why a solve failed (codex review: non-convergence / non-finite is a hard error,
@@ -414,17 +414,97 @@ pub fn solve_local(
     solve_local_elements(&elements, &model.charges, &model.params, cfg)
 }
 
-/// Solve the nonlocal (Yukawa) 3-block BEM system. NESSie: `solve(NonlocalES, model)`.
+/// Core nonlocal solve over explicit triangle elements. NESSie
+/// `_solve_implicit(NonlocalES, …)` (formulation spec §6): one coupled `3n` system
+/// `A·[u;q;w] = [b1;0;0]`, then split.
 ///
-/// TODO(P6): nonlocal assembly + solve; gate `nonlocal → local` limit invariant.
+/// ```text
+/// b1 = K·umol + (1−εΩ/εΣ)·Ky·umol − 2π·umol − (εΩ/ε∞)·V·qmol + (εΩ/εΣ−εΩ/ε∞)·Vy·qmol
+/// ```
 ///
 /// # Errors
-/// Not yet implemented.
-pub fn solve_nonlocal(
-    _model: &BemModel,
-    _cfg: &SolveConfig,
+/// [`SolveError::Empty`] if no elements; [`SolveError::NotConverged`] /
+/// [`SolveError::NonFinite`] from GMRES.
+pub fn solve_nonlocal_elements(
+    elements: &[Tri],
+    charges: &[Charge],
+    params: &Params,
+    cfg: &SolveConfig,
 ) -> Result<(NonlocalResult, SolveStats), SolveError> {
-    unimplemented!("P6: nonlocal 3-block solve (src/bem/nonlocal.jl)")
+    let n = elements.len();
+    if n == 0 {
+        return Err(SolveError::Empty);
+    }
+    let (eo, es, ei) = (params.eps_omega, params.eps_sigma, params.eps_inf);
+    let yuk = params.yukawa();
+
+    let (umol, qmol) = mol_potentials(elements, charges, eo);
+    let (v, k) = laplace_matrices(elements);
+    let (vy, ky) = yukawa_matrices(elements, yuk);
+
+    // RHS first block; b = [b1; 0; 0].
+    let mv = |op: &crate::system::DenseOperator, x: &[f64]| {
+        let mut o = vec![0.0; n];
+        op.matvec(x, &mut o);
+        o
+    };
+    let (k_um, ky_um) = (mv(&k, &umol), mv(&ky, &umol));
+    let (v_qm, vy_qm) = (mv(&v, &qmol), mv(&vy, &qmol));
+    let mut b = vec![0.0; 3 * n];
+    for i in 0..n {
+        b[i] = k_um[i] + (1.0 - eo / es) * ky_um[i] - TWO_PI * umol[i] - (eo / ei) * v_qm[i]
+            + (eo / es - eo / ei) * vy_qm[i];
+    }
+
+    let op = NonlocalOperator {
+        v,
+        k,
+        vy,
+        ky,
+        eps_omega: eo,
+        eps_sigma: es,
+        eps_inf: ei,
+    };
+    let pre = JacobiPreconditioner::from_operator(&op);
+    let sol = gmres(&op, &b, &pre, cfg)?;
+    let res = true_residual(&op, &sol.x, &b);
+
+    let (u, q, w) = (
+        sol.x[0..n].to_vec(),
+        sol.x[n..2 * n].to_vec(),
+        sol.x[2 * n..3 * n].to_vec(),
+    );
+    if !sol.x.iter().all(|x| x.is_finite()) {
+        return Err(SolveError::NonFinite);
+    }
+    let stats = SolveStats {
+        iterations: sol.iterations,
+        residual: res,
+        per_block_residual: vec![res],
+        converged: res <= cfg.tol,
+    };
+    Ok((
+        NonlocalResult {
+            u,
+            q,
+            w,
+            umol,
+            qmol,
+        },
+        stats,
+    ))
+}
+
+/// Solve the nonlocal (Yukawa) 3-block BEM system. NESSie: `solve(NonlocalES, model)`.
+///
+/// # Errors
+/// See [`solve_nonlocal_elements`].
+pub fn solve_nonlocal(
+    model: &BemModel,
+    cfg: &SolveConfig,
+) -> Result<(NonlocalResult, SolveStats), SolveError> {
+    let elements = model_elements(model);
+    solve_nonlocal_elements(&elements, &model.charges, &model.params, cfg)
 }
 
 #[cfg(test)]

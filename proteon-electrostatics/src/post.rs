@@ -23,6 +23,7 @@
 use crate::laplace::laplace_collocation;
 use crate::model::{Charge, Domain, Params, PotentialKind, Tri};
 use crate::solve::CauchyData;
+use crate::yukawa::regular_yukawa_collocation;
 use proteon_core::surface::geom::Vec3;
 
 /// `10¹⁰·e` (Å→m folded in), NESSie `ec` (C).
@@ -54,6 +55,25 @@ fn collocate_contract(
                 .iter()
                 .zip(fvals)
                 .map(|(e, &f)| laplace_collocation(kind, xi, e) * f)
+                .sum()
+        })
+        .collect()
+}
+
+/// `Σ_j regular_yukawa(kind, ξ_c, elem_j, yuk)·fvals_j` per observation point.
+fn yukawa_contract(
+    kind: PotentialKind,
+    obs: &[Vec3],
+    elements: &[Tri],
+    fvals: &[f64],
+    yuk: f64,
+) -> Vec<f64> {
+    obs.iter()
+        .map(|&xi| {
+            elements
+                .iter()
+                .zip(fvals)
+                .map(|(e, &f)| regular_yukawa_collocation(kind, xi, e, yuk) * f)
                 .sum()
         })
         .collect()
@@ -123,15 +143,35 @@ pub fn espotential(
             let vq = collocate_contract(PotentialKind::Single, &obs, elements, cauchy.q())[0];
             (-ku + vq) / FOUR_PI * POTPREFACTOR + molpotential(xi, charges, params.eps_omega)
         }
-        // Σ: (−εΩ/εΣ·V·(q+qmol) + K·(u+umol)) · potprefactor/4π.
+        // Σ (solvent): local and nonlocal differ. Local result (no `w`):
+        //   (−εΩ/εΣ·V·(q+qmol) + K·(u+umol)) · potprefactor/4π.
+        // Nonlocal result (with `w`): adds the regular-Yukawa terms (NESSie
+        //   `_espotential_Σ(::NonlocalBEMResult)`).
         Domain::Sigma => {
             let n = elements.len();
             let qq: Vec<f64> = (0..n).map(|i| cauchy.q()[i] + cauchy.qmol()[i]).collect();
             let uu: Vec<f64> = (0..n).map(|i| cauchy.u()[i] + cauchy.umol()[i]).collect();
             let vqq = collocate_contract(PotentialKind::Single, &obs, elements, &qq)[0];
             let kuu = collocate_contract(PotentialKind::Double, &obs, elements, &uu)[0];
-            let frac = params.eps_omega / params.eps_sigma;
-            (-frac * vqq + kuu) * POTPREFACTOR / FOUR_PI
+            let (eo, es, ei) = (params.eps_omega, params.eps_sigma, params.eps_inf);
+            match cauchy.w() {
+                None => (-eo / es * vqq + kuu) * POTPREFACTOR / FOUR_PI,
+                Some(w) => {
+                    let yuk = params.yukawa();
+                    // Ky argument: u + (1−εΩ/εΣ)·umol − ε∞/εΣ·w.
+                    let ky_arg: Vec<f64> = (0..n)
+                        .map(|i| {
+                            cauchy.u()[i] + (1.0 - eo / es) * cauchy.umol()[i] - (ei / es) * w[i]
+                        })
+                        .collect();
+                    let vy_qq = yukawa_contract(PotentialKind::Single, &obs, elements, &qq, yuk)[0];
+                    let ky =
+                        yukawa_contract(PotentialKind::Double, &obs, elements, &ky_arg, yuk)[0];
+                    // −εΩ/ε∞·V·(q+qmol) + εΩ(1/εΣ−1/ε∞)·Vy·(q+qmol) + K·(u+umol) + Ky·(…).
+                    (-eo / ei * vqq + eo * (1.0 / es - 1.0 / ei) * vy_qq + kuu + ky) * POTPREFACTOR
+                        / FOUR_PI
+                }
+            }
         }
     }
 }

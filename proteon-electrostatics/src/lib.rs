@@ -42,9 +42,14 @@
 //!   closed form): energy + potentials gated vs NESSie `post_dump`, and the BEM
 //!   energy converges to the analytic Born energy on refined sphere meshes — the
 //!   science gate, independent of any BEM path.
-//! - **P6+** — the nonlocal 3-block solve (and nonlocal post) remain `unimplemented!()`
-//!   stubs. The convention spec still gates anything energy-level: a single
-//!   convention bug hides behind close parity.
+//! - **P6 (nonlocal)** ✅ — the coupled 3-block `(u,q,w)` solve ([`system::NonlocalOperator`]
+//!   + [`solve::solve_nonlocal`]) and nonlocal post-processing: Cauchy data + energy +
+//!   potentials gated vs NESSie, the nonlocal→local Born limit, and BEM-vs-Born to a
+//!   few % (Radon-floor-limited; tight nonlocal convergence is the P6.5 follow-up).
+//!   The genuine differentiator — APBS/DelPhi do local PB only.
+//! - **Follow-ups** — P6.5 near-singular remediation (adaptive quadrature) for tight
+//!   nonlocal convergence + protein-scale meshes; P7 Python/CLI exposure; the Xie
+//!   multi-charge analytic model. The convention spec still gates anything energy-level.
 
 // Scaffolding: the stubs below intentionally take parameters they do not yet use.
 // Remove this allow as each phase (P2 = laplace, P3 = yukawa, P4 = system/solve,
@@ -66,11 +71,11 @@ pub use model::{BemModel, Charge, Domain, Locality, Params, PotentialKind, Tri};
 pub use post::{espotential, rfenergy, ENERGY_FACTOR, POTPREFACTOR};
 pub use quadrature::{radon7, TriangleQuad};
 pub use solve::{
-    solve_local, solve_local_elements, solve_nonlocal, CauchyData, LocalResult, NonlocalResult,
-    SolveConfig, SolveError, SolveStats,
+    solve_local, solve_local_elements, solve_nonlocal, solve_nonlocal_elements, CauchyData,
+    LocalResult, NonlocalResult, SolveConfig, SolveError, SolveStats,
 };
 pub use system::{
-    laplace_matrices, mol_potentials, BlockLayout, DenseOperator, JacobiPreconditioner,
-    LinearOperator, LocalOperator, Preconditioner, TWO_PI,
+    laplace_matrices, mol_potentials, yukawa_matrices, BlockLayout, DenseOperator,
+    JacobiPreconditioner, LinearOperator, LocalOperator, NonlocalOperator, Preconditioner, TWO_PI,
 };
 pub use yukawa::regular_yukawa_collocation;

@@ -58,3 +58,36 @@ fn born_energies_match_nessie() {
         );
     }
 }
+
+#[test]
+fn nonlocal_approaches_local_as_correlation_length_shrinks() {
+    // The nonlocal → local limit (plan invariant), at the *analytic* level where it is
+    // clean: as the correlation length λ → 0, sinh(ν)/ν·e^(−ν) → 0 (ν = √(εΣ/ε∞)·R/λ),
+    // so the nonlocal Born factor → (1/εΣ − 1) = the local one. (Stays in λ ≥ 0.1, the
+    // numerically-safe regime — ν > 709 overflows sinh, and λ = 0 is unreachable by the
+    // closed form, in NESSie too.)
+    let radius = 2.0;
+    let mut params = Params {
+        eps_omega: 1.0,
+        eps_sigma: 78.0,
+        eps_inf: 1.8,
+        lambda: 20.0,
+    };
+    let local = born_rfenergy(1.0, radius, &params, Locality::Local);
+
+    let mut prev_gap = f64::INFINITY;
+    for &lambda in &[20.0_f64, 5.0, 1.0, 0.1] {
+        params.lambda = lambda;
+        let nl = born_rfenergy(1.0, radius, &params, Locality::Nonlocal);
+        let gap = (nl - local).abs();
+        assert!(
+            gap.is_finite() && gap < prev_gap,
+            "not approaching local as λ→0: λ={lambda} gap={gap}"
+        );
+        prev_gap = gap;
+    }
+    // By λ = 0.1 the nonlocal energy is within ~1% of the local one.
+    params.lambda = 0.1;
+    let nl = born_rfenergy(1.0, radius, &params, Locality::Nonlocal);
+    assert!((nl - local).abs() / local.abs() < 0.01, "{nl} vs {local}");
+}
