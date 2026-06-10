@@ -17,8 +17,8 @@
 
 use crate::model::{BemModel, Charge, Params, Tri};
 use crate::system::{
-    laplace_matrices, mol_potentials, yukawa_matrices, JacobiPreconditioner, LinearOperator,
-    LocalOperator, NonlocalOperator, Preconditioner, TWO_PI,
+    laplace_matrices, mol_potentials, yukawa_matrices_q, JacobiPreconditioner, LinearOperator,
+    LocalOperator, NonlocalOperator, Preconditioner, Quadrature, TWO_PI,
 };
 
 /// Why a solve failed (codex review: non-convergence / non-finite is a hard error,
@@ -155,6 +155,13 @@ pub struct SolveStats {
     pub per_block_residual: Vec<f64>,
     /// Whether both stages met the residual gate.
     pub converged: bool,
+    /// Regular-Yukawa quadrature used (nonlocal only; `Fixed` for local/GPU). Surfaced
+    /// so an adaptive vs fixed solve is never silently confused (review [R6]).
+    pub quadrature: Quadrature,
+    /// Adaptive panels that hit the depth cap with the error estimate still above
+    /// tolerance (`0` for `Fixed`). Non-zero ⇒ the near-singular result is **not**
+    /// certified for those entries — a diagnostic the caller should heed.
+    pub capped_panels: usize,
 }
 
 // ---- small dense-vector helpers ------------------------------------------------
@@ -388,6 +395,8 @@ pub fn solve_local_elements(
         residual: res_u.max(res_q),
         per_block_residual: vec![res_u, res_q],
         converged: res_u <= cfg.tol && res_q <= cfg.tol,
+        quadrature: Quadrature::Fixed, // local uses only the exact analytic Laplace path
+        capped_panels: 0,
     };
     Ok((LocalResult { u, q, umol, qmol }, stats))
 }
@@ -473,6 +482,10 @@ pub fn solve_local(
 /// b1 = K·umol + (1−εΩ/εΣ)·Ky·umol − 2π·umol − (εΩ/ε∞)·V·qmol + (εΩ/εΣ−εΩ/ε∞)·Vy·qmol
 /// ```
 ///
+/// Uses the fixed 7-point Radon quadrature for the regular-Yukawa kernels (the
+/// documented near-singular floor). For the P6.5 near-singular remediation use
+/// [`solve_nonlocal_elements_q`] with [`Quadrature::Adaptive`].
+///
 /// # Errors
 /// [`SolveError::Empty`] if no elements; [`SolveError::NotConverged`] /
 /// [`SolveError::NonFinite`] from GMRES.
@@ -481,6 +494,24 @@ pub fn solve_nonlocal_elements(
     charges: &[Charge],
     params: &Params,
     cfg: &SolveConfig,
+) -> Result<(NonlocalResult, SolveStats), SolveError> {
+    solve_nonlocal_elements_q(elements, charges, params, cfg, Quadrature::Fixed)
+}
+
+/// As [`solve_nonlocal_elements`], but with a selectable regular-Yukawa quadrature.
+/// `Quadrature::Adaptive` applies the near-singular subdivision remediation
+/// ([`crate::adaptive`]) and reports any depth-capped panels in
+/// [`SolveStats::capped_panels`].
+///
+/// # Errors
+/// [`SolveError::Empty`] if no elements; [`SolveError::NotConverged`] /
+/// [`SolveError::NonFinite`] from GMRES.
+pub fn solve_nonlocal_elements_q(
+    elements: &[Tri],
+    charges: &[Charge],
+    params: &Params,
+    cfg: &SolveConfig,
+    quad: Quadrature,
 ) -> Result<(NonlocalResult, SolveStats), SolveError> {
     let n = elements.len();
     if n == 0 {
@@ -491,7 +522,7 @@ pub fn solve_nonlocal_elements(
 
     let (umol, qmol) = mol_potentials(elements, charges, eo);
     let (v, k) = laplace_matrices(elements);
-    let (vy, ky) = yukawa_matrices(elements, yuk);
+    let (vy, ky, capped_panels) = yukawa_matrices_q(elements, yuk, quad);
 
     // RHS first block; b = [b1; 0; 0].
     let mv = |op: &crate::system::DenseOperator, x: &[f64]| {
@@ -533,6 +564,8 @@ pub fn solve_nonlocal_elements(
         residual: res,
         per_block_residual: vec![res],
         converged: res <= cfg.tol,
+        quadrature: quad,
+        capped_panels,
     };
     Ok((
         NonlocalResult {

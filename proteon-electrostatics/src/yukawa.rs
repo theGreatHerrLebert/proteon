@@ -98,12 +98,31 @@ fn regular_yukawa_pot(kind: PotentialKind, x: Vec3, xi: Vec3, yukawa: f64, norma
 /// exponent `√(εΣ/ε∞)/λ` ([`crate::model::Params::yukawa`]).
 #[must_use]
 pub fn regular_yukawa_collocation(kind: PotentialKind, xi: Vec3, tri: &Tri, yukawa: f64) -> f64 {
+    regular_yukawa_collocation_parts(kind, xi, tri, yukawa).0
+}
+
+/// Like [`regular_yukawa_collocation`], but also returns the **non-cancelling local
+/// magnitude** `Σ_i |w_i · pot_i| · 2·area` alongside the signed value. The adaptive
+/// near-singular estimator ([`crate::adaptive`]) scales its tolerance to this magnitude
+/// so a double-layer collocation passing through zero does not destabilise a purely
+/// relative test (review [R5]).
+#[must_use]
+pub fn regular_yukawa_collocation_parts(
+    kind: PotentialKind,
+    xi: Vec3,
+    tri: &Tri,
+    yukawa: f64,
+) -> (f64, f64) {
     let q = radon7(tri);
     let mut value = 0.0;
+    let mut mag = 0.0;
     for i in 0..q.points.len() {
-        value += regular_yukawa_pot(kind, q.points[i], xi, yukawa, q.normal) * q.weights[i];
+        let term = regular_yukawa_pot(kind, q.points[i], xi, yukawa, q.normal) * q.weights[i];
+        value += term;
+        mag += term.abs();
     }
-    value * 2.0 * q.area
+    let scale = 2.0 * q.area;
+    (value * scale, mag * scale)
 }
 
 #[cfg(test)]

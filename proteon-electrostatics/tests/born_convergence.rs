@@ -9,8 +9,51 @@
 use proteon_core::surface::geom::Vec3;
 use proteon_electrostatics::{
     analytic_sphere_mesh, born_rfenergy, rfenergy, solve_local_elements, solve_nonlocal_elements,
-    Charge, Locality, Params, SolveConfig, Tri,
+    solve_nonlocal_elements_q, Charge, Locality, Params, Quadrature, SolveConfig, Tri,
 };
+
+/// Nonlocal BEM energy with a selectable regular-Yukawa quadrature.
+fn sphere_bem_energy_nonlocal_q(radius: f64, subdiv: u32, quad: Quadrature) -> (f64, usize) {
+    let elements = sphere_elements(radius, subdiv);
+    let charges = central_charge();
+    let cfg = SolveConfig {
+        tol: 1e-9,
+        ..Default::default()
+    };
+    let (res, stats) =
+        solve_nonlocal_elements_q(&elements, &charges, &params(), &cfg, quad).expect("solve");
+    (rfenergy(&elements, &charges, &res), stats.capped_panels)
+}
+
+#[test]
+fn nonlocal_adaptive_matches_fixed_on_convex_sphere() {
+    // Honest gate, NOT "adaptive tightens the sphere Born": a convex sphere has no
+    // opposing/cleft surfaces, so it has essentially no near-singular element pairs —
+    // its few-percent nonlocal floor is *general discretisation error*, not the
+    // near-singular artifact. The near-singular remediation therefore (correctly) leaves
+    // the sphere energy ~unchanged. The proof that adaptive lifts the actual near-field
+    // error is the opposing-panel cleft gate in `adaptive.rs::cleft_opposing_panels_*`,
+    // where the fixed rule is off by 0.3%/3% per cross-entry and adaptive by ~1e-7.
+    //
+    // This asserts (a) adaptive ≈ fixed here (no spurious change on a clean convex mesh)
+    // and (b) the self/diagonal panels do NOT spuriously cap (the on-panel term uses the
+    // analytic limit, not subdivision).
+    let radius = 2.0;
+    let born = born_rfenergy(1.0, radius, &params(), Locality::Nonlocal);
+    for s in [1u32, 2, 3] {
+        let (ef, _) = sphere_bem_energy_nonlocal_q(radius, s, Quadrature::Fixed);
+        let (ea, capped) = sphere_bem_energy_nonlocal_q(radius, s, Quadrature::Adaptive);
+        let rf = (ef - born).abs() / born.abs();
+        let ra = (ea - born).abs() / born.abs();
+        eprintln!("subdiv {s}: fixed rel {rf:.4}  adaptive rel {ra:.4}  (capped {capped})");
+        assert_eq!(capped, 0, "subdiv {s}: self panels must not cap");
+        // Convex sphere: adaptive and fixed agree closely (no near-singular regime).
+        assert!(
+            (ea - ef).abs() / born.abs() < 5e-3,
+            "subdiv {s}: adaptive {ea} vs fixed {ef} diverge unexpectedly on a convex mesh"
+        );
+    }
+}
 
 fn params() -> Params {
     Params {

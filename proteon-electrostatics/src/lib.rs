@@ -57,6 +57,7 @@
 // P5 = post/analytic) lands and the bodies are implemented.
 #![allow(unused_variables, dead_code, clippy::needless_pass_by_value)]
 
+pub mod adaptive;
 pub mod analytic;
 #[cfg(feature = "cuda")]
 pub mod gpu;
@@ -77,11 +78,14 @@ pub use post::{espotential, rfenergy, ENERGY_FACTOR, POTPREFACTOR};
 pub use quadrature::{radon7, TriangleQuad};
 pub use solve::{
     dense_matrix_bytes, solve_local, solve_local_elements, solve_local_elements_auto,
-    solve_nonlocal, solve_nonlocal_elements, solve_nonlocal_elements_auto, CauchyData, LocalResult,
-    NonlocalResult, SolveConfig, SolveError, SolveStats, DENSE_MATRIX_BUDGET,
+    solve_nonlocal, solve_nonlocal_elements, solve_nonlocal_elements_auto,
+    solve_nonlocal_elements_q, CauchyData, LocalResult, NonlocalResult, SolveConfig, SolveError,
+    SolveStats, DENSE_MATRIX_BUDGET,
 };
 pub use system::{
-    laplace_matrices, mol_potentials, yukawa_matrices, BlockLayout, DenseOperator,
-    JacobiPreconditioner, LinearOperator, LocalOperator, NonlocalOperator, Preconditioner, TWO_PI,
+    laplace_matrices, mol_potentials, yukawa_matrices, yukawa_matrices_q, BlockLayout,
+    DenseOperator, JacobiPreconditioner, LinearOperator, LocalOperator, NonlocalOperator,
+    Preconditioner, Quadrature, TWO_PI,
 };
+pub use adaptive::{adaptive_regular_yukawa_collocation, AdaptiveConfig};
 pub use yukawa::regular_yukawa_collocation;

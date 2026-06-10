@@ -153,10 +153,35 @@ pub fn laplace_matrices_cpu(elements: &[Tri]) -> (DenseOperator, DenseOperator) 
     (v, k)
 }
 
+/// Regular-Yukawa quadrature mode for the nonlocal assembly. `Fixed` is the verbatim
+/// 7-point Radon rule; `Adaptive` is the P6.5 near-singular remediation
+/// ([`crate::adaptive`]) that subdivides near-field panels to lift the Radon floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Quadrature {
+    /// Fixed 7-point Radon cubature (fast; the documented near-singular floor).
+    #[default]
+    Fixed,
+    /// Adaptive near-singular subdivision (accurate near-field; slower).
+    Adaptive,
+}
+
 /// Build the regular single/double-layer Yukawa collocation matrices `(Vy, Ky)` over
 /// the element centroids at exponent `yukawa` (NESSie `_get_yukawa_matrices`).
 #[must_use]
 pub fn yukawa_matrices(elements: &[Tri], yukawa: f64) -> (DenseOperator, DenseOperator) {
+    let (vy, ky, _capped) = yukawa_matrices_q(elements, yukawa, Quadrature::Fixed);
+    (vy, ky)
+}
+
+/// Build `(Vy, Ky)` with a selectable quadrature, returning the number of **capped**
+/// panels (adaptive panels that hit the depth cap with the estimate still above
+/// tolerance — a diagnostic the caller surfaces; always `0` for `Fixed`).
+#[must_use]
+pub fn yukawa_matrices_q(
+    elements: &[Tri],
+    yukawa: f64,
+    quad: Quadrature,
+) -> (DenseOperator, DenseOperator, usize) {
     let n = elements.len();
     let centroids: Vec<_> = elements
         .iter()
@@ -164,17 +189,48 @@ pub fn yukawa_matrices(elements: &[Tri], yukawa: f64) -> (DenseOperator, DenseOp
         .collect();
     let mut vy = DenseOperator::zeros(n);
     let mut ky = DenseOperator::zeros(n);
+    // Per-row capped counts, reduced after the parallel assembly.
+    let mut capped_rows = vec![0usize; n];
     vy.data
         .par_chunks_mut(n)
         .zip(ky.data.par_chunks_mut(n))
         .zip(&centroids)
-        .for_each(|((vrow, krow), &xi)| {
-            for (j, ej) in elements.iter().enumerate() {
-                vrow[j] = regular_yukawa_collocation(PotentialKind::Single, xi, ej, yukawa);
-                krow[j] = regular_yukawa_collocation(PotentialKind::Double, xi, ej, yukawa);
+        .zip(capped_rows.par_iter_mut())
+        .for_each(|(((vrow, krow), &xi), capped)| match quad {
+            Quadrature::Fixed => {
+                for (j, ej) in elements.iter().enumerate() {
+                    vrow[j] = regular_yukawa_collocation(PotentialKind::Single, xi, ej, yukawa);
+                    krow[j] = regular_yukawa_collocation(PotentialKind::Double, xi, ej, yukawa);
+                }
+            }
+            Quadrature::Adaptive => {
+                let cfg = crate::adaptive::AdaptiveConfig::default();
+                for (j, ej) in elements.iter().enumerate() {
+                    let (vs, ss) = crate::adaptive::adaptive_regular_yukawa_collocation(
+                        PotentialKind::Single,
+                        xi,
+                        ej,
+                        yukawa,
+                        &cfg,
+                    );
+                    let (ks, sd) = crate::adaptive::adaptive_regular_yukawa_collocation(
+                        PotentialKind::Double,
+                        xi,
+                        ej,
+                        yukawa,
+                        &cfg,
+                    );
+                    vrow[j] = vs;
+                    krow[j] = ks;
+                    if ss == crate::adaptive::Status::Capped
+                        || sd == crate::adaptive::Status::Capped
+                    {
+                        *capped += 1;
+                    }
+                }
             }
         });
-    (vy, ky)
+    (vy, ky, capped_rows.iter().sum())
 }
 
 /// The implicit nonlocal 3-block operator `A·[x1;x2;x3]` (NESSie `NonlocalSystemMatrix`,

@@ -19,7 +19,7 @@ use crate::solve::{
     gmres, true_residual, LocalResult, NonlocalResult, SolveConfig, SolveError, SolveStats,
 };
 use crate::system::{
-    mol_potentials, DenseOperator, JacobiPreconditioner, LinearOperator, TWO_PI,
+    mol_potentials, DenseOperator, JacobiPreconditioner, LinearOperator, Quadrature, TWO_PI,
 };
 use crate::yukawa::regular_yukawa_collocation;
 
@@ -484,6 +484,8 @@ pub fn solve_local_gpu(
         residual: res_u.max(res_q),
         per_block_residual: vec![res_u, res_q],
         converged: res_u <= cfg.tol && res_q <= cfg.tol,
+        quadrature: Quadrature::Fixed,
+        capped_panels: 0,
     };
     Some(Ok((LocalResult { u, q, umol, qmol }, stats)))
 }
@@ -645,6 +647,10 @@ pub fn solve_nonlocal_gpu(
         residual: res,
         per_block_residual: vec![res],
         converged: res <= cfg.tol,
+        // The GPU matrix-free Yukawa matvec is fixed 7-point (adaptive is CPU-only); the
+        // reported mode makes that explicit (review [R6]).
+        quadrature: Quadrature::Fixed,
+        capped_panels: 0,
     };
     Some(Ok((
         NonlocalResult {
