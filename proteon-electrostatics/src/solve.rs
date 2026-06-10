@@ -546,7 +546,37 @@ pub fn solve_nonlocal_elements(
     ))
 }
 
+/// Size-aware nonlocal solve: the dense [`solve_nonlocal_elements`] while the four
+/// `V`/`K`/`Vy`/`Ky` matrices fit [`DENSE_MATRIX_BUDGET`], else the O(N)-memory
+/// matrix-free GPU solve ([`crate::gpu::solve_nonlocal_gpu`], feature `cuda`). The
+/// nonlocal system holds *four* N×N matrices (`4·N²·8` bytes) vs the local solve's two,
+/// so — storage being quadratic in N — it reaches the budget at `1/√2 ≈ 0.71×` the
+/// local element count.
+///
+/// # Errors
+/// See [`solve_nonlocal_elements`].
+pub fn solve_nonlocal_elements_auto(
+    elements: &[Tri],
+    charges: &[Charge],
+    params: &Params,
+    cfg: &SolveConfig,
+) -> Result<(NonlocalResult, SolveStats), SolveError> {
+    #[cfg(feature = "cuda")]
+    if !elements.is_empty() {
+        let bytes = 4 * (elements.len() as u128).saturating_mul(elements.len() as u128) * 8;
+        if bytes > DENSE_MATRIX_BUDGET {
+            if let Some(res) = crate::gpu::solve_nonlocal_gpu(elements, charges, params, cfg) {
+                return res;
+            }
+        }
+    }
+    solve_nonlocal_elements(elements, charges, params, cfg)
+}
+
 /// Solve the nonlocal (Yukawa) 3-block BEM system. NESSie: `solve(NonlocalES, model)`.
+///
+/// Routes through [`solve_nonlocal_elements_auto`], so a mesh too large for the dense
+/// four-matrix system transparently uses the matrix-free GPU path (feature `cuda`).
 ///
 /// # Errors
 /// See [`solve_nonlocal_elements`].
@@ -555,7 +585,7 @@ pub fn solve_nonlocal(
     cfg: &SolveConfig,
 ) -> Result<(NonlocalResult, SolveStats), SolveError> {
     let elements = model_elements(model);
-    solve_nonlocal_elements(&elements, &model.charges, &model.params, cfg)
+    solve_nonlocal_elements_auto(&elements, &model.charges, &model.params, cfg)
 }
 
 #[cfg(test)]

@@ -9,9 +9,17 @@ use proteon_core::surface::geom::Vec3;
 use proteon_electrostatics::system::{laplace_matrices_cpu, LinearOperator};
 use proteon_electrostatics::{
     analytic_sphere_mesh,
-    gpu::{laplace_matrices_gpu, laplace_matvec_gpu},
-    solve_local_elements, solve_local_gpu, Charge, Params, SolveConfig, Tri,
+    gpu::{laplace_matrices_gpu, laplace_matvec_gpu, solve_nonlocal_gpu, yukawa_matvec_gpu},
+    solve_local_elements, solve_local_gpu, solve_nonlocal_elements, yukawa_matrices, Charge, Params,
+    SolveConfig, Tri,
 };
+
+/// Relative L2 error `‖a − b‖ / ‖b‖`.
+fn rel(a: &[f64], b: &[f64]) -> f64 {
+    let num: f64 = a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f64>().sqrt();
+    let den: f64 = b.iter().map(|y| y * y).sum::<f64>().sqrt();
+    num / den.max(1e-300)
+}
 
 fn sphere_elements(radius: f64, subdiv: u32) -> Vec<Tri> {
     let mesh = analytic_sphere_mesh(radius, subdiv);
@@ -165,6 +173,76 @@ fn gpu_matrix_free_local_solve_matches_cpu_dense() {
     }
 }
 
+/// Kernel-isolation gate for the regular-Yukawa kernel: matrix-free GPU `Vy·x` / `Ky·x`
+/// must equal the CPU dense Yukawa matrices applied to the same `x`, independent of
+/// GMRES. Pins down the Radon cubature, the series guard, and the `×2·area` factor on
+/// the GPU against the CPU port.
+#[test]
+fn gpu_matrix_free_yukawa_matvec_matches_cpu_dense() {
+    let elements = sphere_elements(2.0, 2); // 320 triangles
+    let yukawa = local_params().yukawa();
+    let (vy, ky) = yukawa_matrices(&elements, yukawa);
+    let x = test_vector(elements.len());
+
+    let (Some(vyx_gpu), Some(kyx_gpu)) = (
+        yukawa_matvec_gpu(&elements, 0, yukawa, &x),
+        yukawa_matvec_gpu(&elements, 1, yukawa, &x),
+    ) else {
+        eprintln!("no CUDA device — skipping Yukawa matvec parity");
+        return;
+    };
+    let mut vyx_cpu = vec![0.0; x.len()];
+    let mut kyx_cpu = vec![0.0; x.len()];
+    vy.matvec(&x, &mut vyx_cpu);
+    ky.matvec(&x, &mut kyx_cpu);
+
+    let rvy = rel(&vyx_gpu, &vyx_cpu);
+    let rky = rel(&kyx_gpu, &kyx_cpu);
+    eprintln!("matrix-free Yukawa matvec rel err: Vy·x {rvy:.2e}, Ky·x {rky:.2e}");
+    assert!(rvy < 1e-11, "Vy·x rel err {rvy:.2e}");
+    assert!(rky < 1e-11, "Ky·x rel err {rky:.2e}");
+}
+
+/// The matrix-free GPU nonlocal solve must land on the same `(u, q, w)` Cauchy data as
+/// the dense 3-block solve — same GMRES, same RHS, only the five matvecs differ
+/// (recomputed on the GPU vs read from stored matrices).
+#[test]
+fn gpu_matrix_free_nonlocal_solve_matches_cpu_dense() {
+    let elements = sphere_elements(2.0, 2); // 320 triangles → 960 unknowns
+    let params = local_params();
+    let cfg = SolveConfig {
+        tol: 1e-8,
+        ..Default::default()
+    };
+
+    for charge_pos in [Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.6, -0.4, 0.3)] {
+        let charges = [Charge {
+            pos: charge_pos,
+            val: 1.0,
+        }];
+
+        let Some(gpu_res) = solve_nonlocal_gpu(&elements, &charges, &params, &cfg) else {
+            eprintln!("no CUDA device — skipping nonlocal matrix-free parity");
+            return;
+        };
+        let (gpu, gstats) = gpu_res.expect("GPU nonlocal solve");
+        let (cpu, _) =
+            solve_nonlocal_elements(&elements, &charges, &params, &cfg).expect("dense nonlocal");
+
+        let ru = rel(&gpu.u, &cpu.u);
+        let rq = rel(&gpu.q, &cpu.q);
+        let rw = rel(&gpu.w, &cpu.w);
+        eprintln!(
+            "nonlocal matrix-free vs dense @ {charge_pos:?}: rel|Δu| {ru:.2e}, rel|Δq| {rq:.2e}, rel|Δw| {rw:.2e}, residual {:.2e}",
+            gstats.residual
+        );
+        assert!(ru < 1e-6, "u rel err {ru:.2e} @ {charge_pos:?}");
+        assert!(rq < 1e-6, "q rel err {rq:.2e} @ {charge_pos:?}");
+        assert!(rw < 1e-6, "w rel err {rw:.2e} @ {charge_pos:?}");
+        assert!(gstats.converged, "nonlocal GPU solve did not converge @ {charge_pos:?}");
+    }
+}
+
 /// The size-aware dispatcher must be identical to the explicit dense solve on a mesh
 /// that fits the dense budget — i.e. the common path is untouched, the GPU branch only
 /// engages above [`proteon_electrostatics::DENSE_MATRIX_BUDGET`].
@@ -195,15 +273,52 @@ fn dispatcher_matches_dense_below_budget() {
 }
 
 /// Empty input takes the `None` fallback (the CPU path then reports `Empty`), with or
-/// without a device — exercising the boundary the solver promises.
+/// without a device — exercising the boundary the solver promises (both localities).
 #[test]
 fn gpu_matrix_free_empty_falls_back() {
     let cfg = SolveConfig::default();
     let params = local_params();
     assert!(
         solve_local_gpu(&[], &[], &params, &cfg).is_none(),
-        "empty mesh must fall back to CPU (None)"
+        "empty mesh must fall back to CPU (None) — local"
     );
+    assert!(
+        solve_nonlocal_gpu(&[], &[], &params, &cfg).is_none(),
+        "empty mesh must fall back to CPU (None) — nonlocal"
+    );
+}
+
+/// Nonlocal scale demonstration: the four-matrix dense system needs `4·N²·8` bytes
+/// (~13 GiB at 20,480 triangles), while the matrix-free path is O(N) GPU memory.
+/// Honest framing: five matvecs per GMRES step make it slow per solve, but it removes
+/// the dense ceiling entirely.
+#[test]
+#[ignore = "large mesh — run explicitly with --ignored on a CUDA box"]
+fn gpu_matrix_free_nonlocal_scales_past_dense_budget() {
+    let elements = sphere_elements(20.0, 5); // 20_480 triangles → 61_440 unknowns
+    let n = elements.len();
+    // 4·N²·8 exceeds the dense budget (so the auto-dispatcher would pick this path).
+    assert!(4 * (n as u128).pow(2) * 8 > proteon_electrostatics::DENSE_MATRIX_BUDGET);
+    let charges = [Charge {
+        pos: Vec3::new(0.0, 0.0, 0.0),
+        val: 1.0,
+    }];
+    let params = local_params();
+    let cfg = SolveConfig {
+        tol: 1e-7,
+        ..Default::default()
+    };
+
+    let Some(res) = solve_nonlocal_gpu(&elements, &charges, &params, &cfg) else {
+        eprintln!("no CUDA device — skipping nonlocal scale demo");
+        return;
+    };
+    let (_, stats) = res.expect("matrix-free nonlocal solve on a mesh too large for dense host RAM");
+    eprintln!(
+        "matrix-free nonlocal solved {n} elements (dense ~13 GiB): {} iters, residual {:.2e}",
+        stats.iterations, stats.residual
+    );
+    assert!(stats.converged, "matrix-free nonlocal large solve did not converge");
 }
 
 /// Scale demonstration: the matrix-free path solves a mesh whose dense `V`+`K` would

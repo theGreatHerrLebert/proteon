@@ -141,3 +141,124 @@ extern "C" __global__ void laplace_matvec(
     y[i] = acc;
 }
 
+// ---- regular Yukawa (Yukawa − Laplace) collocation, matrix-free -------------------
+//
+// Mirrors yukawa.rs operation-for-operation: the smooth (regular) part of the Yukawa
+// potential integrated over each triangle with the 7-point Radon cubature, with the
+// small-`yukawa·r` alternating-series guard against catastrophic cancellation and the
+// r→0 limits. `kind`: 0 = single layer, 1 = double layer.
+
+#define SERIES_THRESHOLD 0.1
+
+// Regular single-layer Yukawa potential at quadrature point `x` for observation `xi`
+// (×4π). Series for e^(−c) − 1 when c = yukawa·r is small.
+__device__ double reg_yuk_single(const double* x, const double* xi, double yukawa) {
+    double d[3];
+    sub3(x, xi, d);
+    double rnorm = norm3(d);
+    if (rnorm <= ETOL) return -yukawa; // limit r → 0
+    double scalednorm = yukawa * rnorm;
+    if (scalednorm < SERIES_THRESHOLD) {
+        double term = -scalednorm;
+        double tolerance = ETOL * fabs(term);
+        double tsum = 0.0;
+        for (int i = 1; i <= 15; i++) {
+            if (fabs(term) <= tolerance) break;
+            tsum += term;
+            term *= -scalednorm / ((double)i + 1.0);
+        }
+        return tsum / rnorm;
+    }
+    return (exp(-scalednorm) - 1.0) / rnorm;
+}
+
+// Regular double-layer Yukawa potential (normal derivative) at `x` for `xi` (×4π).
+__device__ double reg_yuk_double(const double* x, const double* xi, double yukawa,
+                                 const double* normal) {
+    double d[3];
+    sub3(x, xi, d);
+    double rnorm = norm3(d);
+    if (rnorm <= ETOL) return yukawa * yukawa / 2.0 / sqrt(3.0); // limit r → 0
+    double cosovernorm2 = dot3(d, normal) / (rnorm * rnorm * rnorm);
+    double scalednorm = yukawa * rnorm;
+    if (scalednorm < SERIES_THRESHOLD) {
+        double term = scalednorm * scalednorm / 2.0;
+        double tolerance = ETOL * fabs(term);
+        double tsum = 0.0;
+        for (int i = 2; i <= 16; i++) {
+            if (fabs(term) <= tolerance) break;
+            tsum += term * ((double)i - 1.0);
+            term *= -scalednorm / ((double)i + 1.0);
+        }
+        return tsum * cosovernorm2;
+    }
+    return (1.0 - (1.0 + scalednorm) * exp(-scalednorm)) * cosovernorm2;
+}
+
+// Regular-Yukawa collocation of one triangle at `xi`: 7-point Radon cubature × 2·area.
+// `xb`/`yb`/`wb` are the precomputed barycentric rule (hoisted to one per thread).
+__device__ double reg_yukawa_collocation(int kind, const double* xi, const double* v1,
+                                         const double* v2, const double* v3,
+                                         const double* normal, double area, double yukawa,
+                                         const double* xb, const double* yb,
+                                         const double* wb) {
+    double e1[3], e2[3];
+    sub3(v2, v1, e1);
+    sub3(v3, v1, e2);
+    double value = 0.0;
+    for (int j = 0; j < 7; j++) {
+        // NESSie map: point = x·e1 + y·e2 + v1 (left-assoc per component).
+        double p[3] = {
+            e1[0] * xb[j] + e2[0] * yb[j] + v1[0],
+            e1[1] * xb[j] + e2[1] * yb[j] + v1[1],
+            e1[2] * xb[j] + e2[2] * yb[j] + v1[2],
+        };
+        double pot = (kind == 0) ? reg_yuk_single(p, xi, yukawa)
+                                 : reg_yuk_double(p, xi, yukawa, normal);
+        value += pot * wb[j];
+    }
+    return value * 2.0 * area;
+}
+
+// Matrix-free regular-Yukawa matvec: y[i] = Σ_j regyukawa(kind, ξ_i, elem_j)·x[j].
+extern "C" __global__ void yukawa_matvec(
+    const double* __restrict__ verts,   // nf*9
+    const double* __restrict__ normals, // nf*3
+    const double* __restrict__ area,    // nf
+    const double* __restrict__ cent,    // nf*3
+    const double* __restrict__ x,       // nf
+    int nf,
+    int kind,
+    double yukawa,
+    double* __restrict__ y)             // nf
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nf) return;
+
+    // Radon 7-point rule (barycentric x/y + weights), computed once per thread from
+    // √15 with the same expressions as quadrature.rs (CUDA may still fuse arithmetic, so
+    // results match to rounding, not necessarily bit-for-bit).
+    double s = sqrt(15.0);
+    double xb[7] = {1.0 / 3.0,      (6.0 + s) / 21.0,       (9.0 - 2.0 * s) / 21.0,
+                    (6.0 + s) / 21.0, (6.0 - s) / 21.0,     (9.0 + 2.0 * s) / 21.0,
+                    (6.0 - s) / 21.0};
+    double yb[7] = {1.0 / 3.0,      (9.0 - 2.0 * s) / 21.0, (6.0 + s) / 21.0,
+                    (6.0 + s) / 21.0, (9.0 + 2.0 * s) / 21.0, (6.0 - s) / 21.0,
+                    (6.0 - s) / 21.0};
+    double wb[7] = {9.0 / 80.0,         (155.0 + s) / 2400.0, (155.0 + s) / 2400.0,
+                    (155.0 + s) / 2400.0, (155.0 - s) / 2400.0, (155.0 - s) / 2400.0,
+                    (155.0 - s) / 2400.0};
+
+    const double* xi = &cent[i * 3];
+    double acc = 0.0;
+    for (int j = 0; j < nf; j++) {
+        const double* v1 = &verts[j * 9];
+        const double* v2 = &verts[j * 9 + 3];
+        const double* v3 = &verts[j * 9 + 6];
+        acc += reg_yukawa_collocation(kind, xi, v1, v2, v3, &normals[j * 3], area[j], yukawa,
+                                      xb, yb, wb)
+             * x[j];
+    }
+    y[i] = acc;
+}
+
