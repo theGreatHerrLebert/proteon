@@ -14,7 +14,7 @@ use super::geom::{intersect_two_spheres, plane_basis, Sphere, Vec3};
 use super::graph::build_graph;
 use super::mesh::Mesh;
 use anyhow::{bail, ensure, Context, Result};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Mesh `atom`'s contact face: its sphere outside the union of the buried caps
 /// carved by each of `neighbours`. `grid` is the interior chart-plane spacing
@@ -516,7 +516,11 @@ pub fn ses_mesh_analytic(
     );
     let g = build_graph(atoms, probe)?;
     let mut mesh = Mesh::default();
-    let mut contact: HashMap<usize, Vec<ContactArc>> = HashMap::new();
+    // BTreeMap (not HashMap): contact caps are filled in iteration order, and on a
+    // CDT crossing the *first* failing cap's atom determines the retry — HashMap
+    // order is nondeterministic run-to-run, so the perturbation must see a stable
+    // atom order (codex-review). Sorted-by-atom-index is deterministic.
+    let mut contact: BTreeMap<usize, Vec<ContactArc>> = BTreeMap::new();
 
     // --- toric faces; collect each atom's contact arcs ---
     for arc in &g.toric {
@@ -647,10 +651,25 @@ pub fn ses_mesh_cleaned(
         n_theta >= 3 && n_phi >= 1 && grid > 0.0,
         "bad sampling params"
     );
+    let _prof = std::env::var("SES_PROFILE").is_ok();
+    let _t0 = std::time::Instant::now();
     let g = build_graph(atoms, probe)?;
+    if _prof {
+        eprintln!(
+            "[SES_PROFILE] build_graph {:.2}s ({} rs_faces, {} toric)",
+            _t0.elapsed().as_secs_f64(),
+            g.rs_faces.len(),
+            g.toric.len()
+        );
+    }
+    let _t_toric = std::time::Instant::now();
     let probe_centers: Vec<Vec3> = g.rs_faces.iter().map(|f| f.probe).collect();
     let mut mesh = Mesh::default();
-    let mut contact: HashMap<usize, Vec<ContactArc>> = HashMap::new();
+    // BTreeMap (not HashMap): contact caps are filled in iteration order, and on a
+    // CDT crossing the *first* failing cap's atom determines the retry — HashMap
+    // order is nondeterministic run-to-run, so the perturbation must see a stable
+    // atom order (codex-review). Sorted-by-atom-index is deterministic.
+    let mut contact: BTreeMap<usize, Vec<ContactArc>> = BTreeMap::new();
 
     // --- toric faces: trimmed against colliding neighbours + the spindle ---
     for arc in &g.toric {
@@ -710,6 +729,13 @@ pub fn ses_mesh_cleaned(
         });
     }
 
+    if _prof {
+        eprintln!(
+            "[SES_PROFILE] toric loop {:.2}s",
+            _t_toric.elapsed().as_secs_f64()
+        );
+    }
+    let _t_caps = std::time::Instant::now();
     // --- contact caps (untrimmed for now) ---
     for (&a, arcs) in &contact {
         let loops = walk_cap_loops(arcs)?;
@@ -721,13 +747,23 @@ pub fn ses_mesh_cleaned(
             .filter_map(|nb| buried_cap(atoms[a], atoms[nb], probe))
             .collect();
         let pole = pick_chart_pole(&caps).context("contact cap pole")?;
-        mesh.append(&fill_spherical_region(
-            atoms[a].center,
-            atoms[a].radius,
-            &loops,
-            pole,
-            grid,
-        )?);
+        let filled = fill_spherical_region(atoms[a].center, atoms[a].radius, &loops, pole, grid)
+            .map_err(|e| {
+                if _prof {
+                    eprintln!(
+                        "[SES_PROFILE] caps to crossing (atom {a}) {:.2}s",
+                        _t_caps.elapsed().as_secs_f64()
+                    );
+                }
+                e
+            })?;
+        mesh.append(&filled);
+    }
+    if _prof {
+        eprintln!(
+            "[SES_PROFILE] cap loop (full) {:.2}s",
+            _t_caps.elapsed().as_secs_f64()
+        );
     }
 
     // --- spheric faces: clipped by colliding neighbours ---
@@ -786,15 +822,13 @@ fn splitmix(z: &mut u64) -> u64 {
 /// self-consistently from the perturbed atoms, preserving genuine tangencies while
 /// breaking only the accidental coincidence. The jitter direction is a
 /// deterministic function of `(atom index, attempt)`.
-fn perturb_atoms(atoms: &[Sphere], attempt: usize) -> Vec<Sphere> {
-    // Magnitude grows geometrically from 1e-4 Å, capped at 1e-2 Å. A 1e-4 jitter
-    // clears an *exact* coincidence (≫ the 1e-6 tangent tolerance), but a
-    // *genuine* near-degeneracy (e.g. a near-coplanar spheric triple) needs a
-    // larger escape; empirically up to ~1e-2 Å suffices and still holds the area
-    // within ~0.05% of the reference (sub-resolution for SES). Beyond the cap the
-    // input is treated as irreducibly degenerate (the retry exhausts and surfaces
-    // the error) rather than distorting the surface further.
-    let eps = (1e-4 * 2.0_f64.powi(attempt as i32 - 1)).min(1e-2);
+fn perturb_atoms(atoms: &[Sphere], attempt: usize, eps: f64) -> Vec<Sphere> {
+    // `eps` is the jitter magnitude (Å); direction is a deterministic function of
+    // (atom index, attempt) so it stays reproducible run-to-run and explores a fresh
+    // direction each attempt. Magnitudes ≤ 1e-2 Å hold the recomputed area within
+    // ~0.05% of the reference (sub-resolution for SES). Atom centres are perturbed,
+    // never the solved probe centre (that would break defining tangencies); the whole
+    // graph + assembly is rebuilt self-consistently from the perturbed atoms.
     atoms
         .iter()
         .enumerate()
@@ -808,6 +842,29 @@ fn perturb_atoms(atoms: &[Sphere], attempt: usize) -> Vec<Sphere> {
             Sphere::new(s.center + d * eps, s.radius)
         })
         .collect()
+}
+
+/// Jitter magnitude (Å) for retry `attempt` (1-based) under the given error class.
+///
+/// - **Default** (cospherical / singular / degenerate-cap input degeneracies): a
+///   geometric ramp from 1e-4 Å — a 1e-4 jitter clears an *exact* coincidence
+///   (≫ the 1e-6 tangent tolerance), and only a *genuine* near-degeneracy needs the
+///   larger escape, so starting tiny avoids over-distorting the easy cases.
+/// - **CDT boundary crossing**: skip the ramp. These are near-tangencies that
+///   measured recovery shows only open near the 1e-2 Å cap (corpus depths 5–11 on
+///   the ramp; the sub-1e-2 attempts are wasted). Start at 5e-3 then hold 1e-2, so
+///   recovery lands in the first few attempts instead of deep in the budget. See
+///   `devdocs/SES_DIRECTED_PERTURBATION.md`.
+fn perturb_magnitude(attempt: usize, crossing: bool) -> f64 {
+    if crossing {
+        if attempt <= 1 {
+            5e-3
+        } else {
+            1e-2
+        }
+    } else {
+        (1e-4 * 2.0_f64.powi(attempt as i32 - 1)).min(1e-2)
+    }
 }
 
 /// Is `e` a *degeneracy* the perturbation retry can plausibly resolve — i.e. an
@@ -827,6 +884,18 @@ fn is_degeneracy_error(e: &anyhow::Error) -> bool {
         // some of these — though a *genuinely* near-degenerate sliver may persist.
         || m.contains("RS face")
         || m.contains("degenerate spheric triple")
+        // A CDT "crosses an existing constraint" is the *sampled* contact-cap
+        // boundary self-intersecting at a sliver / pinch / near-tangency in the
+        // reduced surface (diagnosis: `devdocs/SES_CDT_CROSSING.md`). The chart
+        // pole-retry in `fill_spherical_region` tries this first and cheaply (it is
+        // pure re-projection), but it CANNOT fix a crossing that exists in the
+        // 3D-sampled boundary itself (zero-clearance near-tangency — no pole and no
+        // sampling density removes it). A tiny atom jitter, however, opens the
+        // near-tangency at the *arrangement* level so the boundary is simple again.
+        // Empirically the perturbation retry clears the great majority of these
+        // (sliver, pinch, and >hemisphere cases alike) where the pole-retry and
+        // boundary refinement both fail; the rare residual falls through to the grid.
+        || m.contains("crosses an existing constraint")
 }
 
 /// Build `T` from `atoms`, retrying on an input-degeneracy error with a growing
@@ -839,17 +908,29 @@ fn build_with_perturbation_retry<T>(
     mut build: impl FnMut(&[Sphere]) -> Result<T>,
 ) -> Result<(T, usize)> {
     let mut last: Option<anyhow::Error> = None;
+    // The next perturbation's magnitude depends on the class of the *previous*
+    // failure: a CDT boundary crossing uses the fast (high-magnitude) schedule, an
+    // input degeneracy the gentle ramp (see `perturb_magnitude`).
+    let mut crossing = false;
     for attempt in 0..=max_attempts {
         let pert;
         let a = if attempt == 0 {
             atoms
         } else {
-            pert = perturb_atoms(atoms, attempt);
+            pert = perturb_atoms(atoms, attempt, perturb_magnitude(attempt, crossing));
             &pert
         };
         match build(a) {
-            Ok(t) => return Ok((t, attempt)),
-            Err(e) if attempt < max_attempts && is_degeneracy_error(&e) => last = Some(e),
+            Ok(t) => {
+                if attempt > 0 && std::env::var("SES_DEBUG_CROSS").is_ok() {
+                    eprintln!("[SES_RETRY] recovered at perturbation attempt {attempt}");
+                }
+                return Ok((t, attempt));
+            }
+            Err(e) if attempt < max_attempts && is_degeneracy_error(&e) => {
+                crossing = e.to_string().contains("crosses an existing constraint");
+                last = Some(e);
+            }
             Err(e) => return Err(e),
         }
     }
@@ -902,6 +983,11 @@ fn ses_mesh_cleaned_welded_tracked(
         ses_mesh_cleaned(a, probe, n_theta, n_phi, grid)
     })?;
     let mut mesh = raw.welded_within(weld_eps);
+    // Drop the zero-area sliver triangles the weld leaves at singular vertices
+    // (≥3 patches terminating at one point, sampled a hair over `weld_eps` apart).
+    // Guarded so it can only heal defects, never open a hole. Thinner-than-weld
+    // slivers (min altitude < weld_eps) are the candidates.
+    mesh.remove_degenerate_triangles_guarded(weld_eps);
     mesh.orient_consistently();
     if mesh.signed_volume() < 0.0 {
         mesh.flip();
@@ -1158,7 +1244,7 @@ mod tests {
             sph(2.0, 0.0, 0.0, r),  // overlaps the first
             sph(50.0, 0.0, 0.0, r), // isolated
         ];
-        let (m, method) = ses_mesh(&atoms, 1.4, 48, 10, 0.05, 1e-4, 0.3);
+        let (m, method) = ses_mesh(&atoms, 1.4, 48, 10, 0.05, 1e-5, 0.3);
         assert!(
             method.is_exact(),
             "the analytic path is complete, no grid fallback"
@@ -1183,7 +1269,7 @@ mod tests {
             sph(1.0, 1.7, 0.0, 1.6),
             sph(1.0, 0.6, 1.6, 1.6),
         ];
-        let (mesh, method) = ses_mesh(&tetra, 1.4, 48, 10, 0.05, 1e-4, 0.25);
+        let (mesh, method) = ses_mesh(&tetra, 1.4, 48, 10, 0.05, 1e-5, 0.25);
         assert_eq!(method, SesMethod::Analytic, "clean input → exact analytic");
         assert!(method.is_exact());
         assert!(mesh.is_watertight(), "analytic path is watertight");
@@ -1202,9 +1288,10 @@ mod tests {
     #[test]
     fn perturbation_jitter_is_tiny_and_deterministic() {
         let atoms = vec![sph(0.0, 0.0, 0.0, 1.6), sph(2.0, 0.3, -0.1, 1.5)];
-        // First retry (attempt 1) is 1e-4 Å; deterministic run-to-run; radii fixed.
-        let a = perturb_atoms(&atoms, 1);
-        let b = perturb_atoms(&atoms, 1);
+        let eps = |attempt| perturb_magnitude(attempt, false); // input-degeneracy ramp
+                                                               // First retry (attempt 1) is 1e-4 Å; deterministic run-to-run; radii fixed.
+        let a = perturb_atoms(&atoms, 1, eps(1));
+        let b = perturb_atoms(&atoms, 1, eps(1));
         for (x, y) in a.iter().zip(&b) {
             assert_eq!(x.center, y.center, "perturbation must be deterministic");
         }
@@ -1216,18 +1303,21 @@ mod tests {
             );
             assert_eq!(p.radius, o.radius, "radii are not perturbed");
         }
-        // Magnitude grows gently and stays ≪ surface resolution (capped 2e-3 Å).
-        let a3 = perturb_atoms(&atoms, 3);
+        // Magnitude grows gently and stays ≪ surface resolution (capped 1e-2 Å).
+        let a3 = perturb_atoms(&atoms, 3, eps(3));
         let d3 = atoms[0].center.distance(a3[0].center);
         assert!(
             (d3 - 1e-4 * 4.0).abs() < 1e-9,
             "attempt-3 jitter is 4e-4 Å, got {d3}"
         );
-        let big = perturb_atoms(&atoms, 30);
+        let big = perturb_atoms(&atoms, 30, eps(30));
         assert!(
             atoms[0].center.distance(big[0].center) <= 1e-2 + 1e-12,
             "jitter is capped at 1e-2 Å"
         );
+        // The crossing schedule skips the ramp: high magnitude from the first retry.
+        assert!((perturb_magnitude(1, true) - 5e-3).abs() < 1e-12);
+        assert!((perturb_magnitude(2, true) - 1e-2).abs() < 1e-12);
     }
 
     #[test]
@@ -1254,24 +1344,58 @@ mod tests {
         assert_eq!(val, 42);
         assert_eq!(attempts, 2, "two perturbations before success");
 
-        // A non-degeneracy error must NOT be retried (returns immediately).
+        // A genuine non-degeneracy error must NOT be retried (returns immediately).
         let calls2 = Cell::new(0usize);
         let err = build_with_perturbation_retry(&atoms, 6, |_| -> Result<i32> {
             calls2.set(calls2.get() + 1);
-            anyhow::bail!("boundary edge 11->12 crosses an existing constraint")
+            anyhow::bail!("some unrelated geometry error")
         });
         assert!(err.is_err());
         assert_eq!(
             calls2.get(),
             1,
-            "chart/chord errors are not perturb-retried"
+            "non-degeneracy errors are not perturb-retried"
         );
 
-        // Exhausting retries surfaces the last degeneracy error.
+        // A CDT "crosses an existing constraint" IS a (near-tangency) degeneracy the
+        // perturbation can open — the chart pole-retry handles it first, but a
+        // zero-clearance crossing only clears at the arrangement level via jitter, so
+        // this layer must retry it and *recover*. (Diagnosis: SES_CDT_CROSSING.md.)
+        // Assert the recovery contract, not just retryability: fail on the original
+        // atoms, succeed once the centres move, and the attempt count is right.
+        let calls3 = Cell::new(0usize);
+        let (val3, attempts3) = build_with_perturbation_retry(&atoms, 6, |a| {
+            let n = calls3.get();
+            calls3.set(n + 1);
+            if n < 1 {
+                anyhow::bail!("boundary edge 11->12 crosses an existing constraint")
+            }
+            assert!(
+                a[0].center.distance(atoms[0].center) > 0.0,
+                "succeeds on perturbed atoms"
+            );
+            Ok(7)
+        })
+        .unwrap();
+        assert_eq!(val3, 7);
+        assert_eq!(
+            attempts3, 1,
+            "a boundary crossing recovers after one perturbation"
+        );
+
+        // Exhausting retries surfaces the last error — a crossing that never clears
+        // is bounded (it reaches the grid fallback in the hybrid, not an infinite loop).
+        let calls4 = Cell::new(0usize);
         let exhausted = build_with_perturbation_retry(&atoms, 2, |_| -> Result<i32> {
-            anyhow::bail!("cospherical/singular vertex")
+            calls4.set(calls4.get() + 1);
+            anyhow::bail!("boundary edge 11->12 crosses an existing constraint")
         });
         assert!(exhausted.is_err());
+        assert_eq!(
+            calls4.get(),
+            3,
+            "a persistent crossing is bounded at 1 + max_attempts"
+        );
     }
 
     /// On a collision-free config the cleaned **welded** assembler
@@ -1298,7 +1422,7 @@ mod tests {
         ];
         for (name, atoms, ball_area) in [("tetra", tetra, 74.1161), ("chain", chain, 96.7732)] {
             let raw = ses_mesh_cleaned(&atoms, 1.4, 48, 10, 0.05).unwrap();
-            let m = ses_mesh_cleaned_welded(&atoms, 1.4, 48, 10, 0.05, 1e-4).unwrap();
+            let m = ses_mesh_cleaned_welded(&atoms, 1.4, 48, 10, 0.05, 1e-5).unwrap();
 
             // No edge shared by ≥3 triangles (no over-merge) AND none open: the
             // welded cleaned mesh is a closed 2-manifold.

@@ -1,5 +1,93 @@
 # SES mesher robustness — codex consult
 
+> **UPDATE (2026-06-08, later): the dominant failure was a different bug entirely —
+> now FIXED.** Instrumenting the actual failing proteins (104m, 109m, 1a7j, 1a5p,
+> all erroring identically at CDT `boundary edge 11->12`) showed the cause was NOT
+> codex's pole/chord-distortion theory (Q1/Q2) at all. `arrange_loops`
+> (`arrangement.rs`) was emitting a near-fully-buried spheric-face rim as a
+> *duplicated* full-circle boundary loop: a rim buried by the **union** of
+> neighbours (so it misses the single-cap "fully buried" early-out) was left with
+> two ~6e-9-radian exposed slivers (round-off). Both slivers had coincident 3D
+> endpoints, so the `start.distance(end) < TOL` test wrongly promoted **each** to a
+> full-circle loop — duplicating a boundary, which then made the contact-cap CDT
+> reject the constraint and the whole analytic SES fall back to the grid mesher.
+> **Fix:** classify a coincident-endpoint exposed arc by angular *span* —
+> `coincident_arc_is_full_rim(span, tol) = span >= TAU - tol` — so a genuine full
+> rim (span ≈ TAU) stays a loop but a sub-circle sliver is dropped. Result on the
+> repro set: **7/7 proteins now take the analytic path (was 3/7); crambin still
+> watertight, area 2319.9 unchanged**; 102 surface + 12 arrangement tests green
+> (new guard `negligible_exposed_sliver_is_not_a_full_rim`). The proteins now mesh
+> analytically but are not yet *watertight* (open edges 22–180) — that is the
+> SEPARATE cross-face weld stage (NEXT_WELD §2/§3), not a crash. Codex's Q1/Q3 were
+> already-done or not-the-cause; Q2's refine-on-crossing is **not currently needed**
+> for this class. Re-measure exact-analytic coverage once the validation corpus is
+> restored (the `validation/pdbs_1k_sample` symlinks → `/scratch/TMAlign/ferritin`,
+> a dir lost in the crash — `ses-repro/` holds re-fetched repros meanwhile).
+>
+> **STATUS (2026-06-08): codex review done → actionable plan below.** Full verbatim
+> review in sibling `SES_ROBUSTNESS_CODEX.review.md`. Key correction to this doc:
+> the "63% ERROR" figures predate the **perturbation-retry jitter**, which has
+> since landed (commit `caee18a` #108, `assemble.rs::build_with_perturbation_retry`
+> + `perturb_atoms`). So **class 2 (Q3) is already DONE** and codex confirms the
+> approach. The hybrid `ses_mesh()` never errors — it falls back to a numerical
+> grid — so the real metric is **exact-analytic coverage** (`exact`+`pert`) vs
+> **grid-fallback**, measured by `ses_corpus`. Re-measure before/after each item.
+>
+> ## Plan (cheapest correct first)
+>
+> ### Item 1 — Q3 jitter retry — ✅ DONE (`caee18a`)
+> `perturb_atoms(atoms, attempt)` jitters each atom by a deterministic direction
+> seeded from `(atom index, attempt)` via splitmix (NOT a runtime RNG — exactly
+> codex's "seed from stable IDs" point), magnitude geometric from 1e-4 Å capped at
+> 1e-2 Å, ≤12 attempts, retry only on `is_degeneracy_error` (cospherical / tangent
+> third / degenerate caps / does-not-close / RS-face / singular), real errors pass
+> through. Test `perturbation_jitter_is_tiny_and_deterministic`. Codex's only added
+> nuance vs what we have: start the ramp lower (~1e-6) so the smallest escape that
+> works distorts least — *optional* tuning, not a correctness fix. **No SoS** (codex:
+> not worth the cost; it would have to cover every predicate, not just build_graph).
+>
+> ### Item 2 — Q2 refine-on-crossing arc-space loop — ⏳ TODO (high value)
+> The CDT "boundary edge crosses an existing constraint" (`cdt.rs:78-83`) is raised
+> on *projected* 2D chords, after the analytic arc identity has been flattened to
+> bare points in `chart.rs::fill_spherical_region` (`loops2d`). Codex: for the
+> residual 90.6° 4-loop failures, **coarse projected chords are the likely cause,
+> but don't guess — distinguish (a) genuine spherical crossing from (b) false chord
+> crossing with one mechanism**:
+> 1. Thread per-segment analytic-arc provenance (the source circle/torus-rim +
+>    its parametric endpoints) through sampling into the CDT input, instead of
+>    discarding it at `loops2d`.
+> 2. When two planar constraints cross, test the *spherical* arcs directly.
+> 3. Disjoint on the sphere → false chord crossing → subdivide those arcs in chart
+>    space until chord sagitta (midpoint-to-chord) < mutual clearance, retry. A
+>    false crossing vanishes fast.
+> 4. Converge to the same spherical point within tolerance → **genuine singular
+>    merge** (the `walk_cap_loops` per-RS-face chaining missed an inter-loop touch)
+>    → split both arcs there and rebuild the arrangement.
+> Depth-limited "refine-on-crossing-and-retry". Subsumes both CDT sub-causes and
+> the residual 4-loop cases. **Multi-chart is NOT indicated by 90.6°** — only when
+> no pole clears the antipode.
+>
+> ### Item 3 — Q1 Chebyshev pole + antipode-rejection — ⏳ TODO
+> Current pole pick (`chart.rs:173-178`) is the unsound heuristic codex flagged:
+> `cap_c.dot(hint) > 0 && cap_r < maxang(hint)`. "Same hemisphere as hint" does NOT
+> imply `cap_c` is *inside* the region (non-convex bay / hole case), and minimizing
+> max *vertex* angle ignores chord error along arcs. Replace with: candidate poles
+> (hint + region-constrained Chebyshev center `argmax_{p∈R} min_{q∈∂R} d_S(p,q)`) →
+> **reject any whose antipode lies in/near the region** (with clearance) → among
+> survivors minimize projected *arc/chord conditioning*, not vertex angle → adaptive
+> subdivide before CDT. Multi-chart only when no candidate clears the antipode. Folds
+> into the same chart machinery Item 2 touches, so do it alongside/after Item 2.
+>
+> ### Validation gate (every item)
+> - `ses_corpus` over the 1k validation sample: **exact-analytic coverage must rise,
+>   none regress** (track `exact`/`pert`/`grid` tallies).
+> - Crambin stays watertight, area within +0.04% of BALL (the items must not move it).
+> - clippy clean, MSRV 1.75 (`map_or` not `is_none_or`), `main` PR-gated.
+> - codex review of Item 2 before/after (it touches the working analytic weld).
+>
+> ---
+> *Original consult below (pre-jitter; kept for history).*
+
 ## Situation
 
 We have a clean-room analytic Connolly SES mesher (contact caps on atom spheres,

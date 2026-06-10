@@ -322,6 +322,163 @@ impl Mesh {
             tris,
         }
     }
+
+    /// Remove degenerate (near-zero-area) sliver triangles that the tolerance weld
+    /// leaves at **singular vertices** — points where ≥3 analytic patches terminate
+    /// and each samples the shared corner a hair (just over `eps`) apart, so the
+    /// weld can neither fully fuse the cluster nor be loosened without false-merging
+    /// real features. Those slivers carry no area but corrupt the topology (a
+    /// zero-area triangle's edges show up as boundary/non-manifold).
+    ///
+    /// **Guarded**: a sliver is dropped only when *none* of its three edges is
+    /// currently shared by exactly two triangles — i.e. all three edges are already
+    /// boundary (degree 1) or non-manifold (degree ≥3). Dropping such a triangle
+    /// therefore strictly *reduces* the defect count and can never turn a clean
+    /// degree-2 edge into a new boundary (it cannot open a hole). Iterated to a
+    /// fixpoint. A triangle is "degenerate" when its minimum altitude
+    /// (`2·area / longest edge`) falls below `eps` — i.e. it is thinner than the
+    /// weld can resolve. Returns the number removed. Vertices are left in place
+    /// (orphans are harmless); per-vertex normals stay valid.
+    pub fn remove_degenerate_triangles_guarded(&mut self, eps: f64) -> usize {
+        let key = |a: u32, b: u32| (a.min(b), a.max(b));
+        let mut counts: HashMap<(u32, u32), i32> = HashMap::new();
+        for t in &self.tris {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                *counts.entry(key(a, b)).or_default() += 1;
+            }
+        }
+        let degenerate = |t: &[u32; 3]| -> bool {
+            let p = self.verts[t[0] as usize];
+            let q = self.verts[t[1] as usize];
+            let r = self.verts[t[2] as usize];
+            let twice_area = (q - p).cross(r - p).norm();
+            let longest = (q - p).norm().max((r - q).norm()).max((p - r).norm());
+            longest > 0.0 && twice_area / longest < eps
+        };
+        let candidates: Vec<usize> = (0..self.tris.len())
+            .filter(|&i| degenerate(&self.tris[i]))
+            .collect();
+        let mut removed = vec![false; self.tris.len()];
+        let mut total = 0usize;
+        loop {
+            let mut progressed = false;
+            for &i in &candidates {
+                if removed[i] {
+                    continue;
+                }
+                let t = self.tris[i];
+                let edges = [key(t[0], t[1]), key(t[1], t[2]), key(t[2], t[0])];
+                // Safe iff no edge is currently degree-2 (removal would open it).
+                if edges.iter().all(|e| counts[e] != 2) {
+                    removed[i] = true;
+                    for e in edges {
+                        *counts.get_mut(&e).unwrap() -= 1;
+                    }
+                    total += 1;
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        if total > 0 {
+            let mut keep = Vec::with_capacity(self.tris.len() - total);
+            for (i, &t) in self.tris.iter().enumerate() {
+                if !removed[i] {
+                    keep.push(t);
+                }
+            }
+            self.tris = keep;
+        }
+        total
+    }
+
+    /// Area-weighted per-vertex normals (smooth shading). Each triangle adds its
+    /// area-scaled face normal to its three vertices; the sum is normalized. Falls
+    /// back to a unit +z for any isolated/degenerate vertex.
+    pub fn vertex_normals(&self) -> Vec<Vec3> {
+        let mut n = vec![Vec3::new(0.0, 0.0, 0.0); self.verts.len()];
+        for t in &self.tris {
+            let (a, b, c) = self.tri_points(*t);
+            let fn_ = (b - a).cross(c - a); // length = 2·area, direction = face normal
+            for &v in t {
+                n[v as usize] = n[v as usize] + fn_;
+            }
+        }
+        n.iter()
+            .map(|&v| v.normalized().unwrap_or(Vec3::new(0.0, 0.0, 1.0)))
+            .collect()
+    }
+
+    /// Write the mesh as Wavefront **OBJ** (text, universally viewable). Includes
+    /// smooth per-vertex normals (`vn`) so viewers shade it nicely; faces are
+    /// 1-indexed `v//vn`. `name` becomes the object name.
+    pub fn write_obj(&self, mut w: impl std::io::Write, name: &str) -> std::io::Result<()> {
+        let normals = if self.normals.len() == self.verts.len() {
+            self.normals.clone()
+        } else {
+            self.vertex_normals()
+        };
+        writeln!(
+            w,
+            "# proteon SES mesh: {} verts, {} tris",
+            self.verts.len(),
+            self.tris.len()
+        )?;
+        writeln!(w, "o {name}")?;
+        for v in &self.verts {
+            writeln!(w, "v {} {} {}", v.x, v.y, v.z)?;
+        }
+        for n in &normals {
+            writeln!(w, "vn {} {} {}", n.x, n.y, n.z)?;
+        }
+        for t in &self.tris {
+            let (a, b, c) = (t[0] + 1, t[1] + 1, t[2] + 1);
+            writeln!(w, "f {a}//{a} {b}//{b} {c}//{c}")?;
+        }
+        Ok(())
+    }
+
+    /// Write the mesh as **binary little-endian PLY** with per-vertex normals —
+    /// compact for large meshes and read by MeshLab/Blender/PyMOL. Vertices and
+    /// normals are `float32`; faces are `uchar 3` + `int32×3`.
+    pub fn write_ply(&self, mut w: impl std::io::Write) -> std::io::Result<()> {
+        let normals = if self.normals.len() == self.verts.len() {
+            self.normals.clone()
+        } else {
+            self.vertex_normals()
+        };
+        for line in [
+            "ply".to_string(),
+            "format binary_little_endian 1.0".to_string(),
+            "comment proteon SES mesh".to_string(),
+            format!("element vertex {}", self.verts.len()),
+            "property float x".to_string(),
+            "property float y".to_string(),
+            "property float z".to_string(),
+            "property float nx".to_string(),
+            "property float ny".to_string(),
+            "property float nz".to_string(),
+            format!("element face {}", self.tris.len()),
+            "property list uchar int vertex_indices".to_string(),
+            "end_header".to_string(),
+        ] {
+            writeln!(w, "{line}")?;
+        }
+        for (v, n) in self.verts.iter().zip(&normals) {
+            for c in [v.x, v.y, v.z, n.x, n.y, n.z] {
+                w.write_all(&(c as f32).to_le_bytes())?;
+            }
+        }
+        for t in &self.tris {
+            w.write_all(&[3u8])?;
+            for &i in t {
+                w.write_all(&(i as i32).to_le_bytes())?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Triangulated sphere by `subdivisions` levels of icosahedron refinement,
@@ -530,5 +687,75 @@ mod tests {
         );
         assert!(w.is_watertight());
         assert_eq!(w.euler_characteristic(), 2);
+    }
+
+    #[test]
+    fn guarded_cleanup_removes_a_sliver_at_a_nonmanifold_edge() {
+        // Edge A–B shared by two real triangles plus a degenerate sliver A–B–E
+        // (E almost on segment AB) → AB is degree 3 (non-manifold), the signature
+        // of the 1a7j singular-vertex residual. The guarded cleanup must drop only
+        // the sliver, leaving AB a clean degree-2 edge.
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(1.0, 0.0, 0.0);
+        let c = Vec3::new(0.5, 1.0, 0.0);
+        let d = Vec3::new(0.5, -1.0, 0.0);
+        let e = Vec3::new(0.5, 1e-9, 0.0); // ~on AB → zero-area sliver
+        let mut m = Mesh {
+            verts: vec![a, b, c, d, e],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [0, 1, 3], [0, 1, 4]], // last is the sliver
+        };
+        assert_eq!(m.edge_use_counts()[&(0, 1)], 3, "AB non-manifold before");
+        let removed = m.remove_degenerate_triangles_guarded(1e-4);
+        assert_eq!(removed, 1, "exactly the sliver is dropped");
+        assert_eq!(m.tris.len(), 2);
+        assert_eq!(m.edge_use_counts()[&(0, 1)], 2, "AB manifold after");
+    }
+
+    #[test]
+    fn guarded_cleanup_will_not_open_a_hole() {
+        // Edge A–B shared by ONE real triangle and one degenerate sliver → AB is
+        // degree 2. Dropping the sliver would make AB a boundary (open a hole), so
+        // the guard must refuse even though the sliver is degenerate.
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(1.0, 0.0, 0.0);
+        let c = Vec3::new(0.5, 1.0, 0.0);
+        let e = Vec3::new(0.5, 1e-9, 0.0);
+        let mut m = Mesh {
+            verts: vec![a, b, c, e],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [0, 1, 3]], // real + sliver share AB (degree 2)
+        };
+        let removed = m.remove_degenerate_triangles_guarded(1e-4);
+        assert_eq!(
+            removed, 0,
+            "guard refuses — removing the sliver would open AB"
+        );
+        assert_eq!(m.tris.len(), 2);
+    }
+
+    #[test]
+    fn obj_and_ply_export_have_the_right_shape() {
+        let m = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1);
+        let (nv, nt) = (m.num_vertices(), m.num_triangles());
+
+        // OBJ: one `v ` and one `vn ` per vertex, one `f ` per triangle.
+        let mut obj = Vec::new();
+        m.write_obj(&mut obj, "sphere").unwrap();
+        let obj = String::from_utf8(obj).unwrap();
+        assert_eq!(obj.lines().filter(|l| l.starts_with("v ")).count(), nv);
+        assert_eq!(obj.lines().filter(|l| l.starts_with("vn ")).count(), nv);
+        assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), nt);
+
+        // PLY: header declares the right counts, body is the expected byte length
+        // (nv × 6 f32 + nt × (1 byte + 3 i32)).
+        let mut ply = Vec::new();
+        m.write_ply(&mut ply).unwrap();
+        let hdr_end = ply.windows(11).position(|w| w == b"end_header\n").unwrap() + 11;
+        let header = std::str::from_utf8(&ply[..hdr_end]).unwrap();
+        assert!(header.contains(&format!("element vertex {nv}")));
+        assert!(header.contains(&format!("element face {nt}")));
+        let body = ply.len() - hdr_end;
+        assert_eq!(body, nv * 6 * 4 + nt * (1 + 3 * 4));
     }
 }

@@ -42,6 +42,7 @@ vocabularies:
     - search.mmseqs
     - supervision
     - pipeline.batch
+    - surface.ses
   oracle:
     - Biopython
     - FreeSASA
@@ -83,6 +84,7 @@ vocabularies:
     - dssp-8class-parity
     - sasa-cross-tool-parity
     - acceleration-paths-parity
+    - surface-ses-area-parity
   input_class:
     # Extends the base vocabulary. A convenience sample is a non-random
     # selection (e.g. the alphabetically-first N files) — distinguished from
@@ -114,3 +116,4 @@ include:
   - claims/fold_preservation_charmm_50k.yaml
   - claims/fold_preservation_amber_50k.yaml
   - claims/geometry_rmsd_ball.yaml
+  - claims/surface_ses_ball.yaml

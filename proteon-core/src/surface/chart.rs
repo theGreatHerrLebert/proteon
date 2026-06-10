@@ -171,83 +171,228 @@ pub fn fill_spherical_region(
             .fold(0.0_f64, f64::max)
     };
     let (cap_c, cap_r) = enclosing_cap(&all_dirs, hint);
-    let pole = if cap_c.dot(hint) > 0.0 && cap_r < maxang(hint) {
+    let pole0 = if cap_c.dot(hint) > 0.0 && cap_r < maxang(hint) {
         cap_c
     } else {
         hint
     };
-    let chart = Chart::new(pole);
 
-    let mut pts: Vec<[f64; 2]> = Vec::new();
-    let mut world: Vec<Vec3> = Vec::new();
-    let mut loop_idx: Vec<Vec<usize>> = Vec::new();
-    let mut loops2d: Vec<Vec<[f64; 2]>> = Vec::new();
-    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-    for lp in loops {
-        let mut ids = Vec::with_capacity(lp.len());
-        let mut l2 = Vec::with_capacity(lp.len());
-        for &w in lp {
-            let d = dir_of(w);
-            ensure!(
-                d.dot(chart.pole) > -1.0 + 1e-6,
-                "region reaches the projection antipode — single chart degenerate"
-            );
-            let xy = chart.forward(d);
-            ensure!(
-                xy[0].is_finite() && xy[1].is_finite(),
-                "non-finite projection"
-            );
-            lo = [lo[0].min(xy[0]), lo[1].min(xy[1])];
-            hi = [hi[0].max(xy[0]), hi[1].max(xy[1])];
-            ids.push(pts.len());
-            pts.push(xy);
-            world.push(w);
-            l2.push(xy);
+    // One azimuthal-chart fill at a given pole: project the boundary, sprinkle an
+    // interior Steiner grid, constrained-Delaunay-triangulate, lift back. The pole
+    // affects ONLY the 2D triangulation — the boundary vertices (`world`) are the
+    // verbatim shared samples regardless of pole — so retrying the pole is local
+    // and weld-safe (no re-mesh, no cross-patch crack).
+    let attempt = |pole: Vec3| -> Result<Mesh> {
+        let chart = Chart::new(pole);
+        let mut pts: Vec<[f64; 2]> = Vec::new();
+        let mut world: Vec<Vec3> = Vec::new();
+        let mut loop_idx: Vec<Vec<usize>> = Vec::new();
+        let mut loops2d: Vec<Vec<[f64; 2]>> = Vec::new();
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for lp in loops {
+            let mut ids = Vec::with_capacity(lp.len());
+            let mut l2 = Vec::with_capacity(lp.len());
+            for &w in lp {
+                let d = dir_of(w);
+                ensure!(
+                    d.dot(chart.pole) > -1.0 + 1e-6,
+                    "region reaches the projection antipode — single chart degenerate"
+                );
+                let xy = chart.forward(d);
+                ensure!(
+                    xy[0].is_finite() && xy[1].is_finite(),
+                    "non-finite projection"
+                );
+                lo = [lo[0].min(xy[0]), lo[1].min(xy[1])];
+                hi = [hi[0].max(xy[0]), hi[1].max(xy[1])];
+                ids.push(pts.len());
+                pts.push(xy);
+                world.push(w);
+                l2.push(xy);
+            }
+            loop_idx.push(ids);
+            loops2d.push(l2);
         }
-        loop_idx.push(ids);
-        loops2d.push(l2);
-    }
 
-    // Interior Steiner grid: keep points in the domain and clear of every
-    // constraint *edge* (not just vertices — a point on an edge interior would
-    // split it; codex-review), so the CDT keeps the boundary intact.
-    let clear = (0.5 * grid) * (0.5 * grid);
-    let near_edge = |xy: [f64; 2]| {
-        loops2d.iter().any(|lp| {
-            let n = lp.len();
-            (0..n).any(|i| pt_seg_sq(xy, lp[i], lp[(i + 1) % n]) < clear)
+        // Interior Steiner grid: keep points in the domain and clear of every
+        // constraint *edge* (not just vertices — a point on an edge interior would
+        // split it; codex-review), so the CDT keeps the boundary intact.
+        let clear = (0.5 * grid) * (0.5 * grid);
+        let near_edge = |xy: [f64; 2]| {
+            loops2d.iter().any(|lp| {
+                let n = lp.len();
+                (0..n).any(|i| pt_seg_sq(xy, lp[i], lp[(i + 1) % n]) < clear)
+            })
+        };
+        let mut gx = lo[0];
+        while gx <= hi[0] {
+            let mut gy = lo[1];
+            while gy <= hi[1] {
+                let xy = [gx, gy];
+                if in_loops(&loops2d, xy) && !near_edge(xy) {
+                    pts.push(xy);
+                    world.push(center + chart.inverse(xy) * radius);
+                }
+                gy += grid;
+            }
+            gx += grid;
+        }
+
+        let in_domain = |c: [f64; 2]| in_loops(&loops2d, c);
+        let tris = constrained_triangulate(&pts, &loop_idx, in_domain)?;
+        Ok(Mesh {
+            verts: world,
+            normals: Vec::new(),
+            tris: tris
+                .iter()
+                .map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
+                .collect(),
         })
     };
-    let mut gx = lo[0];
-    while gx <= hi[0] {
-        let mut gy = lo[1];
-        while gy <= hi[1] {
-            let xy = [gx, gy];
-            if in_loops(&loops2d, xy) && !near_edge(xy) {
-                pts.push(xy);
-                world.push(center + chart.inverse(xy) * radius);
-            }
-            gy += grid;
-        }
-        gx += grid;
-    }
 
-    let in_domain = |c: [f64; 2]| in_loops(&loops2d, c);
-    let tris = constrained_triangulate(&pts, &loop_idx, in_domain)?;
-    Ok(Mesh {
-        verts: world,
-        normals: Vec::new(),
-        tris: tris
-            .iter()
-            .map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
-            .collect(),
-    })
+    match attempt(pole0) {
+        Ok(m) => Ok(m),
+        // A near-pinch boundary (two stretches passing within a sub-sample gap)
+        // projects to a self-crossing polygon the CDT rejects — but the smooth
+        // curve is simple, so the crossing is a knife-edge of the *projection*.
+        // Re-project from slightly rotated poles (local, weld-safe — boundary verts
+        // unchanged) before paying for a whole-protein perturbation re-mesh.
+        Err(e) if e.to_string().contains("crosses an existing constraint") => {
+            for trial in perturbed_poles(pole0) {
+                if trial.dot(hint) > 0.0 {
+                    if let Ok(m) = attempt(trial) {
+                        return Ok(m);
+                    }
+                }
+            }
+            if std::env::var("SES_DEBUG_CROSS").is_ok() {
+                diagnose_crossing(center, radius, loops, pole0, &maxang);
+            }
+            Err(e)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Diagnostic (env `SES_DEBUG_CROSS`): characterise a chart-fill crossing failure
+/// — is the region bigger than a hemisphere (genuine multi-chart need) or is it a
+/// near-pinch chord artifact (two boundary stretches within a sample gap)?
+fn diagnose_crossing(
+    center: Vec3,
+    radius: f64,
+    loops: &[Vec<Vec3>],
+    pole0: Vec3,
+    maxang: &dyn Fn(Vec3) -> f64,
+) {
+    let chart = Chart::new(pole0);
+    let dir_of = |p: Vec3| (p - center).normalized().expect("boundary at centre");
+    // Project every loop to 2D, remembering (loop, index) per point.
+    let mut segs: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut tag: Vec<(usize, usize)> = Vec::new();
+    let sizes: Vec<usize> = loops.iter().map(|l| l.len()).collect();
+    for (li, lp) in loops.iter().enumerate() {
+        let pj: Vec<[f64; 2]> = lp.iter().map(|&w| chart.forward(dir_of(w))).collect();
+        for i in 0..pj.len() {
+            segs.push((pj[i], pj[(i + 1) % pj.len()]));
+            tag.push((li, i));
+        }
+    }
+    // Min gap between non-adjacent segments, and count of actual crossings.
+    let mut min_gap = f64::INFINITY;
+    let mut crossings = 0usize;
+    for a in 0..segs.len() {
+        for b in (a + 1)..segs.len() {
+            // skip shared-endpoint adjacency within the same loop
+            if tag[a].0 == tag[b].0 {
+                let n = sizes[tag[a].0];
+                let (ia, ib) = (tag[a].1, tag[b].1);
+                if ia == ib || (ia + 1) % n == ib || (ib + 1) % n == ia {
+                    continue;
+                }
+            }
+            if segs_cross(segs[a], segs[b]) {
+                crossings += 1;
+            }
+            let g = seg_seg_gap(segs[a], segs[b]);
+            if g < min_gap {
+                min_gap = g;
+            }
+        }
+    }
+    let region_deg = maxang(pole0).to_degrees();
+    eprintln!(
+        "[SES_CROSS] r={radius:.2} loops={} sizes={:?} region_halfextent={region_deg:.1}deg \
+         crossings={crossings} min_nonadj_gap={min_gap:.4} (chart units ~ angular radians)",
+        loops.len(),
+        sizes,
+    );
+}
+
+/// Do open segments p1–p2 and p3–p4 properly intersect (interior crossing)?
+fn segs_cross(s1: ([f64; 2], [f64; 2]), s2: ([f64; 2], [f64; 2])) -> bool {
+    let (p1, p2) = s1;
+    let (p3, p4) = s2;
+    let o = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    };
+    let (d1, d2, d3, d4) = (o(p3, p4, p1), o(p3, p4, p2), o(p1, p2, p3), o(p1, p2, p4));
+    ((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0))
+}
+
+/// Closest distance between two 2D segments (0 if they touch/cross).
+fn seg_seg_gap(s1: ([f64; 2], [f64; 2]), s2: ([f64; 2], [f64; 2])) -> f64 {
+    if segs_cross(s1, s2) {
+        return 0.0;
+    }
+    pt_seg_sq(s1.0, s2.0, s2.1)
+        .min(pt_seg_sq(s1.1, s2.0, s2.1))
+        .min(pt_seg_sq(s2.0, s1.0, s1.1))
+        .min(pt_seg_sq(s2.1, s1.0, s1.1))
+        .sqrt()
+}
+
+/// Candidate chart poles around `pole` — small rotations in its tangent plane,
+/// tried when the primary projection self-crosses (a near-pinch). Cheap: each is
+/// just a re-projection + CDT, not a re-mesh.
+fn perturbed_poles(pole: Vec3) -> Vec<Vec3> {
+    let (u, v) = plane_basis(pole);
+    let dirs = [
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.0, 1.0),
+        (0.0, -1.0),
+        (0.7, 0.7),
+        (-0.7, 0.7),
+        (0.7, -0.7),
+        (-0.7, -0.7),
+    ];
+    let mut out = Vec::new();
+    for &mag in &[0.06_f64, 0.13, 0.22, 0.35] {
+        for &(du, dv) in &dirs {
+            if let Some(p) = (pole + u * (du * mag) + v * (dv * mag)).normalized() {
+                out.push(p);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::f64::consts::PI;
+
+    #[test]
+    fn perturbed_poles_are_unit_and_near_the_seed() {
+        let pole = Vec3::new(0.2, -0.3, 1.0).normalized().unwrap();
+        let cands = perturbed_poles(pole);
+        assert!(cands.len() >= 16);
+        for p in &cands {
+            assert!((p.norm() - 1.0).abs() < 1e-9, "candidate poles are unit");
+            // small rotations stay on the seed's side of the sphere.
+            assert!(p.dot(pole) > 0.5, "candidate stays near the seed pole");
+        }
+    }
 
     fn circle_loop(center: Vec3, radius: f64, axis: Vec3, alpha: f64, n: usize) -> Vec<Vec3> {
         let (u, v) = plane_basis(axis);

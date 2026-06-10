@@ -27,6 +27,7 @@ mod py_sasa;
 mod py_search;
 mod py_structure;
 mod py_supervision;
+mod py_surface;
 mod py_transform;
 
 /// proteon_connector — PyO3 bindings for the proteon structural bioinformatics toolkit.
@@ -48,6 +49,7 @@ fn proteon_connector(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pymodule!(py_search::py_search))?;
     m.add_wrapped(wrap_pymodule!(py_supervision::py_supervision))?;
     m.add_wrapped(wrap_pymodule!(py_structure::py_structure))?;
+    m.add_wrapped(wrap_pymodule!(py_surface::py_surface))?;
     m.add_wrapped(wrap_pymodule!(py_transform::py_transform))?;
     Ok(())
 }

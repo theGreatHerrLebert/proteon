@@ -319,6 +319,20 @@ pub fn sample_loop(
 /// into vertices, then at each vertex pick the next outgoing arc by **angular
 /// order** in the tangent plane, keeping the exposed region consistently on one
 /// side. Reduces to [`boundary_loops`] when every vertex has degree 2.
+/// An exposed rim arc whose two 3D endpoints coincide is a real boundary loop
+/// (the cap's full rim) only when its angular `span` is essentially the whole
+/// circle. A coincident-endpoint arc with a *small* span is instead a
+/// numerically-negligible exposed sliver — a round-off artifact left when the
+/// rim is all but fully buried by the union of its neighbours — and must NOT be
+/// promoted to a full-circle loop: doing so emits a spurious (and, when two such
+/// slivers survive on one rim, *duplicated*) loop, whose repeated boundary then
+/// makes the contact-cap CDT fill reject the constraint and the whole analytic
+/// SES fall back to the grid mesher. `tol` is the same coincidence tolerance the
+/// caller uses for the 3D endpoint test.
+fn coincident_arc_is_full_rim(span: f64, tol: f64) -> bool {
+    span >= TAU - tol
+}
+
 pub fn arrange_loops(caps: &[SphereCircle]) -> Result<Vec<Vec<BoundaryArc>>> {
     const TOL: f64 = 1e-6;
     let mut arcs: Vec<BoundaryArc> = Vec::new();
@@ -339,7 +353,17 @@ pub fn arrange_loops(caps: &[SphereCircle]) -> Result<Vec<Vec<BoundaryArc>>> {
                 end: c.rim_point(b),
             };
             if arc.start.distance(arc.end) < TOL {
-                full_loops.push(vec![arc]); // a fully-exposed rim is its own loop
+                // Endpoints coincide in 3D: either a genuine fully-exposed rim
+                // (its own loop) or a numerically-negligible exposed sliver (a
+                // round-off artifact on a rim that is all but fully buried by the
+                // *union* of neighbours, so it escapes the single-cap "fully
+                // buried" early-out in `exposed_arcs`). The 3D distance test alone
+                // cannot tell them apart, since both wrap to a coincident endpoint
+                // — disambiguate by angular span (see `coincident_arc_is_full_rim`).
+                if coincident_arc_is_full_rim(b - a, TOL) {
+                    full_loops.push(vec![arc]);
+                }
+                // else: negligible exposed sliver — drop it.
             } else {
                 arcs.push(arc);
             }
@@ -516,6 +540,26 @@ mod tests {
             let t = TAU * k as f64 / 2000.0;
             assert_eq!(in_arcs(t), is_exposed(circle.rim_point(t), &[inside]));
         }
+    }
+
+    #[test]
+    fn negligible_exposed_sliver_is_not_a_full_rim() {
+        // The decision that keeps a near-fully-buried rim from being emitted as a
+        // spurious (often duplicated) full-circle loop. Regression for the analytic
+        // SES crash where `clip_spheric_face` got a rim left with two ~6e-9-rad
+        // exposed slivers (round-off): both had coincident 3D endpoints and were
+        // wrongly promoted to full loops, duplicating a boundary and crashing the
+        // CDT contact fill (→ silent grid fallback on ~half of a protein corpus).
+        const TOL: f64 = 1e-6;
+        // A genuine full rim (the only real full-circle case) survives.
+        assert!(coincident_arc_is_full_rim(TAU, TOL));
+        assert!(coincident_arc_is_full_rim(TAU - 0.5 * TOL, TOL));
+        // The observed degenerate slivers (~6e-9 rad) and any sub-circle span are
+        // dropped, even though their endpoints coincide in 3D.
+        assert!(!coincident_arc_is_full_rim(6.0e-9, TOL));
+        assert!(!coincident_arc_is_full_rim(0.0, TOL));
+        assert!(!coincident_arc_is_full_rim(TAU - 2.0 * TOL, TOL));
+        assert!(!coincident_arc_is_full_rim(TAU / 2.0, TOL));
     }
 
     #[test]
