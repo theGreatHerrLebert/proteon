@@ -279,7 +279,7 @@ fn interior_projection(xi: Vec3, tri: &Tri) -> Option<Vec3> {
 // quadrature target.
 
 /// Positive-half Gauss–Legendre nodes/weights on `[-1, 1]` (the rule is symmetric).
-/// Order 8 (production) and order 16 (the convergence-study reference).
+/// Order 8, 16 (production), and 32 (the sliver convergence-study reference).
 const GL8_HALF: [(f64, f64); 4] = [
     (0.183_434_642_495_649_8, 0.362_683_783_378_362),
     (0.525_532_409_916_329, 0.313_706_645_877_887_3),
@@ -296,12 +296,34 @@ const GL16_HALF: [(f64, f64); 8] = [
     (0.944_575_023_073_232_6, 0.062_253_523_938_647_9),
     (0.989_400_934_991_649_9, 0.027_152_459_411_754_1),
 ];
+const GL32_HALF: [(f64, f64); 16] = [
+    (0.048_307_665_687_738_3, 0.096_540_088_514_727_8),
+    (0.144_471_961_582_796_5, 0.095_638_720_079_274_9),
+    (0.239_287_362_252_137_1, 0.093_844_399_080_804_6),
+    (0.331_868_602_282_127_7, 0.091_173_878_695_763_9),
+    (0.421_351_276_130_635_3, 0.087_652_093_004_403_8),
+    (0.506_899_908_932_229_4, 0.083_311_924_226_946_7),
+    (0.587_715_757_240_762_3, 0.078_193_895_787_070_3),
+    (0.663_044_266_930_215_2, 0.072_345_794_108_848_5),
+    (0.732_182_118_740_289_7, 0.065_822_222_776_361_8),
+    (0.794_483_795_967_942_4, 0.058_684_093_478_535_5),
+    (0.849_367_613_732_57, 0.050_998_059_262_376_2),
+    (0.896_321_155_766_052_1, 0.042_835_898_022_226_7),
+    (0.934_906_075_937_739_7, 0.034_273_862_913_021_4),
+    (0.964_762_255_587_506_4, 0.025_392_065_309_262_1),
+    (0.985_611_511_545_268_4, 0.016_274_394_730_905_7),
+    (0.997_263_861_849_481_6, 0.007_018_610_009_470_1),
+];
 
-/// Gauss–Legendre nodes/weights mapped to `[0, 1]` for `order ∈ {8, 16}`.
+/// Gauss–Legendre nodes/weights mapped to `[0, 1]`.
+///
+/// # Panics
+/// On `order ∉ {8, 16, 32}` (only the tabulated rules are supported).
 fn gauss_legendre_01(order: usize) -> Vec<(f64, f64)> {
     let half: &[(f64, f64)] = match order {
         8 => &GL8_HALF,
         16 => &GL16_HALF,
+        32 => &GL32_HALF,
         _ => panic!("unsupported Gauss–Legendre order {order}"),
     };
     let mut out = Vec::with_capacity(half.len() * 2);
@@ -312,19 +334,24 @@ fn gauss_legendre_01(order: usize) -> Vec<(f64, f64)> {
     out
 }
 
-/// Duffy-transformed single-layer regular-Yukawa **self** collocation of `tri` (∫ over
-/// the panel of the ×4π kernel, with ξ = the panel centroid). Fans the panel at the
-/// centroid so the cusp sits at a vertex of each sub-triangle, then Duffy-maps each
-/// (singular vertex → collapsed edge, Jacobian `u` grades toward the cusp) with a tensor
-/// Gauss–Legendre rule of the given `order`. Recovers the cusp-limited accuracy the
-/// fixed 7-point rule loses on the self panel.
-#[must_use]
-pub fn duffy_self_single(tri: &Tri, yukawa: f64, order: usize) -> f64 {
-    let xi = (tri.v1 + tri.v2 + tri.v3) * (1.0 / 3.0); // self observation point = cusp
+/// Duffy-transformed single-layer regular-Yukawa collocation of `tri` at an **on-panel**
+/// observation point `xi` (∫ over the panel of the ×4π kernel). The cusp at `x = xi` lies
+/// on the domain; fanning the panel at `xi`'s in-plane projection puts the cusp at a
+/// vertex of each (non-degenerate) sub-triangle, and the Duffy map (singular vertex →
+/// collapsed edge, Jacobian `u`) grades toward it, recovering the accuracy the fixed
+/// 7-point rule loses there. General in `xi` (centroid / edge / vertex): a fan triangle
+/// that degenerates because `xi`'s projection lands on its edge is skipped.
+fn duffy_single_at(xi: Vec3, tri: &Tri, yukawa: f64, order: usize) -> f64 {
+    // Cusp location = xi projected into the panel plane (≈ xi for an on-panel point).
+    let signed = (xi - tri.v1).dot(tri.normal);
+    let p = xi - tri.normal * signed;
     let gl = gauss_legendre_01(order);
     let mut value = 0.0;
-    for sub in centroid_fan(tri, xi) {
-        // sub = (p0 = xi, p1, p2); Duffy with the singular vertex p0.
+    for sub in centroid_fan(tri, p) {
+        if sub.area <= f64::MIN_POSITIVE {
+            continue; // p on this sub-triangle's far edge ⇒ zero area
+        }
+        // sub = (p0 = p, p1, p2); Duffy with the singular vertex p0.
         let (p0, a, b) = (sub.v1, sub.v2 - sub.v1, sub.v3 - sub.v1);
         let jac = a.cross(b).norm(); // |a×b| = 2·area(sub); dA = jac · u du dv
         let mut acc = 0.0;
@@ -332,6 +359,7 @@ pub fn duffy_self_single(tri: &Tri, yukawa: f64, order: usize) -> f64 {
             for &(v, wv) in &gl {
                 let (s, t) = (u * (1.0 - v), u * v);
                 let x = p0 + a * s + b * t;
+                // Kernel is evaluated w.r.t. the actual observation point xi.
                 let pot = regular_yukawa_pot(PotentialKind::Single, x, xi, yukawa, tri.normal);
                 acc += pot * u * wu * wv;
             }
@@ -341,22 +369,32 @@ pub fn duffy_self_single(tri: &Tri, yukawa: f64, order: usize) -> f64 {
     value
 }
 
+/// Duffy single-layer **self** collocation: [`duffy_single_at`] with `xi` = the panel
+/// centroid (the BEM self term). Exposed for gating.
+#[must_use]
+pub fn duffy_self_single(tri: &Tri, yukawa: f64, order: usize) -> f64 {
+    let xi = (tri.v1 + tri.v2 + tri.v3) * (1.0 / 3.0);
+    duffy_single_at(xi, tri, yukawa, order)
+}
+
 /// Production Gauss–Legendre order for the Duffy self rule. GL-16 (256 pts × 3 fan
-/// triangles per diagonal entry — negligible against the O(N²) off-diagonal) stays well
-/// converged even on poorly-shaped (sliver) panels, where GL-8 degrades.
+/// triangles per diagonal entry — negligible against the O(N²) off-diagonal) self-
+/// converges to ~1e-5 on quality and moderate-sliver (≈4:1) panels (gated GL-16 vs
+/// GL-32). On *extreme* slivers (≫8:1) tensor-Gauss converges slowly so accuracy degrades
+/// gracefully (~3e-4, still far better than fixed) — a mesh-quality concern, not a method
+/// guarantee.
 const DUFFY_ORDER: usize = 16;
 
-/// The on-panel self collocation used by the adaptive path: Duffy for the single layer
-/// (cusped integrand, resolved), NESSie's fixed regularised value for the double layer
-/// (zero-integrand-plus-coincident-limit convention). Shared by the direct API and the
-/// matrix assembly so the self term is computed one way.
-pub(crate) fn self_collocation(kind: PotentialKind, tri: &Tri, yukawa: f64) -> f64 {
+/// The on-panel collocation of `tri` at an on-panel point `xi`: Duffy for the single
+/// layer (cusped integrand, resolved at the actual `xi`), NESSie's fixed Radon value for
+/// the double layer (integrand zero a.e.; the `κ²/(2√3)` regularisation only fires when
+/// `xi` coincides with the centroid Radon node). Shared by the direct adaptive API and
+/// the matrix assembly (which passes the centroid for the `j == i` self term), so both
+/// honour the actual observation point.
+pub(crate) fn self_collocation(kind: PotentialKind, xi: Vec3, tri: &Tri, yukawa: f64) -> f64 {
     match kind {
-        PotentialKind::Single => duffy_self_single(tri, yukawa, DUFFY_ORDER),
-        PotentialKind::Double => {
-            let xi = (tri.v1 + tri.v2 + tri.v3) * (1.0 / 3.0);
-            regular_yukawa_collocation_parts(kind, xi, tri, yukawa).0
-        }
+        PotentialKind::Single => duffy_single_at(xi, tri, yukawa, DUFFY_ORDER),
+        PotentialKind::Double => regular_yukawa_collocation_parts(kind, xi, tri, yukawa).0,
     }
 }
 
@@ -365,12 +403,12 @@ pub(crate) fn self_collocation(kind: PotentialKind, tri: &Tri, yukawa: f64) -> f
 /// signed collocation (premultiplied by 4π, same convention) and a [`Status`].
 ///
 /// Strategy (design `devdocs/NEAR_SINGULAR_QUADRATURE.md`):
-/// 1. **On-panel** (`d ≤ ETOL`, ξ numerically on the panel) → [`self_collocation`]:
-///    the **Duffy** graded rule for the single layer (the cusp lies *on* the integration
-///    domain, where subdivision cannot converge) and NESSie's fixed regularised value
-///    for the double layer (integrand zero a.e.). This is also a **direct-call safety
-///    net**: the matrix assembly routes the self term by index identity (`j == i`), not
-///    this distance test, so a sub-ETOL cleft can never be misclassified as self.
+/// 1. **On-panel** (`d ≤ ETOL`, ξ numerically on the panel) → [`self_collocation`] at the
+///    actual `xi`: the **Duffy** graded rule for the single layer (cusp on the domain, so
+///    subdivision cannot converge — Duffy fans at `xi`'s projection, valid for any
+///    centroid/edge/vertex point) and NESSie's fixed value for the double layer (integrand
+///    zero a.e.). The matrix assembly also routes the self term here by index identity
+///    (`j == i`, passing the centroid), so a sub-ETOL cleft is never misclassified as self.
 /// 2. **Far** panel → one fixed Radon eval (bit-identical to the non-adaptive path).
 /// 3. Cusp **interior** but off-panel (`d > ETOL`; the cleft / opposing-surface case) →
 ///    centroid fan, then resolution-floor recursion on each fan triangle.
@@ -387,7 +425,7 @@ pub fn adaptive_regular_yukawa_collocation(
     // On-panel self/coincident term: Duffy for the single layer (cusp on the domain),
     // NESSie's fixed regularised value for the double layer (zero a.e.) — see above.
     if d <= ETOL_F64 {
-        return (self_collocation(kind, tri, yukawa), Status::Converged);
+        return (self_collocation(kind, xi, tri, yukawa), Status::Converged);
     }
     if d >= NEAR_FACTOR * longest_edge(tri) {
         return (
@@ -577,7 +615,18 @@ mod tests {
     }
 
     fn skinny() -> Tri {
-        // High aspect-ratio sliver (review [R7] shape diversity).
+        // Moderate ~4:1 aspect (review [R7] shape diversity) — a poor-but-acceptable mesh
+        // element. Extreme aspect ratios are exercised separately by `extreme_sliver`.
+        Tri::new(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(4.0, 0.0, 0.0),
+            Vec3::new(2.0, 1.0, 0.0),
+        )
+    }
+
+    fn extreme_sliver() -> Tri {
+        // ~16:1 aspect — beyond reasonable mesh quality; used to document graceful
+        // degradation of the fixed-order Duffy rule, not to gate tight convergence.
         Tri::new(
             Vec3::new(0.0, 0.0, 0.0),
             Vec3::new(4.0, 0.0, 0.0),
@@ -762,14 +811,70 @@ mod tests {
                 assert!(rel < 1e-4, "{name} y={y}: Duffy vs reference {rel:.2e}");
             }
         }
-        // Higher Gauss order must not hurt on a sliver (GL-16 ≤ GL-8 error) — the only
-        // shape where the lower order would degrade.
+        // Moderate-sliver self-convergence WITHOUT the cusp-limited barycentric reference:
+        // production GL-16 must agree with GL-32 on a 4:1 panel (a rule-order convergence
+        // check, independent of any external reference).
         let sk = skinny();
-        let s_ref = polar_self_single_reference(&sk, 1.3, 4001);
+        for &y in &[0.4_f64, 1.3, 3.0] {
+            let d16 = duffy_self_single(&sk, y, 16);
+            let d32 = duffy_self_single(&sk, y, 32);
+            let conv = (d16 - d32).abs() / d32.abs().max(1e-300);
+            eprintln!("skinny(4:1) y={y}: GL16 vs GL32 {conv:.2e}");
+            assert!(conv < 5e-5, "skinny y={y}: GL16 vs GL32 {conv:.2e} (not converged)");
+        }
+    }
+
+    #[test]
+    fn duffy_self_extreme_sliver_degrades_gracefully() {
+        // Honest mesh-quality boundary (codex [Med]): on a ~16:1 sliver — beyond
+        // acceptable mesh quality — tensor-Gauss converges slowly, so GL-16 is NOT tight
+        // (GL-16 vs GL-32 ~3e-4). But it (a) stays bounded and (b) is still far better
+        // than the fixed 7-point self. Extreme aspect ratios are a mesh-quality concern,
+        // not a method guarantee.
+        let sl = extreme_sliver();
+        let y = 1.3;
+        let xi = (sl.v1 + sl.v2 + sl.v3) * (1.0 / 3.0);
+        let d16 = duffy_self_single(&sl, y, 16);
+        let d32 = duffy_self_single(&sl, y, 32);
+        let conv = (d16 - d32).abs() / d32.abs();
+        let fixed = regular_yukawa_collocation_parts(PotentialKind::Single, xi, &sl, y).0;
+        let e16 = (d16 - d32).abs(); // GL-32 as the best available value
+        let efixed = (fixed - d32).abs();
+        eprintln!("extreme sliver: GL16 vs GL32 {conv:.2e}, fixed err {efixed:.2e}");
+        assert!(conv < 2e-3, "extreme sliver GL16 vs GL32 {conv:.2e} (unbounded)");
+        assert!(e16 < efixed, "even on an extreme sliver, Duffy must beat fixed");
+    }
+
+    #[test]
+    fn duffy_on_panel_non_centroid_point() {
+        // Review [High]: the on-panel Duffy must use the ACTUAL observation point, not
+        // silently the centroid. Evaluate at an on-panel point that is NOT the centroid
+        // (an edge midpoint) and check it matches an independent quadrature of the same
+        // integral w.r.t. that point — i.e. duffy_single_at honours xi.
+        let tri = equilateral();
+        let y = 1.3;
+        let edge_mid = (tri.v1 + tri.v2) * 0.5; // on the panel, on an edge — not the centroid
+        let duffy = duffy_single_at(edge_mid, &tri, y, DUFFY_ORDER);
+        // Independent reference: barycentric midpoint of (e^{−yr}−1)/r about edge_mid.
+        let reference = {
+            let f = |x: Vec3| {
+                let d = (x - edge_mid).norm();
+                if d <= 1e-13 {
+                    -y
+                } else {
+                    ((-y * d).exp() - 1.0) / d
+                }
+            };
+            integrate_tri(tri.v1, tri.v2, tri.v3, 4001, &f)
+        };
+        let centroid_val = duffy_self_single(&tri, y, DUFFY_ORDER);
+        let rel = (duffy - reference).abs() / reference.abs();
+        eprintln!("non-centroid: duffy {duffy:.6} ref {reference:.6} (centroid would be {centroid_val:.6})");
+        assert!(rel < 1e-3, "non-centroid on-panel duffy vs reference rel {rel:.2e}");
+        // And it must genuinely differ from the centroid value (proves xi is honoured).
         assert!(
-            (duffy_self_single(&sk, 1.3, 16) - s_ref).abs()
-                <= (duffy_self_single(&sk, 1.3, 8) - s_ref).abs(),
-            "GL-16 must not be worse than GL-8 on a sliver"
+            (duffy - centroid_val).abs() / centroid_val.abs() > 1e-3,
+            "non-centroid result must differ from the centroid self value"
         );
     }
 

@@ -215,8 +215,12 @@ pub fn yukawa_matrices_q(
                     // rule + NESSie's fixed double-layer value; adaptive subdivision then
                     // applies only to the genuine off-panel near pairs.
                     if i == j {
-                        vrow[j] = crate::adaptive::self_collocation(PotentialKind::Single, ej, yukawa);
-                        krow[j] = crate::adaptive::self_collocation(PotentialKind::Double, ej, yukawa);
+                        // xi is element i's centroid (= ej's, since j == i) — the BEM self
+                        // observation point; pass it through explicitly.
+                        vrow[j] =
+                            crate::adaptive::self_collocation(PotentialKind::Single, xi, ej, yukawa);
+                        krow[j] =
+                            crate::adaptive::self_collocation(PotentialKind::Double, xi, ej, yukawa);
                         continue;
                     }
                     let (vs, ss) = crate::adaptive::adaptive_regular_yukawa_collocation(

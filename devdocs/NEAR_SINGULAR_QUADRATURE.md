@@ -1,7 +1,16 @@
 # P6.5 — Near-singular remediation for the regular-Yukawa collocation
 
 **Status:** implemented (opt-in; default stays Fixed — see §5). Reviewed by: codex on the
-design (round 1, §§ below) and on the implementation (round 2); Duffy self-term round 3.
+design (round 1, §§ below), the implementation (round 2), and the Duffy self-term (rounds
+3 + 4). Round-4 fixes:
+- **[High]** the on-panel Duffy now uses the **actual** observation point (fans at `xi`'s
+  projection), not silently the centroid — so a direct call at an edge/vertex/interior
+  on-panel point is correct, not just the `j == i` centroid self term. Gated by
+  `duffy_on_panel_non_centroid_point`.
+- **[Med]** GL-16 self-convergence is now gated rigorously against **GL-32** (independent
+  of the cusp-limited barycentric reference): ~1e-5 on quality / moderate-sliver (≈4:1)
+  panels. Extreme slivers (≫8:1) converge slowly (~3e-4) — gated as *graceful
+  degradation* + documented as a mesh-quality concern, not claimed as tight convergence.
 
 **Duffy self-term (round 3, landed).** The on-panel **single-layer** self term now uses a
 **Duffy** graded rule (centroid fan → collapse the cusp vertex → tensor Gauss–Legendre,
