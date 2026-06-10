@@ -37,10 +37,14 @@
 //!   limits, and series/closed-form continuity.
 //! - **P4 (local)** ✅ — [`system`] (collocation matrices + the implicit local
 //!   operator) + [`solve`] (matrix-free GMRES, two-stage local solve): Cauchy data
-//!   gated vs NESSie `solve_dump`, LU-vs-GMRES, and a true-residual gate.
-//! - **P5+** — [`post`], [`analytic`], and the nonlocal solve remain `unimplemented!()`
-//!   stubs keyed to their gating phase. The convention spec still gates anything
-//!   energy-level: a single convention bug hides behind close parity.
+//!   gated vs NESSie `solve_dump`, LU-vs-GMRES, entrywise assembly, true residual.
+//! - **P5 (local)** ✅ — [`post`] (`rfenergy` + `espotential`) + [`analytic`] (Born
+//!   closed form): energy + potentials gated vs NESSie `post_dump`, and the BEM
+//!   energy converges to the analytic Born energy on refined sphere meshes — the
+//!   science gate, independent of any BEM path.
+//! - **P6+** — the nonlocal 3-block solve (and nonlocal post) remain `unimplemented!()`
+//!   stubs. The convention spec still gates anything energy-level: a single
+//!   convention bug hides behind close parity.
 
 // Scaffolding: the stubs below intentionally take parameters they do not yet use.
 // Remove this allow as each phase (P2 = laplace, P3 = yukawa, P4 = system/solve,
@@ -56,9 +60,10 @@ pub mod solve;
 pub mod system;
 pub mod yukawa;
 
+pub use analytic::{analytic_sphere_mesh, born_rfenergy};
 pub use laplace::laplace_collocation;
 pub use model::{BemModel, Charge, Domain, Locality, Params, PotentialKind, Tri};
-pub use post::{espotential, rfenergy};
+pub use post::{espotential, rfenergy, ENERGY_FACTOR, POTPREFACTOR};
 pub use quadrature::{radon7, TriangleQuad};
 pub use solve::{
     solve_local, solve_local_elements, solve_nonlocal, CauchyData, LocalResult, NonlocalResult,

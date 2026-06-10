@@ -9,20 +9,34 @@
 //! transcription + Bessel-function risk ("an oracle for the oracle", plan §6).
 
 use crate::model::{Locality, Params};
+use crate::post::{ENERGY_FACTOR, POTPREFACTOR};
 use proteon_core::surface::geom::Vec3;
 use proteon_core::surface::mesh::{icosphere, Mesh};
 
-/// Closed-form Born solvation energy (kJ/mol) of a single ion. NESSie: `BornIon` +
-/// `rfenergy(LocalES|NonlocalES, ion)`.
+/// Closed-form Born solvation energy (kJ/mol) of a single ion of charge `ζ` and
+/// radius `R`. NESSie `rfenergy(LocalES|NonlocalES, ion)` = `ζ·rfpotential(:Ω)·energy_factor`:
 ///
-/// NESSie's Born formula assumes a **vacuum solute** (`εΩ = 1`): the local energy
-/// carries `(1/εΣ − 1)`, not `(1/εΣ − 1/εΩ)`. Reject (or special-case) `eps_omega
-/// != 1` rather than silently evaluating an unvalidated generalization (plan §6).
+/// ```text
+/// local:    potprefactor·energy_factor · ζ²/R · (1/εΣ − 1)
+/// nonlocal: potprefactor·energy_factor · ζ²/(R·εΣ) · (1 − εΣ + (εΣ−ε∞)/ε∞ · sinh(ν)/ν · e^(−ν))
+///           with ν = √(εΣ/ε∞)·R/λ
+/// ```
 ///
-/// TODO(P5): port the Born closed form (local); P6 for nonlocal.
+/// NESSie's Born formula assumes a **vacuum solute** (`εΩ = 1`): the local term is
+/// `(1/εΣ − 1)`, not `(1/εΣ − 1/εΩ)`. `eps_omega` is therefore ignored here; pass a
+/// vacuum-solute ion (the model defaults do).
 #[must_use]
 pub fn born_rfenergy(charge: f64, radius: f64, params: &Params, locality: Locality) -> f64 {
-    unimplemented!("P5/P6: port Born closed-form energy (src/testmodel/born/)")
+    let pre = POTPREFACTOR * ENERGY_FACTOR * charge * charge / radius;
+    match locality {
+        Locality::Local => pre * (1.0 / params.eps_sigma - 1.0),
+        Locality::Nonlocal => {
+            let nu = (params.eps_sigma / params.eps_inf).sqrt() * radius / params.lambda;
+            let bulk = (params.eps_sigma - params.eps_inf) / params.eps_inf;
+            let factor = 1.0 - params.eps_sigma + bulk * nu.sinh() / nu * (-nu).exp();
+            pre / params.eps_sigma * factor
+        }
+    }
 }
 
 /// Exact triangulated sphere for the convergence theorem — vertices lie **on** the
