@@ -28,6 +28,8 @@ proteon-core = { path = "../proteon-core" }
 [dev-dependencies]
 # Load the checked-in NESSie oracle fixtures (tests/fixtures/nessie/*.json).
 serde_json = "1"
+# Example only (protein_surface): load a PDB to mesh its SES + place charges.
+proteon-io = { path = "../proteon-io" }
 
 # Dense LU as the *solver* oracle (LU-vs-GMRES parity), test-only. NOTE: this is
 # NOT the assembly oracle — when LU solves proteon's *own* explicit M it inherits
