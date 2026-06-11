@@ -13,6 +13,16 @@
 use super::geom::Vec3;
 use std::collections::{HashMap, HashSet};
 
+/// Signed solid angle subtended by triangle `(a,b,c)` at point `p` (Van Oosterom–
+/// Strackee). Summing over a closed mesh and dividing by 4π gives the winding number.
+fn triangle_solid_angle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> f64 {
+    let (va, vb, vc) = (a - p, b - p, c - p);
+    let (la, lb, lc) = (va.norm(), vb.norm(), vc.norm());
+    let num = va.dot(vb.cross(vc)); // scalar triple product
+    let den = la * lb * lc + va.dot(vb) * lc + vb.dot(vc) * la + vc.dot(va) * lb;
+    2.0 * num.atan2(den)
+}
+
 /// Does segment `p0→p1` pass through the **interior** of triangle `(a,b,c)`?
 /// Möller–Trumbore, with a strict-interior margin so a mere boundary/endpoint touch
 /// (e.g. a shared edge) is not a crossing — only a clear *transverse* penetration counts.
@@ -358,6 +368,73 @@ impl Mesh {
             }
         }
         Some(count)
+    }
+
+    /// Generalized winding number of `p` w.r.t. each connected component
+    /// (`1/4π · Σ Ω`, Van Oosterom–Strackee solid angle, grouped by component label):
+    /// `≈±1` if `p` is inside that component, `≈0` if outside. Topology-free per
+    /// component; the sum over all components is the total winding.
+    pub fn component_windings(&self, p: Vec3) -> Vec<f64> {
+        let labels = self.component_labels();
+        let k = labels.iter().copied().max().map_or(0, |m| m + 1);
+        let mut w = vec![0.0_f64; k];
+        for (ti, &t) in self.tris.iter().enumerate() {
+            let (a, b, c) = self.tri_points(t);
+            w[labels[ti]] += triangle_solid_angle(p, a, b, c);
+        }
+        for wi in &mut w {
+            *wi /= 4.0 * std::f64::consts::PI;
+        }
+        w
+    }
+
+    /// The connected component that **contains** `p` (winding ≈ ±1), or `None` if `p` is
+    /// inside none (in solvent) or — degenerately — inside more than one. With no nested
+    /// components a point lies in at most one body.
+    pub fn containing_component(&self, p: Vec3) -> Option<usize> {
+        let inside: Vec<usize> = self
+            .component_windings(p)
+            .iter()
+            .enumerate()
+            .filter(|(_, &w)| w.abs() > 0.5)
+            .map(|(i, _)| i)
+            .collect();
+        match inside.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
+    }
+
+    /// Number of **nested** components: a component whose own surface lies inside another
+    /// component (a buried cavity / shell-in-shell). `0` for a set of separate bodies.
+    /// O(components × triangles); intended for closed meshes with few components.
+    pub fn num_nested_components(&self) -> usize {
+        let labels = self.component_labels();
+        let k = labels.iter().copied().max().map_or(0, |m| m + 1);
+        if k <= 1 {
+            return 0;
+        }
+        // A representative vertex of each component.
+        let mut rep: Vec<Option<Vec3>> = vec![None; k];
+        for (ti, &t) in self.tris.iter().enumerate() {
+            rep[labels[ti]].get_or_insert(self.verts[t[0] as usize]);
+        }
+        let mut nested = 0;
+        for i in 0..k {
+            let Some(p) = rep[i] else { continue };
+            // Total winding of component i's representative w.r.t. all OTHER components.
+            let mut w = 0.0;
+            for (ti, &t) in self.tris.iter().enumerate() {
+                if labels[ti] != i {
+                    let (a, b, c) = self.tri_points(t);
+                    w += triangle_solid_angle(p, a, b, c);
+                }
+            }
+            if (w / (4.0 * std::f64::consts::PI)).abs() > 0.5 {
+                nested += 1; // i sits inside another component
+            }
+        }
+        nested
     }
 
     /// Euler characteristic V − E + F, counting only vertices actually used by a
@@ -993,6 +1070,24 @@ mod tests {
             None,
             "a multi-scale mesh is inconclusive, not silently clean"
         );
+    }
+
+    #[test]
+    fn nesting_and_charge_containment() {
+        // Two SEPARATE bodies → no nesting; a point at each centre is in its own body.
+        let mut separate = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2);
+        separate.append(&icosphere(Vec3::new(6.0, 0.0, 0.0), 1.0, 2));
+        assert_eq!(separate.num_nested_components(), 0, "separate bodies are not nested");
+        assert_eq!(separate.containing_component(Vec3::new(0.0, 0.0, 0.0)), Some(0));
+        // The second body is component 1; a point at its centre is inside it.
+        assert_eq!(separate.containing_component(Vec3::new(6.0, 0.0, 0.0)), Some(1));
+        // A point outside both → in none.
+        assert_eq!(separate.containing_component(Vec3::new(3.0, 0.0, 0.0)), None);
+
+        // A small sphere INSIDE a big one (a buried cavity) → one nested component.
+        let mut cavity = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
+        cavity.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
+        assert_eq!(cavity.num_nested_components(), 1, "the inner shell is nested");
     }
 
     #[test]

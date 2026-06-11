@@ -295,7 +295,10 @@ fn solve_surface_py<'py>(
     // Component volumes are only meaningful for a closed, consistent mesh, so only
     // auto-orient then.
     let topo0 = TopologyReport::assess(&mesh);
-    let flipped = if topo0.watertight && topo0.consistently_oriented {
+    // Auto-orient only a closed, consistent, NON-nested mesh: with cavities present a
+    // legitimately-inward shell must not be flipped (it bounds a solvent pocket); such
+    // meshes are out of formulation scope and refuse via the cavity error below.
+    let flipped = if topo0.watertight && topo0.consistently_oriented && topo0.num_cavities == 0 {
         mesh.orient_outward()
     } else {
         false
@@ -328,6 +331,13 @@ fn solve_surface_py<'py>(
             val: qval[q],
         })
         .collect();
+
+    // Charge → solute-body assignment (which connected component contains each charge).
+    // With no nested components a charge is inside at most one body; `None` ⇒ in solvent
+    // (or, degenerately, ambiguous). A diagnostic that closes the "which component?"
+    // question; the single-region solve uses one dielectric regardless.
+    let charge_components: Vec<Option<usize>> =
+        charges.iter().map(|c| mesh.containing_component(c.pos)).collect();
 
     // Combined mesh-acceptance: topology + per-element geometry + charge placement.
     let quality = QualityReport::assess(&elements, &charges);
@@ -426,6 +436,15 @@ fn solve_surface_py<'py>(
     dict.set_item("is_outward", topology.is_outward)?;
     dict.set_item("signed_volume", topology.signed_volume)?;
     dict.set_item("n_components", topology.num_components)?;
+    dict.set_item("n_cavities", topology.num_cavities)?;
+    // Per-charge solute-body index (None ⇒ in solvent / not inside a single body).
+    dict.set_item(
+        "charge_components",
+        charge_components
+            .iter()
+            .map(|c| c.map(|i| i as i64))
+            .collect::<Vec<Option<i64>>>(),
+    )?;
     dict.set_item("n_duplicate_faces", topology.num_duplicate_faces)?;
     // Some(k) → int; None (inconclusive) → Python None.
     dict.set_item("n_self_intersections", topology.num_self_intersections)?;

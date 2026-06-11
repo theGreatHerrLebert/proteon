@@ -327,6 +327,10 @@ pub struct TopologyReport {
     /// check was inconclusive (mesh too irregular to verify cheaply). `Some(k>0)` is
     /// authoritative; `Some(0)` means "no clear penetration found", not a proof.
     pub num_self_intersections: Option<usize>,
+    /// Nested components (buried cavities / shell-in-shell). The single-region BEM
+    /// formulation does not model solvent-filled cavities (spec §10), so any nesting is
+    /// out of scope. Computed only for a closed, consistently-oriented mesh.
+    pub num_cavities: usize,
 }
 
 impl TopologyReport {
@@ -363,6 +367,13 @@ impl TopologyReport {
             has_degenerate_volume: degenerate,
             num_duplicate_faces: mesh.num_duplicate_faces(),
             num_self_intersections: mesh.count_self_intersections(),
+            // Nesting is only meaningful for closed, oriented components (and a non-closed
+            // mesh refuses regardless); skip the O(k·N) work otherwise.
+            num_cavities: if watertight && consistently_oriented {
+                mesh.num_nested_components()
+            } else {
+                0
+            },
         }
     }
 
@@ -435,6 +446,17 @@ impl TopologyReport {
                         "{} inward-oriented (inside-out) component(s): flip the winding so \
                          normals point outward, or the double-layer sign is reversed",
                         self.num_inward_components
+                    ),
+                });
+            }
+            if self.num_cavities > 0 {
+                v.push(QualityIssue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "{} nested component(s) (buried cavity / shell-in-shell): the \
+                         single-region formulation does not model solvent-filled cavities \
+                         (spec §10) — not supported",
+                        self.num_cavities
                     ),
                 });
             }
@@ -618,7 +640,24 @@ mod tests {
         assert_eq!(rep.num_components, 2);
         // Two disjoint outward spheres: a component warning, but no Error.
         assert!(!rep.has_errors());
+        assert_eq!(rep.num_cavities, 0);
         assert!(rep.issues().iter().any(|i| i.severity == Severity::Warn));
+    }
+
+    #[test]
+    fn topology_refuses_buried_cavity() {
+        // A small shell inside a big one (a solvent-filled cavity) is out of the
+        // single-region formulation's scope → Error.
+        use proteon_core::surface::mesh::icosphere;
+        let mut cavity = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
+        cavity.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
+        let rep = TopologyReport::assess(&cavity);
+        assert_eq!(rep.num_cavities, 1);
+        assert!(rep.has_errors());
+        assert!(rep
+            .issues()
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.message.contains("cavity")));
     }
 
     #[test]

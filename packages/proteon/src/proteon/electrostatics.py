@@ -106,7 +106,8 @@ def surface_potential(
         Dict with `surface_potential` (V, float64, volts), `rfenergy` (kJ/mol),
         `iterations`, `residual`, `converged` (bool), `n_elements`, the mesh
         topology diagnostics `watertight` / `oriented` / `is_outward` (bool),
-        `signed_volume`, `n_components`, `n_duplicate_faces`,
+        `signed_volume`, `n_components`, `n_cavities`, `charge_components`
+        (per-charge solute-body index, None if in solvent), `n_duplicate_faces`,
         `n_self_intersections`, `flipped_to_outward`
         (an inward mesh is auto-flipped to outward), the `quadrature` rule actually
         used, `capped_panels` (adaptive panels that did not reach tolerance), and the
