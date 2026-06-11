@@ -96,6 +96,50 @@ pub fn kirkwood_rfenergy(
     POTPREFACTOR * ENERGY_FACTOR * charge * charge / radius * series
 }
 
+/// Generalized (multi-shell) Kirkwood reaction-field energy (kJ/mol) of a point charge
+/// `q` at `offset` from the centre, **in the innermost region** of concentric dielectric
+/// shells. `eps_inner` is the innermost dielectric (the charge's region); `shells` are the
+/// `(interface_radius, dielectric_outside)` triples in ASCENDING radius. This is the
+/// off-centre cavity oracle: it couples all multipoles across every interface.
+///
+/// Implemented by the numerically **stable** layered-media reflection recursion (Möbius
+/// maps + multiplicative `(r_k/r_{k+1})^{2l+1}` propagation), not the ill-conditioned
+/// transfer-matrix product. Reductions (both gated): one interface ⇒ [`kirkwood_rfenergy`];
+/// `offset = 0` ⇒ [`concentric_shell_rfenergy`] (the `l=0` term).
+#[must_use]
+pub fn concentric_kirkwood_rfenergy(
+    charge: f64,
+    offset: f64,
+    eps_inner: f64,
+    shells: &[(f64, f64)],
+    n_terms: usize,
+) -> f64 {
+    assert!(!shells.is_empty(), "need at least one interface");
+    let s = offset;
+    let i1 = shells[0].0; // innermost interface radius
+    let mut phi = 0.0; // Σ_l (R₀/ε_inner)·(s/I₁)^{2l} / I₁
+    for l in 0..n_terms {
+        let lf = l as f64;
+        // Reflection ratio R = (growing value)/(decaying value) at an interface; the
+        // exterior region is purely decaying, so R = 0 there. Propagate inward.
+        let mut r = 0.0;
+        for k in (0..shells.len()).rev() {
+            let eps_above = shells[k].1;
+            let eps_below = if k == 0 { eps_inner } else { shells[k - 1].1 };
+            // Interface map (P and ε∂φ continuity), solved for the below-region ratio.
+            let kk = eps_above * (lf * r - (lf + 1.0)) / (eps_below * (r + 1.0));
+            r = ((lf + 1.0) + kk) / (lf - kk);
+            // Propagate down through the below-region to the next interface (≤1 factor).
+            if k > 0 {
+                r *= (shells[k - 1].0 / shells[k].0).powf(2.0 * lf + 1.0);
+            }
+        }
+        // r is now the reaction ratio of the innermost region at I₁.
+        phi += (r / eps_inner) * (s / i1).powi(2 * l as i32) / i1;
+    }
+    POTPREFACTOR * ENERGY_FACTOR * charge * charge * phi
+}
+
 /// Exact triangulated sphere for the convergence theorem — vertices lie **on** the
 /// analytic sphere, decoupling BEM convergence from SES geometry (plan §3, Q1).
 ///

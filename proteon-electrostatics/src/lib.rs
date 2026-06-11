@@ -71,7 +71,8 @@ pub mod system;
 pub mod yukawa;
 
 pub use analytic::{
-    analytic_sphere_mesh, born_rfenergy, concentric_shell_rfenergy, kirkwood_rfenergy,
+    analytic_sphere_mesh, born_rfenergy, concentric_kirkwood_rfenergy, concentric_shell_rfenergy,
+    kirkwood_rfenergy,
 };
 #[cfg(feature = "cuda")]
 pub use gpu::{solve_local_gpu, solve_nonlocal_gpu};
