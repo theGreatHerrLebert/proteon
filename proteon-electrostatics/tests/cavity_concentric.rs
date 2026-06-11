@@ -91,6 +91,18 @@ fn cavity_bem_matches_concentric_analytic() {
     let rel = (bem - analytic).abs() / analytic.abs();
     eprintln!("cavity BEM {bem:.4} vs concentric analytic {analytic:.4} (rel {rel:.3})");
     assert!(bem < 0.0 && analytic < 0.0, "both energies negative");
-    // Discretisation floor like the single-sphere Born gate (a few %).
-    assert!(rel < 0.05, "cavity BEM off concentric analytic by {rel:.3} (> 5%)");
+    // Discretisation floor like the single-sphere Born gate (observed ~0.4%).
+    assert!(rel < 0.02, "cavity BEM off concentric analytic by {rel:.3} (> 2%)");
+
+    // NEGATIVE CONTROL: orientation matters. Solve the SAME geometry with every shell
+    // left +volume (no nesting orientation) — it must disagree with the analytic, proving
+    // the result is not orientation-insensitive (a shared-mistake guard).
+    let mut wrong = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, subdiv);
+    wrong.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, subdiv));
+    wrong.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, subdiv));
+    // (icospheres are all built +volume; no orient_by_nesting → the cavity is mis-oriented)
+    let bem_wrong = solve_energy(&wrong, &charges);
+    let rel_wrong = (bem_wrong - analytic).abs() / analytic.abs();
+    eprintln!("mis-oriented BEM {bem_wrong:.4} (rel {rel_wrong:.3})");
+    assert!(rel_wrong > 0.1, "mis-oriented solve must DISAGREE (orientation is load-bearing)");
 }

@@ -388,24 +388,27 @@ impl Mesh {
         w
     }
 
-    /// The connected component that **contains** `p` (winding ≈ ±1), or `None` if `p` is
-    /// inside none (in solvent) or — degenerately — inside more than one. With no nested
-    /// components a point lies in at most one body.
+    /// The **solute body** containing `p`, or `None` if `p` is in solvent. With buried
+    /// cavities a point can be inside several nested shells; its region is the **parity**
+    /// of how many contain it — odd ⇒ solute, even (incl. 0) ⇒ solvent. For a solute
+    /// point the body is the **deepest** (most-nested) containing component (the innermost
+    /// boundary it is directly inside).
     pub fn containing_component(&self, p: Vec3) -> Option<usize> {
         if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
             return None;
         }
-        let inside: Vec<usize> = self
+        let containing: Vec<usize> = self
             .component_windings(p)
             .iter()
             .enumerate()
             .filter(|(_, &w)| w.abs() > 0.5)
             .map(|(i, _)| i)
             .collect();
-        match inside.as_slice() {
-            [only] => Some(*only),
-            _ => None,
+        if containing.len() % 2 == 0 {
+            return None; // solvent (exterior or inside a cavity)
         }
+        let depths = self.component_nesting_depths();
+        containing.into_iter().max_by_key(|&i| depths[i])
     }
 
     /// Nesting **depth** of each connected component: how many *other* components contain
@@ -1126,6 +1129,17 @@ mod tests {
         let mut cavity = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
         cavity.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
         assert_eq!(cavity.num_nested_components(), 1, "the inner shell is nested");
+
+        // Parity-based charge region on a 3-shell concentric (island/cavity/body):
+        // a charge in the island (inside 3 ⇒ odd ⇒ solute, deepest = island) vs in the
+        // cavity (inside 2 ⇒ even ⇒ solvent ⇒ None).
+        let mut shells = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2); // body  (comp 0)
+        shells.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 2)); // cavity (comp 1)
+        shells.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2)); // island (comp 2)
+        assert_eq!(shells.containing_component(Vec3::new(0.0, 0.0, 0.0)), Some(2), "island = solute");
+        assert_eq!(shells.containing_component(Vec3::new(1.5, 0.0, 0.0)), None, "cavity = solvent");
+        assert_eq!(shells.containing_component(Vec3::new(2.5, 0.0, 0.0)), Some(0), "shell = solute body");
+        assert_eq!(shells.containing_component(Vec3::new(9.0, 0.0, 0.0)), None, "exterior = solvent");
 
         // Three concentric shells with ALTERNATING orientation (outward, inward, outward)
         // — the cavity-with-island case. A summed-winding test would cancel and miss the

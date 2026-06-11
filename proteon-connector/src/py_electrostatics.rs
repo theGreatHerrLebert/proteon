@@ -342,7 +342,21 @@ fn solve_surface_py<'py>(
 
     // Combined mesh-acceptance: topology + per-element geometry + charge placement.
     let quality = QualityReport::assess(&elements, &charges);
-    let issues: Vec<_> = topology.issues().into_iter().chain(quality.issues()).collect();
+    let mut issues: Vec<_> = topology.issues().into_iter().chain(quality.issues()).collect();
+    // Cavities are validated for the LOCAL solve only (the cavity science gate is local;
+    // the nonlocal Yukawa formulation on alternating regions is not yet gated) — refuse a
+    // nested mesh for the nonlocal solve (review).
+    if nonlocal_ && topology.num_cavities > 0 {
+        issues.push(proteon_electrostatics::QualityIssue {
+            severity: Severity::Error,
+            message: format!(
+                "{} buried cavity / nested component(s) with nonlocal_=True: cavities are \
+                 validated for the local solve only; the nonlocal formulation on cavities \
+                 is not yet gated",
+                topology.num_cavities
+            ),
+        });
+    }
     {
         let warnings = py.import("warnings")?;
         for issue in &issues {
