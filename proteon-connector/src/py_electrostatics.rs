@@ -20,7 +20,7 @@ use proteon_core::surface::mesh::Mesh;
 use proteon_electrostatics::{
     born_rfenergy, espotential, rfenergy, solve_local_elements_auto, solve_nonlocal_elements_auto,
     solve_nonlocal_elements_q, AdaptiveConfig, Charge, Domain, Locality, Params, Quadrature,
-    QualityReport, Severity, SolveConfig, Tri,
+    QualityReport, Severity, SolveConfig, TopologyReport, Tri,
 };
 
 /// Triangle count past which the dense O(N²) solve is warned about.
@@ -93,8 +93,6 @@ struct SolveOut {
     iterations: usize,
     residual: f64,
     converged: bool,
-    watertight: bool,
-    oriented: bool,
     /// Regular-Yukawa quadrature actually used ("fixed" / "adaptive") — surfaced so an
     /// adaptive request that fell back, or a fixed run, is never silently confused.
     quadrature: &'static str,
@@ -278,15 +276,43 @@ fn solve_surface_py<'py>(
 
     // Build elements/charges (cheap, O(N)) and run the P6.5 mesh-acceptance check WITH
     // the GIL — so issues are warned (and a refusal raised) BEFORE the heavy solve and
-    // survive even if the solve later fails (review). `Tri::new` cannot panic here: the
+    // survive even if the solve later fails. `Tri::new` cannot panic here: the
     // per-triangle degeneracy guard above already rejected zero-area faces.
     let vert = |k: usize| Vec3::new(vflat[k * 3], vflat[k * 3 + 1], vflat[k * 3 + 2]);
-    let elements: Vec<Tri> = (0..nf)
-        .map(|f| {
+    let mut mesh = Mesh {
+        verts: (0..nv).map(vert).collect(),
+        normals: Vec::new(),
+        tris: (0..nf)
+            .map(|f| [tflat[f * 3] as u32, tflat[f * 3 + 1] as u32, tflat[f * 3 + 2] as u32])
+            .collect(),
+    };
+
+    // Topological acceptance + auto-flip: a watertight, consistently-oriented but INWARD
+    // (inside-out) mesh has the right geometry but a reversed double-layer sign. Flip it
+    // to outward (correct result) and warn, rather than refuse. Genuinely broken topology
+    // (open / non-manifold / inconsistent winding / duplicate faces) refuses below.
+    let topo0 = TopologyReport::assess(&mesh);
+    let flipped = topo0.watertight && topo0.consistently_oriented && topo0.signed_volume <= 0.0;
+    if flipped {
+        mesh.flip();
+        let warnings = py.import("warnings")?;
+        warnings.call_method1(
+            "warn",
+            ("mesh was inward-oriented (signed volume ≤ 0); flipped to outward so the \
+              double-layer sign is correct.",),
+        )?;
+    }
+    let topology = TopologyReport::assess(&mesh);
+
+    // Build elements honouring any flip (swap the last two vertices when flipped).
+    let elements: Vec<Tri> = mesh
+        .tris
+        .iter()
+        .map(|t| {
             Tri::new(
-                vert(tflat[f * 3] as usize),
-                vert(tflat[f * 3 + 1] as usize),
-                vert(tflat[f * 3 + 2] as usize),
+                mesh.verts[t[0] as usize],
+                mesh.verts[t[1] as usize],
+                mesh.verts[t[2] as usize],
             )
         })
         .collect();
@@ -297,8 +323,9 @@ fn solve_surface_py<'py>(
         })
         .collect();
 
+    // Combined mesh-acceptance: topology + per-element geometry + charge placement.
     let quality = QualityReport::assess(&elements, &charges);
-    let issues = quality.issues();
+    let issues: Vec<_> = topology.issues().into_iter().chain(quality.issues()).collect();
     {
         let warnings = py.import("warnings")?;
         for issue in &issues {
@@ -365,31 +392,12 @@ fn solve_surface_py<'py>(
             return Err("solve produced a non-finite energy / potential".to_string());
         }
 
-        // Mesh-quality diagnostics: the double-layer sign depends on the winding, so a
-        // non-watertight or inconsistently-oriented mesh can give silently-wrong
-        // potentials. Surface these so the caller can trust (or distrust) the result.
-        let mesh = Mesh {
-            verts: (0..nv).map(vert).collect(),
-            normals: Vec::new(),
-            tris: (0..nf)
-                .map(|f| {
-                    [
-                        tflat[f * 3] as u32,
-                        tflat[f * 3 + 1] as u32,
-                        tflat[f * 3 + 2] as u32,
-                    ]
-                })
-                .collect(),
-        };
-
         Ok(SolveOut {
             phi,
             rfenergy: engy,
             iterations: stats.iterations,
             residual: stats.residual,
             converged: stats.converged,
-            watertight: mesh.is_watertight(),
-            oriented: mesh.is_consistently_oriented(),
             quadrature: match stats.quadrature {
                 Quadrature::Fixed => "fixed",
                 Quadrature::Adaptive(_) => "adaptive",
@@ -400,20 +408,6 @@ fn solve_surface_py<'py>(
 
     let out = result.map_err(PyValueError::new_err)?;
 
-    // A bad winding silently flips the double-layer sign — warn loudly rather than
-    // hand back a wrong-but-plausible potential.
-    if !out.oriented {
-        let warnings = py.import("warnings")?;
-        warnings.call_method1(
-            "warn",
-            (
-                "mesh is not consistently oriented: the double-layer sign depends on the \
-              triangle winding, so the potential may be wrong. Pass a watertight, \
-              outward-oriented mesh (e.g. ses_mesh_coarse_py output).",
-            ),
-        )?;
-    }
-
     let dict = PyDict::new(py);
     dict.set_item("surface_potential", PyArray1::from_vec(py, out.phi))?;
     dict.set_item("rfenergy", out.rfenergy)?;
@@ -421,8 +415,13 @@ fn solve_surface_py<'py>(
     dict.set_item("residual", out.residual)?;
     dict.set_item("converged", out.converged)?;
     dict.set_item("n_elements", nf)?;
-    dict.set_item("watertight", out.watertight)?;
-    dict.set_item("oriented", out.oriented)?;
+    dict.set_item("watertight", topology.watertight)?;
+    dict.set_item("oriented", topology.consistently_oriented)?;
+    dict.set_item("is_outward", topology.is_outward)?;
+    dict.set_item("signed_volume", topology.signed_volume)?;
+    dict.set_item("n_components", topology.num_components)?;
+    dict.set_item("n_duplicate_faces", topology.num_duplicate_faces)?;
+    dict.set_item("flipped_to_outward", flipped)?;
     dict.set_item("quadrature", out.quadrature)?;
     dict.set_item("capped_panels", out.capped_panels)?;
     // P6.5 mesh-acceptance metrics (the corresponding warnings were emitted before the

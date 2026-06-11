@@ -16,6 +16,7 @@
 use crate::adaptive::{longest_edge, point_to_triangle_distance};
 use crate::model::{Charge, Tri};
 use proteon_core::surface::geom::Vec3;
+use proteon_core::surface::mesh::Mesh;
 
 /// Severity of a quality issue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,6 +297,107 @@ impl QualityReport {
     }
 }
 
+/// Topological acceptance of the index mesh — the conditions the *interior-source* BEM
+/// model and the double-layer sign depend on, beyond per-element geometry.
+#[derive(Debug, Clone)]
+pub struct TopologyReport {
+    /// Every edge shared by exactly two triangles (closed manifold).
+    pub watertight: bool,
+    /// Every directed edge used once with its reverse once (no flipped windings).
+    pub consistently_oriented: bool,
+    /// Edges used by other than two triangles (boundary / non-manifold).
+    pub num_nonmanifold_edges: usize,
+    /// Signed enclosed volume (divergence theorem) — only meaningful when closed.
+    pub signed_volume: f64,
+    /// Closed + consistently oriented **outward** (`signed_volume > 0`) — the condition
+    /// the double-layer sign needs. An inward (inside-out) mesh flips the sign.
+    pub is_outward: bool,
+    /// Connected surface components (a multi-body solute is > 1).
+    pub num_components: usize,
+    /// Coincident (duplicate) faces.
+    pub num_duplicate_faces: usize,
+}
+
+impl TopologyReport {
+    /// Assess the topology of `mesh` (index-based: shared-vertex/edge structure).
+    #[must_use]
+    pub fn assess(mesh: &Mesh) -> Self {
+        let watertight = mesh.is_watertight();
+        let consistently_oriented = mesh.is_consistently_oriented();
+        let signed_volume = mesh.signed_volume();
+        Self {
+            watertight,
+            consistently_oriented,
+            num_nonmanifold_edges: mesh.num_nonmanifold_edges(),
+            signed_volume,
+            is_outward: watertight && consistently_oriented && signed_volume > 0.0,
+            num_components: mesh.num_connected_components(),
+            num_duplicate_faces: mesh.num_duplicate_faces(),
+        }
+    }
+
+    /// Classify the topology against acceptance policy. `Error` ⇒ the interior model /
+    /// double-layer sign is unsound; `Warn` ⇒ usable but worth surfacing.
+    #[must_use]
+    pub fn issues(&self) -> Vec<QualityIssue> {
+        let mut v = Vec::new();
+        if !self.watertight {
+            v.push(QualityIssue {
+                severity: Severity::Error,
+                message: format!(
+                    "{} non-manifold/boundary edge(s): the surface is not closed, so \
+                     interior/exterior (and the molecular potential) are undefined",
+                    self.num_nonmanifold_edges
+                ),
+            });
+        }
+        if !self.consistently_oriented {
+            v.push(QualityIssue {
+                severity: Severity::Error,
+                message: "inconsistent triangle winding: the double-layer sign is unreliable \
+                          (orient the mesh consistently)"
+                    .to_string(),
+            });
+        }
+        if self.num_duplicate_faces > 0 {
+            v.push(QualityIssue {
+                severity: Severity::Error,
+                message: format!(
+                    "{} duplicate (coincident) face(s): the surface is double-counted",
+                    self.num_duplicate_faces
+                ),
+            });
+        }
+        // Inward orientation only matters once closed + consistent (else the above fire,
+        // and signed_volume is not trustworthy anyway).
+        if self.watertight && self.consistently_oriented && self.signed_volume <= 0.0 {
+            v.push(QualityIssue {
+                severity: Severity::Error,
+                message: "inward-oriented mesh (signed volume ≤ 0): flip the winding so \
+                          normals point outward, or the double-layer sign is reversed"
+                    .to_string(),
+            });
+        }
+        if self.num_components > 1 {
+            v.push(QualityIssue {
+                severity: Severity::Warn,
+                message: format!(
+                    "{} disconnected surface components: ensure each charge is assigned to \
+                     (inside) the correct body — a mis-assigned charge is a silent error",
+                    self.num_components
+                ),
+            });
+        }
+        v
+    }
+
+    /// Whether any [`Severity::Error`] issue is present.
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
+        self.issues().iter().any(|i| i.severity == Severity::Error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +520,44 @@ mod tests {
         let rep = QualityReport::assess(&elements, &[]);
         assert_eq!(rep.n_near_degenerate, 6, "every sliver must be flagged");
         assert!(rep.has_errors());
+    }
+
+    #[test]
+    fn topology_accepts_outward_sphere_flags_inward_and_open() {
+        use proteon_core::surface::mesh::icosphere;
+        let m = icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 2);
+        let rep = TopologyReport::assess(&m);
+        assert!(rep.is_outward && !rep.has_errors(), "outward sphere accepted: {:?}", rep.issues());
+        assert_eq!(rep.num_components, 1);
+
+        // Inward (inside-out) → flagged, with the "outward" message.
+        let mut inward = m.clone();
+        inward.flip();
+        let rin = TopologyReport::assess(&inward);
+        assert!(!rin.is_outward && rin.has_errors());
+        assert!(rin.signed_volume < 0.0);
+        assert!(rin
+            .issues()
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.message.contains("outward")));
+
+        // Open (drop a face) → non-manifold edges → Error.
+        let mut open = m.clone();
+        open.tris.pop();
+        let ropen = TopologyReport::assess(&open);
+        assert!(!ropen.watertight && ropen.has_errors());
+    }
+
+    #[test]
+    fn topology_warns_on_multiple_components() {
+        use proteon_core::surface::mesh::icosphere;
+        let mut two = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1);
+        two.append(&icosphere(Vec3::new(5.0, 0.0, 0.0), 1.0, 1));
+        let rep = TopologyReport::assess(&two);
+        assert_eq!(rep.num_components, 2);
+        // Two disjoint outward spheres: a component warning, but no Error.
+        assert!(!rep.has_errors());
+        assert!(rep.issues().iter().any(|i| i.severity == Severity::Warn));
     }
 
     #[test]

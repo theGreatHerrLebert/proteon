@@ -105,11 +105,15 @@ def surface_potential(
     Returns:
         Dict with `surface_potential` (V, float64, volts), `rfenergy` (kJ/mol),
         `iterations`, `residual`, `converged` (bool), `n_elements`, the mesh
-        diagnostics `watertight` / `oriented` (bool), the `quadrature` rule actually
+        topology diagnostics `watertight` / `oriented` / `is_outward` (bool),
+        `signed_volume`, `n_components`, `n_duplicate_faces`, `flipped_to_outward`
+        (an inward mesh is auto-flipped to outward), the `quadrature` rule actually
         used, `capped_panels` (adaptive panels that did not reach tolerance), and the
-        mesh-acceptance metrics `min_angle_deg`, `max_aspect_ratio`,
+        geometry/charge metrics `min_angle_deg`, `max_aspect_ratio`,
         `n_near_degenerate`, `min_charge_gap_ratio`, `n_charges_outside`. Quality and
-        convergence issues emit warnings.
+        convergence issues emit warnings. A non-closed / inconsistently-wound / duplicate-
+        face mesh, or a charge outside or essentially on the surface, is refused unless
+        `allow_low_quality=True`.
 
     Raises:
         ValueError: bad shapes/values, a degenerate triangle, an over-budget mesh

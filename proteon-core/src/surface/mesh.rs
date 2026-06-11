@@ -102,6 +102,61 @@ impl Mesh {
             .all(|(&(a, b), &c)| c == 1 && dir.get(&(b, a)) == Some(&1))
     }
 
+    /// Number of connected surface components: triangles joined transitively by a
+    /// **shared edge** (union–find). A protein SES is often disconnected (several
+    /// solute bodies + buried cavities), so this is `1` for a single sphere and `>1`
+    /// for a multi-body surface. Edge connectivity (not vertex) is the surface notion;
+    /// two shells touching at a single vertex stay separate components.
+    pub fn num_connected_components(&self) -> usize {
+        let n = self.tris.len();
+        if n == 0 {
+            return 0;
+        }
+        // Union–find over triangle indices.
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                parent[x] = parent[parent[x]]; // path halving
+                x = parent[x];
+            }
+            x
+        }
+        // undirected edge → first triangle that owns it; union on the second.
+        let mut edge_owner: HashMap<(u32, u32), usize> = HashMap::new();
+        for (ti, &t) in self.tris.iter().enumerate() {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if let Some(&other) = edge_owner.get(&key) {
+                    let (ra, rb) = (find(&mut parent, ti), find(&mut parent, other));
+                    if ra != rb {
+                        parent[ra] = rb;
+                    }
+                } else {
+                    edge_owner.insert(key, ti);
+                }
+            }
+        }
+        (0..n).filter(|&i| find(&mut parent, i) == i).count()
+    }
+
+    /// Number of **duplicate** faces: triangles sharing the same vertex set (counted
+    /// as the surplus beyond one per distinct set). Coincident faces are a common mesh
+    /// bug that breaks edge-manifold counts and double-counts the surface.
+    pub fn num_duplicate_faces(&self) -> usize {
+        let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
+        let mut dups = 0;
+        for &t in &self.tris {
+            let mut key = t;
+            key.sort_unstable();
+            let c = seen.entry(key).or_insert(0);
+            if *c >= 1 {
+                dups += 1;
+            }
+            *c += 1;
+        }
+        dups
+    }
+
     /// Euler characteristic V − E + F, counting only vertices actually used by a
     /// triangle (stray/unreferenced vertices don't change the topology). A
     /// closed sphere-topology mesh gives 2.
@@ -596,6 +651,25 @@ mod tests {
         let mut m2 = m.clone();
         m2.verts.push(Vec3::new(9.0, 9.0, 9.0));
         assert_eq!(m2.euler_characteristic(), 2);
+    }
+
+    #[test]
+    fn connected_components_and_duplicate_faces() {
+        let one = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1);
+        assert_eq!(one.num_connected_components(), 1, "a single sphere is one body");
+        assert_eq!(one.num_duplicate_faces(), 0);
+
+        // Two disjoint spheres → two components (append offsets indices, so no shared
+        // edges between them).
+        let mut two = one.clone();
+        let mut other = icosphere(Vec3::new(5.0, 0.0, 0.0), 1.0, 1);
+        // Detach `other`'s vertices/indices via append.
+        two.append(&other);
+        assert_eq!(two.num_connected_components(), 2, "two disjoint spheres");
+
+        // Duplicate a face → one duplicate.
+        other.tris.push(other.tris[0]);
+        assert_eq!(other.num_duplicate_faces(), 1);
     }
 
     #[test]

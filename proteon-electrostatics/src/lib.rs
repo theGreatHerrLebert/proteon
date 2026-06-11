@@ -77,7 +77,7 @@ pub use laplace::laplace_collocation;
 pub use model::{BemModel, Charge, Domain, Locality, Params, PotentialKind, Tri};
 pub use post::{espotential, rfenergy, ENERGY_FACTOR, POTPREFACTOR};
 pub use quadrature::{radon7, TriangleQuad};
-pub use quality::{QualityIssue, QualityReport, Severity};
+pub use quality::{QualityIssue, QualityReport, Severity, TopologyReport};
 pub use solve::{
     dense_matrix_bytes, solve_local, solve_local_elements, solve_local_elements_auto,
     solve_nonlocal, solve_nonlocal_elements, solve_nonlocal_elements_auto,
