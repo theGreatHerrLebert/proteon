@@ -77,6 +77,7 @@ def surface_potential(
     max_iter: int = 10000,
     allow_large: bool = False,
     quadrature: str = "fixed",
+    allow_low_quality: bool = False,
 ) -> Dict[str, object]:
     """Solve the BEM on a surface mesh with point charges and read off the potential.
 
@@ -96,17 +97,24 @@ def surface_potential(
             requested the solve stays on the accurate CPU path (it is never routed to
             the fixed-quadrature GPU path); ``allow_large`` still governs the dense
             memory budget.
+        allow_low_quality: override the mesh-acceptance refusal (P6.5). By default the
+            solve refuses near-degenerate triangles and charges within a small multiple
+            of the local element size of the surface (a near-singular molecular
+            potential); set True to solve anyway (the issues are still warned).
 
     Returns:
         Dict with `surface_potential` (V, float64, volts), `rfenergy` (kJ/mol),
         `iterations`, `residual`, `converged` (bool), `n_elements`, the mesh
         diagnostics `watertight` / `oriented` (bool), the `quadrature` rule actually
-        used, and `capped_panels` (adaptive panels that did not reach tolerance; a
-        warning is emitted when > 0).
+        used, `capped_panels` (adaptive panels that did not reach tolerance), and the
+        mesh-acceptance metrics `min_angle_deg`, `max_aspect_ratio`,
+        `n_near_degenerate`, `min_charge_gap_ratio`. Quality and convergence issues
+        emit warnings.
 
     Raises:
         ValueError: bad shapes/values, a degenerate triangle, an over-budget mesh
-            (without `allow_large`), an unknown `quadrature`, or a non-converged /
+            (without `allow_large`), unacceptable mesh/charge quality (without
+            `allow_low_quality`), an unknown `quadrature`, or a non-converged /
             non-finite solve.
     """
     out = _el.solve_surface_py(
@@ -124,6 +132,7 @@ def surface_potential(
         max_iter,
         allow_large,
         quadrature,
+        allow_low_quality,
     )
     out["surface_potential"] = np.asarray(out["surface_potential"])
     return out

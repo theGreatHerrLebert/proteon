@@ -20,7 +20,7 @@ use proteon_core::surface::mesh::Mesh;
 use proteon_electrostatics::{
     born_rfenergy, espotential, rfenergy, solve_local_elements_auto, solve_nonlocal_elements_auto,
     solve_nonlocal_elements_q, AdaptiveConfig, Charge, Domain, Locality, Params, Quadrature,
-    SolveConfig, Tri,
+    QualityReport, Severity, SolveConfig, Tri,
 };
 
 /// Triangle count past which the dense O(N²) solve is warned about.
@@ -101,6 +101,15 @@ struct SolveOut {
     /// Adaptive panels that hit the depth cap with the error still above tolerance
     /// (0 for fixed). Non-zero ⇒ the near-singular result is not certified for those.
     capped_panels: usize,
+    /// Mesh-acceptance metrics (P6.5): smallest triangle angle, max aspect ratio,
+    /// near-degenerate count, and the scale-aware charge-to-surface gap ratio.
+    min_angle_deg: f64,
+    max_aspect_ratio: f64,
+    n_near_degenerate: usize,
+    min_charge_gap_ratio: f64,
+    /// Quality issues to surface to the caller as Python warnings (`Error`-severity ones
+    /// are only present here when the caller overrode the refusal).
+    quality_warnings: Vec<String>,
 }
 
 /// Solve the local/nonlocal BEM on a surface mesh with point charges and return the
@@ -112,13 +121,19 @@ struct SolveOut {
 /// near-singular remediation — slower, CPU-only, but accurate near clefts). Returns a
 /// dict: `surface_potential` (V, float64, volts), `rfenergy` (kJ/mol), `iterations`,
 /// `residual`, `converged` (bool), `n_elements`, `watertight`, `oriented`, `quadrature`
-/// (the rule actually used), `capped_panels`.
+/// (the rule actually used), `capped_panels`, and the P6.5 mesh-acceptance metrics
+/// `min_angle_deg` / `max_aspect_ratio` / `n_near_degenerate` / `min_charge_gap_ratio`.
+///
+/// Refuses (raises `ValueError`) on unacceptable mesh/charge quality — near-degenerate
+/// triangles, or a charge within a small multiple of the local element size of the
+/// surface (the molecular-potential trace would be near-singular) — unless
+/// `allow_low_quality=True`. Sliver elements and near-surface charges otherwise warn.
 #[pyfunction]
 #[pyo3(signature = (
     vertices, triangles, charge_positions, charge_values,
     eps_omega=1.0, eps_sigma=78.0, eps_inf=1.8, lambda_=20.0,
     nonlocal_=false, tol=1e-7, restart=200, max_iter=10000, allow_large=false,
-    quadrature="fixed",
+    quadrature="fixed", allow_low_quality=false,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn solve_surface_py<'py>(
@@ -137,6 +152,7 @@ fn solve_surface_py<'py>(
     max_iter: usize,
     allow_large: bool,
     quadrature: &str,
+    allow_low_quality: bool,
 ) -> PyResult<Py<PyDict>> {
     // --- validate shapes -----------------------------------------------------
     if vertices.shape().len() != 2 || vertices.shape()[1] != 3 {
@@ -288,6 +304,28 @@ fn solve_surface_py<'py>(
             })
             .collect();
 
+        // P6.5 mesh acceptance: assess BEFORE the expensive solve. Refuse on Error-
+        // severity issues (near-degenerate triangles, a charge near Γ in element-size
+        // units) unless overridden; collect the rest as warnings. "No silent arbitrary-
+        // protein runs."
+        let quality = QualityReport::assess(&elements, &charges);
+        let issues = quality.issues();
+        let has_errors = issues.iter().any(|i| i.severity == Severity::Error);
+        if has_errors && !allow_low_quality {
+            let msgs: Vec<String> = issues
+                .iter()
+                .filter(|i| i.severity == Severity::Error)
+                .map(|i| i.message.clone())
+                .collect();
+            return Err(format!(
+                "mesh/charge quality unacceptable for a reliable solve: {}. \
+                 Fix the mesh/charge placement, or pass allow_low_quality=True to override.",
+                msgs.join("; ")
+            ));
+        }
+        // Surface every issue (incl. overridden errors) as a warning.
+        let quality_warnings: Vec<String> = issues.iter().map(|i| i.message.clone()).collect();
+
         // The CauchyData trait is object-safe; box the result so both localities share
         // the post-processing path.
         let (cauchy, engy, stats): (Box<dyn proteon_electrostatics::CauchyData>, f64, _) =
@@ -361,6 +399,11 @@ fn solve_surface_py<'py>(
                 Quadrature::Adaptive(_) => "adaptive",
             },
             capped_panels: stats.capped_panels,
+            min_angle_deg: quality.min_angle_deg,
+            max_aspect_ratio: quality.max_aspect_ratio,
+            n_near_degenerate: quality.n_near_degenerate,
+            min_charge_gap_ratio: quality.min_charge_gap_ratio,
+            quality_warnings,
         })
     });
 
@@ -391,6 +434,19 @@ fn solve_surface_py<'py>(
     dict.set_item("oriented", out.oriented)?;
     dict.set_item("quadrature", out.quadrature)?;
     dict.set_item("capped_panels", out.capped_panels)?;
+    dict.set_item("min_angle_deg", out.min_angle_deg)?;
+    dict.set_item("max_aspect_ratio", out.max_aspect_ratio)?;
+    dict.set_item("n_near_degenerate", out.n_near_degenerate)?;
+    dict.set_item("min_charge_gap_ratio", out.min_charge_gap_ratio)?;
+
+    // Surface mesh-acceptance warnings (sliver elements, a charge close to Γ, or an
+    // overridden Error) so a low-quality result is never silently trusted.
+    if !out.quality_warnings.is_empty() {
+        let warnings = py.import("warnings")?;
+        for msg in &out.quality_warnings {
+            warnings.call_method1("warn", (format!("mesh/charge quality: {msg}"),))?;
+        }
+    }
 
     // A capped adaptive solve means some near-singular panels did not reach tolerance;
     // surface it so the caller can raise the depth or distrust those entries.
