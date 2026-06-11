@@ -76,6 +76,7 @@ def surface_potential(
     restart: int = 200,
     max_iter: int = 10000,
     allow_large: bool = False,
+    quadrature: str = "fixed",
 ) -> Dict[str, object]:
     """Solve the BEM on a surface mesh with point charges and read off the potential.
 
@@ -88,15 +89,25 @@ def surface_potential(
         nonlocal_: nonlocal (Lorentz/Yukawa) solve instead of local Poisson.
         tol/restart/max_iter: GMRES controls (converges on the true residual).
         allow_large: override the ~6 GiB dense-matrix memory guard.
+        quadrature: regular-Yukawa rule for the *nonlocal* solve — ``"fixed"``
+            (default, fast 7-point Radon) or ``"adaptive"`` (the near-singular
+            remediation; slower, CPU-only, accurate near clefts). No effect on the
+            local solve (the Laplace collocation is exact). When ``"adaptive"`` is
+            requested the solve stays on the accurate CPU path (it is never routed to
+            the fixed-quadrature GPU path); ``allow_large`` still governs the dense
+            memory budget.
 
     Returns:
         Dict with `surface_potential` (V, float64, volts), `rfenergy` (kJ/mol),
-        `iterations`, `residual`, `converged` (bool), `n_elements`, and the mesh
-        diagnostics `watertight` / `oriented` (bool).
+        `iterations`, `residual`, `converged` (bool), `n_elements`, the mesh
+        diagnostics `watertight` / `oriented` (bool), the `quadrature` rule actually
+        used, and `capped_panels` (adaptive panels that did not reach tolerance; a
+        warning is emitted when > 0).
 
     Raises:
         ValueError: bad shapes/values, a degenerate triangle, an over-budget mesh
-            (without `allow_large`), or a non-converged / non-finite solve.
+            (without `allow_large`), an unknown `quadrature`, or a non-converged /
+            non-finite solve.
     """
     out = _el.solve_surface_py(
         np.ascontiguousarray(vertices, dtype=np.float64),
@@ -112,6 +123,7 @@ def surface_potential(
         restart,
         max_iter,
         allow_large,
+        quadrature,
     )
     out["surface_potential"] = np.asarray(out["surface_potential"])
     return out

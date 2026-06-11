@@ -18,9 +18,9 @@ use pyo3::types::PyDict;
 use proteon_core::surface::geom::Vec3;
 use proteon_core::surface::mesh::Mesh;
 use proteon_electrostatics::{
-    born_rfenergy, espotential, rfenergy, solve_local_elements_auto,
-    solve_nonlocal_elements_auto, Charge,
-    Domain, Locality, Params, SolveConfig, Tri,
+    born_rfenergy, espotential, rfenergy, solve_local_elements_auto, solve_nonlocal_elements_auto,
+    solve_nonlocal_elements_q, AdaptiveConfig, Charge, Domain, Locality, Params, Quadrature,
+    SolveConfig, Tri,
 };
 
 /// Triangle count past which the dense O(N²) solve is warned about.
@@ -95,20 +95,30 @@ struct SolveOut {
     converged: bool,
     watertight: bool,
     oriented: bool,
+    /// Regular-Yukawa quadrature actually used ("fixed" / "adaptive") — surfaced so an
+    /// adaptive request that fell back, or a fixed run, is never silently confused.
+    quadrature: &'static str,
+    /// Adaptive panels that hit the depth cap with the error still above tolerance
+    /// (0 for fixed). Non-zero ⇒ the near-singular result is not certified for those.
+    capped_panels: usize,
 }
 
 /// Solve the local/nonlocal BEM on a surface mesh with point charges and return the
 /// per-vertex electrostatic potential plus diagnostics.
 ///
 /// Inputs: `vertices` (V×3 float64), `triangles` (F×3 int), `charge_positions` (Q×3
-/// float64), `charge_values` (Q,). Returns a dict: `surface_potential` (V, float64,
-/// volts), `rfenergy` (kJ/mol), `iterations`, `residual`, `converged` (bool),
-/// `n_elements`.
+/// float64), `charge_values` (Q,). `quadrature` selects the regular-Yukawa rule for the
+/// **nonlocal** solve: `"fixed"` (default, fast 7-point Radon) or `"adaptive"` (the P6.5
+/// near-singular remediation — slower, CPU-only, but accurate near clefts). Returns a
+/// dict: `surface_potential` (V, float64, volts), `rfenergy` (kJ/mol), `iterations`,
+/// `residual`, `converged` (bool), `n_elements`, `watertight`, `oriented`, `quadrature`
+/// (the rule actually used), `capped_panels`.
 #[pyfunction]
 #[pyo3(signature = (
     vertices, triangles, charge_positions, charge_values,
     eps_omega=1.0, eps_sigma=78.0, eps_inf=1.8, lambda_=20.0,
     nonlocal_=false, tol=1e-7, restart=200, max_iter=10000, allow_large=false,
+    quadrature="fixed",
 ))]
 #[allow(clippy::too_many_arguments)]
 fn solve_surface_py<'py>(
@@ -126,6 +136,7 @@ fn solve_surface_py<'py>(
     restart: usize,
     max_iter: usize,
     allow_large: bool,
+    quadrature: &str,
 ) -> PyResult<Py<PyDict>> {
     // --- validate shapes -----------------------------------------------------
     if vertices.shape().len() != 2 || vertices.shape()[1] != 3 {
@@ -156,6 +167,27 @@ fn solve_surface_py<'py>(
         ));
     }
     validate_params(eps_omega, eps_sigma, eps_inf, lambda_)?;
+
+    // Quadrature selector (nonlocal regular-Yukawa). Adaptive is CPU-only and accurate
+    // near clefts; fixed is the fast default. Parsed here (with the GIL) so the off-GIL
+    // closure just consumes the Copy enum.
+    let quad = match quadrature {
+        "fixed" => Quadrature::Fixed,
+        "adaptive" => Quadrature::Adaptive(AdaptiveConfig::default()),
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "quadrature must be 'fixed' or 'adaptive', got '{other}'"
+            )));
+        }
+    };
+    if !nonlocal_ && matches!(quad, Quadrature::Adaptive(_)) {
+        let warnings = py.import("warnings")?;
+        warnings.call_method1(
+            "warn",
+            ("quadrature='adaptive' has no effect on the local solve (the Laplace \
+              collocation is analytic/exact); it applies only to nonlocal_=True.",),
+        )?;
+    }
 
     // Memory guard: the dense BEM holds 2 (local) or 4 (nonlocal) N×N f64 matrices.
     // Refuse a job that would blow past the budget unless the caller opts in.
@@ -260,8 +292,18 @@ fn solve_surface_py<'py>(
         // the post-processing path.
         let (cauchy, engy, stats): (Box<dyn proteon_electrostatics::CauchyData>, f64, _) =
             if nonlocal_ {
-                let (r, s) = solve_nonlocal_elements_auto(&elements, &charges, &params, &cfg)
-                    .map_err(|e| e.to_string())?;
+                // Adaptive (accuracy requested) → CPU adaptive path DIRECTLY, never the
+                // size dispatcher, which could route a large mesh to the fixed-quadrature
+                // GPU path and silently swap accuracy. Fixed → the auto (GPU-capable) path.
+                let (r, s) = match quad {
+                    Quadrature::Adaptive(_) => {
+                        solve_nonlocal_elements_q(&elements, &charges, &params, &cfg, quad)
+                    }
+                    Quadrature::Fixed => {
+                        solve_nonlocal_elements_auto(&elements, &charges, &params, &cfg)
+                    }
+                }
+                .map_err(|e| e.to_string())?;
                 let e = rfenergy(&elements, &charges, &r);
                 (Box::new(r), e, s)
             } else {
@@ -314,6 +356,11 @@ fn solve_surface_py<'py>(
             converged: stats.converged,
             watertight: mesh.is_watertight(),
             oriented: mesh.is_consistently_oriented(),
+            quadrature: match stats.quadrature {
+                Quadrature::Fixed => "fixed",
+                Quadrature::Adaptive(_) => "adaptive",
+            },
+            capped_panels: stats.capped_panels,
         })
     });
 
@@ -342,6 +389,22 @@ fn solve_surface_py<'py>(
     dict.set_item("n_elements", nf)?;
     dict.set_item("watertight", out.watertight)?;
     dict.set_item("oriented", out.oriented)?;
+    dict.set_item("quadrature", out.quadrature)?;
+    dict.set_item("capped_panels", out.capped_panels)?;
+
+    // A capped adaptive solve means some near-singular panels did not reach tolerance;
+    // surface it so the caller can raise the depth or distrust those entries.
+    if out.capped_panels > 0 {
+        let warnings = py.import("warnings")?;
+        warnings.call_method1(
+            "warn",
+            (format!(
+                "{} adaptive panels hit the depth cap without converging; the near-singular \
+                 result is not certified for those entries.",
+                out.capped_panels
+            ),),
+        )?;
+    }
     Ok(dict.unbind())
 }
 
