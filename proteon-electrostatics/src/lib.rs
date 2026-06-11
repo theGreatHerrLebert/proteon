@@ -59,6 +59,7 @@
 
 pub mod adaptive;
 pub mod analytic;
+pub mod format;
 #[cfg(feature = "cuda")]
 pub mod gpu;
 pub mod laplace;
@@ -75,6 +76,7 @@ pub use analytic::{
     analytic_sphere_mesh, born_rfenergy, concentric_kirkwood_rfenergy, concentric_shell_rfenergy,
     kirkwood_rfenergy,
 };
+pub use format::{read_hmo, read_msms, read_off, read_pqr, write_off};
 #[cfg(feature = "cuda")]
 pub use gpu::{solve_local_gpu, solve_nonlocal_gpu};
 pub use laplace::laplace_collocation;
