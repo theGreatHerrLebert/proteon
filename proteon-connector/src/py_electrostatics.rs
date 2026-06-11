@@ -295,11 +295,12 @@ fn solve_surface_py<'py>(
     // Component volumes are only meaningful for a closed, consistent mesh, so only
     // auto-orient then.
     let topo0 = TopologyReport::assess(&mesh);
-    // Auto-orient only a closed, consistent, NON-nested mesh: with cavities present a
-    // legitimately-inward shell must not be flipped (it bounds a solvent pocket); such
-    // meshes are out of formulation scope and refuse via the cavity error below.
-    let flipped = if topo0.watertight && topo0.consistently_oriented && topo0.num_cavities == 0 {
-        mesh.orient_outward()
+    // Auto-orient outward-from-solute by NESTING parity (body +, cavity −, island +) on a
+    // closed, consistent mesh — this is correct for cavities too (the scalar-f solve then
+    // handles them; multi-region cavity science gate passes). Component volumes are only
+    // meaningful for a closed, consistent mesh, so only orient then.
+    let flipped = if topo0.watertight && topo0.consistently_oriented {
+        mesh.orient_by_nesting()
     } else {
         false
     };
@@ -307,8 +308,8 @@ fn solve_surface_py<'py>(
         let warnings = py.import("warnings")?;
         warnings.call_method1(
             "warn",
-            ("one or more mesh components were inside-out; flipped to outward so the \
-              double-layer sign is correct.",),
+            ("one or more mesh components were re-oriented outward-from-solute (by nesting \
+              parity) so the double-layer sign is correct.",),
         )?;
     }
     let topology = TopologyReport::assess(&mesh);

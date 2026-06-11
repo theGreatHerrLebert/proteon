@@ -310,14 +310,17 @@ pub struct TopologyReport {
     /// Aggregate signed enclosed volume (divergence theorem) — only meaningful when
     /// closed, and can MASK an inward component, so orientation is judged per component.
     pub signed_volume: f64,
-    /// Closed + consistently oriented with **every** component outward — the condition
-    /// the double-layer sign needs. A single aggregate volume is insufficient (review).
+    /// Closed + consistently oriented with **every** component correctly oriented
+    /// *outward-from-solute* (signed-volume sign `(−1)^nesting_depth` — body +, cavity −,
+    /// island +). The condition the double-layer sign needs; nesting-aware so a cavity's
+    /// legitimately-negative volume is not flagged (multi-region work).
     pub is_outward: bool,
     /// Connected surface components (a multi-body solute is > 1).
     pub num_components: usize,
-    /// Components that are inside-out (per-component signed volume < 0, when closed +
-    /// consistently oriented). The connector auto-flips these to outward.
-    pub num_inward_components: usize,
+    /// Components whose orientation is *wrong* for their nesting parity (sign ≠
+    /// `(−1)^depth`), when closed + consistently oriented. The connector auto-fixes these
+    /// via `orient_by_nesting`.
+    pub num_misoriented_components: usize,
     /// Any component whose enclosed volume is non-finite or, relative to its area,
     /// effectively zero — an indeterminate orientation (review [Med#2]).
     pub has_degenerate_volume: bool,
@@ -327,9 +330,10 @@ pub struct TopologyReport {
     /// check was inconclusive (mesh too irregular to verify cheaply). `Some(k>0)` is
     /// authoritative; `Some(0)` means "no clear penetration found", not a proof.
     pub num_self_intersections: Option<usize>,
-    /// Nested components (buried cavities / shell-in-shell). The single-region BEM
-    /// formulation does not model solvent-filled cavities (spec §10), so any nesting is
-    /// out of scope. Computed only for a closed, consistently-oriented mesh.
+    /// Nested components (buried cavities / shell-in-shell). Supported via orientation
+    /// (the scalar-`f` solve is correct once oriented by nesting; cavity science gate in
+    /// `tests/cavity_concentric.rs`) but less-exercised than the single-body case, so a
+    /// Warn, not an Error. Computed only for a closed, consistently-oriented mesh.
     pub num_cavities: usize,
 }
 
@@ -341,16 +345,27 @@ impl TopologyReport {
         let consistently_oriented = mesh.is_consistently_oriented();
         let signed_volume = mesh.signed_volume();
         let va = mesh.component_volumes_areas();
-        let mut num_inward = 0usize;
+        // Nesting depths are only meaningful (and only worth the O(k·N) cost) for a
+        // closed, consistently-oriented mesh; a non-closed mesh refuses regardless.
+        let depths = if watertight && consistently_oriented {
+            mesh.component_nesting_depths()
+        } else {
+            Vec::new()
+        };
+        let mut num_misoriented = 0usize;
         let mut degenerate = false;
-        for &(vol, area) in &va {
+        for (c, &(vol, area)) in va.iter().enumerate() {
             // A closed component should enclose ~area^1.5 of volume; far below that (or
             // non-finite) is indeterminate.
             let floor = 1e-9 * area.max(0.0).powf(1.5);
             if !vol.is_finite() || vol.abs() <= floor {
                 degenerate = true;
-            } else if vol < 0.0 {
-                num_inward += 1;
+            } else {
+                // Correct sign by nesting parity (depth unknown ⇒ assume top-level body).
+                let want = if depths.get(c).copied().unwrap_or(0) % 2 == 0 { 1.0 } else { -1.0 };
+                if vol.signum() != want {
+                    num_misoriented += 1;
+                }
             }
         }
         Self {
@@ -360,20 +375,14 @@ impl TopologyReport {
             signed_volume,
             is_outward: watertight
                 && consistently_oriented
-                && num_inward == 0
+                && num_misoriented == 0
                 && !degenerate,
             num_components: mesh.num_connected_components(),
-            num_inward_components: num_inward,
+            num_misoriented_components: num_misoriented,
             has_degenerate_volume: degenerate,
             num_duplicate_faces: mesh.num_duplicate_faces(),
             num_self_intersections: mesh.count_self_intersections(),
-            // Nesting is only meaningful for closed, oriented components (and a non-closed
-            // mesh refuses regardless); skip the O(k·N) work otherwise.
-            num_cavities: if watertight && consistently_oriented {
-                mesh.num_nested_components()
-            } else {
-                0
-            },
+            num_cavities: depths.iter().filter(|&&d| d > 0).count(),
         }
     }
 
@@ -439,23 +448,24 @@ impl TopologyReport {
                         .to_string(),
                 });
             }
-            if self.num_inward_components > 0 {
+            if self.num_misoriented_components > 0 {
                 v.push(QualityIssue {
                     severity: Severity::Error,
                     message: format!(
-                        "{} inward-oriented (inside-out) component(s): flip the winding so \
-                         normals point outward, or the double-layer sign is reversed",
-                        self.num_inward_components
+                        "{} component(s) oriented wrong for their nesting parity (sign ≠ \
+                         (−1)^depth): orient outward-from-solute (body +, cavity −, …), or \
+                         the double-layer sign is reversed",
+                        self.num_misoriented_components
                     ),
                 });
             }
             if self.num_cavities > 0 {
                 v.push(QualityIssue {
-                    severity: Severity::Error,
+                    severity: Severity::Warn,
                     message: format!(
-                        "{} nested component(s) (buried cavity / shell-in-shell): the \
-                         single-region formulation does not model solvent-filled cavities \
-                         (spec §10) — not supported",
+                        "{} buried cavity / nested component(s): handled via nesting \
+                         orientation (cavity science gate passes), but multi-region is \
+                         less-exercised than the single-body case — sanity-check the result",
                         self.num_cavities
                     ),
                 });
@@ -645,19 +655,27 @@ mod tests {
     }
 
     #[test]
-    fn topology_refuses_buried_cavity() {
-        // A small shell inside a big one (a solvent-filled cavity) is out of the
-        // single-region formulation's scope → Error.
+    fn topology_accepts_oriented_cavity_with_warning() {
+        // A small shell inside a big one (a solvent-filled cavity), oriented by nesting
+        // (body +, cavity −), is now SUPPORTED — accepted with a Warn, not an Error
+        // (multi-region; the cavity science gate passes).
         use proteon_core::surface::mesh::icosphere;
         let mut cavity = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
         cavity.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
+        cavity.orient_by_nesting(); // body +, cavity −
         let rep = TopologyReport::assess(&cavity);
         assert_eq!(rep.num_cavities, 1);
-        assert!(rep.has_errors());
+        assert!(rep.is_outward, "correctly oriented per nesting");
+        assert!(!rep.has_errors(), "an oriented cavity is accepted: {:?}", rep.issues());
         assert!(rep
             .issues()
             .iter()
-            .any(|i| i.severity == Severity::Error && i.message.contains("cavity")));
+            .any(|i| i.severity == Severity::Warn && i.message.contains("cavity")));
+
+        // Without orientation, the inner shell is misoriented for its parity → Error.
+        let mut raw = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
+        raw.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
+        assert!(TopologyReport::assess(&raw).has_errors(), "unoriented cavity is misoriented");
     }
 
     #[test]
@@ -719,12 +737,12 @@ mod tests {
 
         let rep = TopologyReport::assess(&mixed);
         assert!(rep.signed_volume > 0.0, "aggregate volume masks the inward shell");
-        assert_eq!(rep.num_inward_components, 1, "per-component catches the inward shell");
+        assert_eq!(rep.num_misoriented_components, 1, "per-component catches the inward shell");
         assert!(!rep.is_outward && rep.has_errors());
         assert!(rep
             .issues()
             .iter()
-            .any(|i| i.severity == Severity::Error && i.message.contains("inward-oriented")));
+            .any(|i| i.severity == Severity::Error && i.message.contains("nesting parity")));
     }
 
     #[test]
