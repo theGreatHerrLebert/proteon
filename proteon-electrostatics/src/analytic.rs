@@ -99,13 +99,18 @@ pub fn kirkwood_rfenergy(
 /// Generalized (multi-shell) Kirkwood reaction-field energy (kJ/mol) of a point charge
 /// `q` at `offset` from the centre, **in the innermost region** of concentric dielectric
 /// shells. `eps_inner` is the innermost dielectric (the charge's region); `shells` are the
-/// `(interface_radius, dielectric_outside)` triples in ASCENDING radius. This is the
+/// `(interface_radius, dielectric_outside)` pairs in ASCENDING radius. This is the
 /// off-centre cavity oracle: it couples all multipoles across every interface.
 ///
 /// Implemented by the numerically **stable** layered-media reflection recursion (Möbius
 /// maps + multiplicative `(r_k/r_{k+1})^{2l+1}` propagation), not the ill-conditioned
 /// transfer-matrix product. Reductions (both gated): one interface ⇒ [`kirkwood_rfenergy`];
 /// `offset = 0` ⇒ [`concentric_shell_rfenergy`] (the `l=0` term).
+///
+/// # Panics
+/// On non-positive / non-finite dielectrics or radii, non-strictly-increasing interface
+/// radii, or `offset` not in `[0, I₁)` (the series only converges inside the innermost
+/// region) — a bad geometry would otherwise return silent garbage.
 #[must_use]
 pub fn concentric_kirkwood_rfenergy(
     charge: f64,
@@ -115,13 +120,25 @@ pub fn concentric_kirkwood_rfenergy(
     n_terms: usize,
 ) -> f64 {
     assert!(!shells.is_empty(), "need at least one interface");
-    let s = offset;
+    assert!(eps_inner.is_finite() && eps_inner > 0.0, "eps_inner must be > 0");
     let i1 = shells[0].0; // innermost interface radius
+    let mut prev_r = 0.0;
+    for &(r, eps) in shells {
+        assert!(r.is_finite() && r > prev_r, "interface radii must be finite, strictly increasing");
+        assert!(eps.is_finite() && eps > 0.0, "dielectrics must be > 0");
+        prev_r = r;
+    }
+    assert!(offset.is_finite() && (0.0..i1).contains(&offset), "offset must be in [0, I₁)");
+
+    let s = offset;
+    let x2 = (s / i1).powi(2);
+    let mut offset_power = 1.0; // (s/I₁)^{2l}
     let mut phi = 0.0; // Σ_l (R₀/ε_inner)·(s/I₁)^{2l} / I₁
     for l in 0..n_terms {
         let lf = l as f64;
         // Reflection ratio R = (growing value)/(decaying value) at an interface; the
-        // exterior region is purely decaying, so R = 0 there. Propagate inward.
+        // exterior region is purely decaying, so R = 0 there. Propagate inward. (Pole-
+        // free for physical ε / ordered radii: induction keeps R > −1 and l − K > 0.)
         let mut r = 0.0;
         for k in (0..shells.len()).rev() {
             let eps_above = shells[k].1;
@@ -135,7 +152,8 @@ pub fn concentric_kirkwood_rfenergy(
             }
         }
         // r is now the reaction ratio of the innermost region at I₁.
-        phi += (r / eps_inner) * (s / i1).powi(2 * l as i32) / i1;
+        phi += (r / eps_inner) * offset_power / i1;
+        offset_power *= x2;
     }
     POTPREFACTOR * ENERGY_FACTOR * charge * charge * phi
 }
