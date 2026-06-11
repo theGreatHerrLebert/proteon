@@ -108,8 +108,8 @@ def surface_potential(
         diagnostics `watertight` / `oriented` (bool), the `quadrature` rule actually
         used, `capped_panels` (adaptive panels that did not reach tolerance), and the
         mesh-acceptance metrics `min_angle_deg`, `max_aspect_ratio`,
-        `n_near_degenerate`, `min_charge_gap_ratio`. Quality and convergence issues
-        emit warnings.
+        `n_near_degenerate`, `min_charge_gap_ratio`, `n_charges_outside`. Quality and
+        convergence issues emit warnings.
 
     Raises:
         ValueError: bad shapes/values, a degenerate triangle, an over-budget mesh

@@ -101,15 +101,6 @@ struct SolveOut {
     /// Adaptive panels that hit the depth cap with the error still above tolerance
     /// (0 for fixed). Non-zero ⇒ the near-singular result is not certified for those.
     capped_panels: usize,
-    /// Mesh-acceptance metrics (P6.5): smallest triangle angle, max aspect ratio,
-    /// near-degenerate count, and the scale-aware charge-to-surface gap ratio.
-    min_angle_deg: f64,
-    max_aspect_ratio: f64,
-    n_near_degenerate: usize,
-    min_charge_gap_ratio: f64,
-    /// Quality issues to surface to the caller as Python warnings (`Error`-severity ones
-    /// are only present here when the caller overrode the refusal).
-    quality_warnings: Vec<String>,
 }
 
 /// Solve the local/nonlocal BEM on a surface mesh with point charges and return the
@@ -285,46 +276,51 @@ fn solve_surface_py<'py>(
         max_iter,
     };
 
-    // --- heavy compute off the GIL -------------------------------------------
-    let result = py.allow_threads(|| -> Result<SolveOut, String> {
-        let vert = |k: usize| Vec3::new(vflat[k * 3], vflat[k * 3 + 1], vflat[k * 3 + 2]);
-        let elements: Vec<Tri> = (0..nf)
-            .map(|f| {
-                Tri::new(
-                    vert(tflat[f * 3] as usize),
-                    vert(tflat[f * 3 + 1] as usize),
-                    vert(tflat[f * 3 + 2] as usize),
-                )
-            })
-            .collect();
-        let charges: Vec<Charge> = (0..nq)
-            .map(|q| Charge {
-                pos: Vec3::new(qpos[q * 3], qpos[q * 3 + 1], qpos[q * 3 + 2]),
-                val: qval[q],
-            })
-            .collect();
+    // Build elements/charges (cheap, O(N)) and run the P6.5 mesh-acceptance check WITH
+    // the GIL — so issues are warned (and a refusal raised) BEFORE the heavy solve and
+    // survive even if the solve later fails (review). `Tri::new` cannot panic here: the
+    // per-triangle degeneracy guard above already rejected zero-area faces.
+    let vert = |k: usize| Vec3::new(vflat[k * 3], vflat[k * 3 + 1], vflat[k * 3 + 2]);
+    let elements: Vec<Tri> = (0..nf)
+        .map(|f| {
+            Tri::new(
+                vert(tflat[f * 3] as usize),
+                vert(tflat[f * 3 + 1] as usize),
+                vert(tflat[f * 3 + 2] as usize),
+            )
+        })
+        .collect();
+    let charges: Vec<Charge> = (0..nq)
+        .map(|q| Charge {
+            pos: Vec3::new(qpos[q * 3], qpos[q * 3 + 1], qpos[q * 3 + 2]),
+            val: qval[q],
+        })
+        .collect();
 
-        // P6.5 mesh acceptance: assess BEFORE the expensive solve. Refuse on Error-
-        // severity issues (near-degenerate triangles, a charge near Γ in element-size
-        // units) unless overridden; collect the rest as warnings. "No silent arbitrary-
-        // protein runs."
-        let quality = QualityReport::assess(&elements, &charges);
-        let issues = quality.issues();
-        let has_errors = issues.iter().any(|i| i.severity == Severity::Error);
-        if has_errors && !allow_low_quality {
-            let msgs: Vec<String> = issues
-                .iter()
-                .filter(|i| i.severity == Severity::Error)
-                .map(|i| i.message.clone())
-                .collect();
-            return Err(format!(
-                "mesh/charge quality unacceptable for a reliable solve: {}. \
-                 Fix the mesh/charge placement, or pass allow_low_quality=True to override.",
-                msgs.join("; ")
-            ));
+    let quality = QualityReport::assess(&elements, &charges);
+    let issues = quality.issues();
+    {
+        let warnings = py.import("warnings")?;
+        for issue in &issues {
+            warnings.call_method1("warn", (format!("mesh/charge quality: {}", issue.message),))?;
         }
-        // Surface every issue (incl. overridden errors) as a warning.
-        let quality_warnings: Vec<String> = issues.iter().map(|i| i.message.clone()).collect();
+    }
+    if issues.iter().any(|i| i.severity == Severity::Error) && !allow_low_quality {
+        let msgs: Vec<String> = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .map(|i| i.message.clone())
+            .collect();
+        return Err(PyValueError::new_err(format!(
+            "mesh/charge quality unacceptable for a reliable solve: {}. \
+             Fix the mesh/charge placement, or pass allow_low_quality=True to override.",
+            msgs.join("; ")
+        )));
+    }
+
+    // --- heavy compute off the GIL -------------------------------------------
+    let result = py.allow_threads(move || -> Result<SolveOut, String> {
+        let vert = |k: usize| Vec3::new(vflat[k * 3], vflat[k * 3 + 1], vflat[k * 3 + 2]);
 
         // The CauchyData trait is object-safe; box the result so both localities share
         // the post-processing path.
@@ -399,11 +395,6 @@ fn solve_surface_py<'py>(
                 Quadrature::Adaptive(_) => "adaptive",
             },
             capped_panels: stats.capped_panels,
-            min_angle_deg: quality.min_angle_deg,
-            max_aspect_ratio: quality.max_aspect_ratio,
-            n_near_degenerate: quality.n_near_degenerate,
-            min_charge_gap_ratio: quality.min_charge_gap_ratio,
-            quality_warnings,
         })
     });
 
@@ -434,19 +425,13 @@ fn solve_surface_py<'py>(
     dict.set_item("oriented", out.oriented)?;
     dict.set_item("quadrature", out.quadrature)?;
     dict.set_item("capped_panels", out.capped_panels)?;
-    dict.set_item("min_angle_deg", out.min_angle_deg)?;
-    dict.set_item("max_aspect_ratio", out.max_aspect_ratio)?;
-    dict.set_item("n_near_degenerate", out.n_near_degenerate)?;
-    dict.set_item("min_charge_gap_ratio", out.min_charge_gap_ratio)?;
-
-    // Surface mesh-acceptance warnings (sliver elements, a charge close to Γ, or an
-    // overridden Error) so a low-quality result is never silently trusted.
-    if !out.quality_warnings.is_empty() {
-        let warnings = py.import("warnings")?;
-        for msg in &out.quality_warnings {
-            warnings.call_method1("warn", (format!("mesh/charge quality: {msg}"),))?;
-        }
-    }
+    // P6.5 mesh-acceptance metrics (the corresponding warnings were emitted before the
+    // solve, so they survive even a solve failure).
+    dict.set_item("min_angle_deg", quality.min_angle_deg)?;
+    dict.set_item("max_aspect_ratio", quality.max_aspect_ratio)?;
+    dict.set_item("n_near_degenerate", quality.n_near_degenerate)?;
+    dict.set_item("min_charge_gap_ratio", quality.min_charge_gap_ratio)?;
+    dict.set_item("n_charges_outside", quality.n_charges_outside)?;
 
     // A capped adaptive solve means some near-singular panels did not reach tolerance;
     // surface it so the caller can raise the depth or distrust those entries.

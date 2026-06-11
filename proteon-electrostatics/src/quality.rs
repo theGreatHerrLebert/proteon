@@ -15,6 +15,7 @@
 
 use crate::adaptive::{longest_edge, point_to_triangle_distance};
 use crate::model::{Charge, Tri};
+use proteon_core::surface::geom::Vec3;
 
 /// Severity of a quality issue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,9 +53,14 @@ pub struct QualityReport {
     pub n_near_degenerate: usize,
     /// Minimum distance from any charge to the surface (`0` if no charges).
     pub min_charge_surface_gap: f64,
-    /// That minimum gap **relative to the local element size** at the closest element —
-    /// the scale-aware charge-placement metric (small ⇒ a charge on/near Γ).
+    /// Minimum over all charges and elements of `dist(charge, element) / longest_edge` —
+    /// the scale-aware charge-placement metric (small ⇒ a charge on/near Γ in element-
+    /// size units). Taken as `min_t(d/h_t)` over *all* elements (review [High#2]), not the
+    /// ratio at the single nearest element, so a grading boundary cannot flip it.
     pub min_charge_gap_ratio: f64,
+    /// Number of charges that fall **outside** the (closed) surface by the generalized
+    /// winding number — a placement error the unsigned gap cannot see (review [High#1]).
+    pub n_charges_outside: usize,
 }
 
 // ---- policy thresholds (documented defaults) ---------------------------------------
@@ -63,49 +69,104 @@ pub struct QualityReport {
 pub const ANGLE_WARN_DEG: f64 = 10.0;
 /// Above this radius-ratio aspect a triangle is badly shaped — warn.
 pub const ASPECT_WARN: f64 = 10.0;
-/// A triangle whose area is below this fraction of the median is near-degenerate.
-pub const DEGENERATE_AREA_FRAC: f64 = 1e-6;
+/// An **intrinsic** near-degeneracy threshold on the dimensionless fatness
+/// `2·Area / longest_edge²` (`≈0.87` equilateral, `→0` as the triangle collapses).
+/// Below this the normal is unreliable — judged per triangle, so it is robust even when
+/// most of the mesh is degenerate (review [High#3]).
+pub const DEGENERATE_FATNESS: f64 = 1e-4;
 /// Charge-to-surface gap (relative to local element size) below this — **reject**: the
-/// molecular-potential trace is near-singular and the solve is unreliable.
-pub const CHARGE_REJECT_RATIO: f64 = 0.05;
-/// …below this (but above reject) — warn: the charge is close to Γ.
+/// charge is essentially on/through Γ, so the molecular-potential trace is near-singular
+/// regardless of mesh resolution. Deliberately tighter than the warn band: refusal is
+/// reserved for the mesh-independent pathological case (review [Med#5]).
+pub const CHARGE_REJECT_RATIO: f64 = 0.01;
+/// …below this (but above reject) — warn: the charge is close to Γ. This band IS mesh-
+/// dependent (a coarse mesh shrinks the ratio for the same physical gap), so it warns
+/// rather than refuses. All charge thresholds are uncalibrated starting points pending an
+/// SES-corpus study (review [Med#5]).
 pub const CHARGE_WARN_RATIO: f64 = 0.3;
 
-/// Smallest interior angle of a triangle, in degrees (law of cosines on the three edge
-/// lengths). Returns `0` for a degenerate triangle.
-fn min_angle_deg(tri: &Tri) -> f64 {
-    let a = (tri.v2 - tri.v1).norm();
-    let b = (tri.v3 - tri.v2).norm();
-    let c = (tri.v1 - tri.v3).norm();
-    if a <= 0.0 || b <= 0.0 || c <= 0.0 {
+/// Dimensionless triangle "fatness" `2·Area / longest_edge²` (`2/√3·… `≈0.87 for an
+/// equilateral, `→0` as it degenerates). `0` if non-finite / zero longest edge.
+fn fatness(tri: &Tri) -> f64 {
+    let m = longest_edge(tri);
+    if !m.is_finite() || m <= 0.0 || !tri.area.is_finite() {
         return 0.0;
     }
-    // Angle opposite each edge; clamp the cosine for floating-point safety.
-    let ang = |opp: f64, x: f64, y: f64| {
-        ((x * x + y * y - opp * opp) / (2.0 * x * y))
-            .clamp(-1.0, 1.0)
-            .acos()
-    };
-    let amin = ang(a, b, c).min(ang(b, c, a)).min(ang(c, a, b));
-    amin.to_degrees()
+    2.0 * tri.area / (m * m)
 }
 
-/// Radius-ratio aspect `R_circ / (2·r_in) = a·b·c·s / (8·Area²)` (`1` equilateral,
-/// grows without bound as the triangle degenerates).
+/// Smallest interior angle of a triangle, in degrees, via the numerically stable
+/// `atan2(|u×v|, u·v)` (no cosine cancellation on slivers). Returns `0` if non-finite.
+fn min_angle_deg(tri: &Tri) -> f64 {
+    let vs = [tri.v1, tri.v2, tri.v3];
+    let mut amin = std::f64::consts::PI;
+    for i in 0..3 {
+        let u = vs[(i + 1) % 3] - vs[i];
+        let v = vs[(i + 2) % 3] - vs[i];
+        let ang = u.cross(v).norm().atan2(u.dot(v));
+        amin = amin.min(ang);
+    }
+    let deg = amin.to_degrees();
+    if deg.is_finite() {
+        deg
+    } else {
+        0.0
+    }
+}
+
+/// Radius-ratio aspect `R_circ / (2·r_in)` (`1` equilateral, `→∞` degenerate), computed
+/// on edges **rescaled by the longest** so the four-length product cannot over/underflow
+/// even for a tiny-but-nonzero area (review [Med#4]). `∞` if non-finite.
 fn aspect_ratio(tri: &Tri) -> f64 {
-    let a = (tri.v2 - tri.v1).norm();
-    let b = (tri.v3 - tri.v2).norm();
-    let c = (tri.v1 - tri.v3).norm();
-    let area = tri.area;
+    let m = longest_edge(tri);
+    if !m.is_finite() || m <= 0.0 || !tri.area.is_finite() {
+        return f64::INFINITY;
+    }
+    let (a, b, c) = (
+        (tri.v2 - tri.v1).norm() / m,
+        (tri.v3 - tri.v2).norm() / m,
+        (tri.v1 - tri.v3).norm() / m,
+    );
+    let area = tri.area / (m * m); // rescaled area
     if area <= 0.0 {
         return f64::INFINITY;
     }
     let s = (a + b + c) / 2.0;
-    a * b * c * s / (8.0 * area * area)
+    let r = a * b * c * s / (8.0 * area * area);
+    if r.is_finite() {
+        r
+    } else {
+        f64::INFINITY
+    }
+}
+
+/// Generalized winding number of point `p` w.r.t. the (closed) surface: `1/4π · Σ_t
+/// Ω(p, t)`, with the Van Oosterom–Strackee signed solid angle per triangle. `≈±1` for an
+/// interior point (sign = orientation), `≈0` for an exterior one — so `|w| < 0.5`
+/// classifies `p` as **outside**, robustly and orientation-agnostically. Topology-free
+/// (works on the raw element geometry), so usable without a watertight `Mesh`.
+fn winding_number(p: Vec3, elements: &[Tri]) -> f64 {
+    let mut omega = 0.0;
+    for t in elements {
+        let a = t.v1 - p;
+        let b = t.v2 - p;
+        let c = t.v3 - p;
+        let (la, lb, lc) = (a.norm(), b.norm(), c.norm());
+        let num = a.dot(b.cross(c)); // scalar triple product
+        let den =
+            la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
+        omega += 2.0 * num.atan2(den);
+    }
+    omega / (4.0 * std::f64::consts::PI)
 }
 
 impl QualityReport {
     /// Measure the quality of `elements` with `charges`. Pure geometry, no thresholds.
+    ///
+    /// Cost is `O(charges × elements)` (nearest-element gap + winding number). That is at
+    /// most one BEM matvec's worth of work and the dense solve is `O(N²·iters)`, so it is
+    /// not the bottleneck; a spatial index would be the move only if this ever runs
+    /// without a following solve (review [#6]).
     #[must_use]
     pub fn assess(elements: &[Tri], charges: &[Charge]) -> Self {
         let n = elements.len();
@@ -113,44 +174,36 @@ impl QualityReport {
         let mut max_aspect = 0.0_f64;
         let mut min_area = f64::INFINITY;
         let mut max_area = 0.0_f64;
-        let mut areas: Vec<f64> = Vec::with_capacity(n);
+        let mut n_near_degenerate = 0usize;
         for e in elements {
             min_angle = min_angle.min(min_angle_deg(e));
             max_aspect = max_aspect.max(aspect_ratio(e));
             min_area = min_area.min(e.area);
             max_area = max_area.max(e.area);
-            areas.push(e.area);
-        }
-        // Near-degenerate: area below a fraction of the median (robust to outliers).
-        let median = {
-            areas.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-            if areas.is_empty() {
-                0.0
-            } else {
-                areas[areas.len() / 2]
+            // Intrinsic per-triangle degeneracy (robust to widespread degeneracy).
+            if fatness(e) < DEGENERATE_FATNESS {
+                n_near_degenerate += 1;
             }
-        };
-        let n_near_degenerate = elements
-            .iter()
-            .filter(|e| e.area < DEGENERATE_AREA_FRAC * median)
-            .count();
+        }
 
-        // Scale-aware charge placement: min over charges of (gap / local element size).
+        // Scale-aware charge placement + containment.
         let mut min_gap = f64::INFINITY;
         let mut min_ratio = f64::INFINITY;
+        let mut n_outside = 0usize;
         for c in charges {
-            let mut best = f64::INFINITY;
-            let mut best_elem_size = 1.0;
+            let mut gap = f64::INFINITY;
             for e in elements {
                 let d = point_to_triangle_distance(c.pos, e.v1, e.v2, e.v3);
-                if d < best {
-                    best = d;
-                    best_elem_size = longest_edge(e);
+                gap = gap.min(d);
+                let h = longest_edge(e);
+                if h > 0.0 {
+                    // min over ALL elements of d/h — a grading boundary cannot flip it.
+                    min_ratio = min_ratio.min(d / h);
                 }
             }
-            min_gap = min_gap.min(best);
-            if best_elem_size > 0.0 {
-                min_ratio = min_ratio.min(best / best_elem_size);
+            min_gap = min_gap.min(gap);
+            if !elements.is_empty() && winding_number(c.pos, elements).abs() < 0.5 {
+                n_outside += 1;
             }
         }
         if charges.is_empty() {
@@ -167,6 +220,7 @@ impl QualityReport {
             n_near_degenerate,
             min_charge_surface_gap: min_gap,
             min_charge_gap_ratio: min_ratio,
+            n_charges_outside: n_outside,
         }
     }
 
@@ -180,8 +234,19 @@ impl QualityReport {
             v.push(QualityIssue {
                 severity: Severity::Error,
                 message: format!(
-                    "{} near-degenerate (≈zero-area) triangle(s): the collocation is unreliable",
+                    "{} near-degenerate (sliver / unreliable-normal) triangle(s): the \
+                     collocation is unreliable",
                     self.n_near_degenerate
+                ),
+            });
+        }
+        if self.n_charges_outside > 0 {
+            v.push(QualityIssue {
+                severity: Severity::Error,
+                message: format!(
+                    "{} charge(s) lie outside the closed surface (winding number ≈ 0): the \
+                     interior-source model is violated — check charge placement / mesh closure",
+                    self.n_charges_outside
                 ),
             });
         }
@@ -310,12 +375,60 @@ mod tests {
         let radius = 2.0;
         let elements = sphere_elements(radius, 3);
         let elem = longest_edge(&elements[0]);
-        // Place the charge ~0.5·elem below the surface ⇒ warn band, not reject.
+        // Place the charge ~elem below the surface ⇒ ratio ~1, no reject (and above warn).
         let charges = [Charge {
-            pos: Vec3::new(0.0, 0.0, radius - 0.5 * elem),
+            pos: Vec3::new(0.0, 0.0, radius - elem),
             val: 1.0,
         }];
         let rep = QualityReport::assess(&elements, &charges);
-        assert!(!rep.has_errors(), "0.5·elem deep should not reject: {:?}", rep.issues());
+        assert!(!rep.has_errors(), "elem deep should not reject: {:?}", rep.issues());
+        assert_eq!(rep.n_charges_outside, 0, "an interior charge is not outside");
+    }
+
+    #[test]
+    fn outside_charge_is_rejected_by_containment() {
+        // Review [High#1]: a charge OUTSIDE the closed surface has a comfortable unsigned
+        // gap but violates the interior-source model. The winding number must catch it.
+        let elements = sphere_elements(2.0, 3);
+        let charges = [Charge {
+            pos: Vec3::new(0.0, 0.0, 5.0), // well outside the radius-2 sphere
+            val: 1.0,
+        }];
+        let rep = QualityReport::assess(&elements, &charges);
+        assert_eq!(rep.n_charges_outside, 1, "exterior charge must be detected");
+        assert!(rep.has_errors());
+        assert!(rep
+            .issues()
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.message.contains("outside the closed")));
+    }
+
+    #[test]
+    fn widespread_degeneracy_is_caught() {
+        // Review [High#3]: when MOST faces are degenerate, a median-relative test collapses
+        // and flags nothing. The intrinsic per-triangle fatness must flag them all.
+        let sliver = || {
+            Tri::new(
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.5, 1e-5, 0.0), // fatness ≈ 1e-5 ≪ DEGENERATE_FATNESS
+            )
+        };
+        let elements: Vec<Tri> = (0..6).map(|_| sliver()).collect();
+        let rep = QualityReport::assess(&elements, &[]);
+        assert_eq!(rep.n_near_degenerate, 6, "every sliver must be flagged");
+        assert!(rep.has_errors());
+    }
+
+    #[test]
+    fn metrics_stay_finite_on_a_tiny_triangle() {
+        // Review [Med#4]: rescaling guards over/underflow — aspect/angle stay finite even
+        // for a tiny (but valid) triangle.
+        let t = Tri::new(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1e-6, 0.0, 0.0),
+            Vec3::new(0.0, 1e-6, 0.0),
+        );
+        assert!(min_angle_deg(&t).is_finite() && aspect_ratio(&t).is_finite());
     }
 }
