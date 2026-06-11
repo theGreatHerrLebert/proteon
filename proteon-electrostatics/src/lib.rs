@@ -66,6 +66,7 @@ pub mod model;
 pub mod post;
 pub mod quadrature;
 pub mod quality;
+pub mod xie;
 pub mod solve;
 pub mod system;
 pub mod yukawa;
@@ -81,6 +82,7 @@ pub use model::{BemModel, Charge, Domain, Locality, Params, PotentialKind, Tri};
 pub use post::{espotential, rfenergy, ENERGY_FACTOR, POTPREFACTOR};
 pub use quadrature::{radon7, TriangleQuad};
 pub use quality::{QualityIssue, QualityReport, Severity, TopologyReport};
+pub use xie::{scalemodel, XieKind, XieModel};
 pub use solve::{
     dense_matrix_bytes, solve_local, solve_local_elements, solve_local_elements_auto,
     solve_nonlocal, solve_nonlocal_elements, solve_nonlocal_elements_auto,
