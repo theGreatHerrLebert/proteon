@@ -92,6 +92,64 @@ fn read_hmo_round_trip() {
 }
 
 #[test]
+fn read_pqr_excludes_hetatm_like_nessie() {
+    // NESSie's readpqr takes only lines beginning with "ATOM"; a charged HETATM
+    // water record must be dropped. Mirror that exactly.
+    let tmp = std::env::temp_dir().join("proteon_pqr_hetatm.pqr");
+    {
+        let mut f = std::fs::File::create(&tmp).unwrap();
+        writeln!(f, "ATOM      1  N   THR     1   -17.108  25.866  23.850  0.1812 1.8240").unwrap();
+        writeln!(f, "HETATM    2  O   HOH     2   -21.160  40.444  40.509 -0.8340 1.6612").unwrap();
+        writeln!(f, "ATOM      3  CA  THR     3   -16.775  27.193  23.310  0.0034 1.9080").unwrap();
+    }
+    let charges = read_pqr(&tmp).expect("read pqr");
+    assert_eq!(charges.len(), 2, "HETATM water excluded");
+    assert!(approx(charges[0].val, 0.1812));
+    assert!(approx(charges[1].val, 0.0034));
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn read_hmo_keeps_zero_charges() {
+    // Unlike PQR, NESSie's HMO loader constructs every listed charge, zero or not.
+    let tmp = std::env::temp_dir().join("proteon_hmo_zero.hmo");
+    {
+        let mut f = std::fs::File::create(&tmp).unwrap();
+        writeln!(f, "BEG_NODL_DATA\n3\n1 0.0 0.0 0.0\n2 1.0 0.0 0.0\n3 0.0 1.0 0.0\nEND_NODL_DATA").unwrap();
+        writeln!(f, "BEG_ELEM_DATA\n1\n1 0 0 1 2 3\nEND_ELEM_DATA").unwrap();
+        writeln!(f, "BEG_CHARGE_DATA\n2\n1 0.1 0.1 0.0 0.0\n2 0.2 0.2 0.0 -0.5\nEND_CHARGE_DATA").unwrap();
+    }
+    let (_, charges) = read_hmo(&tmp).expect("read hmo");
+    assert_eq!(charges.len(), 2, "zero charge retained");
+    assert!(approx(charges[0].val, 0.0));
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn malformed_rows_error_not_skip() {
+    // A skipped node row would shift every subsequent 1-based element index;
+    // an undersized non-blank row must be a hard error instead.
+    let tmp = std::env::temp_dir().join("proteon_hmo_bad.hmo");
+    {
+        let mut f = std::fs::File::create(&tmp).unwrap();
+        writeln!(f, "BEG_NODL_DATA\n2\n1 0.0 0.0 0.0\n2 1.0\nEND_NODL_DATA").unwrap();
+        writeln!(f, "BEG_ELEM_DATA\n0\nEND_ELEM_DATA").unwrap();
+    }
+    assert!(read_hmo(&tmp).is_err(), "undersized node row must error");
+    let _ = std::fs::remove_file(&tmp);
+
+    // HMO 1-based element id out of range must error (not wrap on the -1).
+    let tmp2 = std::env::temp_dir().join("proteon_hmo_oor.hmo");
+    {
+        let mut f = std::fs::File::create(&tmp2).unwrap();
+        writeln!(f, "BEG_NODL_DATA\n1\n1 0.0 0.0 0.0\nEND_NODL_DATA").unwrap();
+        writeln!(f, "BEG_ELEM_DATA\n1\n1 0 0 1 2 3\nEND_ELEM_DATA").unwrap();
+    }
+    assert!(read_hmo(&tmp2).is_err(), "out-of-range element id must error");
+    let _ = std::fs::remove_file(&tmp2);
+}
+
+#[test]
 fn read_msms_round_trip() {
     // .vert / .face pair, three header lines each, 1-based face indices.
     let vert = std::env::temp_dir().join("proteon_msms_test.vert");
