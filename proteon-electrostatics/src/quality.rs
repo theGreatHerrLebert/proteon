@@ -307,13 +307,20 @@ pub struct TopologyReport {
     pub consistently_oriented: bool,
     /// Edges used by other than two triangles (boundary / non-manifold).
     pub num_nonmanifold_edges: usize,
-    /// Signed enclosed volume (divergence theorem) — only meaningful when closed.
+    /// Aggregate signed enclosed volume (divergence theorem) — only meaningful when
+    /// closed, and can MASK an inward component, so orientation is judged per component.
     pub signed_volume: f64,
-    /// Closed + consistently oriented **outward** (`signed_volume > 0`) — the condition
-    /// the double-layer sign needs. An inward (inside-out) mesh flips the sign.
+    /// Closed + consistently oriented with **every** component outward — the condition
+    /// the double-layer sign needs. A single aggregate volume is insufficient (review).
     pub is_outward: bool,
     /// Connected surface components (a multi-body solute is > 1).
     pub num_components: usize,
+    /// Components that are inside-out (per-component signed volume < 0, when closed +
+    /// consistently oriented). The connector auto-flips these to outward.
+    pub num_inward_components: usize,
+    /// Any component whose enclosed volume is non-finite or, relative to its area,
+    /// effectively zero — an indeterminate orientation (review [Med#2]).
+    pub has_degenerate_volume: bool,
     /// Coincident (duplicate) faces.
     pub num_duplicate_faces: usize,
 }
@@ -325,13 +332,31 @@ impl TopologyReport {
         let watertight = mesh.is_watertight();
         let consistently_oriented = mesh.is_consistently_oriented();
         let signed_volume = mesh.signed_volume();
+        let va = mesh.component_volumes_areas();
+        let mut num_inward = 0usize;
+        let mut degenerate = false;
+        for &(vol, area) in &va {
+            // A closed component should enclose ~area^1.5 of volume; far below that (or
+            // non-finite) is indeterminate.
+            let floor = 1e-9 * area.max(0.0).powf(1.5);
+            if !vol.is_finite() || vol.abs() <= floor {
+                degenerate = true;
+            } else if vol < 0.0 {
+                num_inward += 1;
+            }
+        }
         Self {
             watertight,
             consistently_oriented,
             num_nonmanifold_edges: mesh.num_nonmanifold_edges(),
             signed_volume,
-            is_outward: watertight && consistently_oriented && signed_volume > 0.0,
+            is_outward: watertight
+                && consistently_oriented
+                && num_inward == 0
+                && !degenerate,
             num_components: mesh.num_connected_components(),
+            num_inward_components: num_inward,
+            has_degenerate_volume: degenerate,
             num_duplicate_faces: mesh.num_duplicate_faces(),
         }
     }
@@ -368,15 +393,27 @@ impl TopologyReport {
                 ),
             });
         }
-        // Inward orientation only matters once closed + consistent (else the above fire,
-        // and signed_volume is not trustworthy anyway).
-        if self.watertight && self.consistently_oriented && self.signed_volume <= 0.0 {
-            v.push(QualityIssue {
-                severity: Severity::Error,
-                message: "inward-oriented mesh (signed volume ≤ 0): flip the winding so \
-                          normals point outward, or the double-layer sign is reversed"
-                    .to_string(),
-            });
+        // Per-component orientation only matters once closed + consistent (else the
+        // above fire, and component volumes are not trustworthy anyway).
+        if self.watertight && self.consistently_oriented {
+            if self.has_degenerate_volume {
+                v.push(QualityIssue {
+                    severity: Severity::Error,
+                    message: "a component has indeterminate enclosed volume (≈0 or \
+                              non-finite): orientation cannot be established"
+                        .to_string(),
+                });
+            }
+            if self.num_inward_components > 0 {
+                v.push(QualityIssue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "{} inward-oriented (inside-out) component(s): flip the winding so \
+                         normals point outward, or the double-layer sign is reversed",
+                        self.num_inward_components
+                    ),
+                });
+            }
         }
         if self.num_components > 1 {
             v.push(QualityIssue {
@@ -558,6 +595,28 @@ mod tests {
         // Two disjoint outward spheres: a component warning, but no Error.
         assert!(!rep.has_errors());
         assert!(rep.issues().iter().any(|i| i.severity == Severity::Warn));
+    }
+
+    #[test]
+    fn topology_detects_per_component_inward_under_masking_volume() {
+        // Review [High#1]: a big outward shell + a small INWARD shell. The aggregate
+        // signed volume stays positive (masking the inward one), but per-component
+        // orientation must still flag the inward component as an Error.
+        use proteon_core::surface::mesh::icosphere;
+        let big = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 1); // outward, large +vol
+        let mut small = icosphere(Vec3::new(10.0, 0.0, 0.0), 0.5, 1);
+        small.flip(); // inward, small −vol
+        let mut mixed = big.clone();
+        mixed.append(&small);
+
+        let rep = TopologyReport::assess(&mixed);
+        assert!(rep.signed_volume > 0.0, "aggregate volume masks the inward shell");
+        assert_eq!(rep.num_inward_components, 1, "per-component catches the inward shell");
+        assert!(!rep.is_outward && rep.has_errors());
+        assert!(rep
+            .issues()
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.message.contains("inward-oriented")));
     }
 
     #[test]

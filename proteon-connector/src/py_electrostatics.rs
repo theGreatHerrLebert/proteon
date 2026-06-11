@@ -287,18 +287,24 @@ fn solve_surface_py<'py>(
             .collect(),
     };
 
-    // Topological acceptance + auto-flip: a watertight, consistently-oriented but INWARD
-    // (inside-out) mesh has the right geometry but a reversed double-layer sign. Flip it
-    // to outward (correct result) and warn, rather than refuse. Genuinely broken topology
-    // (open / non-manifold / inconsistent winding / duplicate faces) refuses below.
+    // Topological acceptance + auto-flip: a closed, consistently-oriented mesh whose
+    // components are inside-out has the right geometry but a reversed double-layer sign.
+    // Flip each inward component to outward (PER COMPONENT — a single aggregate volume
+    // would mis-handle a multi-body mesh) and warn, rather than refuse. Genuinely broken
+    // topology (open / non-manifold / inconsistent winding / duplicate) refuses below.
+    // Component volumes are only meaningful for a closed, consistent mesh, so only
+    // auto-orient then.
     let topo0 = TopologyReport::assess(&mesh);
-    let flipped = topo0.watertight && topo0.consistently_oriented && topo0.signed_volume <= 0.0;
+    let flipped = if topo0.watertight && topo0.consistently_oriented {
+        mesh.orient_outward()
+    } else {
+        false
+    };
     if flipped {
-        mesh.flip();
         let warnings = py.import("warnings")?;
         warnings.call_method1(
             "warn",
-            ("mesh was inward-oriented (signed volume ≤ 0); flipped to outward so the \
+            ("one or more mesh components were inside-out; flipped to outward so the \
               double-layer sign is correct.",),
         )?;
     }

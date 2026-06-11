@@ -102,17 +102,12 @@ impl Mesh {
             .all(|(&(a, b), &c)| c == 1 && dir.get(&(b, a)) == Some(&1))
     }
 
-    /// Number of connected surface components: triangles joined transitively by a
-    /// **shared edge** (union–find). A protein SES is often disconnected (several
-    /// solute bodies + buried cavities), so this is `1` for a single sphere and `>1`
-    /// for a multi-body surface. Edge connectivity (not vertex) is the surface notion;
-    /// two shells touching at a single vertex stay separate components.
-    pub fn num_connected_components(&self) -> usize {
+    /// Compact connected-component label (`0..k`) per triangle, components being
+    /// triangles joined transitively by a **shared edge** (union–find, path halving).
+    /// Edge connectivity (not vertex) is the surface notion: two shells touching at a
+    /// single vertex stay separate components.
+    pub fn component_labels(&self) -> Vec<usize> {
         let n = self.tris.len();
-        if n == 0 {
-            return 0;
-        }
-        // Union–find over triangle indices.
         let mut parent: Vec<usize> = (0..n).collect();
         fn find(parent: &mut [usize], mut x: usize) -> usize {
             while parent[x] != x {
@@ -121,7 +116,7 @@ impl Mesh {
             }
             x
         }
-        // undirected edge → first triangle that owns it; union on the second.
+        // undirected edge → first triangle that owns it; union on the rest.
         let mut edge_owner: HashMap<(u32, u32), usize> = HashMap::new();
         for (ti, &t) in self.tris.iter().enumerate() {
             for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
@@ -136,7 +131,60 @@ impl Mesh {
                 }
             }
         }
-        (0..n).filter(|&i| find(&mut parent, i) == i).count()
+        // Compact roots → 0..k.
+        let mut label = vec![0usize; n];
+        let mut next = 0usize;
+        let mut root_label: HashMap<usize, usize> = HashMap::new();
+        for i in 0..n {
+            let r = find(&mut parent, i);
+            label[i] = *root_label.entry(r).or_insert_with(|| {
+                let l = next;
+                next += 1;
+                l
+            });
+        }
+        label
+    }
+
+    /// Number of connected surface components — `1` for a single sphere, `>1` for a
+    /// multi-body surface (a protein SES: several solute bodies + buried cavities).
+    pub fn num_connected_components(&self) -> usize {
+        if self.tris.is_empty() {
+            return 0;
+        }
+        self.component_labels().iter().copied().max().map_or(0, |m| m + 1)
+    }
+
+    /// `(signed volume, area)` of **each** connected component (divergence theorem +
+    /// triangle areas). Aggregate `signed_volume` can mask an inward component behind a
+    /// larger outward one, so orientation must be judged per component.
+    pub fn component_volumes_areas(&self) -> Vec<(f64, f64)> {
+        let labels = self.component_labels();
+        let k = labels.iter().copied().max().map_or(0, |m| m + 1);
+        let mut va = vec![(0.0_f64, 0.0_f64); k];
+        for (ti, &t) in self.tris.iter().enumerate() {
+            let (a, b, c) = self.tri_points(t);
+            va[labels[ti]].0 += a.dot(b.cross(c)) / 6.0;
+            va[labels[ti]].1 += 0.5 * (b - a).cross(c - a).norm();
+        }
+        va
+    }
+
+    /// Flip each connected component whose signed volume is **negative** (inside-out) so
+    /// every component is outward-oriented. Returns whether any component was flipped.
+    /// Per-component (not global) — a multi-body mesh with mixed orientation is fixed
+    /// without disturbing already-outward bodies.
+    pub fn orient_outward(&mut self) -> bool {
+        let labels = self.component_labels();
+        let vols: Vec<f64> = self.component_volumes_areas().iter().map(|&(v, _)| v).collect();
+        let mut flipped = false;
+        for (ti, t) in self.tris.iter_mut().enumerate() {
+            if vols[labels[ti]] < 0.0 {
+                t.swap(1, 2);
+                flipped = true;
+            }
+        }
+        flipped
     }
 
     /// Number of **duplicate** faces: triangles sharing the same vertex set (counted
@@ -670,6 +718,34 @@ mod tests {
         // Duplicate a face → one duplicate.
         other.tris.push(other.tris[0]);
         assert_eq!(other.num_duplicate_faces(), 1);
+    }
+
+    #[test]
+    fn per_component_orient_outward_fixes_mixed_orientation() {
+        // One outward sphere + one INWARD sphere. Aggregate signed_volume can mask the
+        // inward one; per-component orientation must flip only the inward body and leave
+        // the outward one alone.
+        let outward = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1);
+        let mut inward = icosphere(Vec3::new(5.0, 0.0, 0.0), 1.0, 1);
+        inward.flip(); // now inside-out
+        let mut mixed = outward.clone();
+        mixed.append(&inward);
+
+        let vols: Vec<f64> = mixed.component_volumes_areas().iter().map(|&(v, _)| v).collect();
+        assert_eq!(vols.len(), 2);
+        assert!(
+            vols.iter().any(|&v| v > 0.0) && vols.iter().any(|&v| v < 0.0),
+            "mixed orientation: {vols:?}"
+        );
+
+        assert!(mixed.orient_outward(), "the inward component must be flipped");
+        let fixed: Vec<f64> = mixed.component_volumes_areas().iter().map(|&(v, _)| v).collect();
+        assert!(fixed.iter().all(|&v| v > 0.0), "both components outward now: {fixed:?}");
+        // The already-outward component is untouched (same volume).
+        assert!((fixed.iter().cloned().fold(f64::INFINITY, f64::min)
+            - vols.iter().cloned().fold(f64::INFINITY, |a, b| a.min(b.abs())))
+            .abs()
+            < 1e-9);
     }
 
     #[test]
