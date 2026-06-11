@@ -15,15 +15,19 @@ use std::collections::{HashMap, HashSet};
 
 /// Does segment `p0→p1` pass through the **interior** of triangle `(a,b,c)`?
 /// Möller–Trumbore, with a strict-interior margin so a mere boundary/endpoint touch
-/// (e.g. a shared edge) is not a crossing — only a clear penetration counts.
+/// (e.g. a shared edge) is not a crossing — only a clear *transverse* penetration counts.
+/// `u`/`v`/`t` are dimensionless (normalized), so their absolute margin is scale-free;
+/// the parallel cutoff is taken **relative** to the operand magnitudes so it does not
+/// become scale-dependent (review).
 fn segment_penetrates_triangle(p0: Vec3, p1: Vec3, a: Vec3, b: Vec3, c: Vec3) -> bool {
     const EPS: f64 = 1e-9;
     let dir = p1 - p0;
     let (e1, e2) = (b - a, c - a);
     let pvec = dir.cross(e2);
     let det = e1.dot(pvec);
-    if det.abs() < EPS {
-        return false; // segment parallel to the triangle plane
+    // |det| = |e1||pvec|·|cos∠|; compare relative to |e1||pvec| (scale-invariant).
+    if det.abs() <= EPS * e1.norm() * pvec.norm() {
+        return false; // segment (near-)parallel to the triangle plane
     }
     let inv = 1.0 / det;
     let tvec = p0 - a;
@@ -248,20 +252,34 @@ impl Mesh {
         dups
     }
 
-    /// Number of **self-intersecting** triangle pairs: non-adjacent triangles (no shared
-    /// vertex) that geometrically penetrate each other. A self-intersecting surface has
-    /// no well-defined interior/exterior, so the BEM interior-source model breaks.
+    /// Count **self-intersecting** triangle pairs — triangles that *transversely*
+    /// penetrate each other — or `None` if the mesh is too irregular to check within a
+    /// bounded budget (degenerate sizing, wildly multi-scale triangles, or pathologically
+    /// dense cells). A self-intersecting surface has no well-defined interior/exterior, so
+    /// the BEM interior-source model breaks.
     ///
-    /// Uses a uniform **spatial hash** (cell ≈ the median triangle size) so it is ~O(N)
-    /// on a clean, roughly-uniform mesh rather than O(N²): only triangles sharing a grid
-    /// cell are exact-tested. (Coplanar overlaps are not counted — that is the
-    /// duplicate-face defect; see [`Self::num_duplicate_faces`].)
-    pub fn count_self_intersections(&self) -> usize {
+    /// **Honest semantics (review):** this is a *detector*, biased toward false negatives.
+    /// `Some(k>0)` is authoritative (those crossings are real); `Some(0)` means "no clear
+    /// transverse penetration found", **not** a proof of a clean surface — coplanar
+    /// overlaps, exact vertex-on-face / edge-on-edge contacts, and crossings inside the
+    /// strict-interior margin are not reported. `None` means "could not verify" → the
+    /// caller should surface that, not treat it as clean.
+    ///
+    /// Uses a uniform **spatial hash** (cell ≈ the median triangle size) so it is ~O(N) on
+    /// a clean, roughly-uniform mesh. Adjacent (shared-feature) triangles are *not* skipped
+    /// wholesale — the strict-interior test already excludes their shared edge/vertex,
+    /// while still catching a pair that shares a vertex *and* also crosses elsewhere.
+    pub fn count_self_intersections(&self) -> Option<usize> {
         let n = self.tris.len();
         if n < 2 {
-            return 0;
+            return Some(0);
         }
+        // Per-triangle points must be finite (NaN/inf would corrupt the cell keys).
         let pts: Vec<(Vec3, Vec3, Vec3)> = self.tris.iter().map(|&t| self.tri_points(t)).collect();
+        let finite = |v: Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
+        if !pts.iter().all(|&(a, b, c)| finite(a) && finite(b) && finite(c)) {
+            return None;
+        }
 
         // Cell size = median longest edge (typical element size).
         let mut edges: Vec<f64> = pts
@@ -271,40 +289,39 @@ impl Mesh {
         edges.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
         let cell = edges[n / 2];
         if !(cell > 0.0 && cell.is_finite()) {
-            return 0; // degenerate sizing; geometric-degeneracy gates catch this mesh
+            return None; // degenerate sizing — cannot build a grid; not "clean"
         }
 
-        let key = |v: Vec3| {
-            (
-                (v.x / cell).floor() as i64,
-                (v.y / cell).floor() as i64,
-                (v.z / cell).floor() as i64,
-            )
-        };
-        // Bin each triangle into every grid cell its AABB overlaps.
+        // Bound the work: cap how many cells one triangle may span (oversized/multi-scale
+        // triangle ⇒ bail) and the total exact tests (dense cells ⇒ bail). Both keep this
+        // safe on adversarial connector input.
+        const SPAN_CAP: i64 = 4096;
+        let budget = 64usize.saturating_mul(n);
+
+        let key = |x: f64| (x / cell).floor();
         let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
         for (i, &(a, b, c)) in pts.iter().enumerate() {
-            let lo = Vec3::new(
-                a.x.min(b.x).min(c.x),
-                a.y.min(b.y).min(c.y),
-                a.z.min(b.z).min(c.z),
-            );
-            let hi = Vec3::new(
-                a.x.max(b.x).max(c.x),
-                a.y.max(b.y).max(c.y),
-                a.z.max(b.z).max(c.z),
-            );
-            let (klo, khi) = (key(lo), key(hi));
-            for cx in klo.0..=khi.0 {
-                for cy in klo.1..=khi.1 {
-                    for cz in klo.2..=khi.2 {
+            let span = |lo: f64, hi: f64| ((hi / cell).floor() - (lo / cell).floor()) + 1.0;
+            let dx = span(a.x.min(b.x).min(c.x), a.x.max(b.x).max(c.x));
+            let dy = span(a.y.min(b.y).min(c.y), a.y.max(b.y).max(c.y));
+            let dz = span(a.z.min(b.z).min(c.z), a.z.max(b.z).max(c.z));
+            if dx * dy * dz > SPAN_CAP as f64 {
+                return None; // a triangle spans too many cells — multi-scale mesh
+            }
+            let (xlo, xhi) = (key(a.x.min(b.x).min(c.x)) as i64, key(a.x.max(b.x).max(c.x)) as i64);
+            let (ylo, yhi) = (key(a.y.min(b.y).min(c.y)) as i64, key(a.y.max(b.y).max(c.y)) as i64);
+            let (zlo, zhi) = (key(a.z.min(b.z).min(c.z)) as i64, key(a.z.max(b.z).max(c.z)) as i64);
+            for cx in xlo..=xhi {
+                for cy in ylo..=yhi {
+                    for cz in zlo..=zhi {
                         grid.entry((cx, cy, cz)).or_default().push(i);
                     }
                 }
             }
         }
 
-        // Exact-test candidate pairs (sharing a cell), once each, skipping adjacency.
+        // Exact-test candidate pairs (sharing a cell), once each. The `tested` set and the
+        // exact tests are both bounded by `budget`.
         let mut tested: HashSet<(usize, usize)> = HashSet::new();
         let mut count = 0;
         for ids in grid.values() {
@@ -317,11 +334,8 @@ impl Mesh {
                     if !tested.insert((a, b)) {
                         continue; // already tested from another shared cell
                     }
-                    let (ta, tb) = (self.tris[a], self.tris[b]);
-                    // Adjacent (shared vertex) triangles meet at that feature — not a
-                    // self-intersection.
-                    if ta.iter().any(|x| tb.contains(x)) {
-                        continue;
+                    if tested.len() > budget {
+                        return None; // too many candidate pairs — cannot verify cheaply
                     }
                     if triangles_penetrate(pts[a], pts[b]) {
                         count += 1;
@@ -329,7 +343,7 @@ impl Mesh {
                 }
             }
         }
-        count
+        Some(count)
     }
 
     /// Euler characteristic V − E + F, counting only vertices actually used by a
@@ -849,25 +863,27 @@ mod tests {
 
     #[test]
     fn self_intersection_detection() {
-        // A clean icosphere has no self-intersections.
+        // A clean icosphere has no self-intersections (no false positives from the now
+        // un-skipped adjacent triangles — the strict-interior test excludes them).
         let clean = icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 3);
-        assert_eq!(clean.count_self_intersections(), 0, "a clean sphere is self-intersection-free");
+        assert_eq!(clean.count_self_intersections(), Some(0), "a clean sphere is clean");
 
-        // Two triangles that cross like an X (non-adjacent, penetrating).
-        let cross = Mesh {
+        let cross_mesh = |s: f64| Mesh {
             verts: vec![
-                Vec3::new(-1.0, 0.0, 0.0),
-                Vec3::new(1.0, 0.0, 0.0),
-                Vec3::new(0.0, 1.0, 0.5),
-                // second triangle in a perpendicular plane through the first's interior
-                Vec3::new(0.0, -1.0, 0.0),
-                Vec3::new(0.0, 1.0, 0.0),
-                Vec3::new(0.5, 0.0, 1.0),
+                Vec3::new(-s, 0.0, 0.0),
+                Vec3::new(s, 0.0, 0.0),
+                Vec3::new(0.0, s, 0.5 * s),
+                Vec3::new(0.0, -s, 0.0),
+                Vec3::new(0.0, s, 0.0),
+                Vec3::new(0.5 * s, 0.0, s),
             ],
             normals: Vec::new(),
             tris: vec![[0, 1, 2], [3, 4, 5]],
         };
-        assert_eq!(cross.count_self_intersections(), 1, "the crossing pair is detected");
+        // Crossing pair detected at small AND large scale (scale-invariant det cutoff).
+        assert_eq!(cross_mesh(1.0).count_self_intersections(), Some(1));
+        assert_eq!(cross_mesh(1e-4).count_self_intersections(), Some(1), "small scale");
+        assert_eq!(cross_mesh(1e5).count_self_intersections(), Some(1), "large scale");
 
         // Two coplanar, non-overlapping triangles → no penetration.
         let apart = Mesh {
@@ -882,7 +898,27 @@ mod tests {
             normals: Vec::new(),
             tris: vec![[0, 1, 2], [3, 4, 5]],
         };
-        assert_eq!(apart.count_self_intersections(), 0);
+        assert_eq!(apart.count_self_intersections(), Some(0));
+
+        // Shared-vertex pair that ALSO crosses elsewhere: the old any-shared-vertex skip
+        // would miss it; now it must be caught (review). Two triangles share vertex 0;
+        // the second folds back through the first's interior.
+        let shared_and_crossing = Mesh {
+            verts: vec![
+                Vec3::new(0.0, 0.0, 0.0), // shared vertex
+                Vec3::new(2.0, 0.0, 0.0),
+                Vec3::new(0.0, 2.0, 0.0), // tri A in z=0
+                Vec3::new(1.0, 0.5, -1.0), // tri B straddles z=0; its far edge punches
+                Vec3::new(1.0, 0.5, 1.0),  //   through A's interior at (1, 0.5, 0)
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [0, 3, 4]],
+        };
+        assert_eq!(
+            shared_and_crossing.count_self_intersections(),
+            Some(1),
+            "a shared-vertex pair that also crosses must be detected"
+        );
     }
 
     #[test]

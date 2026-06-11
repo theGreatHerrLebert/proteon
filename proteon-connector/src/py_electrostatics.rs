@@ -427,6 +427,7 @@ fn solve_surface_py<'py>(
     dict.set_item("signed_volume", topology.signed_volume)?;
     dict.set_item("n_components", topology.num_components)?;
     dict.set_item("n_duplicate_faces", topology.num_duplicate_faces)?;
+    // Some(k) → int; None (inconclusive) → Python None.
     dict.set_item("n_self_intersections", topology.num_self_intersections)?;
     dict.set_item("flipped_to_outward", flipped)?;
     dict.set_item("quadrature", out.quadrature)?;

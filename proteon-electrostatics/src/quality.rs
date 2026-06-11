@@ -323,9 +323,10 @@ pub struct TopologyReport {
     pub has_degenerate_volume: bool,
     /// Coincident (duplicate) faces.
     pub num_duplicate_faces: usize,
-    /// Self-intersecting (mutually penetrating, non-adjacent) triangle pairs — a
-    /// self-intersecting surface has no well-defined interior/exterior.
-    pub num_self_intersections: usize,
+    /// Self-intersecting (transversely penetrating) triangle pairs, or `None` if the
+    /// check was inconclusive (mesh too irregular to verify cheaply). `Some(k>0)` is
+    /// authoritative; `Some(0)` means "no clear penetration found", not a proof.
+    pub num_self_intersections: Option<usize>,
 }
 
 impl TopologyReport {
@@ -397,15 +398,21 @@ impl TopologyReport {
                 ),
             });
         }
-        if self.num_self_intersections > 0 {
-            v.push(QualityIssue {
+        match self.num_self_intersections {
+            Some(k) if k > 0 => v.push(QualityIssue {
                 severity: Severity::Error,
                 message: format!(
-                    "{} self-intersecting triangle pair(s): the surface penetrates itself, so \
-                     interior/exterior (and the molecular potential) are undefined",
-                    self.num_self_intersections
+                    "{k} self-intersecting triangle pair(s): the surface penetrates itself, so \
+                     interior/exterior (and the molecular potential) are undefined"
                 ),
-            });
+            }),
+            None => v.push(QualityIssue {
+                severity: Severity::Warn,
+                message: "self-intersection check was inconclusive (mesh too irregular / \
+                          multi-scale to verify cheaply); a clean closed surface is not assured"
+                    .to_string(),
+            }),
+            Some(_) => {} // no clear penetration found (not a proof — see the detector docs)
         }
         // Per-component orientation only matters once closed + consistent (else the
         // above fire, and component volumes are not trustworthy anyway).
@@ -628,7 +635,7 @@ mod tests {
             tris: vec![[0, 1, 2], [3, 4, 5]],
         };
         let rep = TopologyReport::assess(&m);
-        assert_eq!(rep.num_self_intersections, 1);
+        assert_eq!(rep.num_self_intersections, Some(1));
         assert!(rep.has_errors());
         assert!(rep
             .issues()
