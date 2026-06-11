@@ -22,7 +22,7 @@ triangles. The result dict carries `watertight` / `oriented` diagnostics; a mesh
 is not consistently outward-oriented can give a sign-wrong potential (and warns).
 """
 
-from typing import Dict
+from typing import Dict, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -142,3 +142,97 @@ def surface_potential(
     )
     out["surface_potential"] = np.asarray(out["surface_potential"])
     return out
+
+
+def read_off(
+    path: str,
+) -> Tuple[NDArray[np.float64], NDArray[np.int64]]:
+    """Read a Geomview OFF surface mesh.
+
+    Args:
+        path: path to the ``.off`` file.
+
+    Returns:
+        ``(vertices, triangles)`` — ``(V, 3)`` float64 coordinates and ``(F, 3)``
+        int64 0-based vertex indices, ready to pass to `surface_potential`.
+    """
+    d = _el.read_off_py(path)
+    return np.asarray(d["vertices"]), np.asarray(d["triangles"])
+
+
+def read_pqr(
+    path: str,
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Read a PQR charge set (atomic charges + radii).
+
+    Only ``ATOM`` records are taken (``HETATM`` water excluded) and zero-charge
+    atoms are dropped, matching NESSie's reader.
+
+    Args:
+        path: path to the ``.pqr`` file.
+
+    Returns:
+        ``(charge_positions, charge_values)`` — ``(Q, 3)`` float64 positions and
+        ``(Q,)`` float64 charges (elementary charges).
+    """
+    d = _el.read_pqr_py(path)
+    return np.asarray(d["charge_positions"]), np.asarray(d["charge_values"])
+
+
+def read_hmo(
+    path: str,
+) -> Dict[str, NDArray]:
+    """Read an HMO file (BEM mesh + charges in one document).
+
+    Args:
+        path: path to the ``.hmo`` file.
+
+    Returns:
+        Dict with ``vertices`` ``(V, 3)``, ``triangles`` ``(F, 3)``,
+        ``charge_positions`` ``(Q, 3)``, and ``charge_values`` ``(Q,)`` — the full
+        set of arrays `surface_potential` needs.
+    """
+    d = _el.read_hmo_py(path)
+    return {
+        "vertices": np.asarray(d["vertices"]),
+        "triangles": np.asarray(d["triangles"]),
+        "charge_positions": np.asarray(d["charge_positions"]),
+        "charge_values": np.asarray(d["charge_values"]),
+    }
+
+
+def read_msms(
+    vert_path: str,
+    face_path: str,
+) -> Tuple[NDArray[np.float64], NDArray[np.int64]]:
+    """Read an MSMS surface from its ``.vert`` / ``.face`` pair.
+
+    Args:
+        vert_path: path to the ``.vert`` file.
+        face_path: path to the ``.face`` file.
+
+    Returns:
+        ``(vertices, triangles)`` — ``(V, 3)`` float64 coordinates and ``(F, 3)``
+        int64 0-based vertex indices. MSMS carries no charges.
+    """
+    d = _el.read_msms_py(vert_path, face_path)
+    return np.asarray(d["vertices"]), np.asarray(d["triangles"])
+
+
+def write_off(
+    path: str,
+    vertices: NDArray[np.float64],
+    triangles: NDArray[np.int64],
+) -> None:
+    """Write a surface mesh to a Geomview OFF file.
+
+    Args:
+        path: destination ``.off`` path.
+        vertices: ``(V, 3)`` float64 coordinates.
+        triangles: ``(F, 3)`` int 0-based vertex indices.
+    """
+    _el.write_off_py(
+        path,
+        np.ascontiguousarray(vertices, dtype=np.float64),
+        np.ascontiguousarray(triangles, dtype=np.int64),
+    )

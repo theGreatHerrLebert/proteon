@@ -10,7 +10,9 @@
 //! (e.g. `ses_mesh_coarse_py` output) — the double-layer sign depends on the winding;
 //! the result's `oriented` diagnostic flags (and warns on) a bad one.
 
-use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{
+    PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -18,9 +20,10 @@ use pyo3::types::PyDict;
 use proteon_core::surface::geom::Vec3;
 use proteon_core::surface::mesh::Mesh;
 use proteon_electrostatics::{
-    born_rfenergy, espotential, rfenergy, solve_local_elements_auto, solve_nonlocal_elements_auto,
-    solve_nonlocal_elements_q, AdaptiveConfig, Charge, Domain, Locality, Params, Quadrature,
-    QualityReport, Severity, SolveConfig, TopologyReport, Tri,
+    born_rfenergy, espotential, read_hmo, read_msms, read_off, read_pqr, rfenergy,
+    solve_local_elements_auto, solve_nonlocal_elements_auto, solve_nonlocal_elements_q, write_off,
+    AdaptiveConfig, Charge, Domain, Locality, Params, Quadrature, QualityReport, Severity,
+    SolveConfig, TopologyReport, Tri,
 };
 
 /// Triangle count past which the dense O(N²) solve is warned about.
@@ -490,9 +493,162 @@ fn solve_surface_py<'py>(
     Ok(dict.unbind())
 }
 
+// =========================================================================================
+// File-format I/O (the NESSie `format/` layer) — load a surface mesh + charge set
+// straight off disk into the arrays `solve_surface_py` consumes.
+
+/// Map a format-reader `io::Error` to the right Python exception: a parse error
+/// (`InvalidData`) is a `ValueError`; anything else (missing file, permissions) is
+/// an `OSError`.
+fn io_err_to_py(e: std::io::Error) -> PyErr {
+    if e.kind() == std::io::ErrorKind::InvalidData {
+        PyValueError::new_err(e.to_string())
+    } else {
+        pyo3::exceptions::PyOSError::new_err(e.to_string())
+    }
+}
+
+/// Mesh → (V×3 f64 vertices, F×3 i64 triangles) numpy arrays.
+fn mesh_to_py<'py>(
+    py: Python<'py>,
+    mesh: &Mesh,
+) -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>) {
+    let nv = mesh.verts.len();
+    let vflat: Vec<f64> = mesh.verts.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
+    let verts = PyArray1::from_vec(py, vflat)
+        .reshape([nv, 3])
+        .expect("reshape V×3");
+    let nf = mesh.tris.len();
+    let tflat: Vec<i64> = mesh
+        .tris
+        .iter()
+        .flat_map(|t| [i64::from(t[0]), i64::from(t[1]), i64::from(t[2])])
+        .collect();
+    let tris = PyArray1::from_vec(py, tflat)
+        .reshape([nf, 3])
+        .expect("reshape F×3");
+    (verts, tris)
+}
+
+/// Charges → (Q×3 f64 positions, Q f64 values) numpy arrays.
+fn charges_to_py<'py>(
+    py: Python<'py>,
+    charges: &[Charge],
+) -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>) {
+    let nq = charges.len();
+    let pflat: Vec<f64> = charges
+        .iter()
+        .flat_map(|c| [c.pos.x, c.pos.y, c.pos.z])
+        .collect();
+    let pos = PyArray1::from_vec(py, pflat)
+        .reshape([nq, 3])
+        .expect("reshape Q×3");
+    let vals = PyArray1::from_vec(py, charges.iter().map(|c| c.val).collect::<Vec<_>>());
+    (pos, vals)
+}
+
+/// Read a Geomview **OFF** surface mesh → dict `{vertices: V×3 f64, triangles: F×3 i64}`.
+#[pyfunction]
+fn read_off_py(py: Python<'_>, path: &str) -> PyResult<Py<PyDict>> {
+    let mesh = read_off(path).map_err(io_err_to_py)?;
+    let dict = PyDict::new(py);
+    let (v, t) = mesh_to_py(py, &mesh);
+    dict.set_item("vertices", v)?;
+    dict.set_item("triangles", t)?;
+    Ok(dict.unbind())
+}
+
+/// Read a **PQR** charge set → dict `{charge_positions: Q×3 f64, charge_values: Q f64}`.
+/// Only `ATOM` records are taken and zero-charge atoms dropped (as NESSie does).
+#[pyfunction]
+fn read_pqr_py(py: Python<'_>, path: &str) -> PyResult<Py<PyDict>> {
+    let charges = read_pqr(path).map_err(io_err_to_py)?;
+    let dict = PyDict::new(py);
+    let (pos, vals) = charges_to_py(py, &charges);
+    dict.set_item("charge_positions", pos)?;
+    dict.set_item("charge_values", vals)?;
+    Ok(dict.unbind())
+}
+
+/// Read an **HMO** file (mesh + charges in one document) → dict with all four
+/// arrays: `vertices`, `triangles`, `charge_positions`, `charge_values`.
+#[pyfunction]
+fn read_hmo_py(py: Python<'_>, path: &str) -> PyResult<Py<PyDict>> {
+    let (mesh, charges) = read_hmo(path).map_err(io_err_to_py)?;
+    let dict = PyDict::new(py);
+    let (v, t) = mesh_to_py(py, &mesh);
+    let (pos, vals) = charges_to_py(py, &charges);
+    dict.set_item("vertices", v)?;
+    dict.set_item("triangles", t)?;
+    dict.set_item("charge_positions", pos)?;
+    dict.set_item("charge_values", vals)?;
+    Ok(dict.unbind())
+}
+
+/// Read an **MSMS** surface from its `.vert` / `.face` pair → dict
+/// `{vertices: V×3 f64, triangles: F×3 i64}`. MSMS carries no charges.
+#[pyfunction]
+fn read_msms_py(py: Python<'_>, vert_path: &str, face_path: &str) -> PyResult<Py<PyDict>> {
+    let mesh = read_msms(vert_path, face_path).map_err(io_err_to_py)?;
+    let dict = PyDict::new(py);
+    let (v, t) = mesh_to_py(py, &mesh);
+    dict.set_item("vertices", v)?;
+    dict.set_item("triangles", t)?;
+    Ok(dict.unbind())
+}
+
+/// Write a mesh (`vertices` V×3, `triangles` F×3) to a Geomview **OFF** file.
+#[pyfunction]
+fn write_off_py(
+    path: &str,
+    vertices: PyReadonlyArray2<'_, f64>,
+    triangles: PyReadonlyArray2<'_, i64>,
+) -> PyResult<()> {
+    if vertices.shape().len() != 2 || vertices.shape()[1] != 3 {
+        return Err(PyValueError::new_err("vertices must be V×3"));
+    }
+    if triangles.shape().len() != 2 || triangles.shape()[1] != 3 {
+        return Err(PyValueError::new_err("triangles must be F×3"));
+    }
+    let nv = vertices.shape()[0];
+    let vflat = vertices
+        .as_slice()
+        .map_err(|e| PyValueError::new_err(format!("vertices not C-contiguous: {e}")))?;
+    let tflat = triangles
+        .as_slice()
+        .map_err(|e| PyValueError::new_err(format!("triangles not C-contiguous: {e}")))?;
+    if vflat.iter().any(|v| !v.is_finite()) {
+        return Err(PyValueError::new_err("non-finite vertex coordinate"));
+    }
+    let verts: Vec<Vec3> = vflat
+        .chunks_exact(3)
+        .map(|c| Vec3::new(c[0], c[1], c[2]))
+        .collect();
+    let mut tris: Vec<[u32; 3]> = Vec::with_capacity(tflat.len() / 3);
+    for c in tflat.chunks_exact(3) {
+        let mut t = [0u32; 3];
+        for (k, &id) in c.iter().enumerate() {
+            if id < 0 || id as usize >= nv {
+                return Err(PyValueError::new_err(format!(
+                    "triangle index {id} out of range 0..{nv}"
+                )));
+            }
+            t[k] = id as u32;
+        }
+        tris.push(t);
+    }
+    let mesh = Mesh { verts, normals: Vec::new(), tris };
+    write_off(&mesh, path).map_err(io_err_to_py)
+}
+
 #[pymodule]
 pub(crate) fn py_electrostatics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(born_energy_py, m)?)?;
     m.add_function(wrap_pyfunction!(solve_surface_py, m)?)?;
+    m.add_function(wrap_pyfunction!(read_off_py, m)?)?;
+    m.add_function(wrap_pyfunction!(read_pqr_py, m)?)?;
+    m.add_function(wrap_pyfunction!(read_hmo_py, m)?)?;
+    m.add_function(wrap_pyfunction!(read_msms_py, m)?)?;
+    m.add_function(wrap_pyfunction!(write_off_py, m)?)?;
     Ok(())
 }
