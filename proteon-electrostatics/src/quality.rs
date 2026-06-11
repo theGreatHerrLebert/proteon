@@ -323,6 +323,9 @@ pub struct TopologyReport {
     pub has_degenerate_volume: bool,
     /// Coincident (duplicate) faces.
     pub num_duplicate_faces: usize,
+    /// Self-intersecting (mutually penetrating, non-adjacent) triangle pairs — a
+    /// self-intersecting surface has no well-defined interior/exterior.
+    pub num_self_intersections: usize,
 }
 
 impl TopologyReport {
@@ -358,6 +361,7 @@ impl TopologyReport {
             num_inward_components: num_inward,
             has_degenerate_volume: degenerate,
             num_duplicate_faces: mesh.num_duplicate_faces(),
+            num_self_intersections: mesh.count_self_intersections(),
         }
     }
 
@@ -390,6 +394,16 @@ impl TopologyReport {
                 message: format!(
                     "{} duplicate (coincident) face(s): the surface is double-counted",
                     self.num_duplicate_faces
+                ),
+            });
+        }
+        if self.num_self_intersections > 0 {
+            v.push(QualityIssue {
+                severity: Severity::Error,
+                message: format!(
+                    "{} self-intersecting triangle pair(s): the surface penetrates itself, so \
+                     interior/exterior (and the molecular potential) are undefined",
+                    self.num_self_intersections
                 ),
             });
         }
@@ -595,6 +609,31 @@ mod tests {
         // Two disjoint outward spheres: a component warning, but no Error.
         assert!(!rep.has_errors());
         assert!(rep.issues().iter().any(|i| i.severity == Severity::Warn));
+    }
+
+    #[test]
+    fn topology_flags_self_intersection() {
+        use proteon_core::surface::mesh::Mesh;
+        // Two non-adjacent crossing triangles.
+        let m = Mesh {
+            verts: vec![
+                Vec3::new(-1.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.5),
+                Vec3::new(0.0, -1.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.5, 0.0, 1.0),
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [3, 4, 5]],
+        };
+        let rep = TopologyReport::assess(&m);
+        assert_eq!(rep.num_self_intersections, 1);
+        assert!(rep.has_errors());
+        assert!(rep
+            .issues()
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.message.contains("self-intersecting")));
     }
 
     #[test]
