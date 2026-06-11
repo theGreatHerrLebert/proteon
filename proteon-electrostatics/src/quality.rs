@@ -330,11 +330,15 @@ pub struct TopologyReport {
     /// check was inconclusive (mesh too irregular to verify cheaply). `Some(k>0)` is
     /// authoritative; `Some(0)` means "no clear penetration found", not a proof.
     pub num_self_intersections: Option<usize>,
-    /// Nested components (buried cavities / shell-in-shell). Supported via orientation
-    /// (the scalar-`f` solve is correct once oriented by nesting; cavity science gate in
-    /// `tests/cavity_concentric.rs`) but less-exercised than the single-body case, so a
-    /// Warn, not an Error. Computed only for a closed, consistently-oriented mesh.
+    /// Buried solvent cavities — components at **odd** nesting depth (depth 1 = a cavity
+    /// in a body, depth 3 = a cavity in an island, …). Supported via orientation (the
+    /// scalar-`f` solve is correct once oriented by nesting; cavity science gates in
+    /// `tests/cavity_*.rs`) but less-exercised than the single-body case, so a Warn, not
+    /// an Error. Computed only for a closed, consistently-oriented mesh.
     pub num_cavities: usize,
+    /// Two different components touch (share a vertex) — the region topology is then
+    /// ill-defined, so the nesting/winding classification cannot be trusted (review).
+    pub components_touch: bool,
 }
 
 impl TopologyReport {
@@ -382,7 +386,10 @@ impl TopologyReport {
             has_degenerate_volume: degenerate,
             num_duplicate_faces: mesh.num_duplicate_faces(),
             num_self_intersections: mesh.count_self_intersections(),
-            num_cavities: depths.iter().filter(|&&d| d > 0).count(),
+            // Actual solvent cavities are the ODD-depth components (a body/cavity/island
+            // nest has 2 nested components but 1 solvent cavity).
+            num_cavities: depths.iter().filter(|&&d| d % 2 == 1).count(),
+            components_touch: depths.len() > 1 && mesh.has_touching_components(),
         }
     }
 
@@ -440,6 +447,15 @@ impl TopologyReport {
         // Per-component orientation only matters once closed + consistent (else the
         // above fire, and component volumes are not trustworthy anyway).
         if self.watertight && self.consistently_oriented {
+            if self.components_touch {
+                v.push(QualityIssue {
+                    severity: Severity::Error,
+                    message: "two surface components touch (share a vertex): the region \
+                              topology (and so the nesting/cavity classification) is \
+                              ill-defined — separate the components"
+                        .to_string(),
+                });
+            }
             if self.has_degenerate_volume {
                 v.push(QualityIssue {
                     severity: Severity::Error,
@@ -676,6 +692,14 @@ mod tests {
         let mut raw = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
         raw.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
         assert!(TopologyReport::assess(&raw).has_errors(), "unoriented cavity is misoriented");
+
+        // num_cavities counts actual solvent cavities (odd depth): body/cavity/island has
+        // 2 nested components but 1 solvent cavity.
+        let mut three = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
+        three.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 2));
+        three.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
+        three.orient_by_nesting();
+        assert_eq!(TopologyReport::assess(&three).num_cavities, 1, "1 solvent cavity (odd depth)");
     }
 
     #[test]

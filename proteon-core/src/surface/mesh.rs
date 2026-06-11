@@ -411,6 +411,28 @@ impl Mesh {
         containing.into_iter().max_by_key(|&i| depths[i])
     }
 
+    /// Whether two **different** connected components share a vertex (touch). The nesting
+    /// / winding machinery assumes pairwise-disjoint components; a touching pair makes a
+    /// representative vertex's winding w.r.t. the other component ill-defined, so the
+    /// region topology cannot be trusted. Edge-manifold and self-intersection checks do
+    /// NOT catch vertex-only contact, so this is a distinct gate.
+    pub fn has_touching_components(&self) -> bool {
+        let labels = self.component_labels();
+        let mut vert_comp: HashMap<u32, usize> = HashMap::new();
+        for (ti, &t) in self.tris.iter().enumerate() {
+            for &v in &t {
+                match vert_comp.get(&v) {
+                    Some(&c) if c != labels[ti] => return true,
+                    None => {
+                        vert_comp.insert(v, labels[ti]);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
     /// Nesting **depth** of each connected component: how many *other* components contain
     /// its representative point (`0` = top-level body, `1` = a cavity inside one body, `2`
     /// = an island in that cavity, …). Each other component is tested independently so
@@ -471,9 +493,9 @@ impl Mesh {
     /// Each other component is tested **independently** (not as a summed winding): with
     /// alternating-orientation nesting — outward solute, inward cavity, outward island —
     /// a summed winding can cancel to zero and miss the innermost shell (review). Assumes
-    /// pairwise-disjoint components; touching components (a representative vertex lying on
-    /// another's surface) are a degenerate topology the watertight / self-intersection
-    /// gates are expected to catch.
+    /// pairwise-disjoint components; **touching components are not caught here** — gate on
+    /// [`Self::has_touching_components`] first (edge-manifold / self-intersection checks
+    /// miss vertex-only contact).
     pub fn num_nested_components(&self) -> usize {
         self.component_nesting_depths().iter().filter(|&&d| d > 0).count()
     }
@@ -1152,6 +1174,44 @@ mod tests {
         three.append(&inner);
         assert_eq!(three.num_nested_components(), 2, "both inner shells are nested");
         assert_eq!(three.component_nesting_depths(), vec![0, 1, 2], "body/cavity/island depths");
+    }
+
+    #[test]
+    fn touching_components_detected() {
+        // Two tetrahedra sharing ONLY vertex 0 (edge-disjoint ⇒ two components, but they
+        // touch at a vertex). Edge-manifoldness doesn't see this; has_touching_components
+        // must.
+        let mut verts = vec![
+            Vec3::new(0.0, 0.0, 0.0), // shared vertex 0
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(-1.0, 0.0, 0.0), // tetra B
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+        ];
+        let tetra = |b: u32| {
+            vec![
+                [b, b + 1, b + 2],
+                [b, b + 2, b + 3],
+                [b, b + 3, b + 1],
+                [b + 1, b + 3, b + 2],
+            ]
+        };
+        let mut tris = tetra(0); // A: 0,1,2,3
+        tris.extend([[0, 4, 5], [0, 5, 6], [0, 6, 4], [4, 6, 5]]); // B shares vertex 0
+        let touching = Mesh {
+            verts: std::mem::take(&mut verts),
+            normals: Vec::new(),
+            tris,
+        };
+        assert_eq!(touching.num_connected_components(), 2, "edge-disjoint ⇒ two components");
+        assert!(touching.has_touching_components(), "they share vertex 0");
+
+        // Two genuinely-disjoint tetrahedra (no shared index) do NOT touch.
+        let mut t2 = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 0);
+        t2.append(&icosphere(Vec3::new(5.0, 0.0, 0.0), 1.0, 0));
+        assert!(!t2.has_touching_components());
     }
 
     #[test]

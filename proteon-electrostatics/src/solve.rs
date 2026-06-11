@@ -31,6 +31,9 @@ pub enum SolveError {
     NonFinite,
     /// The model had no surface elements.
     Empty,
+    /// The model's topology is outside the validated formulation scope (e.g. a buried
+    /// cavity for the nonlocal solve, which is only gated for the local solve).
+    Unsupported,
 }
 
 impl std::fmt::Display for SolveError {
@@ -39,6 +42,9 @@ impl std::fmt::Display for SolveError {
             Self::NotConverged => write!(f, "GMRES did not converge within max_iter"),
             Self::NonFinite => write!(f, "solve produced a non-finite value"),
             Self::Empty => write!(f, "model has no surface elements"),
+            Self::Unsupported => {
+                write!(f, "model topology is outside the validated formulation scope")
+            }
         }
     }
 }
@@ -611,12 +617,22 @@ pub fn solve_nonlocal_elements_auto(
 /// Routes through [`solve_nonlocal_elements_auto`], so a mesh too large for the dense
 /// four-matrix system transparently uses the matrix-free GPU path (feature `cuda`).
 ///
+/// **Cavities are refused here** ([`SolveError::Unsupported`]): the nonlocal formulation
+/// on buried cavities is not yet validated (only the *local* cavity solve is gated). The
+/// model-level API has the topology to check; the element-level
+/// [`solve_nonlocal_elements`] cannot, so callers passing a cavity element list directly
+/// are responsible for that precondition.
+///
 /// # Errors
-/// See [`solve_nonlocal_elements`].
+/// [`SolveError::Unsupported`] for a nested (cavity) mesh; otherwise see
+/// [`solve_nonlocal_elements`].
 pub fn solve_nonlocal(
     model: &BemModel,
     cfg: &SolveConfig,
 ) -> Result<(NonlocalResult, SolveStats), SolveError> {
+    if model.mesh.num_nested_components() > 0 {
+        return Err(SolveError::Unsupported);
+    }
     let elements = model_elements(model);
     solve_nonlocal_elements_auto(&elements, &model.charges, &model.params, cfg)
 }

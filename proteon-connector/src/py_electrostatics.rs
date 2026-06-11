@@ -340,23 +340,22 @@ fn solve_surface_py<'py>(
     let charge_components: Vec<Option<usize>> =
         charges.iter().map(|c| mesh.containing_component(c.pos)).collect();
 
+    // Cavities are validated for the LOCAL solve only (the cavity science gate is local;
+    // the nonlocal Yukawa formulation on alternating regions is not yet gated). This is a
+    // SCIENCE boundary, not a mesh-quality issue, so it is refused UNCONDITIONALLY — the
+    // allow_low_quality mesh-quality override must not enable unvalidated physics (review).
+    if nonlocal_ && topology.num_cavities > 0 {
+        return Err(PyValueError::new_err(format!(
+            "{} buried cavity / nested component(s) with nonlocal_=True: the nonlocal \
+             formulation on cavities is not yet validated (the cavity science gate is \
+             local-only). Use a single-region mesh, or the local solve.",
+            topology.num_cavities
+        )));
+    }
+
     // Combined mesh-acceptance: topology + per-element geometry + charge placement.
     let quality = QualityReport::assess(&elements, &charges);
-    let mut issues: Vec<_> = topology.issues().into_iter().chain(quality.issues()).collect();
-    // Cavities are validated for the LOCAL solve only (the cavity science gate is local;
-    // the nonlocal Yukawa formulation on alternating regions is not yet gated) — refuse a
-    // nested mesh for the nonlocal solve (review).
-    if nonlocal_ && topology.num_cavities > 0 {
-        issues.push(proteon_electrostatics::QualityIssue {
-            severity: Severity::Error,
-            message: format!(
-                "{} buried cavity / nested component(s) with nonlocal_=True: cavities are \
-                 validated for the local solve only; the nonlocal formulation on cavities \
-                 is not yet gated",
-                topology.num_cavities
-            ),
-        });
-    }
+    let issues: Vec<_> = topology.issues().into_iter().chain(quality.issues()).collect();
     {
         let warnings = py.import("warnings")?;
         for issue in &issues {
@@ -452,6 +451,7 @@ fn solve_surface_py<'py>(
     dict.set_item("signed_volume", topology.signed_volume)?;
     dict.set_item("n_components", topology.num_components)?;
     dict.set_item("n_cavities", topology.num_cavities)?;
+    dict.set_item("components_touch", topology.components_touch)?;
     // Per-charge solute-body index (None ⇒ in solvent / not inside a single body).
     dict.set_item(
         "charge_components",
