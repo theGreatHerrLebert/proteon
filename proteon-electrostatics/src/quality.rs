@@ -407,9 +407,12 @@ impl TopologyReport {
                 ),
             }),
             None => v.push(QualityIssue {
-                severity: Severity::Warn,
+                // Fail CLOSED (review): a validity gate must refuse an unverifiable mesh,
+                // not proceed. `allow_low_quality=True` is the explicit override.
+                severity: Severity::Error,
                 message: "self-intersection check was inconclusive (mesh too irregular / \
-                          multi-scale to verify cheaply); a clean closed surface is not assured"
+                          multi-scale to verify cheaply): a clean closed surface cannot be \
+                          assured — pass a cleaner mesh or override"
                     .to_string(),
             }),
             Some(_) => {} // no clear penetration found (not a proof — see the detector docs)
@@ -641,6 +644,26 @@ mod tests {
             .issues()
             .iter()
             .any(|i| i.severity == Severity::Error && i.message.contains("self-intersecting")));
+
+        // Inconclusive (None) must fail CLOSED — an Error, not a Warn (review).
+        let nan = Mesh {
+            verts: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, f64::NAN, 0.0),
+                Vec3::new(2.0, 2.0, 2.0),
+                Vec3::new(3.0, 2.0, 2.0),
+                Vec3::new(2.0, 3.0, 2.0),
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [3, 4, 5]],
+        };
+        let rep2 = TopologyReport::assess(&nan);
+        assert_eq!(rep2.num_self_intersections, None);
+        assert!(rep2
+            .issues()
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.message.contains("inconclusive")));
     }
 
     #[test]

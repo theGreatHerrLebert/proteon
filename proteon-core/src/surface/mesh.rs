@@ -295,22 +295,36 @@ impl Mesh {
         // Bound the work: cap how many cells one triangle may span (oversized/multi-scale
         // triangle ⇒ bail) and the total exact tests (dense cells ⇒ bail). Both keep this
         // safe on adversarial connector input.
-        const SPAN_CAP: i64 = 4096;
+        const SPAN_CAP: f64 = 4096.0;
+        // Cell keys beyond this magnitude (a mesh extent of >1e15 cells) indicate huge
+        // coordinates / a tiny cell — bail rather than loop a vast i64 range.
+        const MAX_KEY: f64 = 1e15;
         let budget = 64usize.saturating_mul(n);
 
-        let key = |x: f64| (x / cell).floor();
+        let q = |x: f64| (x / cell).floor();
         let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
         for (i, &(a, b, c)) in pts.iter().enumerate() {
-            let span = |lo: f64, hi: f64| ((hi / cell).floor() - (lo / cell).floor()) + 1.0;
-            let dx = span(a.x.min(b.x).min(c.x), a.x.max(b.x).max(c.x));
-            let dy = span(a.y.min(b.y).min(c.y), a.y.max(b.y).max(c.y));
-            let dz = span(a.z.min(b.z).min(c.z), a.z.max(b.z).max(c.z));
-            if dx * dy * dz > SPAN_CAP as f64 {
+            // Floored cell keys per axis. Validate finiteness + magnitude BEFORE any cast
+            // to i64: a huge finite coordinate over a tiny cell yields inf/NaN quotients
+            // that would slip past the span check and produce an `i64::MIN..=MAX` loop.
+            let keys = [
+                q(a.x.min(b.x).min(c.x)),
+                q(a.x.max(b.x).max(c.x)),
+                q(a.y.min(b.y).min(c.y)),
+                q(a.y.max(b.y).max(c.y)),
+                q(a.z.min(b.z).min(c.z)),
+                q(a.z.max(b.z).max(c.z)),
+            ];
+            if keys.iter().any(|k| !k.is_finite() || k.abs() > MAX_KEY) {
+                return None;
+            }
+            let span = (keys[1] - keys[0] + 1.0) * (keys[3] - keys[2] + 1.0) * (keys[5] - keys[4] + 1.0);
+            if !span.is_finite() || span > SPAN_CAP {
                 return None; // a triangle spans too many cells — multi-scale mesh
             }
-            let (xlo, xhi) = (key(a.x.min(b.x).min(c.x)) as i64, key(a.x.max(b.x).max(c.x)) as i64);
-            let (ylo, yhi) = (key(a.y.min(b.y).min(c.y)) as i64, key(a.y.max(b.y).max(c.y)) as i64);
-            let (zlo, zhi) = (key(a.z.min(b.z).min(c.z)) as i64, key(a.z.max(b.z).max(c.z)) as i64);
+            let (xlo, xhi) = (keys[0] as i64, keys[1] as i64);
+            let (ylo, yhi) = (keys[2] as i64, keys[3] as i64);
+            let (zlo, zhi) = (keys[4] as i64, keys[5] as i64);
             for cx in xlo..=xhi {
                 for cy in ylo..=yhi {
                     for cz in zlo..=zhi {
@@ -918,6 +932,66 @@ mod tests {
             shared_and_crossing.count_self_intersections(),
             Some(1),
             "a shared-vertex pair that also crosses must be detected"
+        );
+
+        // A clean edge-adjacent pair (two tetra faces sharing an edge, folded) → no
+        // penetration, no false positive.
+        let fold = Mesh {
+            verts: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [0, 1, 3]], // share edge 0-1
+        };
+        assert_eq!(fold.count_self_intersections(), Some(0), "a clean fold is not a crossing");
+
+        // Non-finite coordinate → inconclusive (None), not a false "clean".
+        let nan = Mesh {
+            verts: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, f64::NAN, 0.0),
+                Vec3::new(2.0, 2.0, 2.0),
+                Vec3::new(3.0, 2.0, 2.0),
+                Vec3::new(2.0, 3.0, 2.0),
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [3, 4, 5]],
+        };
+        assert_eq!(nan.count_self_intersections(), None, "non-finite input is inconclusive");
+
+        // Multi-scale mesh trips SPAN_CAP → inconclusive (one huge triangle over a tiny
+        // median cell would span a vast cell range).
+        let mut multiscale = Mesh {
+            verts: vec![Vec3::new(0.0, 0.0, 0.0); 0],
+            normals: Vec::new(),
+            tris: Vec::new(),
+        };
+        for i in 0..5 {
+            // five unit triangles (set the median cell ≈ 1)
+            let o = i as f64 * 3.0;
+            let b = multiscale.verts.len() as u32;
+            multiscale.verts.extend([
+                Vec3::new(o, 0.0, 0.0),
+                Vec3::new(o + 1.0, 0.0, 0.0),
+                Vec3::new(o, 1.0, 0.0),
+            ]);
+            multiscale.tris.push([b, b + 1, b + 2]);
+        }
+        let b = multiscale.verts.len() as u32;
+        multiscale.verts.extend([
+            Vec3::new(0.0, 0.0, 100.0),
+            Vec3::new(300.0, 0.0, 100.0),
+            Vec3::new(0.0, 300.0, 100.0), // extent ~300 cells/axis ≫ SPAN_CAP
+        ]);
+        multiscale.tris.push([b, b + 1, b + 2]);
+        assert_eq!(
+            multiscale.count_self_intersections(),
+            None,
+            "a multi-scale mesh is inconclusive, not silently clean"
         );
     }
 
