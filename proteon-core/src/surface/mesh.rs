@@ -392,6 +392,9 @@ impl Mesh {
     /// inside none (in solvent) or — degenerately — inside more than one. With no nested
     /// components a point lies in at most one body.
     pub fn containing_component(&self, p: Vec3) -> Option<usize> {
+        if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+            return None;
+        }
         let inside: Vec<usize> = self
             .component_windings(p)
             .iter()
@@ -408,6 +411,13 @@ impl Mesh {
     /// Number of **nested** components: a component whose own surface lies inside another
     /// component (a buried cavity / shell-in-shell). `0` for a set of separate bodies.
     /// O(components × triangles); intended for closed meshes with few components.
+    ///
+    /// Each other component is tested **independently** (not as a summed winding): with
+    /// alternating-orientation nesting — outward solute, inward cavity, outward island —
+    /// a summed winding can cancel to zero and miss the innermost shell (review). Assumes
+    /// pairwise-disjoint components; touching components (a representative vertex lying on
+    /// another's surface) are a degenerate topology the watertight / self-intersection
+    /// gates are expected to catch.
     pub fn num_nested_components(&self) -> usize {
         let labels = self.component_labels();
         let k = labels.iter().copied().max().map_or(0, |m| m + 1);
@@ -422,15 +432,17 @@ impl Mesh {
         let mut nested = 0;
         for i in 0..k {
             let Some(p) = rep[i] else { continue };
-            // Total winding of component i's representative w.r.t. all OTHER components.
-            let mut w = 0.0;
-            for (ti, &t) in self.tris.iter().enumerate() {
-                if labels[ti] != i {
-                    let (a, b, c) = self.tri_points(t);
-                    w += triangle_solid_angle(p, a, b, c);
-                }
+            if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+                continue; // non-finite geometry — cannot classify (caller validates)
             }
-            if (w / (4.0 * std::f64::consts::PI)).abs() > 0.5 {
+            // Inside ANY *other* component (tested separately, so opposite-orientation
+            // enclosing shells cannot cancel).
+            let w = self.component_windings(p);
+            if w
+                .iter()
+                .enumerate()
+                .any(|(j, &wj)| j != i && wj.abs() > 0.5)
+            {
                 nested += 1; // i sits inside another component
             }
         }
@@ -1088,6 +1100,17 @@ mod tests {
         let mut cavity = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
         cavity.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
         assert_eq!(cavity.num_nested_components(), 1, "the inner shell is nested");
+
+        // Three concentric shells with ALTERNATING orientation (outward, inward, outward)
+        // — the cavity-with-island case. A summed-winding test would cancel and miss the
+        // innermost; the per-component test must report BOTH inner shells nested (review).
+        let mut three = icosphere(Vec3::new(0.0, 0.0, 0.0), 5.0, 2); // outward
+        let mut mid = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
+        mid.flip(); // inward cavity shell
+        let inner = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2); // outward island
+        three.append(&mid);
+        three.append(&inner);
+        assert_eq!(three.num_nested_components(), 2, "both inner shells are nested");
     }
 
     #[test]
