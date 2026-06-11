@@ -46,6 +46,22 @@ pub fn born_rfenergy(charge: f64, radius: f64, params: &Params, locality: Locali
     }
 }
 
+/// Closed-form `l=0` reaction-field energy (kJ/mol) of a **central** point charge `q` in
+/// concentric dielectric shells (codex multi-region oracle). `interfaces` are the
+/// `(radius, ε_inside, ε_outside)` triples in any order. The monopole reaction potential
+/// at the centre is `φ = q · Σ_k (1/ε_out − 1/ε_in)/r_k`, and `W* = ½ q φ · prefactor`
+/// (the ½ lives in [`ENERGY_FACTOR`]). The single-interface case is exactly the Born
+/// energy, so this gates the multi-region (cavity) BEM the way Born gates the single
+/// region.
+#[must_use]
+pub fn concentric_shell_rfenergy(charge: f64, interfaces: &[(f64, f64, f64)]) -> f64 {
+    let sum: f64 = interfaces
+        .iter()
+        .map(|&(r, ein, eout)| (1.0 / eout - 1.0 / ein) / r)
+        .sum();
+    POTPREFACTOR * ENERGY_FACTOR * charge * charge * sum
+}
+
 /// Exact triangulated sphere for the convergence theorem — vertices lie **on** the
 /// analytic sphere, decoupling BEM convergence from SES geometry (plan §3, Q1).
 ///

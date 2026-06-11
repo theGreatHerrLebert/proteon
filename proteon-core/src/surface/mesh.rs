@@ -408,6 +408,59 @@ impl Mesh {
         }
     }
 
+    /// Nesting **depth** of each connected component: how many *other* components contain
+    /// its representative point (`0` = top-level body, `1` = a cavity inside one body, `2`
+    /// = an island in that cavity, …). Each other component is tested independently so
+    /// alternating-orientation shells cannot cancel. Assumes pairwise-disjoint components.
+    pub fn component_nesting_depths(&self) -> Vec<usize> {
+        let labels = self.component_labels();
+        let k = labels.iter().copied().max().map_or(0, |m| m + 1);
+        let mut rep: Vec<Option<Vec3>> = vec![None; k];
+        for (ti, &t) in self.tris.iter().enumerate() {
+            rep[labels[ti]].get_or_insert(self.verts[t[0] as usize]);
+        }
+        (0..k)
+            .map(|i| {
+                let Some(p) = rep[i] else { return 0 };
+                if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+                    return 0;
+                }
+                self.component_windings(p)
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, &wj)| j != i && wj.abs() > 0.5)
+                    .count()
+            })
+            .collect()
+    }
+
+    /// Orient every component **outward-from-solute** for a multiply-connected (cavity)
+    /// solute: a component at nesting depth `d` should have signed-volume sign `(−1)^d`
+    /// (top-level body +, cavity −, island +, …). With that orientation every panel has
+    /// solute on its interior side and solvent on its exterior side, so the *scalar*
+    /// `f = εΩ/εΣ` solve is correct on cavity meshes too (codex). Flips the components
+    /// whose sign is wrong; returns whether any were flipped. (For a single body this is
+    /// exactly [`Self::orient_outward`].)
+    pub fn orient_by_nesting(&mut self) -> bool {
+        let labels = self.component_labels();
+        let depths = self.component_nesting_depths();
+        let vols: Vec<f64> = self.component_volumes_areas().iter().map(|&(v, _)| v).collect();
+        let flip: Vec<bool> = (0..vols.len())
+            .map(|c| {
+                let want = if depths[c] % 2 == 0 { 1.0 } else { -1.0 };
+                vols[c] != 0.0 && vols[c].signum() != want
+            })
+            .collect();
+        let mut flipped = false;
+        for (ti, t) in self.tris.iter_mut().enumerate() {
+            if flip[labels[ti]] {
+                t.swap(1, 2);
+                flipped = true;
+            }
+        }
+        flipped
+    }
+
     /// Number of **nested** components: a component whose own surface lies inside another
     /// component (a buried cavity / shell-in-shell). `0` for a set of separate bodies.
     /// O(components × triangles); intended for closed meshes with few components.
@@ -419,34 +472,7 @@ impl Mesh {
     /// another's surface) are a degenerate topology the watertight / self-intersection
     /// gates are expected to catch.
     pub fn num_nested_components(&self) -> usize {
-        let labels = self.component_labels();
-        let k = labels.iter().copied().max().map_or(0, |m| m + 1);
-        if k <= 1 {
-            return 0;
-        }
-        // A representative vertex of each component.
-        let mut rep: Vec<Option<Vec3>> = vec![None; k];
-        for (ti, &t) in self.tris.iter().enumerate() {
-            rep[labels[ti]].get_or_insert(self.verts[t[0] as usize]);
-        }
-        let mut nested = 0;
-        for i in 0..k {
-            let Some(p) = rep[i] else { continue };
-            if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
-                continue; // non-finite geometry — cannot classify (caller validates)
-            }
-            // Inside ANY *other* component (tested separately, so opposite-orientation
-            // enclosing shells cannot cancel).
-            let w = self.component_windings(p);
-            if w
-                .iter()
-                .enumerate()
-                .any(|(j, &wj)| j != i && wj.abs() > 0.5)
-            {
-                nested += 1; // i sits inside another component
-            }
-        }
-        nested
+        self.component_nesting_depths().iter().filter(|&&d| d > 0).count()
     }
 
     /// Euler characteristic V − E + F, counting only vertices actually used by a
@@ -1111,6 +1137,26 @@ mod tests {
         three.append(&mid);
         three.append(&inner);
         assert_eq!(three.num_nested_components(), 2, "both inner shells are nested");
+        assert_eq!(three.component_nesting_depths(), vec![0, 1, 2], "body/cavity/island depths");
+    }
+
+    #[test]
+    fn orient_by_nesting_alternates_signs() {
+        // Three concentric icospheres (all built outward = +volume): orient_by_nesting
+        // must leave the body (+), flip the cavity (−), keep the island (+) so each panel
+        // faces solute-inside / solvent-outside (codex correction).
+        let mut m = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 1); // body, depth 0
+        m.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 1)); // cavity, depth 1
+        m.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1)); // island, depth 2
+        assert!(m.orient_by_nesting(), "the cavity shell must be flipped");
+        let depths = m.component_nesting_depths();
+        let vols: Vec<f64> = m.component_volumes_areas().iter().map(|&(v, _)| v).collect();
+        for (c, &d) in depths.iter().enumerate() {
+            let want = if d % 2 == 0 { 1.0 } else { -1.0 };
+            assert_eq!(vols[c].signum(), want, "component {c} depth {d}: sign {}", vols[c]);
+        }
+        // Idempotent: a second pass flips nothing.
+        assert!(!m.orient_by_nesting(), "already correctly oriented");
     }
 
     #[test]
