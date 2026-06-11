@@ -498,61 +498,58 @@ fn solve_surface_py<'py>(
 // straight off disk into the arrays `solve_surface_py` consumes.
 
 /// Map a format-reader `io::Error` to the right Python exception: a parse error
-/// (`InvalidData`) is a `ValueError`; anything else (missing file, permissions) is
-/// an `OSError`.
+/// (`InvalidData`) is a `ValueError`; a missing file is a `FileNotFoundError`;
+/// anything else (permissions, etc.) is a generic `OSError`.
 fn io_err_to_py(e: std::io::Error) -> PyErr {
-    if e.kind() == std::io::ErrorKind::InvalidData {
-        PyValueError::new_err(e.to_string())
-    } else {
-        pyo3::exceptions::PyOSError::new_err(e.to_string())
+    use std::io::ErrorKind;
+    match e.kind() {
+        ErrorKind::InvalidData => PyValueError::new_err(e.to_string()),
+        ErrorKind::NotFound => pyo3::exceptions::PyFileNotFoundError::new_err(e.to_string()),
+        _ => pyo3::exceptions::PyOSError::new_err(e.to_string()),
     }
 }
 
-/// Mesh → (V×3 f64 vertices, F×3 i64 triangles) numpy arrays.
+/// Mesh → (V×3 f64 vertices, F×3 i64 triangles) numpy arrays. Propagates a reshape
+/// failure as a real exception rather than panicking across the FFI boundary.
 fn mesh_to_py<'py>(
     py: Python<'py>,
     mesh: &Mesh,
-) -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>) {
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>)> {
     let nv = mesh.verts.len();
     let vflat: Vec<f64> = mesh.verts.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
-    let verts = PyArray1::from_vec(py, vflat)
-        .reshape([nv, 3])
-        .expect("reshape V×3");
+    let verts = PyArray1::from_vec(py, vflat).reshape([nv, 3])?;
     let nf = mesh.tris.len();
     let tflat: Vec<i64> = mesh
         .tris
         .iter()
         .flat_map(|t| [i64::from(t[0]), i64::from(t[1]), i64::from(t[2])])
         .collect();
-    let tris = PyArray1::from_vec(py, tflat)
-        .reshape([nf, 3])
-        .expect("reshape F×3");
-    (verts, tris)
+    let tris = PyArray1::from_vec(py, tflat).reshape([nf, 3])?;
+    Ok((verts, tris))
 }
 
 /// Charges → (Q×3 f64 positions, Q f64 values) numpy arrays.
 fn charges_to_py<'py>(
     py: Python<'py>,
     charges: &[Charge],
-) -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>) {
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
     let nq = charges.len();
     let pflat: Vec<f64> = charges
         .iter()
         .flat_map(|c| [c.pos.x, c.pos.y, c.pos.z])
         .collect();
-    let pos = PyArray1::from_vec(py, pflat)
-        .reshape([nq, 3])
-        .expect("reshape Q×3");
+    let pos = PyArray1::from_vec(py, pflat).reshape([nq, 3])?;
     let vals = PyArray1::from_vec(py, charges.iter().map(|c| c.val).collect::<Vec<_>>());
-    (pos, vals)
+    Ok((pos, vals))
 }
 
 /// Read a Geomview **OFF** surface mesh → dict `{vertices: V×3 f64, triangles: F×3 i64}`.
 #[pyfunction]
 fn read_off_py(py: Python<'_>, path: &str) -> PyResult<Py<PyDict>> {
-    let mesh = read_off(path).map_err(io_err_to_py)?;
+    // I/O + parsing off the GIL; numpy construction after reacquiring it.
+    let mesh = py.allow_threads(|| read_off(path)).map_err(io_err_to_py)?;
     let dict = PyDict::new(py);
-    let (v, t) = mesh_to_py(py, &mesh);
+    let (v, t) = mesh_to_py(py, &mesh)?;
     dict.set_item("vertices", v)?;
     dict.set_item("triangles", t)?;
     Ok(dict.unbind())
@@ -562,9 +559,9 @@ fn read_off_py(py: Python<'_>, path: &str) -> PyResult<Py<PyDict>> {
 /// Only `ATOM` records are taken and zero-charge atoms dropped (as NESSie does).
 #[pyfunction]
 fn read_pqr_py(py: Python<'_>, path: &str) -> PyResult<Py<PyDict>> {
-    let charges = read_pqr(path).map_err(io_err_to_py)?;
+    let charges = py.allow_threads(|| read_pqr(path)).map_err(io_err_to_py)?;
     let dict = PyDict::new(py);
-    let (pos, vals) = charges_to_py(py, &charges);
+    let (pos, vals) = charges_to_py(py, &charges)?;
     dict.set_item("charge_positions", pos)?;
     dict.set_item("charge_values", vals)?;
     Ok(dict.unbind())
@@ -574,10 +571,10 @@ fn read_pqr_py(py: Python<'_>, path: &str) -> PyResult<Py<PyDict>> {
 /// arrays: `vertices`, `triangles`, `charge_positions`, `charge_values`.
 #[pyfunction]
 fn read_hmo_py(py: Python<'_>, path: &str) -> PyResult<Py<PyDict>> {
-    let (mesh, charges) = read_hmo(path).map_err(io_err_to_py)?;
+    let (mesh, charges) = py.allow_threads(|| read_hmo(path)).map_err(io_err_to_py)?;
     let dict = PyDict::new(py);
-    let (v, t) = mesh_to_py(py, &mesh);
-    let (pos, vals) = charges_to_py(py, &charges);
+    let (v, t) = mesh_to_py(py, &mesh)?;
+    let (pos, vals) = charges_to_py(py, &charges)?;
     dict.set_item("vertices", v)?;
     dict.set_item("triangles", t)?;
     dict.set_item("charge_positions", pos)?;
@@ -589,9 +586,11 @@ fn read_hmo_py(py: Python<'_>, path: &str) -> PyResult<Py<PyDict>> {
 /// `{vertices: V×3 f64, triangles: F×3 i64}`. MSMS carries no charges.
 #[pyfunction]
 fn read_msms_py(py: Python<'_>, vert_path: &str, face_path: &str) -> PyResult<Py<PyDict>> {
-    let mesh = read_msms(vert_path, face_path).map_err(io_err_to_py)?;
+    let mesh = py
+        .allow_threads(|| read_msms(vert_path, face_path))
+        .map_err(io_err_to_py)?;
     let dict = PyDict::new(py);
-    let (v, t) = mesh_to_py(py, &mesh);
+    let (v, t) = mesh_to_py(py, &mesh)?;
     dict.set_item("vertices", v)?;
     dict.set_item("triangles", t)?;
     Ok(dict.unbind())
@@ -600,6 +599,7 @@ fn read_msms_py(py: Python<'_>, vert_path: &str, face_path: &str) -> PyResult<Py
 /// Write a mesh (`vertices` V×3, `triangles` F×3) to a Geomview **OFF** file.
 #[pyfunction]
 fn write_off_py(
+    py: Python<'_>,
     path: &str,
     vertices: PyReadonlyArray2<'_, f64>,
     triangles: PyReadonlyArray2<'_, i64>,
@@ -628,17 +628,22 @@ fn write_off_py(
     for c in tflat.chunks_exact(3) {
         let mut t = [0u32; 3];
         for (k, &id) in c.iter().enumerate() {
-            if id < 0 || id as usize >= nv {
-                return Err(PyValueError::new_err(format!(
-                    "triangle index {id} out of range 0..{nv}"
-                )));
-            }
-            t[k] = id as u32;
+            // Validate against nv, then checked-convert — a value past u32::MAX (or
+            // a negative id) is an error, never a silent wrap.
+            let idx = usize::try_from(id)
+                .ok()
+                .filter(|&u| u < nv)
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!("triangle index {id} out of range 0..{nv}"))
+                })?;
+            t[k] = u32::try_from(idx)
+                .map_err(|_| PyValueError::new_err(format!("triangle index {idx} exceeds u32")))?;
         }
         tris.push(t);
     }
     let mesh = Mesh { verts, normals: Vec::new(), tris };
-    write_off(&mesh, path).map_err(io_err_to_py)
+    py.allow_threads(|| write_off(&mesh, path))
+        .map_err(io_err_to_py)
 }
 
 #[pymodule]

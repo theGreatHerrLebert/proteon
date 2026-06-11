@@ -89,8 +89,9 @@ def test_load_then_solve_end_to_end():
     assert out["surface_potential"].shape == (len(v),)
 
 
-def test_missing_file_raises_oserror():
-    with pytest.raises(OSError):
+def test_missing_file_raises_filenotfound():
+    # FileNotFoundError is an OSError subclass, so the errno class is preserved.
+    with pytest.raises(FileNotFoundError):
         proteon.read_off("/nonexistent/path/x.off")
 
 
