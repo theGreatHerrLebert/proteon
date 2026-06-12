@@ -19,6 +19,7 @@
 //! - (next) panel-aware single/double-layer cluster expansions (BLTC + Cartesian),
 //!   then the octree, then a `TreecodeOperator: LinearOperator`.
 
+pub mod cartesian;
 pub mod cheb;
 pub mod cubature;
 pub mod expansion;
