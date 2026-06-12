@@ -489,20 +489,27 @@ The remaining work is **reliability + quality** — both now under way:
 
 ## Measured retrieval quality (quality §)
 
-Benchmark on a 317-PDB corpus (100×25 sample, TM-align ground truth):
+Single-run benchmark on a 317-PDB corpus (100×25 sample, one seed, TM-align ground
+truth). These are observations from **one** run — directional, not yet CIs.
 
 - **Baseline (k=6, top-10):** recall@K = 0.80 (TM≥0.5) / 0.96 (TM≥0.7) / 1.00 (TM≥0.9).
-- **k-mer length is NOT a lever:** k=4, k=5, k=6, and multi-k `[3,4,5,6]` give *identical*
-  recall — the misses are not a k-mer-resolution problem.
-- **Rerank depth IS the lever:** the missed homologs are recoverable candidates ranked
-  6–~20 that the default shallow rerank (`rerank_top_k=5`) never TM-aligns. At a fixed
-  top-10 return, deepening rerank to 20 raises recall@10 to **0.85 (TM≥0.5) / 0.98
-  (TM≥0.7)** — monotonic by construction (TM-align reorders a superset). Cost: more
-  TM-aligns per query (still fast).
-- **Action taken:** the `proteon-search query` CLI defaults `--rerank-top-k=20` (vs the
-  library `search()` default of 5). The library default is left conservative on purpose —
-  changing it is a latency/behaviour decision for the maintainer.
+- **k-mer length showed no effect in this run:** k=4, k=5, k=6, and multi-k `[3,4,5,6]`
+  gave identical recall here — so on this corpus the misses were not a k-mer-resolution
+  problem. Not established beyond this corpus/seed.
+- **Rerank depth moved recall:** note the effective rerank depth is
+  `max(top_k, rerank_top_k)`, so at top-10 the library default `rerank_top_k=5` already
+  TM-aligns 10 candidates. Raising `rerank_top_k` to 20 deepens the reranked pool
+  10→20 (~2× the TM-align work, not 4×) and raised recall@10 to **0.85 (TM≥0.5) / 0.98
+  (TM≥0.7)** in this run (+0.044 / +0.021, i.e. ≈1 query-equivalent over 25 queries —
+  within plausible single-seed noise). Recall is non-decreasing in depth *only* under
+  matched conditions (deeper pool is a superset **and** rerank TM scores match the
+  ground-truth TM scores); it observed monotonic here but is not guaranteed in general —
+  ground truth uses batched `tm_align_one_to_many` while rerank uses scalar `tm_align`,
+  and changing `rerank_top_k` also shifts the diagonal candidate/rescore cutoffs.
+- **No default changed.** Both the CLI and library keep `rerank_top_k=5`. The depth
+  effect needs multiple seeds/corpora and a paired bootstrap before it justifies a
+  latency/behaviour change.
 
-Next quality levers to measure: confirm the rerank-depth gain across seeds/corpora and
-revisit the `search()` default; alphabet/AA weight tuning; domain splitting for the
-remote-homolog tail (TM 0.5–0.7).
+Next quality levers to measure: confirm the rerank-depth gain across seeds/corpora with
+paired per-query deltas + a bootstrap interval before revisiting the default; alphabet/AA
+weight tuning; domain splitting for the remote-homolog tail (TM 0.5–0.7).

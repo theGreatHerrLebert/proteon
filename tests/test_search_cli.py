@@ -11,7 +11,7 @@ import os
 import pytest
 
 from conftest import TEST_PDBS_DIR
-from proteon.search_cli import main
+from proteon.search_cli import build_parser, main
 
 
 def _pdb(name: str) -> str:
@@ -68,3 +68,11 @@ def test_build_requires_inputs(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     assert main(["build", str(empty), "-o", str(tmp_path / "db")]) == 2
+
+
+def test_query_rerank_default_matches_library():
+    # Pin the CLI --rerank-top-k default to the library search() default (5). The
+    # effective rerank depth is max(top_k, rerank_top_k), so this is a floor, not a cap.
+    args = build_parser().parse_args(["query", "db", "q.pdb"])
+    assert args.rerank_top_k == 5
+    assert args.top_k == 10
