@@ -153,6 +153,12 @@ fn solve_surface_py<'py>(
             "charge_values length must match charge_positions",
         ));
     }
+    // Empty check early (matches the pre-extraction ordering: before tol/param checks).
+    if triangles.shape()[0] == 0 || nq == 0 {
+        return Err(PyValueError::new_err(
+            "need at least one triangle and one charge",
+        ));
+    }
     if !(tol.is_finite() && tol > 0.0) || max_iter == 0 || restart == 0 {
         return Err(PyValueError::new_err(
             "need tol > 0, max_iter > 0, and restart > 0",
@@ -229,17 +235,18 @@ fn solve_surface_py<'py>(
     };
 
     // --- heavy compute off the GIL -------------------------------------------
-    let sol = py
-        .allow_threads(|| solve_surface(mesh, &charges, &opts))
-        .map_err(surface_err_to_py)?;
+    let output = py.allow_threads(|| solve_surface(mesh, &charges, &opts));
 
-    // Re-emit the solve's advisories (size, auto-flip, quality issues) as Python warnings.
+    // Re-emit the advisories (size, auto-flip, quality issues) as Python warnings —
+    // ALWAYS, before handling the result, so a refused/failed solve still warns exactly
+    // as the pre-extraction connector did.
     {
         let warnings = py.import("warnings")?;
-        for w in &sol.warnings {
+        for w in &output.warnings {
             warnings.call_method1("warn", (w.clone(),))?;
         }
     }
+    let sol = output.result.map_err(surface_err_to_py)?;
 
     let topology = &sol.topology;
     let quality = &sol.quality;

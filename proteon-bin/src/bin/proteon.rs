@@ -35,7 +35,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use rayon::prelude::*;
 
 use proteon_core::dssp;
@@ -224,6 +224,10 @@ struct MinimizeArgs {
 /// potential. Input is one of: `--hmo` (mesh + charges in one file), `--off` +
 /// `--pqr`, or `--msms PREFIX` (reads `PREFIX.vert`/`PREFIX.face`) + `--pqr`.
 #[derive(Args)]
+#[command(group(
+    // Exactly one mesh source is required: --off, --msms, or --hmo.
+    ArgGroup::new("mesh").required(true).args(["off", "msms", "hmo"])
+))]
 struct ElectrostaticsArgs {
     /// OFF surface mesh (requires --pqr for charges).
     #[arg(long, conflicts_with_all = ["hmo", "msms"])]
@@ -234,8 +238,8 @@ struct ElectrostaticsArgs {
     /// HMO file providing BOTH the mesh and the charges.
     #[arg(long, conflicts_with_all = ["off", "msms", "pqr"])]
     hmo: Option<PathBuf>,
-    /// PQR charge set (used with --off / --msms).
-    #[arg(long)]
+    /// PQR charge set — required with --off / --msms (an HMO carries its own charges).
+    #[arg(long, required_unless_present = "hmo")]
     pqr: Option<PathBuf>,
     /// Solute (interior) dielectric.
     #[arg(long, default_value_t = 1.0)]
@@ -843,12 +847,14 @@ fn run_electrostatics(args: &ElectrostaticsArgs) -> Result<()> {
         allow_low_quality: args.allow_low_quality,
     };
 
-    let sol = electro::solve_surface(mesh, &charges, &opts).map_err(|e| anyhow!(e.to_string()))?;
+    let output = electro::solve_surface(mesh, &charges, &opts);
 
-    // Advisories (auto-flip, quality, size) to stderr — the summary stays clean on stdout.
-    for w in &sol.warnings {
+    // Advisories (auto-flip, quality, size) to stderr — ALWAYS, even on a refused solve —
+    // so the summary stays clean on stdout but the warnings are never lost.
+    for w in &output.warnings {
         eprintln!("WARN {w}");
     }
+    let sol = output.result.map_err(|e| anyhow!(e.to_string()))?;
 
     if let Some(path) = &args.potential_out {
         let mut w = io::BufWriter::new(

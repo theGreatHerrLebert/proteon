@@ -95,13 +95,23 @@ pub struct SurfaceSolution {
     pub charge_components: Vec<Option<usize>>,
     /// Whether one or more components were re-oriented outward-from-solute.
     pub flipped_to_outward: bool,
-    /// Non-fatal advisories (quality issues, the flip notice, the size warning).
+}
+
+/// The outcome of [`solve_surface`]: the non-fatal advisories accumulated up to the
+/// point of return (emitted **regardless** of success or failure, matching the original
+/// connector's "warn before refuse" behaviour) plus the success/failure result.
+pub struct SurfaceSolveOutput {
+    /// Advisories (size, auto-flip, quality issues) collected before the function returned.
     pub warnings: Vec<String>,
+    /// The solution, or the reason the solve could not complete.
+    pub result: Result<SurfaceSolution, SurfaceSolveError>,
 }
 
 /// Why a surface solve could not be completed.
 #[derive(Debug)]
 pub enum SurfaceSolveError {
+    /// A solver or dielectric parameter is out of range (non-finite, non-positive, …).
+    InvalidParams(String),
     /// No triangles or no charges.
     Empty,
     /// A zero-area / collinear triangle at this index.
@@ -126,6 +136,7 @@ pub enum SurfaceSolveError {
 impl fmt::Display for SurfaceSolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidParams(m) => write!(f, "{m}"),
             Self::Empty => write!(f, "need at least one triangle and one charge"),
             Self::DegenerateTriangle(i) => {
                 write!(f, "degenerate (zero-area / collinear) triangle at index {i}")
@@ -159,18 +170,82 @@ impl std::error::Error for SurfaceSolveError {}
 
 /// Solve the local/nonlocal BEM on `mesh` with point `charges`; see the module docs.
 ///
+/// Returns a [`SurfaceSolveOutput`] whose `warnings` are populated **regardless** of
+/// success or failure (so a refused or failed solve still surfaces the advisories the
+/// caller would have wanted — exactly as the connector did before this was extracted)
+/// and whose `result` carries the solution or the typed error.
+///
 /// The `mesh` is taken by value because acceptable meshes are auto-oriented in place
 /// (each inward component flipped outward-from-solute by nesting parity); callers that
 /// need the original keep their own copy.
 pub fn solve_surface(
+    mesh: Mesh,
+    charges: &[Charge],
+    opts: &SurfaceSolveOptions,
+) -> SurfaceSolveOutput {
+    let mut warnings = Vec::new();
+    let result = solve_surface_inner(mesh, charges, opts, &mut warnings);
+    SurfaceSolveOutput { warnings, result }
+}
+
+/// Validate the solver + dielectric parameters. Centralised here so every front-end
+/// (connector, CLI) accepts identical inputs — a non-positive `lambda` / `eps_*` would
+/// otherwise reach `Params::yukawa()`'s `debug_assert!` (panic in debug; bad numbers in
+/// release), and `restart = 0` would be silently clamped by GMRES.
+fn validate_options(opts: &SurfaceSolveOptions) -> Result<(), SurfaceSolveError> {
+    let cfg = &opts.cfg;
+    if !(cfg.tol.is_finite() && cfg.tol > 0.0) || cfg.max_iter == 0 || cfg.restart == 0 {
+        return Err(SurfaceSolveError::InvalidParams(
+            "need tol > 0, max_iter > 0, and restart > 0".to_string(),
+        ));
+    }
+    let p = &opts.params;
+    for (name, v) in [
+        ("eps_omega", p.eps_omega),
+        ("eps_sigma", p.eps_sigma),
+        ("eps_inf", p.eps_inf),
+        ("lambda", p.lambda),
+    ] {
+        if !(v.is_finite() && v > 0.0) {
+            return Err(SurfaceSolveError::InvalidParams(format!(
+                "{name} must be finite and > 0"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn solve_surface_inner(
     mut mesh: Mesh,
     charges: &[Charge],
     opts: &SurfaceSolveOptions,
+    warnings: &mut Vec<String>,
 ) -> Result<SurfaceSolution, SurfaceSolveError> {
     let nf = mesh.tris.len();
     let nq = charges.len();
     if nf == 0 || nq == 0 {
         return Err(SurfaceSolveError::Empty);
+    }
+
+    validate_options(opts)?;
+
+    // Dense memory guard (before the per-element work, matching the original ordering) +
+    // the size advisory.
+    let blocks: u128 = if opts.nonlocal { 4 } else { 2 };
+    let est = (nf as u128).saturating_mul(nf as u128).saturating_mul(8) * blocks;
+    if est > MEM_BUDGET && !opts.allow_large {
+        return Err(SurfaceSolveError::OverBudget {
+            n_elements: nf,
+            gib: est >> 30,
+        });
+    }
+    if nf >= N_WARN {
+        warnings.push(format!(
+            "{nf} triangles: the dense BEM is O(N²) in memory and time — this will be \
+             slow/RAM-heavy. Over the dense budget it switches to the O(N)-memory \
+             matrix-free GPU solve if a CUDA device is present (slower per solve, but \
+             uncapped in mesh size)."
+        ));
     }
 
     // Finite inputs (a NaN/inf would otherwise propagate silently into the solve).
@@ -198,24 +273,6 @@ pub fn solve_surface(
         if !(cross.norm() > 0.0 && cross.norm().is_finite()) {
             return Err(SurfaceSolveError::DegenerateTriangle(f));
         }
-    }
-
-    // Dense memory guard.
-    let blocks: u128 = if opts.nonlocal { 4 } else { 2 };
-    let est = (nf as u128).saturating_mul(nf as u128).saturating_mul(8) * blocks;
-    if est > MEM_BUDGET && !opts.allow_large {
-        return Err(SurfaceSolveError::OverBudget {
-            n_elements: nf,
-            gib: est >> 30,
-        });
-    }
-
-    let mut warnings = Vec::new();
-    if nf >= N_WARN {
-        warnings.push(format!(
-            "{nf} triangles: the dense BEM is O(N²) in memory and time — this will be \
-             slow/RAM-heavy."
-        ));
     }
 
     // Topological acceptance + per-component auto-orient. A closed, consistently-oriented
@@ -329,6 +386,5 @@ pub fn solve_surface(
         quality,
         charge_components,
         flipped_to_outward: flipped,
-        warnings,
     })
 }

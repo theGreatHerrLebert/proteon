@@ -22,7 +22,7 @@ fn solve_surface_central_charge_matches_born() {
     let params = Params { eps_omega: eo, eps_sigma: es, eps_inf: 1.8, lambda: 20.0 };
     let opts = SurfaceSolveOptions { params, ..Default::default() };
 
-    let sol = solve_surface(mesh, &charges, &opts).expect("solve");
+    let sol = solve_surface(mesh, &charges, &opts).result.expect("solve");
 
     assert!(sol.converged, "did not converge");
     assert!(sol.topology.watertight && sol.topology.consistently_oriented);
@@ -42,7 +42,7 @@ fn solve_surface_empty_inputs_error() {
     let opts = SurfaceSolveOptions::default();
     // No charges → Empty. (matches! avoids requiring SurfaceSolution: Debug.)
     assert!(matches!(
-        solve_surface(mesh, &[], &opts),
+        solve_surface(mesh, &[], &opts).result,
         Err(SurfaceSolveError::Empty)
     ));
 }
@@ -54,5 +54,21 @@ fn solve_surface_coarse_mesh_under_budget_ok() {
     let mesh = analytic_sphere_mesh(2.0, 3);
     let charges = [Charge { pos: Vec3::new(0.0, 0.0, 0.0), val: 1.0 }];
     let opts = SurfaceSolveOptions::default();
-    assert!(solve_surface(mesh, &charges, &opts).is_ok());
+    assert!(solve_surface(mesh, &charges, &opts).result.is_ok());
+}
+
+#[test]
+fn solve_surface_invalid_params_error() {
+    // A non-positive dielectric must be rejected by the shared validation (so the CLI,
+    // which doesn't pre-validate, never reaches Params::yukawa's debug_assert).
+    let mesh = analytic_sphere_mesh(2.0, 2);
+    let charges = [Charge { pos: Vec3::new(0.0, 0.0, 0.0), val: 1.0 }];
+    let opts = SurfaceSolveOptions {
+        params: Params { eps_omega: 1.0, eps_sigma: 78.0, eps_inf: 1.8, lambda: 0.0 },
+        ..Default::default()
+    };
+    assert!(matches!(
+        solve_surface(mesh, &charges, &opts).result,
+        Err(SurfaceSolveError::InvalidParams(_))
+    ));
 }
