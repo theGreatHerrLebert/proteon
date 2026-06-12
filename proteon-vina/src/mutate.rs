@@ -95,10 +95,10 @@ pub fn random_in_box<R: Rng + ?Sized>(corner1: Vec3, corner2: Vec3, rng: &mut R)
 }
 
 /// Radius of gyration of `coords` about `center` — RMS distance of the
-/// atoms from the root origin. Upstream uses heavy atoms only; PDBQT
-/// ligands are united-atom (only polar H survive), so the all-atom value
-/// used here is within rounding of upstream and only scales the
-/// orientation-mutation step, never an energy.
+/// atoms from the root origin. Upstream uses heavy atoms only; the
+/// `Molecule` loader already drops hydrogens (both nonpolar H and polar
+/// HD), so "all atoms" here *are* upstream's heavy atoms. This value only
+/// scales the orientation-mutation step, never an energy.
 #[must_use]
 pub fn gyration_radius(coords: &[Vec3], center: Vec3) -> f64 {
     if coords.is_empty() {

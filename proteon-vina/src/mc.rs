@@ -131,12 +131,12 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
     let max_steps = params.local_steps.unwrap_or((25 + ligand.len()) / 3);
     let confine = Some(BoxPenalty { corner1, corner2, slope: params.box_slope });
 
-    // Seed: random placement, then minimise.
-    let start = randomize_conf(corner1, corner2, n_tors, rng);
-    let (mut cur_conf, mut cur_out) = minimise_conf_confined(
-        receptor, &tree, &pairs, &mut scratch, precalc, start, max_steps, params.v_curl, confine,
-    );
-    let mut cur_energy = cur_out.final_energy;
+    // Seed with a raw random placement (not yet minimised). As upstream,
+    // step 0 mutates this placement, minimises, and is accepted
+    // unconditionally — so the first pool entry is minimise(mutate(random)),
+    // with no separate pre-loop minimisation.
+    let mut cur_conf = randomize_conf(corner1, corner2, n_tors, rng);
+    let mut cur_energy = f64::INFINITY; // forces step-0 acceptance
 
     let mut pool: Vec<DockPose> = Vec::new();
     let mut best_e = f64::INFINITY;
@@ -154,7 +154,6 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
 
         if step == 0 || metropolis_accept(cur_energy, cand_energy, params.temperature, rng) {
             cur_conf = cand_conf;
-            cur_out = cand_out;
             cur_energy = cand_energy;
 
             if cur_energy < best_e || pool.len() < params.num_saved_mins {
@@ -168,7 +167,6 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
         }
     }
 
-    let _ = cur_out; // last accepted outcome; retained for clarity, not exported
     pool
 }
 
@@ -189,29 +187,34 @@ fn build_pose(
     DockPose { conf: conf.clone(), coords, search_energy, components }
 }
 
-/// Insert `pose` into the energy-sorted `pool`, collapsing near-duplicate
-/// minima (RMSD < `min_rmsd`) to their lowest-energy representative and
-/// capping the pool at `capacity`. Mirrors upstream
+/// Insert `pose` into `pool` and re-cluster so no two retained poses are
+/// within `min_rmsd` (keeping the lowest-energy representative of each
+/// cluster), capped at `capacity`. Mirrors upstream
 /// `add_to_output_container`.
 fn insert_clustered(pool: &mut Vec<DockPose>, pose: DockPose, min_rmsd: f64, capacity: usize) {
-    // If a near-duplicate already sits at lower-or-equal energy, drop the
-    // newcomer; if the duplicate is worse, the newcomer replaces it.
-    for existing in pool.iter_mut() {
-        if rmsd(&existing.coords, &pose.coords) < min_rmsd {
-            if pose.search_energy < existing.search_energy {
-                *existing = pose;
-                sort_and_cap(pool, capacity);
-            }
-            return;
-        }
-    }
     pool.push(pose);
-    sort_and_cap(pool, capacity);
+    let merged = std::mem::take(pool);
+    *pool = greedy_cluster(merged, min_rmsd, capacity);
 }
 
-fn sort_and_cap(pool: &mut Vec<DockPose>, capacity: usize) {
-    pool.sort_by(|a, b| a.search_energy.total_cmp(&b.search_energy));
-    pool.truncate(capacity);
+/// Sort poses by ascending search energy, then greedily keep each pose
+/// only if it is ≥ `min_rmsd` from every already-kept (lower-energy)
+/// pose, up to `capacity`. Because it always keeps the best of any
+/// near-duplicate set and re-checks every candidate against the *whole*
+/// kept set, the result is guaranteed pairwise ≥ `min_rmsd` (the
+/// non-transitive case a replace-first-match scheme misses).
+fn greedy_cluster(mut poses: Vec<DockPose>, min_rmsd: f64, capacity: usize) -> Vec<DockPose> {
+    poses.sort_by(|a, b| a.search_energy.total_cmp(&b.search_energy));
+    let mut kept: Vec<DockPose> = Vec::new();
+    for pose in poses {
+        if kept.len() >= capacity {
+            break;
+        }
+        if kept.iter().all(|k| rmsd(&k.coords, &pose.coords) >= min_rmsd) {
+            kept.push(pose);
+        }
+    }
+    kept
 }
 
 #[cfg(test)]
@@ -303,5 +306,35 @@ mod tests {
         insert_clustered(&mut pool, mk(shifted, -7.0), 0.5, 50);
         assert_eq!(pool.len(), 1, "near-duplicate poses should cluster");
         assert!((pool[0].search_energy - (-7.0)).abs() < 1e-9, "kept the worse pose");
+    }
+
+    #[test]
+    fn clustering_stays_pairwise_distinct_under_nontransitivity() {
+        // A and B are 0.6 Å apart (both kept at min_rmsd 0.5). C sits at
+        // 0.3 Å from BOTH and scores best. A replace-first-match scheme
+        // would leave {C, B} only 0.3 Å apart; greedy re-clustering must
+        // collapse the whole 0.3-radius set to C.
+        let shift = |d: f64| vec![[d, 0.0, 0.0], [d + 1.0, 0.0, 0.0], [d, 1.0, 0.0]];
+        let mk = |d: f64, e: f64| DockPose {
+            conf: Conf::identity_at([0.0; 3], 0),
+            coords: shift(d),
+            search_energy: e,
+            components: ScoreComponents::default(),
+        };
+        let mut pool = Vec::new();
+        insert_clustered(&mut pool, mk(0.0, -5.0), 0.5, 50); // A
+        insert_clustered(&mut pool, mk(0.6, -6.0), 0.5, 50); // B (>=0.5 from A)
+        insert_clustered(&mut pool, mk(0.3, -7.0), 0.5, 50); // C (0.3 from both)
+        for i in 0..pool.len() {
+            for j in (i + 1)..pool.len() {
+                assert!(
+                    rmsd(&pool[i].coords, &pool[j].coords) >= 0.5,
+                    "retained poses {i},{j} closer than min_rmsd"
+                );
+            }
+        }
+        // C is the global best and 0.3 from both others, so it alone survives.
+        assert_eq!(pool.len(), 1);
+        assert!((pool[0].search_energy - (-7.0)).abs() < 1e-9);
     }
 }
