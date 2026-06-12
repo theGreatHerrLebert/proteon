@@ -111,6 +111,74 @@ pub fn single_layer_moments(cluster: &Cluster, panels: &[(Tri, f64)], p: usize) 
     q
 }
 
+/// Double-layer **vector** moments `Q_K = Σ_j x_j n_j ∫_{T_j} L_K(y) dS_y` (one `Vec3`
+/// per proxy point), flattened as `(i·ny + j)·nz + k`. The dipole far field interpolates
+/// the vector field `∇_y G(ξ,·)` over the cluster and contracts it with these moments —
+/// the explicit vector-moment data model (not "carry n into a scalar weight"), so the
+/// normal orientation is faithfully represented and the double-layer sign is correct.
+#[must_use]
+pub fn double_layer_moments(cluster: &Cluster, panels: &[(Tri, f64)], p: usize) -> Vec<Vec3> {
+    let (nx, ny, nz) = cluster.dims();
+    let mut q = vec![Vec3::new(0.0, 0.0, 0.0); nx * ny * nz];
+    let cub_order = panel_order_for_degree(p);
+    for (tri, x) in panels {
+        let n = tri.normal;
+        for cp in triangle_cubature(tri, cub_order) {
+            let (lx, ly, lz) = cluster.basis_at(cp.pos);
+            let scale = x * cp.w;
+            for i in 0..nx {
+                let li = scale * lx[i];
+                for j in 0..ny {
+                    let lij = li * ly[j];
+                    let base = (i * ny + j) * nz;
+                    for k in 0..nz {
+                        q[base + k] = q[base + k] + n * (lij * lz[k]);
+                    }
+                }
+            }
+        }
+    }
+    q
+}
+
+/// Evaluate the double-layer far field at `xi`: `Σ_K ∇_y G(xi, s_K) · Q_K`, where
+/// `∇_y G(xi, s) = (xi − s)/|xi − s|³`.
+#[must_use]
+pub fn eval_double_layer(cluster: &Cluster, moments: &[Vec3], xi: Vec3) -> f64 {
+    let (nx, ny, nz) = cluster.dims();
+    let mut acc = 0.0;
+    for i in 0..nx {
+        for j in 0..ny {
+            let base = (i * ny + j) * nz;
+            for k in 0..nz {
+                let s = cluster.proxy(i, j, k);
+                let d = xi - s;
+                let r = d.norm();
+                let grad = d * (1.0 / (r * r * r));
+                acc += grad.dot(moments[base + k]);
+            }
+        }
+    }
+    acc
+}
+
+/// Direct reference: `Σ_j x_j ∫_{T_j} (xi − y)·n_j / |xi − y|³ dS_y` by high-order
+/// cubature — the bare double-layer integral, which (confirmed by test) equals
+/// `laplace_collocation(Double, …)`.
+#[must_use]
+pub fn direct_double_layer(panels: &[(Tri, f64)], xi: Vec3, cub_order: usize) -> f64 {
+    let mut acc = 0.0;
+    for (tri, x) in panels {
+        let n = tri.normal;
+        for cp in triangle_cubature(tri, cub_order) {
+            let d = xi - cp.pos;
+            let r = d.norm();
+            acc += x * cp.w * d.dot(n) / (r * r * r);
+        }
+    }
+    acc
+}
+
 /// Evaluate the single-layer far field at target `xi`: `Σ_K (1/|xi − s_K|) · Q_K`.
 #[must_use]
 pub fn eval_single_layer(cluster: &Cluster, moments: &[f64], xi: Vec3) -> f64 {
@@ -210,6 +278,44 @@ mod tests {
         let near = err_at(2.0);
         assert!(far < near, "nearer target = larger error: near {near:.3e} far {far:.3e}");
         assert!(far < 1e-8, "well-separated target should be accurate: {far:.3e}");
+    }
+
+    #[test]
+    fn double_layer_far_field_converges_in_p() {
+        let tri = tilted_tri();
+        let (lo, hi) = tri_bbox(&tri);
+        let xi = Vec3::new(5.0, 4.0, 6.0);
+        let reference = direct_double_layer(&[(tri, 1.0)], xi, 24);
+        assert!(reference.abs() > 1e-6, "reference should be non-trivial: {reference}");
+        let err = |p: usize| {
+            let c = Cluster::new(lo, hi, p);
+            let q = double_layer_moments(&c, &[(tri, 1.0)], p);
+            rel(eval_double_layer(&c, &q, xi), reference)
+        };
+        let e2 = err(2);
+        let e8 = err(8);
+        assert!(e8 < e2, "double-layer error should fall with p: {e2:.3e} -> {e8:.3e}");
+        assert!(e8 < 1e-8, "p=8 double-layer far field should be tight, got {e8:.3e}");
+    }
+
+    #[test]
+    fn double_layer_matches_collocation_and_flips_with_normal() {
+        let tri = tilted_tri();
+        let xi = Vec3::new(4.0, 5.0, 3.0);
+        // Convention: bare double-layer integral = laplace_collocation(Double).
+        let bare = direct_double_layer(&[(tri, 1.0)], xi, 24);
+        let coll = laplace_collocation(PotentialKind::Double, xi, &tri);
+        assert!(rel(bare, coll) < 1e-9, "double bare {bare} vs collocation {coll}");
+
+        // Sign: reversing the panel orientation (swap two vertices) flips the normal and
+        // must flip the double-layer sign — the expansion tracks it through the vector
+        // moment, not just the direct reference.
+        let flipped = Tri::new(tri.v1, tri.v3, tri.v2);
+        let (lo, hi) = tri_bbox(&flipped);
+        let c = Cluster::new(lo, hi, 8);
+        let q = double_layer_moments(&c, &[(flipped, 1.0)], 8);
+        let expansion_flipped = eval_double_layer(&c, &q, xi);
+        assert!(rel(expansion_flipped, -bare) < 1e-6, "flipped {expansion_flipped} vs -bare {}", -bare);
     }
 
     #[test]
