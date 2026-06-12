@@ -24,7 +24,7 @@ use crate::quality::{QualityReport, Severity, TopologyReport};
 use crate::fastsum::operator::MAX_FS_ORDER;
 use crate::solve::{
     solve_local_elements_auto, solve_local_elements_treecode, solve_nonlocal_elements_auto,
-    solve_nonlocal_elements_q, CauchyData, SolveConfig,
+    solve_nonlocal_elements_q, solve_nonlocal_elements_treecode, CauchyData, SolveConfig,
 };
 use crate::system::Quadrature;
 
@@ -230,23 +230,22 @@ fn validate_options(opts: &SurfaceSolveOptions) -> Result<(), SurfaceSolveError>
             )));
         }
     }
-    // Only validate the treecode params when they will actually be used (the local
-    // solve). On a nonlocal solve fast_summation is ignored (warned in the inner solve),
-    // so validating its unused fields would reject a combination we otherwise accept.
-    if !opts.nonlocal {
-        if let Some(fs) = opts.fast_summation {
-            if fs.p == 0 || fs.p > MAX_FS_ORDER {
-                return Err(SurfaceSolveError::InvalidParams(format!(
-                    "fast_summation.p (expansion order) must be in 1..={MAX_FS_ORDER}, got {}",
-                    fs.p
-                )));
-            }
-            if !(fs.theta.is_finite() && fs.theta > 0.0 && fs.theta < 1.0) {
-                return Err(SurfaceSolveError::InvalidParams(format!(
-                    "fast_summation.theta must be in (0, 1), got {}",
-                    fs.theta
-                )));
-            }
+    // Validate the treecode params whenever set — they now drive both the local and the
+    // nonlocal treecode solve. (The one case the treecode is bypassed, nonlocal +
+    // adaptive quadrature, is rare enough that validating the unused order/theta there is
+    // the lesser evil vs silently accepting an out-of-range value.)
+    if let Some(fs) = opts.fast_summation {
+        if fs.p == 0 || fs.p > MAX_FS_ORDER {
+            return Err(SurfaceSolveError::InvalidParams(format!(
+                "fast_summation.p (expansion order) must be in 1..={MAX_FS_ORDER}, got {}",
+                fs.p
+            )));
+        }
+        if !(fs.theta.is_finite() && fs.theta > 0.0 && fs.theta < 1.0) {
+            return Err(SurfaceSolveError::InvalidParams(format!(
+                "fast_summation.theta must be in (0, 1), got {}",
+                fs.theta
+            )));
         }
     }
     Ok(())
@@ -266,14 +265,17 @@ fn solve_surface_inner(
 
     validate_options(opts)?;
 
-    // A local fast-summation request is treecode-only (O(N) memory), so it bypasses the
-    // dense guard; it has no nonlocal back-end yet (P8.4) — warn and fall through to the
-    // dense nonlocal solve rather than silently ignoring the request.
-    let use_treecode = opts.fast_summation.is_some() && !opts.nonlocal;
-    if opts.fast_summation.is_some() && opts.nonlocal {
+    // Fast summation (treecode) is O(N) memory for both the local and nonlocal solve, so
+    // it bypasses the dense guard. Its near field is the exact FIXED-quadrature
+    // collocation, so an adaptive-quadrature request on the nonlocal solve is honoured by
+    // staying dense (the treecode would silently drop the near-singular remediation).
+    let use_treecode = opts.fast_summation.is_some()
+        && !(opts.nonlocal && matches!(opts.quadrature, Quadrature::Adaptive(_)));
+    if opts.fast_summation.is_some() && opts.nonlocal && matches!(opts.quadrature, Quadrature::Adaptive(_))
+    {
         warnings.push(
-            "fast_summation has no effect on the nonlocal solve yet (treecode is local-only, \
-             P8.4); the dense nonlocal path is used."
+            "fast_summation is ignored with quadrature='adaptive' on the nonlocal solve \
+             (the treecode near field is fixed-quadrature); the dense adaptive path is used."
                 .to_string(),
         );
     }
@@ -392,17 +394,24 @@ fn solve_surface_inner(
 
     // --- linear solve + Γ-trace potential ------------------------------------
     let (cauchy, engy, stats): (Box<dyn CauchyData>, f64, _) = if opts.nonlocal {
-        let (r, s) = match opts.quadrature {
-            Quadrature::Adaptive(_) => solve_nonlocal_elements_q(
+        let (r, s) = match (use_treecode, opts.fast_summation, opts.quadrature) {
+            // Opt-in treecode nonlocal solve (O(N) memory; fixed-quadrature near field).
+            (true, Some(fs), _) => solve_nonlocal_elements_treecode(
+                &elements,
+                charges,
+                &opts.params,
+                &opts.cfg,
+                fs.p,
+                fs.theta,
+            ),
+            (_, _, Quadrature::Adaptive(_)) => solve_nonlocal_elements_q(
                 &elements,
                 charges,
                 &opts.params,
                 &opts.cfg,
                 opts.quadrature,
             ),
-            Quadrature::Fixed => {
-                solve_nonlocal_elements_auto(&elements, charges, &opts.params, &opts.cfg)
-            }
+            _ => solve_nonlocal_elements_auto(&elements, charges, &opts.params, &opts.cfg),
         }
         .map_err(|e| SurfaceSolveError::Solve(e.to_string()))?;
         let e = rfenergy(&elements, charges, &r);

@@ -274,8 +274,9 @@ struct ElectrostaticsArgs {
     /// Solve despite Error-severity mesh/charge quality issues (still reported).
     #[arg(long)]
     allow_low_quality: bool,
-    /// Use the P8 treecode fast-summation local solve (O(N) memory — for meshes too
-    /// large for the dense O(N²) matrices). Local solve only; no effect with --nonlocal.
+    /// Use the P8 treecode fast-summation solve (O(N) memory — for meshes too large for
+    /// the dense O(N²) matrices). Works for both the local and nonlocal solve; ignored
+    /// only with --nonlocal --quadrature adaptive (treecode near field is fixed).
     #[arg(long)]
     fast_summation: bool,
     /// Treecode Cartesian expansion order (accuracy; higher = tighter, costlier).

@@ -148,11 +148,11 @@ fn treecode_solve_rejects_bad_params_without_panicking() {
 }
 
 #[test]
-fn fast_summation_with_nonlocal_warns_and_falls_through() {
-    // fast_summation has no nonlocal back-end (P8.4): it must warn and use the dense
-    // nonlocal solve rather than erroring or silently ignoring — and its (unused) params
-    // are not validated in that case.
-    let mesh = analytic_sphere_mesh(2.0, 2);
+fn fast_summation_nonlocal_routes_to_treecode() {
+    // fast_summation now drives the NONLOCAL treecode solve too (P8.4). On a tiny mesh
+    // this just checks the routing succeeds + converges; correctness vs dense is gated in
+    // tests/p8_nonlocal_solve.rs.
+    let mesh = analytic_sphere_mesh(2.0, 1);
     let charges = [Charge { pos: Vec3::new(0.0, 0.0, 0.0), val: 1.0 }];
     let params = Params { eps_omega: 1.0, eps_sigma: 78.0, eps_inf: 1.8, lambda: 20.0 };
     let cfg = SolveConfig { tol: 1e-7, ..Default::default() };
@@ -160,17 +160,30 @@ fn fast_summation_with_nonlocal_warns_and_falls_through() {
         params,
         cfg,
         nonlocal: true,
-        // Even an out-of-range theta is tolerated here because it's unused on nonlocal.
-        fast_summation: Some(FastSummation { p: 6, theta: 5.0 }),
+        fast_summation: Some(FastSummation { p: 6, theta: 0.5 }),
         ..Default::default()
     };
     let out = solve_surface(mesh, &charges, &opts);
-    let sol = out.result.expect("nonlocal solve should succeed (dense fallthrough)");
+    let sol = out.result.expect("nonlocal treecode solve should succeed");
     assert!(sol.converged);
-    assert!(
-        out.warnings.iter().any(|w| w.contains("nonlocal")),
-        "should warn that fast_summation is local-only"
-    );
+    assert!(sol.rfenergy < 0.0, "solvation energy is negative");
+}
+
+#[test]
+fn fast_summation_nonlocal_invalid_params_rejected() {
+    // The treecode params are validated for the nonlocal path now that it uses them.
+    let mesh = analytic_sphere_mesh(2.0, 1);
+    let charges = [Charge { pos: Vec3::new(0.0, 0.0, 0.0), val: 1.0 }];
+    let params = Params { eps_omega: 1.0, eps_sigma: 78.0, eps_inf: 1.8, lambda: 20.0 };
+    let cfg = SolveConfig { tol: 1e-7, ..Default::default() };
+    let opts = SurfaceSolveOptions {
+        params,
+        cfg,
+        nonlocal: true,
+        fast_summation: Some(FastSummation { p: 6, theta: 5.0 }),
+        ..Default::default()
+    };
+    assert!(solve_surface(mesh, &charges, &opts).result.is_err(), "theta=5 must be rejected");
 }
 
 #[test]
