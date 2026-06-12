@@ -24,6 +24,7 @@ import argparse
 import hashlib
 import json
 import random
+import sys
 import time
 from pathlib import Path
 from statistics import mean
@@ -55,11 +56,15 @@ def build_truth_for_query(
     query_structure,
     target_paths: list[Path],
     target_structures: list,
-) -> list[dict]:
+    n_threads: int = -1,
+) -> tuple[list[dict], int]:
+    """Exact TM-align truth for one query. Returns ``(rows, n_failed)`` — dropping a
+    failed alignment shrinks the relevant-set denominator, so the caller must surface
+    ``n_failed`` (a broken aligner would otherwise silently *inflate* recall)."""
     results = proteon.tm_align_one_to_many(
         query_structure,
         target_structures,
-        n_threads=-1,
+        n_threads=n_threads,
         fast=True,
     )
     # tm_align_one_to_many returns a BatchResult: item.index is the target index and
@@ -71,9 +76,11 @@ def build_truth_for_query(
             continue
         by_target[item.index] = item.value
     rows = []
+    n_failed = 0
     for ti, path in enumerate(target_paths):
         result = by_target.get(ti)
         if result is None:
+            n_failed += 1
             continue
         score = max(result.tm_score_chain1, result.tm_score_chain2)
         rows.append(
@@ -85,7 +92,7 @@ def build_truth_for_query(
             }
         )
     rows.sort(key=lambda row: (-row["tm_score"], Path(row["source_path"]).name))
-    return rows
+    return rows, n_failed
 
 
 def recall_at_k(
@@ -175,6 +182,11 @@ def main() -> None:
     parser.add_argument("--truth-cache", default=None)
     parser.add_argument("--reuse-truth", action="store_true")
     parser.add_argument("--thresholds", nargs="*", type=float, default=[0.5, 0.7, 0.9])
+    parser.add_argument(
+        "--threads", type=int, default=-1,
+        help="Worker threads for TM-align ground truth / DB build / load (-1 = all cores; "
+             "set 1 to avoid oversubscription in parallel CI jobs).",
+    )
     parser.add_argument("--output", default="validation/retrieval_bench.json")
     args = parser.parse_args()
 
@@ -196,7 +208,7 @@ def main() -> None:
     if args.reuse_db and db_path.exists():
         db = proteon.load_search_db(db_path)
     else:
-        db = proteon.build_search_db(target_paths, out=db_path, k=build_k, n_threads=-1)
+        db = proteon.build_search_db(target_paths, out=db_path, k=build_k, n_threads=args.threads)
     build_s = time.time() - t0
 
     if args.warm_db:
@@ -213,7 +225,7 @@ def main() -> None:
     else:
         compile_s = 0.0
 
-    loaded_targets = proteon.batch_load_tolerant(target_paths, n_threads=-1)
+    loaded_targets = proteon.batch_load_tolerant(target_paths, n_threads=args.threads)
     if not loaded_targets:
         raise SystemExit("No target structures could be loaded for brute-force evaluation")
     loaded_target_map = {
@@ -247,6 +259,7 @@ def main() -> None:
     top1_exact_rerank = []
     per_query = []
     brute_force_s = 0.0
+    total_truth_failures = 0
     prefilter_s = 0.0
     rerank_s = 0.0
 
@@ -258,7 +271,16 @@ def main() -> None:
             truth_rows = truth_cache[query_key]
         else:
             t0 = time.time()
-            truth_rows = build_truth_for_query(query_path, query, target_paths, target_structures)
+            truth_rows, n_failed = build_truth_for_query(
+                query_path, query, target_paths, target_structures, n_threads=args.threads
+            )
+            if n_failed:
+                total_truth_failures += n_failed
+                print(
+                    f"  warning: {n_failed} ground-truth alignment(s) failed for "
+                    f"{Path(query_path).name}; its relevant set may be undercounted",
+                    file=sys.stderr,
+                )
             brute_force_s += time.time() - t0
             truth_cache[query_key] = truth_rows
 
@@ -368,6 +390,7 @@ def main() -> None:
             "thresholds": args.thresholds,
             "truth_cache": str(truth_cache_path),
             "truth_cache_hit": truth_cache_hit,
+            "ground_truth_alignment_failures": total_truth_failures,
         },
         "timing": {
             "build_s": round(build_s, 3),

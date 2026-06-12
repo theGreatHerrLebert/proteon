@@ -61,7 +61,11 @@ def test_self_scores_highest_in_prefilter(search_db):
     db, paths = search_db
     for path in paths:
         q = proteon.load(path)
-        hits = proteon.search(q, db, top_k=5, rerank=False)
+        # Isolate the raw k-mer prefilter: disable rerank AND the diagonal voting/rescore
+        # so the candidate ordering reflects k-mer overlap alone.
+        hits = proteon.search(
+            q, db, top_k=5, rerank=False, diagonal_rescore=False, diagonal_prefilter=False
+        )
         assert hits
         self_hits = [h for h in hits if os.path.basename(h.source_path) == os.path.basename(path)]
         assert self_hits, f"{os.path.basename(path)}: self not in prefilter results"
@@ -90,9 +94,26 @@ def test_retrieval_benchmark_runs_end_to_end(tmp_path):
             "--n-targets", "5", "--n-queries", "3",
             "--db-path", str(tmp_path / "db"),
             "--output", str(out),
+            "--threads", "1",  # avoid core oversubscription across parallel CI jobs
         ],
         capture_output=True, text=True, timeout=300,
     )
     assert proc.returncode == 0, f"benchmark failed:\n{proc.stderr[-2000:]}"
     report = json.loads(out.read_text())
     assert "metrics" in report and "recall_at_k" in report["metrics"], report.keys()
+
+
+def test_multi_model_query_is_handled_gracefully(search_db):
+    """Pin the current behavior for a multi-model structure as a query (rather than
+    silently excluding it from the corpus): it must not crash. Today it returns no hits;
+    if multi-model querying is supported later this still passes (a list either way). If
+    it ever starts raising, this catches that regression."""
+    import proteon
+
+    db, _ = search_db
+    models = os.path.join(TEST_PDBS_DIR, "models.pdb")
+    if not os.path.exists(models):
+        pytest.skip("models.pdb (multi-model fixture) not present")
+    q = proteon.load(models)
+    hits = proteon.search(q, db, top_k=3, rerank=True, rerank_top_k=3)
+    assert isinstance(hits, list)  # graceful: a list (possibly empty), never an exception

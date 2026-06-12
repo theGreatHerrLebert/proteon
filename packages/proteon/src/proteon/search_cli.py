@@ -25,16 +25,28 @@ from typing import List, Optional, Sequence
 _STRUCTURE_EXTS = {".pdb", ".cif", ".ent", ".mmcif"}
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: a strictly-positive integer."""
+    ivalue = int(value)
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value}")
+    return ivalue
+
+
 def _gather_inputs(inputs: Sequence[str]) -> List[str]:
-    """Expand inputs into a sorted file list: a single directory argument is
-    expanded to its structure-file children (non-recursive); otherwise inputs are
-    taken verbatim. Sorted for deterministic corpus order."""
-    if len(inputs) == 1 and Path(inputs[0]).is_dir():
-        files = sorted(
-            p for p in Path(inputs[0]).iterdir() if p.suffix.lower() in _STRUCTURE_EXTS
-        )
-        return [str(p) for p in files]
-    return [str(p) for p in inputs]
+    """Expand inputs into a file list. **Each** directory argument is expanded to its
+    structure-file children (non-recursive, sorted); explicit file arguments are kept in
+    order. Mixed `dir/ file.pdb` works (every directory is expanded independently)."""
+    out: List[str] = []
+    for item in inputs:
+        p = Path(item)
+        if p.is_dir():
+            out.extend(
+                str(c) for c in sorted(p.iterdir()) if c.suffix.lower() in _STRUCTURE_EXTS
+            )
+        else:
+            out.append(str(p))
+    return out
 
 
 def _fmt(value: Optional[float], spec: str) -> str:
@@ -48,7 +60,16 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if not paths:
         print("error: no input structures found", file=sys.stderr)
         return 2
+    missing = [p for p in paths if not Path(p).exists()]
+    for p in missing:
+        print(f"warning: input not found, skipping: {p}", file=sys.stderr)
     db = proteon.build_search_db(paths, out=args.out, k=args.k, n_threads=args.threads)
+    if len(db) == 0:
+        # build_search_db tolerantly skips unloadable inputs; an empty DB is a build failure.
+        print(
+            f"error: no structures could be indexed from {len(paths)} input(s)", file=sys.stderr
+        )
+        return 2
     print(
         f"built {len(db)} entries (k={db.k_values}) from {len(paths)} input(s) -> {args.out}",
         file=sys.stderr,
@@ -136,16 +157,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_build = sub.add_parser("build", help="Encode structures and build a search database.")
     p_build.add_argument("inputs", nargs="+", help="Structure files (PDB/mmCIF) or one directory of them.")
     p_build.add_argument("-o", "--out", required=True, help="Output database directory.")
-    p_build.add_argument("-k", type=int, default=6, help="k-mer length for the prefilter index (default 6).")
+    p_build.add_argument("-k", type=_positive_int, default=6, help="k-mer length for the prefilter index (default 6).")
     p_build.add_argument("-j", "--threads", type=int, default=None, help="Worker threads (default: all cores).")
     p_build.set_defaults(func=_cmd_build)
 
     p_query = sub.add_parser("query", help="Search a database with a query structure.")
     p_query.add_argument("db", help="Search database directory (from `build`).")
     p_query.add_argument("query", help="Query structure file (PDB/mmCIF).")
-    p_query.add_argument("--top-k", type=int, default=10, help="Number of hits to return (default 10).")
+    p_query.add_argument("--top-k", type=_positive_int, default=10, help="Number of hits to return (default 10).")
     p_query.add_argument("--no-rerank", action="store_true", help="Skip TM-align reranking (prefilter/diagonal only).")
-    p_query.add_argument("--rerank-top-k", type=int, default=5, help="How many top hits to TM-align rerank (default 5).")
+    p_query.add_argument("--rerank-top-k", type=_positive_int, default=5, help="How many top hits to TM-align rerank (default 5).")
     p_query.add_argument("--format", choices=["tsv", "json"], default="tsv", help="Output format.")
     p_query.set_defaults(func=_cmd_query)
 
@@ -159,7 +180,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except FileNotFoundError as exc:
+        print(f"error: file not found: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, ValueError, KeyError) as exc:
+        # Missing/invalid DB, malformed structure, bad manifest — a controlled diagnostic
+        # rather than a Python traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
