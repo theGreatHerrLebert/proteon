@@ -79,15 +79,30 @@ components of `∇_y G` against the vector moment `Q_k` (chosen here), *not* a s
 "carry n_j into the weight". Sign / normal orientation / derivative accuracy are
 tested in isolation against `laplace_collocation(Double, …)` before any wiring.
 
-### 3.2 Barycentric-Lagrange vs Cartesian multipole — decide by bake-off
+### 3.2 Barycentric-Lagrange vs Cartesian multipole — bake-off result
 
 BLTC (Wang–Krasny–Tlupova 2020) is kernel-independent and uniform across `V/K/
-Vy/Ky`, but pays a `(p+1)³` constant per accepted interaction (kernel values are
-target-dependent — only geometry + moments are storable, the `(p+1)³` kernel
-evaluations happen per target-cluster pair). For the *only two* kernels we need
-(Laplace + Yukawa), **Cartesian multipole/Taylor expansions are cheaper and handle
-dipoles naturally**. P8.1 builds an isolated summation harness and benchmarks BLTC
-vs Cartesian *before* committing the operator architecture.
+Vy/Ky`, but pays a `(p+1)³` constant per accepted interaction. Cartesian
+multipole uses `C(p+3,3) = (p+1)(p+2)(p+3)/6` total-degree terms — fewer — at the
+price of a Coulomb-specific Taylor recurrence (Lindsay–Krasny).
+
+**Bake-off (P8.1, `tests/p8_bakeoff.rs`):** for a `1e-6` far-field accuracy target
+across separations `{3,5,8}` and aspect ratios `{1,2,4}`, the minimal expansion
+order and resulting term count (= kernel evals per accepted interaction):
+
+| sep | aspect | p_bltc | p_cart | terms BLTC | terms Cartesian |
+|----:|-------:|-------:|-------:|-----------:|----------------:|
+| 3   | 1      | 4      | 4      | 125        | **35** |
+| 5   | 2      | 3      | 3      | 64         | **20** |
+| 8   | 2      | 3      | 2      | 64         | **10** |
+
+**Decision: Cartesian for the operator.** It costs ~2–6× fewer terms at matched
+accuracy in *every* tested config (even where it needs a higher `p`), and the term
+count is the dominant per-interaction traversal cost. BLTC stays in the tree as the
+**fallback for the Yukawa regular kernels** (`Vy/Ky`) if the screened-Coulomb
+recurrence proves painful — its kernel-independence is the hedge. Both panel-aware
+data models (scalar + dipole, BLTC; scalar, Cartesian) are gated in P8.1; the
+Cartesian dipole recurrence lands with the operator (P8.2).
 
 ### 3.3 Honest complexity
 
