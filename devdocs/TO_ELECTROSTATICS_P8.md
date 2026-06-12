@@ -230,6 +230,27 @@ pass** (M2L + L2L + L2P), for which the M2M (§5.2) is the prerequisite. Near-fi
 exact collocation is untouched (it carries the reference accuracy), so the achievable
 speedup is bounded by the far share (~75% at scale).
 
+### 5.4 FMM building blocks landed; the M2L cost wall (measured)
+
+The two new FMM operators are implemented and gated bit-true:
+- **M2L** (`cartesian::m2l_single`): source multipole → target **local** expansion,
+  `L_m = (−1)^|m| R_t^|m| Σ_k R_s^|k| C(k+m,m) a_{k+m}(D) M̂_k` (Coulomb Taylor coeffs to
+  order `2p`). Gate: M2L + L2P reproduces the direct multipole eval to `< 1e-9` — the
+  intricate translation landed on the first try.
+- **L2P** (`cartesian::eval_local_single`): evaluate the local expansion at a particle.
+
+But the **dense Cartesian M2L is `O(p⁶)`**, and measured it costs **20× / 36× / 64×** a
+single treecode far-eval at `p = 4 / 6 / 8`. An FMM amortizes one M2L over the targets in
+a cluster, so the break-even cluster size is exactly that ratio — and at `p ≥ 6` the
+default `n_leaf = 32` is **below** break-even. This is the classic result: a basic
+Cartesian FMM with dense M2L does **not** beat the treecode; a real speedup needs
+**accelerated M2L** — FFT-convolution (`O(p³ log p)`), spherical-harmonic rotations
+(`O(p³)`), or plane-wave/exponential expansions (`O(p²)`) — each a major build on top of
+this. Decision: land M2L/L2P as correct, reusable building blocks (the hard math, done
+and gated); defer the full downward pass (L2L + interaction lists) and the M2L
+acceleration it needs. No speed claim — the treecode stays the O(N)-memory tool. The
+remaining genuine speed lever is accelerated-M2L FMM, scoped here for a funded follow-up.
+
 ## 6. Phasing
 
 - **P8.1** Isolated summation harness: octree (vertex-enclosing) + **panel-aware

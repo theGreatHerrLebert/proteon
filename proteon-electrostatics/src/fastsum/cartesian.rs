@@ -320,6 +320,102 @@ pub fn m2m_double(child: &[Vec3], s: f64, t: Vec3, p: usize) -> Vec<Vec3> {
     (0..len).map(|i| Vec3::new(px[i], py[i], pz[i])).collect()
 }
 
+/// **M2L** (multipole→local): translate a source cluster's normalized multipole moments
+/// `M̂_k` (about `c_s`, radius `R_s`) into a **local expansion** `L_m` about the target
+/// center `c_t` (radius `R_t`), valid for targets near `c_t` and well separated from the
+/// source. Derivation (re-expanding the multipole potential `Σ_k a_k(t−c_s)R_s^|k| M̂_k`
+/// as a Taylor series in `v = (t−c_t)/R_t`):
+///
+/// ```text
+/// L_m = (−1)^|m| R_t^|m| Σ_k R_s^|k| · C(k+m, m) · a_{k+m}(D) · M̂_k ,   D = c_t − c_s
+/// ```
+///
+/// with `a_n(D)` the Coulomb Taylor coefficients to order `2p` and `C(k+m,m)` the
+/// per-axis multi-index binomial. This is the FMM operation the §5.3 measurement
+/// justifies: computed **once per source/target-cluster pair**, then shared by all
+/// targets in the target cluster via [`eval_local_single`]. `O(p⁶)` per pair (the
+/// classic dense Cartesian M2L cost).
+#[must_use]
+pub fn m2l_single(
+    src_moments: &[f64],
+    r_s: f64,
+    c_s: Vec3,
+    r_t: f64,
+    c_t: Vec3,
+    p: usize,
+) -> Vec<f64> {
+    let n = p + 1;
+    let a = coulomb_taylor_coeffs(c_t - c_s, 2 * p); // (2p+1)³ Taylor cube
+    let bcap = 2 * p + 1;
+    // Pascal triangle C(i,j) up to 2p.
+    let mut binom = vec![0.0; bcap * bcap];
+    for i in 0..bcap {
+        binom[i * bcap] = 1.0;
+        for j in 1..=i {
+            binom[i * bcap + j] = binom[(i - 1) * bcap + j - 1] + binom[(i - 1) * bcap + j];
+        }
+    }
+    let pow = |base: f64, up: usize| {
+        let mut v = vec![1.0; up + 1];
+        for t in 1..=up {
+            v[t] = v[t - 1] * base;
+        }
+        v
+    };
+    let rs_pow = pow(r_s.max(MIN_RADIUS), p);
+    let rt_pow = pow(r_t.max(MIN_RADIUS), p);
+
+    let mut l = vec![0.0; n * n * n];
+    for mi in 0..n {
+        for mj in 0..(n - mi) {
+            for mk in 0..(n - mi - mj) {
+                let mdeg = mi + mj + mk;
+                let mut acc = 0.0;
+                for ki in 0..n {
+                    let bx = binom[(ki + mi) * bcap + mi];
+                    for kj in 0..(n - ki) {
+                        let bxy = bx * binom[(kj + mj) * bcap + mj];
+                        for kk in 0..(n - ki - kj) {
+                            let kdeg = ki + kj + kk;
+                            let cbin = bxy * binom[(kk + mk) * bcap + mk];
+                            let an = a[cidx(ki + mi, kj + mj, kk + mk, 2 * p)];
+                            acc += rs_pow[kdeg] * cbin * an * src_moments[cidx(ki, kj, kk, p)];
+                        }
+                    }
+                }
+                let sign = if mdeg % 2 == 0 { 1.0 } else { -1.0 };
+                l[cidx(mi, mj, mk, p)] = sign * rt_pow[mdeg] * acc;
+            }
+        }
+    }
+    l
+}
+
+/// Evaluate a single-layer **local** expansion `Σ_m L_m·((t−c_t)/R_t)^m` at target `t`
+/// (the FMM L2P step — cheap, no per-source work).
+#[must_use]
+pub fn eval_local_single(local: &[f64], r_t: f64, c_t: Vec3, t: Vec3, p: usize) -> f64 {
+    let n = p + 1;
+    let v = (t - c_t) * (1.0 / r_t.max(MIN_RADIUS));
+    let mut vx = vec![1.0; n];
+    let mut vy = vec![1.0; n];
+    let mut vz = vec![1.0; n];
+    for i in 1..n {
+        vx[i] = vx[i - 1] * v.x;
+        vy[i] = vy[i - 1] * v.y;
+        vz[i] = vz[i - 1] * v.z;
+    }
+    let mut acc = 0.0;
+    for i in 0..n {
+        for j in 0..(n - i) {
+            for k in 0..(n - i - j) {
+                acc += local[cidx(i, j, k, p)] * vx[i] * vy[j] * vz[k];
+            }
+        }
+    }
+    acc
+}
+
 /// Number of terms in a total-degree-`p` Cartesian expansion, `C(p+3, 3)`.
 #[must_use]
 pub fn n_terms(p: usize) -> usize {
@@ -491,6 +587,39 @@ mod tests {
             }
         }
         assert!(maxerr < 1e-12, "M2M dipole vs direct max abs err {maxerr:.3e}");
+    }
+
+    #[test]
+    fn m2l_then_local_eval_matches_direct_multipole() {
+        // FMM consistency: M2L (source multipole → target local expansion) followed by
+        // local-expansion evaluation must reproduce the direct multipole evaluation at a
+        // target well separated from the source — to truncation accuracy.
+        let tri = tilted_tri();
+        let p = 8;
+        let (lo, hi) = tri_bbox(&tri);
+        let c_s = (lo + hi) * 0.5;
+        let r_s = (hi - lo).norm() * 0.5;
+        let m_src = single_layer_moments(c_s, r_s, &[(tri, 1.0)], p);
+
+        // A target cluster well separated from the source; evaluate at a point inside it.
+        let c_t = Vec3::new(6.0, 5.0, 7.0);
+        let r_t = 0.4;
+        let local = m2l_single(&m_src, r_s, c_s, r_t, c_t, p);
+
+        for off in [
+            Vec3::new(0.1, -0.05, 0.08),
+            Vec3::new(-0.12, 0.2, -0.07),
+            Vec3::new(0.0, 0.0, 0.0),
+        ] {
+            let t = c_t + off; // inside the target cluster (|off| < r_t)
+            let via_local = eval_local_single(&local, r_t, c_t, t, p);
+            let direct = eval_single_layer(c_s, r_s, &m_src, t, p);
+            assert!(
+                rel(via_local, direct) < 1e-9,
+                "M2L+L2P {via_local} vs direct multipole {direct} (rel {:.2e})",
+                rel(via_local, direct)
+            );
+        }
     }
 
     #[test]
