@@ -1,0 +1,32 @@
+# 1iep multipose: 4 poses from upstream `vina` default docking.
+# Receptor: tests/fixtures/pairs/1iep/receptor.pdbqt.
+# Values captured from `vina --score_only --autobox` on
+# v1.2.7-27-g3c65c0b, one invocation per `vina_split` output file.
+
+receptor = 1iep
+
+pose0.total            = -13.236
+pose0.lig_grids        = -18.652
+pose0.lig_intra        =  -0.455
+pose0.conf_independent =   5.416
+pose0.intramolecular   =  -0.455
+
+pose1.total            = -11.141
+pose1.lig_grids        = -15.699
+pose1.lig_intra        =  -0.670
+pose1.conf_independent =   4.559
+pose1.intramolecular   =  -0.670
+
+pose2.total            = -10.926
+pose2.lig_grids        = -15.398
+pose2.lig_intra        =  -0.959
+pose2.conf_independent =   4.471
+pose2.intramolecular   =  -0.959
+
+pose3.total            = -11.270
+pose3.lig_grids        = -15.882
+pose3.lig_intra        =  -0.281
+pose3.conf_independent =   4.612
+pose3.intramolecular   =  -0.281
+
+tolerance_kcal         =   0.002

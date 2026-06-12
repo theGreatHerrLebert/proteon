@@ -6,6 +6,10 @@ license notices required by those upstreams.
 
 proteon itself is distributed under the MIT License; see `LICENSE`.
 
+The `proteon-vina` crate is distributed under the Apache License,
+Version 2.0, matching its upstream (see `proteon-vina/LICENSE` and the
+AutoDock Vina entry below).
+
 ---
 
 ## 1. TM-align and US-align — Zhang group (University of Michigan)
@@ -183,7 +187,45 @@ proteon-align, proteon-connector. Linked as a Rust dependency.
 
 ---
 
-## 6. Paper-inspired components (no source-code lineage)
+## 6. AutoDock Vina — Trott / Forli Lab, The Scripps Research Institute
+
+**Used in:** `proteon-vina/src/**` (XS atom types, Vina scoring-function
+terms, precalculated pairwise potentials, receptor grid cache,
+`score_only` entry point).
+
+**Upstream:** https://github.com/ccsb-scripps/AutoDock-Vina
+
+**License:** Apache License, Version 2.0. The full license text is
+reproduced at `proteon-vina/LICENSE`. The `proteon-vina` crate is itself
+distributed under Apache-2.0; the rest of proteon remains MIT.
+
+**Copyright notice (reproduced from upstream source headers):**
+
+> Copyright (c) 2006-2010, The Scripps Research Institute
+>
+> Licensed under the Apache License, Version 2.0 (the "License"); you
+> may not use this file except in compliance with the License. You may
+> obtain a copy of the License at
+>
+>     http://www.apache.org/licenses/LICENSE-2.0
+>
+> Unless required by applicable law or agreed to in writing, software
+> distributed under the License is distributed on an "AS IS" BASIS,
+> WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+> implied. See the License for the specific language governing
+> permissions and limitations under the License.
+>
+> Author: Dr. Oleg Trott <ot14@columbia.edu>, The Olson Lab, The
+> Scripps Research Institute.
+
+**Primary references:**
+- Trott & Olson. *Journal of Computational Chemistry* 31(2), 455-461 (2010).
+- Eberhardt, Santos-Martins, Tillack & Forli. *Journal of Chemical
+  Information and Modeling* 61(8), 3891-3898 (2021).
+
+---
+
+## 7. Paper-inspired components (no source-code lineage)
 
 The following components are implemented from primary literature. No
 source code from their reference implementations is incorporated; no
@@ -207,7 +249,7 @@ upstream license notice is required.
 
 ---
 
-## 7. Correctness oracles (not incorporated)
+## 8. Correctness oracles (not incorporated)
 
 The following projects are used at development time to verify proteon's
 numerical and algorithmic correctness. They are NOT linked into

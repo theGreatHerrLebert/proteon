@@ -7,6 +7,7 @@ members = [
     "proteon-bin",
     "proteon-connector",
     "proteon-search",
+    "proteon-vina",
 ]
 exclude = ["gpu-poc"]
 resolver = "2"

@@ -1263,6 +1263,7 @@ dependencies = [
  "proteon-core",
  "proteon-io",
  "proteon-search",
+ "proteon-vina",
  "pyo3",
  "rayon",
 ]
@@ -1295,6 +1296,14 @@ dependencies = [
  "cudarc",
  "memmap2",
  "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "proteon-vina"
+version = "0.2.1"
+dependencies = [
+ "approx",
  "thiserror",
 ]
 

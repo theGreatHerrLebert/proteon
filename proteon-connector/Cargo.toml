@@ -31,6 +31,7 @@ proteon-arrow = { path = "../proteon-arrow" }
 proteon-core = { path = "../proteon-core" }
 proteon-io = { path = "../proteon-io" }
 proteon-search = { path = "../proteon-search" }
+proteon-vina = { path = "../proteon-vina" }
 pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
 arrow = { version = "54", features = ["ipc"] }
 pyo3 = { version = "0.23", features = ["extension-module"] }
