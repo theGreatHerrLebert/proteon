@@ -218,6 +218,90 @@ pub fn direct_single_layer(panels: &[(Tri, f64)], xi: Vec3, cub_order: usize) ->
     acc
 }
 
+/// Regular-Yukawa **single-layer** point kernel `G(r) = (e^{−κr} − 1)/r` (Yukawa minus
+/// Laplace — smooth and bounded). The BLTC far field reuses the *same* moments as the
+/// Laplace single layer ([`single_layer_moments`]); only this kernel changes.
+#[must_use]
+fn regyuk_single_kernel(r: f64, kappa: f64) -> f64 {
+    ((-kappa * r).exp() - 1.0) / r
+}
+
+/// Coefficient `c(r)` in the regular-Yukawa **double-layer** gradient
+/// `∇_y G_reg(ξ,y) = c(r)·(y − ξ)/r³`, with `c(r) = 1 − (1 + κr)e^{−κr}`.
+#[must_use]
+fn regyuk_double_coef(r: f64, kappa: f64) -> f64 {
+    1.0 - (1.0 + kappa * r) * (-kappa * r).exp()
+}
+
+/// Evaluate the regular-Yukawa single-layer far field: `Σ_K G_reg(|xi − s_K|)·Q_K`,
+/// reusing the Laplace single-layer moments `Q_K`.
+#[must_use]
+pub fn eval_single_layer_yukawa(cluster: &Cluster, moments: &[f64], xi: Vec3, kappa: f64) -> f64 {
+    let (nx, ny, nz) = cluster.dims();
+    let mut acc = 0.0;
+    for i in 0..nx {
+        for j in 0..ny {
+            let base = (i * ny + j) * nz;
+            for k in 0..nz {
+                let r = (xi - cluster.proxy(i, j, k)).norm();
+                acc += regyuk_single_kernel(r, kappa) * moments[base + k];
+            }
+        }
+    }
+    acc
+}
+
+/// Evaluate the regular-Yukawa double-layer far field: `Σ_K ∇_y G_reg(xi, s_K)·Q_K`,
+/// `∇_y G_reg(xi, s) = c(r)·(s − xi)/r³`, reusing the Laplace double-layer vector moments.
+#[must_use]
+pub fn eval_double_layer_yukawa(cluster: &Cluster, moments: &[Vec3], xi: Vec3, kappa: f64) -> f64 {
+    let (nx, ny, nz) = cluster.dims();
+    let mut acc = 0.0;
+    for i in 0..nx {
+        for j in 0..ny {
+            let base = (i * ny + j) * nz;
+            for k in 0..nz {
+                let s = cluster.proxy(i, j, k);
+                let d = s - xi;
+                let r = d.norm();
+                let grad = d * (regyuk_double_coef(r, kappa) / (r * r * r));
+                acc += grad.dot(moments[base + k]);
+            }
+        }
+    }
+    acc
+}
+
+/// Direct reference: `Σ_j x_j ∫_{T_j} (e^{−κ|xi−y|} − 1)/|xi−y| dS_y` by high-order cubature
+/// — the bare regular-Yukawa single-layer integral (equals `regular_yukawa_collocation`).
+#[must_use]
+pub fn direct_single_layer_yukawa(panels: &[(Tri, f64)], xi: Vec3, kappa: f64, cub_order: usize) -> f64 {
+    let mut acc = 0.0;
+    for (tri, x) in panels {
+        for cp in triangle_cubature(tri, cub_order) {
+            let r = (xi - cp.pos).norm();
+            acc += x * cp.w * regyuk_single_kernel(r, kappa);
+        }
+    }
+    acc
+}
+
+/// Direct reference for the regular-Yukawa **double** layer:
+/// `Σ_j x_j ∫_{T_j} c(r)·(y − xi)·n_j / r³ dS_y`.
+#[must_use]
+pub fn direct_double_layer_yukawa(panels: &[(Tri, f64)], xi: Vec3, kappa: f64, cub_order: usize) -> f64 {
+    let mut acc = 0.0;
+    for (tri, x) in panels {
+        let n = tri.normal;
+        for cp in triangle_cubature(tri, cub_order) {
+            let d = cp.pos - xi;
+            let r = d.norm();
+            acc += x * cp.w * regyuk_double_coef(r, kappa) * d.dot(n) / (r * r * r);
+        }
+    }
+    acc
+}
+
 /// Axis-aligned bounding box of a triangle's vertices.
 #[must_use]
 pub fn tri_bbox(tri: &Tri) -> (Vec3, Vec3) {
@@ -321,6 +405,37 @@ mod tests {
         let q = double_layer_moments(&c, &[(flipped, 1.0)], 8);
         let expansion_flipped = eval_double_layer(&c, &q, xi);
         assert!(rel(expansion_flipped, -bare) < 1e-6, "flipped {expansion_flipped} vs -bare {}", -bare);
+    }
+
+    #[test]
+    fn yukawa_far_field_converges_and_matches_collocation() {
+        use crate::yukawa::regular_yukawa_collocation;
+        let tri = tilted_tri();
+        let (lo, hi) = tri_bbox(&tri);
+        let xi = Vec3::new(5.0, 4.0, 6.0);
+        let kappa = 0.3;
+
+        // Convention: the bare integrals equal regular_yukawa_collocation (single + double).
+        let bare_s = direct_single_layer_yukawa(&[(tri, 1.0)], xi, kappa, 24);
+        let coll_s = regular_yukawa_collocation(PotentialKind::Single, xi, &tri, kappa);
+        assert!(rel(bare_s, coll_s) < 1e-7, "Vy bare {bare_s} vs collocation {coll_s}");
+        let bare_d = direct_double_layer_yukawa(&[(tri, 1.0)], xi, kappa, 24);
+        let coll_d = regular_yukawa_collocation(PotentialKind::Double, xi, &tri, kappa);
+        assert!(rel(bare_d, coll_d) < 1e-7, "Ky bare {bare_d} vs collocation {coll_d}");
+
+        // BLTC far field converges in p to the direct integral (reusing Laplace moments).
+        let errs = |p: usize| {
+            let c = Cluster::new(lo, hi, p);
+            let qs = single_layer_moments(&c, &[(tri, 1.0)], p);
+            let qd = double_layer_moments(&c, &[(tri, 1.0)], p);
+            let es = rel(eval_single_layer_yukawa(&c, &qs, xi, kappa), bare_s);
+            let ed = rel(eval_double_layer_yukawa(&c, &qd, xi, kappa), bare_d);
+            (es, ed)
+        };
+        let (s2, d2) = errs(2);
+        let (s8, d8) = errs(8);
+        assert!(s8 < s2 && s8 < 1e-9, "Vy converge: {s2:.2e}->{s8:.2e}");
+        assert!(d8 < d2 && d8 < 1e-8, "Ky converge: {d2:.2e}->{d8:.2e}");
     }
 
     #[test]

@@ -94,8 +94,9 @@ pub use xie::{scalemodel, XieKind, XieModel};
 pub use solve::{
     dense_matrix_bytes, solve_local, solve_local_elements, solve_local_elements_auto,
     solve_local_elements_treecode, solve_nonlocal, solve_nonlocal_elements,
-    solve_nonlocal_elements_auto, solve_nonlocal_elements_q, CauchyData, LocalResult,
-    NonlocalResult, SolveConfig, SolveError, SolveStats, DENSE_MATRIX_BUDGET,
+    solve_nonlocal_elements_auto, solve_nonlocal_elements_q, solve_nonlocal_elements_treecode,
+    CauchyData, LocalResult, NonlocalResult, SolveConfig, SolveError, SolveStats,
+    DENSE_MATRIX_BUDGET,
 };
 pub use system::{
     laplace_matrices, mol_potentials, yukawa_matrices, yukawa_matrices_q, BlockLayout,

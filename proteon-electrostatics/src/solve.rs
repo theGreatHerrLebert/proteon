@@ -18,7 +18,7 @@
 use crate::model::{BemModel, Charge, Params, Tri};
 use crate::system::{
     laplace_matrices, mol_potentials, yukawa_matrices_q, JacobiPreconditioner, LinearOperator,
-    NonlocalOperator, Preconditioner, Quadrature, TWO_PI,
+    Preconditioner, Quadrature, TWO_PI,
 };
 
 /// Why a solve failed (codex review: non-convergence / non-finite is a hard error,
@@ -595,40 +595,139 @@ pub fn solve_nonlocal_elements_q(
     cfg: &SolveConfig,
     quad: Quadrature,
 ) -> Result<(NonlocalResult, SolveStats), SolveError> {
-    let n = elements.len();
-    if n == 0 {
+    if elements.is_empty() {
         return Err(SolveError::Empty);
     }
-    let (eo, es, ei) = (params.eps_omega, params.eps_sigma, params.eps_inf);
     let yuk = params.yukawa();
-
-    let (umol, qmol) = mol_potentials(elements, charges, eo);
     let (v, k) = laplace_matrices(elements);
     let (vy, ky, capped_panels) = yukawa_matrices_q(elements, yuk, quad);
+    solve_nonlocal_with_ops(&v, &k, &vy, &ky, elements, charges, params, cfg, quad, capped_panels)
+}
 
-    // RHS first block; b = [b1; 0; 0].
-    let mv = |op: &crate::system::DenseOperator, x: &[f64]| {
+/// Nonlocal solve with the **treecode** V/K (Cartesian) + Vy/Ky (BLTC) operators — the
+/// memory-unlocking sibling of [`solve_nonlocal_elements`]. The near field uses the exact
+/// fixed-quadrature collocation (so this is the fixed-quadrature path; near-singular
+/// adaptive remediation is dense-only). `p`, `theta` as in
+/// [`solve_local_elements_treecode`].
+pub fn solve_nonlocal_elements_treecode(
+    elements: &[Tri],
+    charges: &[Charge],
+    params: &Params,
+    cfg: &SolveConfig,
+    p: usize,
+    theta: f64,
+) -> Result<(NonlocalResult, SolveStats), SolveError> {
+    use crate::fastsum::operator::{CollocationTreecode, YukawaTreecode, MAX_FS_ORDER};
+    use crate::model::PotentialKind;
+    if elements.is_empty() {
+        return Err(SolveError::Empty);
+    }
+    if p == 0 || p > MAX_FS_ORDER {
+        return Err(SolveError::BadParams(format!(
+            "treecode order p must be in 1..={MAX_FS_ORDER}, got {p}"
+        )));
+    }
+    if !(theta.is_finite() && theta > 0.0 && theta < 1.0) {
+        return Err(SolveError::BadParams(format!(
+            "treecode MAC ratio theta must be in (0, 1), got {theta}"
+        )));
+    }
+    let yuk = params.yukawa();
+    let v = CollocationTreecode::new(elements, PotentialKind::Single, p, theta);
+    let k = CollocationTreecode::new(elements, PotentialKind::Double, p, theta);
+    let vy = YukawaTreecode::new(elements, PotentialKind::Single, yuk, p, theta);
+    let ky = YukawaTreecode::new(elements, PotentialKind::Double, yuk, p, theta);
+    solve_nonlocal_with_ops(&v, &k, &vy, &ky, elements, charges, params, cfg, Quadrature::Fixed, 0)
+}
+
+/// The 3-block nonlocal system operator `(u,q,w)` over borrowed V/K/Vy/Ky — mirrors
+/// [`crate::system::NonlocalOperator`] but holds `&dyn LinearOperator`, so the dense and
+/// treecode back-ends share the solve core. Matvec and preconditioner diagonal are the
+/// same formulas (`bem/nonlocal.jl`), using the operators' `diagonal()` for the
+/// preconditioner blocks.
+struct NonlocalOpRef<'a> {
+    v: &'a dyn LinearOperator,
+    k: &'a dyn LinearOperator,
+    vy: &'a dyn LinearOperator,
+    ky: &'a dyn LinearOperator,
+    eps_omega: f64,
+    eps_sigma: f64,
+    eps_inf: f64,
+}
+
+impl LinearOperator for NonlocalOpRef<'_> {
+    fn dim(&self) -> usize {
+        3 * self.v.dim()
+    }
+    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        let n = self.v.dim();
+        let (x1, x2, x3) = (&x[0..n], &x[n..2 * n], &x[2 * n..3 * n]);
+        let (eo, es, ei) = (self.eps_omega, self.eps_sigma, self.eps_inf);
+        let mut kx1 = vec![0.0; n];
+        self.k.matvec(x1, &mut kx1);
+        let mut kx3 = vec![0.0; n];
+        self.k.matvec(x3, &mut kx3);
+        let mut vx2 = vec![0.0; n];
+        self.v.matvec(x2, &mut vx2);
+        let mut vyx2 = vec![0.0; n];
+        self.vy.matvec(x2, &mut vyx2);
+        let comb: Vec<f64> = (0..n).map(|i| (ei / es) * x3[i] - x1[i]).collect();
+        let mut kycomb = vec![0.0; n];
+        self.ky.matvec(&comb, &mut kycomb);
+        for i in 0..n {
+            y[i] = kycomb[i] - kx1[i]
+                + (eo / ei - eo / es) * vyx2[i]
+                + (eo / ei) * vx2[i]
+                + TWO_PI * x1[i];
+            y[n + i] = kx1[i] - vx2[i] + TWO_PI * x1[i];
+            y[2 * n + i] = (eo / ei) * vx2[i] - kx3[i] + TWO_PI * x3[i];
+        }
+    }
+    fn diagonal(&self) -> Vec<f64> {
+        let n = self.v.dim();
+        let kyd = self.ky.diagonal();
+        let vd = self.v.diagonal();
+        let mut d = Vec::with_capacity(3 * n);
+        d.extend((0..n).map(|i| TWO_PI - kyd[i]));
+        d.extend((0..n).map(|i| vd[i]));
+        d.extend(std::iter::repeat(TWO_PI).take(n));
+        d
+    }
+}
+
+/// Shared 3-block nonlocal solve over abstract V/K/Vy/Ky operators (dense or treecode).
+#[allow(clippy::too_many_arguments)]
+fn solve_nonlocal_with_ops(
+    v: &dyn LinearOperator,
+    k: &dyn LinearOperator,
+    vy: &dyn LinearOperator,
+    ky: &dyn LinearOperator,
+    elements: &[Tri],
+    charges: &[Charge],
+    params: &Params,
+    cfg: &SolveConfig,
+    quad: Quadrature,
+    capped_panels: usize,
+) -> Result<(NonlocalResult, SolveStats), SolveError> {
+    let n = elements.len();
+    let (eo, es, ei) = (params.eps_omega, params.eps_sigma, params.eps_inf);
+
+    let (umol, qmol) = mol_potentials(elements, charges, eo);
+
+    let mv = |op: &dyn LinearOperator, x: &[f64]| {
         let mut o = vec![0.0; n];
         op.matvec(x, &mut o);
         o
     };
-    let (k_um, ky_um) = (mv(&k, &umol), mv(&ky, &umol));
-    let (v_qm, vy_qm) = (mv(&v, &qmol), mv(&vy, &qmol));
+    let (k_um, ky_um) = (mv(k, &umol), mv(ky, &umol));
+    let (v_qm, vy_qm) = (mv(v, &qmol), mv(vy, &qmol));
     let mut b = vec![0.0; 3 * n];
     for i in 0..n {
         b[i] = k_um[i] + (1.0 - eo / es) * ky_um[i] - TWO_PI * umol[i] - (eo / ei) * v_qm[i]
             + (eo / es - eo / ei) * vy_qm[i];
     }
 
-    let op = NonlocalOperator {
-        v,
-        k,
-        vy,
-        ky,
-        eps_omega: eo,
-        eps_sigma: es,
-        eps_inf: ei,
-    };
+    let op = NonlocalOpRef { v, k, vy, ky, eps_omega: eo, eps_sigma: es, eps_inf: ei };
     let pre = JacobiPreconditioner::from_operator(&op);
     let sol = gmres(&op, &b, &pre, cfg)?;
     let res = true_residual(&op, &sol.x, &b);
@@ -649,16 +748,7 @@ pub fn solve_nonlocal_elements_q(
         quadrature: quad,
         capped_panels,
     };
-    Ok((
-        NonlocalResult {
-            u,
-            q,
-            w,
-            umol,
-            qmol,
-        },
-        stats,
-    ))
+    Ok((NonlocalResult { u, q, w, umol, qmol }, stats))
 }
 
 /// Size-aware nonlocal solve: the dense [`solve_nonlocal_elements`] while the four

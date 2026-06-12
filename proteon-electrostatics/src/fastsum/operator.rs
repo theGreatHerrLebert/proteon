@@ -24,10 +24,15 @@ use proteon_core::surface::geom::Vec3;
 use rayon::prelude::*;
 
 use super::cartesian;
+use super::expansion::{
+    double_layer_moments as bltc_double_moments, eval_double_layer_yukawa,
+    eval_single_layer_yukawa, single_layer_moments as bltc_single_moments, Cluster,
+};
 use super::octree::Octree;
 use crate::laplace::laplace_collocation;
 use crate::model::{PotentialKind, Tri};
 use crate::system::LinearOperator;
+use crate::yukawa::regular_yukawa_collocation;
 
 /// Default leaf capacity and depth cap for the octree.
 pub const DEFAULT_N_LEAF: usize = 32;
@@ -260,11 +265,140 @@ impl LinearOperator for CollocationTreecode {
     }
 }
 
+/// A **regular-Yukawa** collocation matrix (`Vy` single or `Ky` double) applied by
+/// treecode fast summation, the Yukawa sibling of [`CollocationTreecode`]. Uses the
+/// **barycentric-Lagrange** far field (the moments are kernel-independent — identical to
+/// the Laplace single/double-layer moments — so the only Yukawa-specific part is the
+/// proxy-point kernel eval; plan §3.2 hedge). The near field is the exact
+/// `regular_yukawa_collocation`.
+///
+/// v1 builds node moments directly per matvec (no M2M — the BLTC M2M differs from the
+/// Cartesian one, and the matvec is traversal-bound regardless). The per-node Chebyshev
+/// proxy grids are built once at construction.
+pub struct YukawaTreecode {
+    elements: Vec<Tri>,
+    centroids: Vec<Vec3>,
+    kind: PotentialKind,
+    kappa: f64,
+    p: usize,
+    theta: f64,
+    tree: Octree,
+    clusters: Vec<Cluster>,
+}
+
+impl YukawaTreecode {
+    /// Build the regular-Yukawa treecode for `kind` (`Single`=`Vy` / `Double`=`Ky`) with
+    /// exponent `kappa`, expansion order `p`, MAC ratio `theta`.
+    ///
+    /// # Panics
+    /// If `theta ∉ (0,1)` or `p ∉ 1..=MAX_FS_ORDER`.
+    #[must_use]
+    pub fn new(elements: &[Tri], kind: PotentialKind, kappa: f64, p: usize, theta: f64) -> Self {
+        assert!(
+            theta.is_finite() && theta > 0.0 && theta < 1.0,
+            "treecode MAC ratio theta must be in (0, 1), got {theta}"
+        );
+        assert!(
+            (1..=MAX_FS_ORDER).contains(&p),
+            "treecode order p must be in 1..={MAX_FS_ORDER}, got {p}"
+        );
+        let centroids: Vec<Vec3> = elements
+            .iter()
+            .map(|t| (t.v1 + t.v2 + t.v3) * (1.0 / 3.0))
+            .collect();
+        let tree = Octree::build(elements, &centroids, DEFAULT_N_LEAF, DEFAULT_MAX_DEPTH);
+        // Per-node Chebyshev grids (x-independent — built once).
+        let clusters: Vec<Cluster> =
+            tree.nodes.iter().map(|nd| Cluster::new(nd.lo, nd.hi, p)).collect();
+        Self { elements: elements.to_vec(), centroids, kind, kappa, p, theta, tree, clusters }
+    }
+
+    /// Per-node moments from the current `x` (direct from each node's subtree panels).
+    fn single_moments(&self, x: &[f64]) -> Vec<Vec<f64>> {
+        self.tree
+            .nodes
+            .par_iter()
+            .enumerate()
+            .map(|(i, node)| {
+                let panels: Vec<(Tri, f64)> =
+                    node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
+                bltc_single_moments(&self.clusters[i], &panels, self.p)
+            })
+            .collect()
+    }
+
+    fn double_moments(&self, x: &[f64]) -> Vec<Vec<Vec3>> {
+        self.tree
+            .nodes
+            .par_iter()
+            .enumerate()
+            .map(|(i, node)| {
+                let panels: Vec<(Tri, f64)> =
+                    node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
+                bltc_double_moments(&self.clusters[i], &panels, self.p)
+            })
+            .collect()
+    }
+
+    fn eval_target(
+        &self,
+        xi: Vec3,
+        x: &[f64],
+        sl: &[Vec<f64>],
+        dl: &[Vec<Vec3>],
+        node_idx: usize,
+    ) -> f64 {
+        let node = &self.tree.nodes[node_idx];
+        let d = (xi - node.center).norm();
+        if d > 0.0 && node.radius <= self.theta * d {
+            return match self.kind {
+                PotentialKind::Single => {
+                    eval_single_layer_yukawa(&self.clusters[node_idx], &sl[node_idx], xi, self.kappa)
+                }
+                PotentialKind::Double => {
+                    eval_double_layer_yukawa(&self.clusters[node_idx], &dl[node_idx], xi, self.kappa)
+                }
+            };
+        }
+        if node.children.is_empty() {
+            return node
+                .panels
+                .iter()
+                .map(|&j| regular_yukawa_collocation(self.kind, xi, &self.elements[j], self.kappa) * x[j])
+                .sum();
+        }
+        node.children
+            .iter()
+            .map(|&c| self.eval_target(xi, x, sl, dl, c))
+            .sum()
+    }
+}
+
+impl LinearOperator for YukawaTreecode {
+    fn dim(&self) -> usize {
+        self.elements.len()
+    }
+    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        let (sl, dl) = match self.kind {
+            PotentialKind::Single => (self.single_moments(x), Vec::new()),
+            PotentialKind::Double => (Vec::new(), self.double_moments(x)),
+        };
+        y.par_iter_mut().enumerate().for_each(|(i, yi)| {
+            *yi = self.eval_target(self.centroids[i], x, &sl, &dl, 0);
+        });
+    }
+    fn diagonal(&self) -> Vec<f64> {
+        (0..self.elements.len())
+            .map(|i| regular_yukawa_collocation(self.kind, self.centroids[i], &self.elements[i], self.kappa))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::analytic::analytic_sphere_mesh;
-    use crate::system::laplace_matrices;
+    use crate::system::{laplace_matrices, yukawa_matrices};
 
     fn sphere_elements(subdiv: u32) -> Vec<Tri> {
         let mesh = analytic_sphere_mesh(2.0, subdiv);
@@ -428,6 +562,41 @@ mod tests {
     fn invalid_theta_rejected() {
         let els = sphere_elements(2);
         let _ = CollocationTreecode::new(&els, PotentialKind::Single, 4, 1.0);
+    }
+
+    #[test]
+    fn yukawa_matvec_matches_dense() {
+        // Vy (single) and Ky (double) regular-Yukawa treecode matvecs vs the dense
+        // yukawa_matrices, on a sphere SES.
+        let els = sphere_elements(3);
+        let n = els.len();
+        let kappa = 0.25;
+        let (vy_dense, ky_dense) = yukawa_matrices(&els, kappa);
+        let x: Vec<f64> = (0..n).map(|i| (((i * 5) % 11) as f64 - 5.0) * 0.1).collect();
+
+        for (kind, dense) in [
+            (PotentialKind::Single, &vy_dense),
+            (PotentialKind::Double, &ky_dense),
+        ] {
+            let (p, theta) = match kind {
+                PotentialKind::Single => (7, 0.5),
+                PotentialKind::Double => (8, 0.45),
+            };
+            let tree = YukawaTreecode::new(&els, kind, kappa, p, theta);
+            let mut yd = vec![0.0; n];
+            let mut yt = vec![0.0; n];
+            dense.matvec(&x, &mut yd);
+            tree.matvec(&x, &mut yt);
+            let e = rel_l2(&yt, &yd);
+            eprintln!("Yukawa {kind:?} matvec rel L2: {e:.3e}");
+            assert!(e < 1e-3, "Yukawa {kind:?} treecode off dense by {e:.3e}");
+            // Diagonal is the exact self-collocation.
+            let dd = dense.diagonal();
+            let td = tree.diagonal();
+            for (a, b) in td.iter().zip(&dd) {
+                assert!((a - b).abs() < 1e-12, "Yukawa {kind:?} diagonal {a} vs {b}");
+            }
+        }
     }
 
     #[test]
