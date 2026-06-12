@@ -21,6 +21,7 @@ use proteon_core::surface::mesh::Mesh;
 use crate::model::{Charge, Domain, Params, Tri};
 use crate::post::{espotential, rfenergy};
 use crate::quality::{QualityReport, Severity, TopologyReport};
+use crate::fastsum::operator::MAX_FS_ORDER;
 use crate::solve::{
     solve_local_elements_auto, solve_local_elements_treecode, solve_nonlocal_elements_auto,
     solve_nonlocal_elements_q, CauchyData, SolveConfig,
@@ -229,17 +230,23 @@ fn validate_options(opts: &SurfaceSolveOptions) -> Result<(), SurfaceSolveError>
             )));
         }
     }
-    if let Some(fs) = opts.fast_summation {
-        if fs.p == 0 {
-            return Err(SurfaceSolveError::InvalidParams(
-                "fast_summation.p (expansion order) must be ≥ 1".to_string(),
-            ));
-        }
-        if !(fs.theta.is_finite() && fs.theta > 0.0 && fs.theta < 1.0) {
-            return Err(SurfaceSolveError::InvalidParams(format!(
-                "fast_summation.theta must be in (0, 1), got {}",
-                fs.theta
-            )));
+    // Only validate the treecode params when they will actually be used (the local
+    // solve). On a nonlocal solve fast_summation is ignored (warned in the inner solve),
+    // so validating its unused fields would reject a combination we otherwise accept.
+    if !opts.nonlocal {
+        if let Some(fs) = opts.fast_summation {
+            if fs.p == 0 || fs.p > MAX_FS_ORDER {
+                return Err(SurfaceSolveError::InvalidParams(format!(
+                    "fast_summation.p (expansion order) must be in 1..={MAX_FS_ORDER}, got {}",
+                    fs.p
+                )));
+            }
+            if !(fs.theta.is_finite() && fs.theta > 0.0 && fs.theta < 1.0) {
+                return Err(SurfaceSolveError::InvalidParams(format!(
+                    "fast_summation.theta must be in (0, 1), got {}",
+                    fs.theta
+                )));
+            }
         }
     }
     Ok(())
@@ -282,12 +289,19 @@ fn solve_surface_inner(
         });
     }
     if nf >= N_WARN {
-        warnings.push(format!(
-            "{nf} triangles: the dense BEM is O(N²) in memory and time — this will be \
-             slow/RAM-heavy. Over the dense budget it switches to the O(N)-memory \
-             matrix-free GPU solve if a CUDA device is present (slower per solve, but \
-             uncapped in mesh size)."
-        ));
+        warnings.push(if use_treecode {
+            format!(
+                "{nf} triangles: the treecode (fast summation) is O(N) memory but its matvec \
+                 is traversal-bound — this will be slow per GMRES iteration."
+            )
+        } else {
+            format!(
+                "{nf} triangles: the dense BEM is O(N²) in memory and time — this will be \
+                 slow/RAM-heavy. Over the dense budget it switches to the O(N)-memory \
+                 matrix-free GPU solve if a CUDA device is present (slower per solve, but \
+                 uncapped in mesh size)."
+            )
+        });
     }
 
     // Finite inputs (a NaN/inf would otherwise propagate silently into the solve).

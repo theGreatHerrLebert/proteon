@@ -33,6 +33,12 @@ use crate::system::LinearOperator;
 pub const DEFAULT_N_LEAF: usize = 32;
 /// Octree depth cap (a backstop; real meshes stop on `n_leaf` far sooner).
 pub const DEFAULT_MAX_DEPTH: usize = 24;
+/// Maximum supported Cartesian expansion order. Caps the per-node working set at
+/// `(p+1)³` (≈ 9.3k coefficients at p=20) so a hostile / fat-fingered order cannot
+/// overflow the size arithmetic or request an unreasonable allocation — and so the
+/// "treecode memory is O(N)" argument (linear only for *bounded* p) holds. Far beyond
+/// any useful order (accuracy saturates against mesh discretization well before this).
+pub const MAX_FS_ORDER: usize = 20;
 
 /// A collocation matrix applied by treecode fast summation.
 pub struct CollocationTreecode {
@@ -72,6 +78,10 @@ impl CollocationTreecode {
         assert!(
             theta.is_finite() && theta > 0.0 && theta < 1.0,
             "treecode MAC ratio theta must be in (0, 1), got {theta}"
+        );
+        assert!(
+            (1..=MAX_FS_ORDER).contains(&p),
+            "treecode order p must be in 1..={MAX_FS_ORDER}, got {p}"
         );
         let centroids: Vec<Vec3> = elements
             .iter()
@@ -117,10 +127,11 @@ impl CollocationTreecode {
             if node.children.is_empty() {
                 continue;
             }
+            let inv_r = 1.0 / cartesian::eff_radius(node.radius);
             let mut acc = vec![0.0; sz];
             for &c in &node.children {
-                let s = nodes[c].radius / node.radius;
-                let t = (nodes[c].center - node.center) * (1.0 / node.radius);
+                let s = cartesian::eff_radius(nodes[c].radius) * inv_r;
+                let t = (nodes[c].center - node.center) * inv_r;
                 let tc = cartesian::m2m_single(&moments[c], s, t, self.p);
                 for (a, b) in acc.iter_mut().zip(&tc) {
                     *a += *b;
@@ -156,10 +167,11 @@ impl CollocationTreecode {
             if node.children.is_empty() {
                 continue;
             }
+            let inv_r = 1.0 / cartesian::eff_radius(node.radius);
             let mut acc = vec![zero; sz];
             for &c in &node.children {
-                let s = nodes[c].radius / node.radius;
-                let t = (nodes[c].center - node.center) * (1.0 / node.radius);
+                let s = cartesian::eff_radius(nodes[c].radius) * inv_r;
+                let t = (nodes[c].center - node.center) * inv_r;
                 let tc = cartesian::m2m_double(&moments[c], s, t, self.p);
                 for (a, b) in acc.iter_mut().zip(&tc) {
                     *a = *a + *b;

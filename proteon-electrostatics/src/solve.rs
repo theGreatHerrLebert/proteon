@@ -34,6 +34,8 @@ pub enum SolveError {
     /// The model's topology is outside the validated formulation scope (e.g. a buried
     /// cavity for the nonlocal solve, which is only gated for the local solve).
     Unsupported,
+    /// A solver parameter is out of range (e.g. treecode order / MAC ratio).
+    BadParams(String),
 }
 
 impl std::fmt::Display for SolveError {
@@ -45,6 +47,7 @@ impl std::fmt::Display for SolveError {
             Self::Unsupported => {
                 write!(f, "model topology is outside the validated formulation scope")
             }
+            Self::BadParams(m) => write!(f, "{m}"),
         }
     }
 }
@@ -377,10 +380,22 @@ pub fn solve_local_elements_treecode(
     p: usize,
     theta: f64,
 ) -> Result<(LocalResult, SolveStats), SolveError> {
-    use crate::fastsum::operator::CollocationTreecode;
+    use crate::fastsum::operator::{CollocationTreecode, MAX_FS_ORDER};
     use crate::model::PotentialKind;
     if elements.is_empty() {
         return Err(SolveError::Empty);
+    }
+    // Validate up front (return, not panic) so a direct Rust caller gets the same
+    // contract the surface front-end enforces.
+    if p == 0 || p > MAX_FS_ORDER {
+        return Err(SolveError::BadParams(format!(
+            "treecode order p must be in 1..={MAX_FS_ORDER}, got {p}"
+        )));
+    }
+    if !(theta.is_finite() && theta > 0.0 && theta < 1.0) {
+        return Err(SolveError::BadParams(format!(
+            "treecode MAC ratio theta must be in (0, 1), got {theta}"
+        )));
     }
     let k = CollocationTreecode::new(elements, PotentialKind::Double, p, theta);
     let v = CollocationTreecode::new(elements, PotentialKind::Single, p, theta);

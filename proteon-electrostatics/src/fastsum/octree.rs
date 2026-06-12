@@ -217,4 +217,18 @@ mod tests {
         let tree = Octree::build(&[], &[], 4, 10);
         assert!(tree.nodes.is_empty(), "empty geometry ⇒ no nodes (no NaN root)");
     }
+
+    #[test]
+    fn every_child_index_exceeds_its_parent() {
+        // The treecode M2M upward pass processes nodes in reverse index order and relies
+        // on every child being built (appended) after its parent.
+        let els = grid_panels(4);
+        let cs: Vec<Vec3> = els.iter().map(centroid).collect();
+        let tree = Octree::build(&els, &cs, 3, 12);
+        for (i, node) in tree.nodes.iter().enumerate() {
+            for &c in &node.children {
+                assert!(c > i, "child {c} must come after parent {i}");
+            }
+        }
+    }
 }

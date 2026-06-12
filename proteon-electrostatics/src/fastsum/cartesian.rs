@@ -26,6 +26,14 @@ use crate::model::Tri;
 /// cluster — all panel points coincident — cannot arise from non-degenerate triangles).
 const MIN_RADIUS: f64 = 1e-300;
 
+/// The effective normalization radius — clamped so a (degenerate) zero/underflowed radius
+/// cannot divide-by-zero. Used by every consumer (leaf moments, eval, **and** the M2M
+/// upward pass) so child and parent frames stay consistent.
+#[must_use]
+pub fn eff_radius(r: f64) -> f64 {
+    r.max(MIN_RADIUS)
+}
+
 /// Flat index of multi-index `(i, j, k)` in a dense `(p+1)³` cube.
 #[inline]
 fn cidx(i: usize, j: usize, k: usize, p: usize) -> usize {
