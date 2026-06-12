@@ -18,10 +18,10 @@ use std::fmt;
 
 use proteon_core::surface::mesh::Mesh;
 
+use crate::fastsum::operator::MAX_FS_ORDER;
 use crate::model::{Charge, Domain, Params, Tri};
 use crate::post::{espotential, rfenergy};
 use crate::quality::{QualityReport, Severity, TopologyReport};
-use crate::fastsum::operator::MAX_FS_ORDER;
 use crate::solve::{
     solve_local_elements_auto, solve_local_elements_treecode, solve_nonlocal_elements_auto,
     solve_nonlocal_elements_q, solve_nonlocal_elements_treecode, CauchyData, SolveConfig,
@@ -157,10 +157,16 @@ impl fmt::Display for SurfaceSolveError {
             Self::InvalidParams(m) => write!(f, "{m}"),
             Self::Empty => write!(f, "need at least one triangle and one charge"),
             Self::DegenerateTriangle(i) => {
-                write!(f, "degenerate (zero-area / collinear) triangle at index {i}")
+                write!(
+                    f,
+                    "degenerate (zero-area / collinear) triangle at index {i}"
+                )
             }
             Self::NonFiniteInput => {
-                write!(f, "non-finite value in vertices / charge positions / charge values")
+                write!(
+                    f,
+                    "non-finite value in vertices / charge positions / charge values"
+                )
             }
             Self::NonlocalCavity(n) => write!(
                 f,
@@ -271,7 +277,9 @@ fn solve_surface_inner(
     // staying dense (the treecode would silently drop the near-singular remediation).
     let use_treecode = opts.fast_summation.is_some()
         && !(opts.nonlocal && matches!(opts.quadrature, Quadrature::Adaptive(_)));
-    if opts.fast_summation.is_some() && opts.nonlocal && matches!(opts.quadrature, Quadrature::Adaptive(_))
+    if opts.fast_summation.is_some()
+        && opts.nonlocal
+        && matches!(opts.quadrature, Quadrature::Adaptive(_))
     {
         warnings.push(
             "fast_summation is ignored with quadrature='adaptive' on the nonlocal solve \
@@ -311,7 +319,11 @@ fn solve_surface_inner(
         .verts
         .iter()
         .flat_map(|p| [p.x, p.y, p.z])
-        .chain(charges.iter().flat_map(|c| [c.pos.x, c.pos.y, c.pos.z, c.val]))
+        .chain(
+            charges
+                .iter()
+                .flat_map(|c| [c.pos.x, c.pos.y, c.pos.z, c.val]),
+        )
         .any(|v| !v.is_finite())
     {
         return Err(SurfaceSolveError::NonFiniteInput);
@@ -379,7 +391,11 @@ fn solve_surface_inner(
 
     // Combined mesh-acceptance: topology + per-element geometry + charge placement.
     let quality = QualityReport::assess(&elements, charges);
-    let issues: Vec<_> = topology.issues().into_iter().chain(quality.issues()).collect();
+    let issues: Vec<_> = topology
+        .issues()
+        .into_iter()
+        .chain(quality.issues())
+        .collect();
     for issue in &issues {
         warnings.push(format!("mesh/charge quality: {}", issue.message));
     }
@@ -418,9 +434,15 @@ fn solve_surface_inner(
         (Box::new(r), e, s)
     } else if let Some(fs) = opts.fast_summation {
         // Opt-in treecode local solve (O(N) memory; see FastSummation docs).
-        let (r, s) =
-            solve_local_elements_treecode(&elements, charges, &opts.params, &opts.cfg, fs.p, fs.theta)
-                .map_err(|e| SurfaceSolveError::Solve(e.to_string()))?;
+        let (r, s) = solve_local_elements_treecode(
+            &elements,
+            charges,
+            &opts.params,
+            &opts.cfg,
+            fs.p,
+            fs.theta,
+        )
+        .map_err(|e| SurfaceSolveError::Solve(e.to_string()))?;
         let e = rfenergy(&elements, charges, &r);
         (Box::new(r), e, s)
     } else {
@@ -433,7 +455,16 @@ fn solve_surface_inner(
     let potential: Vec<f64> = mesh
         .verts
         .iter()
-        .map(|&xi| espotential(Domain::Gamma, xi, &elements, charges, &opts.params, &*cauchy))
+        .map(|&xi| {
+            espotential(
+                Domain::Gamma,
+                xi,
+                &elements,
+                charges,
+                &opts.params,
+                &*cauchy,
+            )
+        })
         .collect();
 
     if !engy.is_finite() || potential.iter().any(|v| !v.is_finite()) {

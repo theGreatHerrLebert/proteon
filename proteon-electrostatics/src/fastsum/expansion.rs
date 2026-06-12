@@ -58,7 +58,11 @@ impl Cluster {
     /// `(nx, ny, nz)` node counts per axis.
     #[must_use]
     pub fn dims(&self) -> (usize, usize, usize) {
-        (self.nodes[0].len(), self.nodes[1].len(), self.nodes[2].len())
+        (
+            self.nodes[0].len(),
+            self.nodes[1].len(),
+            self.nodes[2].len(),
+        )
     }
 
     /// Number of proxy points `(nx·ny·nz)`.
@@ -268,7 +272,12 @@ pub fn eval_double_layer_yukawa(cluster: &Cluster, moments: &[Vec3], xi: Vec3, k
 /// Direct reference: `Σ_j x_j ∫_{T_j} (e^{−κ|xi−y|} − 1)/|xi−y| dS_y` by high-order cubature
 /// — the bare regular-Yukawa single-layer integral (equals `regular_yukawa_collocation`).
 #[must_use]
-pub fn direct_single_layer_yukawa(panels: &[(Tri, f64)], xi: Vec3, kappa: f64, cub_order: usize) -> f64 {
+pub fn direct_single_layer_yukawa(
+    panels: &[(Tri, f64)],
+    xi: Vec3,
+    kappa: f64,
+    cub_order: usize,
+) -> f64 {
     let mut acc = 0.0;
     for (tri, x) in panels {
         for cp in triangle_cubature(tri, cub_order) {
@@ -282,7 +291,12 @@ pub fn direct_single_layer_yukawa(panels: &[(Tri, f64)], xi: Vec3, kappa: f64, c
 /// Direct reference for the regular-Yukawa **double** layer:
 /// `Σ_j x_j ∫_{T_j} c(r)·(y − xi)·n_j / r³ dS_y`.
 #[must_use]
-pub fn direct_double_layer_yukawa(panels: &[(Tri, f64)], xi: Vec3, kappa: f64, cub_order: usize) -> f64 {
+pub fn direct_double_layer_yukawa(
+    panels: &[(Tri, f64)],
+    xi: Vec3,
+    kappa: f64,
+    cub_order: usize,
+) -> f64 {
     let mut acc = 0.0;
     for (tri, x) in panels {
         let n = tri.normal;
@@ -303,7 +317,10 @@ pub fn tri_bbox(tri: &Tri) -> (Vec3, Vec3) {
     let zs = [tri.v1.z, tri.v2.z, tri.v3.z];
     let mn = |a: [f64; 3]| a.iter().copied().fold(f64::INFINITY, f64::min);
     let mx = |a: [f64; 3]| a.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    (Vec3::new(mn(xs), mn(ys), mn(zs)), Vec3::new(mx(xs), mx(ys), mx(zs)))
+    (
+        Vec3::new(mn(xs), mn(ys), mn(zs)),
+        Vec3::new(mx(xs), mx(ys), mx(zs)),
+    )
 }
 
 #[cfg(test)]
@@ -330,7 +347,7 @@ mod tests {
         let tri = tilted_tri();
         let (lo, hi) = tri_bbox(&tri);
         let xi = Vec3::new(5.0, 4.0, 6.0); // far from the unit-ish panel
-        // High-order direct reference for the bare integral.
+                                           // High-order direct reference for the bare integral.
         let reference = direct_single_layer(&[(tri, 1.0)], xi, 24);
         let err = |p: usize| {
             let c = Cluster::new(lo, hi, p);
@@ -358,8 +375,14 @@ mod tests {
         };
         let far = err_at(8.0);
         let near = err_at(2.0);
-        assert!(far < near, "nearer target = larger error: near {near:.3e} far {far:.3e}");
-        assert!(far < 1e-8, "well-separated target should be accurate: {far:.3e}");
+        assert!(
+            far < near,
+            "nearer target = larger error: near {near:.3e} far {far:.3e}"
+        );
+        assert!(
+            far < 1e-8,
+            "well-separated target should be accurate: {far:.3e}"
+        );
     }
 
     #[test]
@@ -368,7 +391,10 @@ mod tests {
         let (lo, hi) = tri_bbox(&tri);
         let xi = Vec3::new(5.0, 4.0, 6.0);
         let reference = direct_double_layer(&[(tri, 1.0)], xi, 24);
-        assert!(reference.abs() > 1e-6, "reference should be non-trivial: {reference}");
+        assert!(
+            reference.abs() > 1e-6,
+            "reference should be non-trivial: {reference}"
+        );
         let err = |p: usize| {
             let c = Cluster::new(lo, hi, p);
             let q = double_layer_moments(&c, &[(tri, 1.0)], p);
@@ -376,8 +402,14 @@ mod tests {
         };
         let e2 = err(2);
         let e8 = err(8);
-        assert!(e8 < e2, "double-layer error should fall with p: {e2:.3e} -> {e8:.3e}");
-        assert!(e8 < 1e-8, "p=8 double-layer far field should be tight, got {e8:.3e}");
+        assert!(
+            e8 < e2,
+            "double-layer error should fall with p: {e2:.3e} -> {e8:.3e}"
+        );
+        assert!(
+            e8 < 1e-8,
+            "p=8 double-layer far field should be tight, got {e8:.3e}"
+        );
     }
 
     #[test]
@@ -387,7 +419,10 @@ mod tests {
         // Convention: bare double-layer integral = laplace_collocation(Double).
         let bare = direct_double_layer(&[(tri, 1.0)], xi, 24);
         let coll = laplace_collocation(PotentialKind::Double, xi, &tri);
-        assert!(rel(bare, coll) < 1e-9, "double bare {bare} vs collocation {coll}");
+        assert!(
+            rel(bare, coll) < 1e-9,
+            "double bare {bare} vs collocation {coll}"
+        );
 
         // Sign: reversing the panel orientation (swap two vertices) flips the normal and
         // must flip the double-layer sign — the expansion tracks it through the vector
@@ -397,7 +432,11 @@ mod tests {
         let c = Cluster::new(lo, hi, 8);
         let q = double_layer_moments(&c, &[(flipped, 1.0)], 8);
         let expansion_flipped = eval_double_layer(&c, &q, xi);
-        assert!(rel(expansion_flipped, -bare) < 1e-6, "flipped {expansion_flipped} vs -bare {}", -bare);
+        assert!(
+            rel(expansion_flipped, -bare) < 1e-6,
+            "flipped {expansion_flipped} vs -bare {}",
+            -bare
+        );
     }
 
     #[test]
@@ -414,11 +453,17 @@ mod tests {
             // regular_yukawa_collocation (also series-guarded) at every κ.
             let bare_s = direct_single_layer_yukawa(&[(tri, 1.0)], xi, kappa, 24);
             let coll_s = regular_yukawa_collocation(PotentialKind::Single, xi, &tri, kappa);
-            assert!(rel(bare_s, coll_s) < 1e-6, "Vy κ={kappa}: bare {bare_s} vs coll {coll_s}");
+            assert!(
+                rel(bare_s, coll_s) < 1e-6,
+                "Vy κ={kappa}: bare {bare_s} vs coll {coll_s}"
+            );
             let bare_d = direct_double_layer_yukawa(&[(tri, 1.0)], xi, kappa, 24);
             let coll_d = regular_yukawa_collocation(PotentialKind::Double, xi, &tri, kappa);
             assert!(coll_d.is_finite() && bare_d.is_finite());
-            assert!(rel(bare_d, coll_d) < 1e-6, "Ky κ={kappa}: bare {bare_d} vs coll {coll_d}");
+            assert!(
+                rel(bare_d, coll_d) < 1e-6,
+                "Ky κ={kappa}: bare {bare_d} vs coll {coll_d}"
+            );
 
             // BLTC far field converges in p to the direct integral (reusing Laplace moments).
             let c = Cluster::new(lo, hi, 8);
@@ -448,4 +493,3 @@ mod tests {
         assert!(rel(bare, coll) < 1e-9, "bare {bare} vs collocation {coll}");
     }
 }
-

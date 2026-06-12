@@ -25,7 +25,6 @@ use proteon_electrostatics::{
     SurfaceSolveOptions,
 };
 
-
 /// Closed-form Born reaction-field (solvation) energy of a single ion (kJ/mol).
 ///
 /// The Born model assumes a **vacuum solute**: the formula uses `(1/εΣ − 1)`, so a
@@ -181,8 +180,10 @@ fn solve_surface_py<'py>(
         let warnings = py.import("warnings")?;
         warnings.call_method1(
             "warn",
-            ("quadrature='adaptive' has no effect on the local solve (the Laplace \
-              collocation is analytic/exact); it applies only to nonlocal_=True.",),
+            (
+                "quadrature='adaptive' has no effect on the local solve (the Laplace \
+              collocation is analytic/exact); it applies only to nonlocal_=True.",
+            ),
         )?;
     }
 
@@ -222,12 +223,24 @@ fn solve_surface_py<'py>(
     let charges: Vec<Charge> = qpos
         .chunks_exact(3)
         .zip(qval)
-        .map(|(p, &val)| Charge { pos: Vec3::new(p[0], p[1], p[2]), val })
+        .map(|(p, &val)| Charge {
+            pos: Vec3::new(p[0], p[1], p[2]),
+            val,
+        })
         .collect();
 
     let opts = SurfaceSolveOptions {
-        params: Params { eps_omega, eps_sigma, eps_inf, lambda: lambda_ },
-        cfg: SolveConfig { tol, restart, max_iter },
+        params: Params {
+            eps_omega,
+            eps_sigma,
+            eps_inf,
+            lambda: lambda_,
+        },
+        cfg: SolveConfig {
+            tol,
+            restart,
+            max_iter,
+        },
         nonlocal: nonlocal_,
         quadrature: quad,
         allow_large,
@@ -252,7 +265,10 @@ fn solve_surface_py<'py>(
     let topology = &sol.topology;
     let quality = &sol.quality;
     let dict = PyDict::new(py);
-    dict.set_item("surface_potential", PyArray1::from_vec(py, sol.potential.clone()))?;
+    dict.set_item(
+        "surface_potential",
+        PyArray1::from_vec(py, sol.potential.clone()),
+    )?;
     dict.set_item("rfenergy", sol.rfenergy)?;
     dict.set_item("iterations", sol.iterations)?;
     dict.set_item("residual", sol.residual)?;
@@ -302,7 +318,6 @@ fn solve_surface_py<'py>(
 fn surface_err_to_py(e: SurfaceSolveError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
-
 
 // =========================================================================================
 // File-format I/O (the NESSie `format/` layer) — load a surface mesh + charge set
@@ -452,7 +467,11 @@ fn write_off_py(
         }
         tris.push(t);
     }
-    let mesh = Mesh { verts, normals: Vec::new(), tris };
+    let mesh = Mesh {
+        verts,
+        normals: Vec::new(),
+        tris,
+    };
     py.allow_threads(|| write_off(&mesh, path))
         .map_err(io_err_to_py)
 }

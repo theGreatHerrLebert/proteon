@@ -11,7 +11,10 @@ use std::io::Write;
 use proteon_electrostatics::{read_hmo, read_msms, read_off, read_pqr, write_off};
 
 fn fixture(name: &str) -> String {
-    format!("{}/tests/fixtures/format/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!(
+        "{}/tests/fixtures/format/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
 }
 
 fn approx(a: f64, b: f64) -> bool {
@@ -26,7 +29,10 @@ fn read_off_matches_nessie() {
     assert_eq!(mesh.tris.len(), 512, "element count");
     // First vertex per NESSie: [0.0, 0.0, 1.0049999952].
     let v0 = mesh.verts[0];
-    assert!(approx(v0.x, 0.0) && approx(v0.y, 0.0) && approx(v0.z, 1.0049999952), "v0 = {v0:?}");
+    assert!(
+        approx(v0.x, 0.0) && approx(v0.y, 0.0) && approx(v0.z, 1.0049999952),
+        "v0 = {v0:?}"
+    );
     // Indices must be in range and 0-based (NESSie's OFF faces are 0-based).
     for t in &mesh.tris {
         for &idx in t {
@@ -40,7 +46,11 @@ fn read_pqr_matches_nessie() {
     let charges = read_pqr(fixture("na.pqr")).expect("read na.pqr");
     assert_eq!(charges.len(), 1, "one non-zero charge");
     let c = &charges[0];
-    assert!(approx(c.pos.x, 0.0) && approx(c.pos.y, 0.0) && approx(c.pos.z, 0.0), "pos = {:?}", c.pos);
+    assert!(
+        approx(c.pos.x, 0.0) && approx(c.pos.y, 0.0) && approx(c.pos.z, 0.0),
+        "pos = {:?}",
+        c.pos
+    );
     assert!(approx(c.val, 1.0), "val = {}", c.val);
 }
 
@@ -98,9 +108,21 @@ fn read_pqr_excludes_hetatm_like_nessie() {
     let tmp = std::env::temp_dir().join("proteon_pqr_hetatm.pqr");
     {
         let mut f = std::fs::File::create(&tmp).unwrap();
-        writeln!(f, "ATOM      1  N   THR     1   -17.108  25.866  23.850  0.1812 1.8240").unwrap();
-        writeln!(f, "HETATM    2  O   HOH     2   -21.160  40.444  40.509 -0.8340 1.6612").unwrap();
-        writeln!(f, "ATOM      3  CA  THR     3   -16.775  27.193  23.310  0.0034 1.9080").unwrap();
+        writeln!(
+            f,
+            "ATOM      1  N   THR     1   -17.108  25.866  23.850  0.1812 1.8240"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "HETATM    2  O   HOH     2   -21.160  40.444  40.509 -0.8340 1.6612"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "ATOM      3  CA  THR     3   -16.775  27.193  23.310  0.0034 1.9080"
+        )
+        .unwrap();
     }
     let charges = read_pqr(&tmp).expect("read pqr");
     assert_eq!(charges.len(), 2, "HETATM water excluded");
@@ -115,9 +137,17 @@ fn read_hmo_keeps_zero_charges() {
     let tmp = std::env::temp_dir().join("proteon_hmo_zero.hmo");
     {
         let mut f = std::fs::File::create(&tmp).unwrap();
-        writeln!(f, "BEG_NODL_DATA\n3\n1 0.0 0.0 0.0\n2 1.0 0.0 0.0\n3 0.0 1.0 0.0\nEND_NODL_DATA").unwrap();
+        writeln!(
+            f,
+            "BEG_NODL_DATA\n3\n1 0.0 0.0 0.0\n2 1.0 0.0 0.0\n3 0.0 1.0 0.0\nEND_NODL_DATA"
+        )
+        .unwrap();
         writeln!(f, "BEG_ELEM_DATA\n1\n1 0 0 1 2 3\nEND_ELEM_DATA").unwrap();
-        writeln!(f, "BEG_CHARGE_DATA\n2\n1 0.1 0.1 0.0 0.0\n2 0.2 0.2 0.0 -0.5\nEND_CHARGE_DATA").unwrap();
+        writeln!(
+            f,
+            "BEG_CHARGE_DATA\n2\n1 0.1 0.1 0.0 0.0\n2 0.2 0.2 0.0 -0.5\nEND_CHARGE_DATA"
+        )
+        .unwrap();
     }
     let (_, charges) = read_hmo(&tmp).expect("read hmo");
     assert_eq!(charges.len(), 2, "zero charge retained");
@@ -145,7 +175,10 @@ fn malformed_rows_error_not_skip() {
         writeln!(f, "BEG_NODL_DATA\n1\n1 0.0 0.0 0.0\nEND_NODL_DATA").unwrap();
         writeln!(f, "BEG_ELEM_DATA\n1\n1 0 0 1 2 3\nEND_ELEM_DATA").unwrap();
     }
-    assert!(read_hmo(&tmp2).is_err(), "out-of-range element id must error");
+    assert!(
+        read_hmo(&tmp2).is_err(),
+        "out-of-range element id must error"
+    );
     let _ = std::fs::remove_file(&tmp2);
 }
 

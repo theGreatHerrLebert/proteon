@@ -45,7 +45,10 @@ impl std::fmt::Display for SolveError {
             Self::NonFinite => write!(f, "solve produced a non-finite value"),
             Self::Empty => write!(f, "model has no surface elements"),
             Self::Unsupported => {
-                write!(f, "model topology is outside the validated formulation scope")
+                write!(
+                    f,
+                    "model topology is outside the validated formulation scope"
+                )
             }
             Self::BadParams(m) => write!(f, "{m}"),
         }
@@ -601,7 +604,18 @@ pub fn solve_nonlocal_elements_q(
     let yuk = params.yukawa();
     let (v, k) = laplace_matrices(elements);
     let (vy, ky, capped_panels) = yukawa_matrices_q(elements, yuk, quad);
-    solve_nonlocal_with_ops(&v, &k, &vy, &ky, elements, charges, params, cfg, quad, capped_panels)
+    solve_nonlocal_with_ops(
+        &v,
+        &k,
+        &vy,
+        &ky,
+        elements,
+        charges,
+        params,
+        cfg,
+        quad,
+        capped_panels,
+    )
 }
 
 /// Nonlocal solve with the **treecode** V/K (Cartesian) + Vy/Ky (BLTC) operators — the
@@ -637,7 +651,18 @@ pub fn solve_nonlocal_elements_treecode(
     let k = CollocationTreecode::new(elements, PotentialKind::Double, p, theta);
     let vy = YukawaTreecode::new(elements, PotentialKind::Single, yuk, p, theta);
     let ky = YukawaTreecode::new(elements, PotentialKind::Double, yuk, p, theta);
-    solve_nonlocal_with_ops(&v, &k, &vy, &ky, elements, charges, params, cfg, Quadrature::Fixed, 0)
+    solve_nonlocal_with_ops(
+        &v,
+        &k,
+        &vy,
+        &ky,
+        elements,
+        charges,
+        params,
+        cfg,
+        Quadrature::Fixed,
+        0,
+    )
 }
 
 /// The 3-block nonlocal system operator `(u,q,w)` over borrowed V/K/Vy/Ky — mirrors
@@ -727,7 +752,15 @@ fn solve_nonlocal_with_ops(
             + (eo / es - eo / ei) * vy_qm[i];
     }
 
-    let op = NonlocalOpRef { v, k, vy, ky, eps_omega: eo, eps_sigma: es, eps_inf: ei };
+    let op = NonlocalOpRef {
+        v,
+        k,
+        vy,
+        ky,
+        eps_omega: eo,
+        eps_sigma: es,
+        eps_inf: ei,
+    };
     let pre = JacobiPreconditioner::from_operator(&op);
     let sol = gmres(&op, &b, &pre, cfg)?;
     let res = true_residual(&op, &sol.x, &b);
@@ -748,7 +781,16 @@ fn solve_nonlocal_with_ops(
         quadrature: quad,
         capped_panels,
     };
-    Ok((NonlocalResult { u, q, w, umol, qmol }, stats))
+    Ok((
+        NonlocalResult {
+            u,
+            q,
+            w,
+            umol,
+            qmol,
+        },
+        stats,
+    ))
 }
 
 /// Size-aware nonlocal solve: the dense [`solve_nonlocal_elements`] while the four
@@ -834,7 +876,15 @@ mod tests {
             eps_sigma: es,
             eps_inf: ei,
         };
-        let borrowed = NonlocalOpRef { v: &v, k: &k, vy: &vy, ky: &ky, eps_omega: eo, eps_sigma: es, eps_inf: ei };
+        let borrowed = NonlocalOpRef {
+            v: &v,
+            k: &k,
+            vy: &vy,
+            ky: &ky,
+            eps_omega: eo,
+            eps_sigma: es,
+            eps_inf: ei,
+        };
 
         let x: Vec<f64> = (0..3 * n).map(|i| ((i % 5) as f64) - 2.0).collect();
         let mut yo = vec![0.0; 3 * n];
@@ -842,7 +892,11 @@ mod tests {
         owned.matvec(&x, &mut yo);
         borrowed.matvec(&x, &mut yb);
         assert_eq!(yo, yb, "matvec must be bit-identical");
-        assert_eq!(owned.diagonal(), borrowed.diagonal(), "preconditioner diagonal identical");
+        assert_eq!(
+            owned.diagonal(),
+            borrowed.diagonal(),
+            "preconditioner diagonal identical"
+        );
     }
 
     fn op_3x3() -> DenseOperator {

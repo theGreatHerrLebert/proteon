@@ -94,7 +94,10 @@ pub fn panel_order_for_cartesian(p: usize) -> usize {
 pub fn triangle_cubature(tri: &Tri, n: usize) -> Vec<CubPoint> {
     let gl = gauss_legendre(n);
     // Map [-1,1] → [0,1].
-    let gl01: Vec<(f64, f64)> = gl.iter().map(|&(x, w)| ((x + 1.0) * 0.5, w * 0.5)).collect();
+    let gl01: Vec<(f64, f64)> = gl
+        .iter()
+        .map(|&(x, w)| ((x + 1.0) * 0.5, w * 0.5))
+        .collect();
     let mut pts = Vec::with_capacity(gl01.len() * gl01.len());
     let two_area = 2.0 * tri.area;
     for &(a, wa) in &gl01 {
@@ -124,7 +127,11 @@ mod tests {
         let n = 6; // exact to degree 11
         for k in 0..=11u32 {
             let got = gl_integral(n, |x| x.powi(k as i32));
-            let want = if k % 2 == 1 { 0.0 } else { 2.0 / (k as f64 + 1.0) };
+            let want = if k % 2 == 1 {
+                0.0
+            } else {
+                2.0 / (k as f64 + 1.0)
+            };
             assert!((got - want).abs() < 1e-12, "∫x^{k}: {got} vs {want}");
         }
     }
@@ -146,7 +153,11 @@ mod tests {
         );
         let pts = triangle_cubature(&tri, 5);
         let s: f64 = pts.iter().map(|p| p.w).sum();
-        assert!((s - tri.area).abs() < 1e-12, "Σw = {s}, area = {}", tri.area);
+        assert!(
+            (s - tri.area).abs() < 1e-12,
+            "Σw = {s}, area = {}",
+            tri.area
+        );
         assert!((tri.area - 3.0).abs() < 1e-12, "area sanity");
     }
 
@@ -161,10 +172,18 @@ mod tests {
         let n = panel_order_for_degree(2); // ≥ degree 6, plenty for x·y
         let pts = triangle_cubature(&tri, n);
         let got: f64 = pts.iter().map(|p| p.w * p.pos.x * p.pos.y).sum();
-        assert!((got - 1.0 / 24.0).abs() < 1e-12, "∫xy dA = {got}, want {}", 1.0 / 24.0);
+        assert!(
+            (got - 1.0 / 24.0).abs() < 1e-12,
+            "∫xy dA = {got}, want {}",
+            1.0 / 24.0
+        );
 
         // ∫_T x^3 dA = 1/20 on the reference triangle.
         let got3: f64 = pts.iter().map(|p| p.w * p.pos.x.powi(3)).sum();
-        assert!((got3 - 1.0 / 20.0).abs() < 1e-12, "∫x^3 dA = {got3}, want {}", 1.0 / 20.0);
+        assert!(
+            (got3 - 1.0 / 20.0).abs() < 1e-12,
+            "∫x^3 dA = {got3}, want {}",
+            1.0 / 20.0
+        );
     }
 }

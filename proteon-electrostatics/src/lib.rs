@@ -68,12 +68,13 @@ pub mod model;
 pub mod post;
 pub mod quadrature;
 pub mod quality;
-pub mod xie;
 pub mod solve;
 pub mod surface;
 pub mod system;
+pub mod xie;
 pub mod yukawa;
 
+pub use adaptive::{adaptive_regular_yukawa_collocation, duffy_self_single, AdaptiveConfig};
 pub use analytic::{
     analytic_sphere_mesh, born_rfenergy, concentric_kirkwood_rfenergy, concentric_shell_rfenergy,
     kirkwood_rfenergy,
@@ -86,11 +87,6 @@ pub use model::{BemModel, Charge, Domain, Locality, Params, PotentialKind, Tri};
 pub use post::{espotential, rfenergy, ENERGY_FACTOR, POTPREFACTOR};
 pub use quadrature::{radon7, TriangleQuad};
 pub use quality::{QualityIssue, QualityReport, Severity, TopologyReport};
-pub use surface::{
-    solve_surface, FastSummation, SurfaceSolution, SurfaceSolveError, SurfaceSolveOptions,
-    MEM_BUDGET, N_WARN,
-};
-pub use xie::{scalemodel, XieKind, XieModel};
 pub use solve::{
     dense_matrix_bytes, solve_local, solve_local_elements, solve_local_elements_auto,
     solve_local_elements_treecode, solve_nonlocal, solve_nonlocal_elements,
@@ -98,10 +94,14 @@ pub use solve::{
     CauchyData, LocalResult, NonlocalResult, SolveConfig, SolveError, SolveStats,
     DENSE_MATRIX_BUDGET,
 };
+pub use surface::{
+    solve_surface, FastSummation, SurfaceSolution, SurfaceSolveError, SurfaceSolveOptions,
+    MEM_BUDGET, N_WARN,
+};
 pub use system::{
     laplace_matrices, mol_potentials, yukawa_matrices, yukawa_matrices_q, BlockLayout,
     DenseOperator, JacobiPreconditioner, LinearOperator, LocalOperator, NonlocalOperator,
     Preconditioner, Quadrature, TWO_PI,
 };
-pub use adaptive::{adaptive_regular_yukawa_collocation, duffy_self_single, AdaptiveConfig};
+pub use xie::{scalemodel, XieKind, XieModel};
 pub use yukawa::regular_yukawa_collocation;

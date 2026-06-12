@@ -55,7 +55,10 @@ fn concentric_single_interface_is_born() {
     for &r in &[1.5_f64, 2.0, 3.0] {
         let conc = concentric_shell_rfenergy(1.0, &[(r, EPS_OMEGA, EPS_SIGMA)]);
         let born = born_rfenergy(1.0, r, &params(), Locality::Local);
-        assert!((conc - born).abs() / born.abs() < 1e-12, "r={r}: {conc} vs {born}");
+        assert!(
+            (conc - born).abs() / born.abs() < 1e-12,
+            "r={r}: {conc} vs {born}"
+        );
     }
 }
 
@@ -92,7 +95,10 @@ fn cavity_bem_matches_concentric_analytic() {
     eprintln!("cavity BEM {bem:.4} vs concentric analytic {analytic:.4} (rel {rel:.3})");
     assert!(bem < 0.0 && analytic < 0.0, "both energies negative");
     // Discretisation floor like the single-sphere Born gate (observed ~0.4%).
-    assert!(rel < 0.02, "cavity BEM off concentric analytic by {rel:.3} (> 2%)");
+    assert!(
+        rel < 0.02,
+        "cavity BEM off concentric analytic by {rel:.3} (> 2%)"
+    );
 
     // NEGATIVE CONTROL: orientation matters. Solve the SAME geometry with every shell
     // left +volume (no nesting orientation) — it must disagree with the analytic, proving
@@ -104,5 +110,8 @@ fn cavity_bem_matches_concentric_analytic() {
     let bem_wrong = solve_energy(&wrong, &charges);
     let rel_wrong = (bem_wrong - analytic).abs() / analytic.abs();
     eprintln!("mis-oriented BEM {bem_wrong:.4} (rel {rel_wrong:.3})");
-    assert!(rel_wrong > 0.1, "mis-oriented solve must DISAGREE (orientation is load-bearing)");
+    assert!(
+        rel_wrong > 0.1,
+        "mis-oriented solve must DISAGREE (orientation is load-bearing)"
+    );
 }

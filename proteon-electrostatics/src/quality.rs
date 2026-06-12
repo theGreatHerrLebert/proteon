@@ -154,8 +154,7 @@ fn winding_number(p: Vec3, elements: &[Tri]) -> f64 {
         let c = t.v3 - p;
         let (la, lb, lc) = (a.norm(), b.norm(), c.norm());
         let num = a.dot(b.cross(c)); // scalar triple product
-        let den =
-            la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
+        let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
         omega += 2.0 * num.atan2(den);
     }
     omega / (4.0 * std::f64::consts::PI)
@@ -366,7 +365,11 @@ impl TopologyReport {
                 degenerate = true;
             } else {
                 // Correct sign by nesting parity (depth unknown ⇒ assume top-level body).
-                let want = if depths.get(c).copied().unwrap_or(0) % 2 == 0 { 1.0 } else { -1.0 };
+                let want = if depths.get(c).copied().unwrap_or(0) % 2 == 0 {
+                    1.0
+                } else {
+                    -1.0
+                };
                 if vol.signum() != want {
                     num_misoriented += 1;
                 }
@@ -377,10 +380,7 @@ impl TopologyReport {
             consistently_oriented,
             num_nonmanifold_edges: mesh.num_nonmanifold_edges(),
             signed_volume,
-            is_outward: watertight
-                && consistently_oriented
-                && num_misoriented == 0
-                && !degenerate,
+            is_outward: watertight && consistently_oriented && num_misoriented == 0 && !degenerate,
             num_components: mesh.num_connected_components(),
             num_misoriented_components: num_misoriented,
             has_degenerate_volume: degenerate,
@@ -534,8 +534,14 @@ mod tests {
             Vec3::new(1.0, -1.0 / 3.0_f64.sqrt(), 0.0),
             Vec3::new(0.0, 2.0 / 3.0_f64.sqrt(), 0.0),
         );
-        assert!((min_angle_deg(&t) - 60.0).abs() < 1e-9, "equilateral angles are 60°");
-        assert!((aspect_ratio(&t) - 1.0).abs() < 1e-9, "equilateral aspect is 1");
+        assert!(
+            (min_angle_deg(&t) - 60.0).abs() < 1e-9,
+            "equilateral angles are 60°"
+        );
+        assert!(
+            (aspect_ratio(&t) - 1.0).abs() < 1e-9,
+            "equilateral aspect is 1"
+        );
     }
 
     #[test]
@@ -557,8 +563,15 @@ mod tests {
             val: 1.0,
         }];
         let rep = QualityReport::assess(&elements, &charges);
-        assert!(!rep.has_errors(), "central charge in a good sphere: {:?}", rep.issues());
-        assert!(rep.min_angle_deg > ANGLE_WARN_DEG, "icosphere angles are well-shaped");
+        assert!(
+            !rep.has_errors(),
+            "central charge in a good sphere: {:?}",
+            rep.issues()
+        );
+        assert!(
+            rep.min_angle_deg > ANGLE_WARN_DEG,
+            "icosphere angles are well-shaped"
+        );
         // The central charge is ~radius away, far in element-size units.
         assert!(rep.min_charge_gap_ratio > CHARGE_WARN_RATIO);
     }
@@ -573,7 +586,11 @@ mod tests {
             val: 1.0,
         }];
         let rep = QualityReport::assess(&elements, &charges);
-        assert!(rep.min_charge_gap_ratio < CHARGE_REJECT_RATIO, "ratio {}", rep.min_charge_gap_ratio);
+        assert!(
+            rep.min_charge_gap_ratio < CHARGE_REJECT_RATIO,
+            "ratio {}",
+            rep.min_charge_gap_ratio
+        );
         assert!(rep.has_errors());
         assert!(rep
             .issues()
@@ -592,8 +609,15 @@ mod tests {
             val: 1.0,
         }];
         let rep = QualityReport::assess(&elements, &charges);
-        assert!(!rep.has_errors(), "elem deep should not reject: {:?}", rep.issues());
-        assert_eq!(rep.n_charges_outside, 0, "an interior charge is not outside");
+        assert!(
+            !rep.has_errors(),
+            "elem deep should not reject: {:?}",
+            rep.issues()
+        );
+        assert_eq!(
+            rep.n_charges_outside, 0,
+            "an interior charge is not outside"
+        );
     }
 
     #[test]
@@ -636,7 +660,11 @@ mod tests {
         use proteon_core::surface::mesh::icosphere;
         let m = icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 2);
         let rep = TopologyReport::assess(&m);
-        assert!(rep.is_outward && !rep.has_errors(), "outward sphere accepted: {:?}", rep.issues());
+        assert!(
+            rep.is_outward && !rep.has_errors(),
+            "outward sphere accepted: {:?}",
+            rep.issues()
+        );
         assert_eq!(rep.num_components, 1);
 
         // Inward (inside-out) → flagged, with the "outward" message.
@@ -682,7 +710,11 @@ mod tests {
         let rep = TopologyReport::assess(&cavity);
         assert_eq!(rep.num_cavities, 1);
         assert!(rep.is_outward, "correctly oriented per nesting");
-        assert!(!rep.has_errors(), "an oriented cavity is accepted: {:?}", rep.issues());
+        assert!(
+            !rep.has_errors(),
+            "an oriented cavity is accepted: {:?}",
+            rep.issues()
+        );
         assert!(rep
             .issues()
             .iter()
@@ -691,7 +723,10 @@ mod tests {
         // Without orientation, the inner shell is misoriented for its parity → Error.
         let mut raw = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
         raw.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
-        assert!(TopologyReport::assess(&raw).has_errors(), "unoriented cavity is misoriented");
+        assert!(
+            TopologyReport::assess(&raw).has_errors(),
+            "unoriented cavity is misoriented"
+        );
 
         // num_cavities counts actual solvent cavities (odd depth): body/cavity/island has
         // 2 nested components but 1 solvent cavity.
@@ -699,7 +734,11 @@ mod tests {
         three.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 2));
         three.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
         three.orient_by_nesting();
-        assert_eq!(TopologyReport::assess(&three).num_cavities, 1, "1 solvent cavity (odd depth)");
+        assert_eq!(
+            TopologyReport::assess(&three).num_cavities,
+            1,
+            "1 solvent cavity (odd depth)"
+        );
     }
 
     #[test]
@@ -760,8 +799,14 @@ mod tests {
         mixed.append(&small);
 
         let rep = TopologyReport::assess(&mixed);
-        assert!(rep.signed_volume > 0.0, "aggregate volume masks the inward shell");
-        assert_eq!(rep.num_misoriented_components, 1, "per-component catches the inward shell");
+        assert!(
+            rep.signed_volume > 0.0,
+            "aggregate volume masks the inward shell"
+        );
+        assert_eq!(
+            rep.num_misoriented_components, 1,
+            "per-component catches the inward shell"
+        );
         assert!(!rep.is_outward && rep.has_errors());
         assert!(rep
             .issues()

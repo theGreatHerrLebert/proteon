@@ -11,8 +11,8 @@
 
 use std::time::Instant;
 
-use proteon_electrostatics::system::{laplace_matrices, LinearOperator};
 use proteon_electrostatics::fastsum::operator::CollocationTreecode;
+use proteon_electrostatics::system::{laplace_matrices, LinearOperator};
 use proteon_electrostatics::{analytic_sphere_mesh, PotentialKind, Tri};
 
 fn sphere_elements(subdiv: u32) -> Vec<Tri> {
@@ -36,7 +36,12 @@ fn time_ms(mut f: impl FnMut()) -> f64 {
 }
 
 fn rel_l2(a: &[f64], b: &[f64]) -> f64 {
-    let num: f64 = a.iter().zip(b).map(|(p, q)| (p - q).powi(2)).sum::<f64>().sqrt();
+    let num: f64 = a
+        .iter()
+        .zip(b)
+        .map(|(p, q)| (p - q).powi(2))
+        .sum::<f64>()
+        .sqrt();
     let den: f64 = b.iter().map(|q| q * q).sum::<f64>().sqrt().max(1e-300);
     num / den
 }
@@ -61,7 +66,12 @@ fn main() {
         // Treecode (always).
         let mut tree = None;
         let tree_bld = time_ms(|| {
-            tree = Some(CollocationTreecode::new(&els, PotentialKind::Double, p, theta));
+            tree = Some(CollocationTreecode::new(
+                &els,
+                PotentialKind::Double,
+                p,
+                theta,
+            ));
         });
         let tree = tree.unwrap();
         let mut y_tree = vec![0.0; n];

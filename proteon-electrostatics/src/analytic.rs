@@ -120,15 +120,24 @@ pub fn concentric_kirkwood_rfenergy(
     n_terms: usize,
 ) -> f64 {
     assert!(!shells.is_empty(), "need at least one interface");
-    assert!(eps_inner.is_finite() && eps_inner > 0.0, "eps_inner must be > 0");
+    assert!(
+        eps_inner.is_finite() && eps_inner > 0.0,
+        "eps_inner must be > 0"
+    );
     let i1 = shells[0].0; // innermost interface radius
     let mut prev_r = 0.0;
     for &(r, eps) in shells {
-        assert!(r.is_finite() && r > prev_r, "interface radii must be finite, strictly increasing");
+        assert!(
+            r.is_finite() && r > prev_r,
+            "interface radii must be finite, strictly increasing"
+        );
         assert!(eps.is_finite() && eps > 0.0, "dielectrics must be > 0");
         prev_r = r;
     }
-    assert!(offset.is_finite() && (0.0..i1).contains(&offset), "offset must be in [0, I₁)");
+    assert!(
+        offset.is_finite() && (0.0..i1).contains(&offset),
+        "offset must be in [0, I₁)"
+    );
 
     let s = offset;
     let x2 = (s / i1).powi(2);

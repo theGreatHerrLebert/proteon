@@ -803,15 +803,14 @@ fn load_mesh_and_charges(
     args: &ElectrostaticsArgs,
 ) -> Result<(proteon_core::surface::mesh::Mesh, Vec<electro::Charge>)> {
     if let Some(hmo) = &args.hmo {
-        return electro::read_hmo(hmo)
-            .with_context(|| format!("reading HMO {}", hmo.display()));
+        return electro::read_hmo(hmo).with_context(|| format!("reading HMO {}", hmo.display()));
     }
     let charges_path = args
         .pqr
         .as_ref()
         .ok_or_else(|| anyhow!("--pqr is required with --off / --msms"))?;
-    let charges =
-        electro::read_pqr(charges_path).with_context(|| format!("reading PQR {}", charges_path.display()))?;
+    let charges = electro::read_pqr(charges_path)
+        .with_context(|| format!("reading PQR {}", charges_path.display()))?;
     let mesh = if let Some(off) = &args.off {
         electro::read_off(off).with_context(|| format!("reading OFF {}", off.display()))?
     } else if let Some(prefix) = &args.msms {
@@ -820,7 +819,9 @@ fn load_mesh_and_charges(
         electro::read_msms(&vert, &face)
             .with_context(|| format!("reading MSMS {}.{{vert,face}}", prefix.display()))?
     } else {
-        return Err(anyhow!("specify a mesh: --off FILE, --msms PREFIX, or --hmo FILE"));
+        return Err(anyhow!(
+            "specify a mesh: --off FILE, --msms PREFIX, or --hmo FILE"
+        ));
     };
     Ok((mesh, charges))
 }
@@ -858,7 +859,10 @@ fn run_electrostatics(args: &ElectrostaticsArgs) -> Result<()> {
         allow_low_quality: args.allow_low_quality,
         // Opt-in treecode (local only): enabled when --fast-summation is passed.
         fast_summation: if args.fast_summation {
-            Some(electro::FastSummation { p: args.fs_order, theta: args.fs_theta })
+            Some(electro::FastSummation {
+                p: args.fs_order,
+                theta: args.fs_theta,
+            })
         } else {
             None
         },
@@ -896,12 +900,27 @@ fn run_electrostatics(args: &ElectrostaticsArgs) -> Result<()> {
         ("residual", Value::F64(sol.residual)),
         ("quadrature", Value::Str(sol.quadrature.to_string())),
         ("capped_panels", Value::Int(sol.capped_panels as i64)),
-        ("watertight", Value::Str(sol.topology.watertight.to_string())),
-        ("oriented", Value::Str(sol.topology.consistently_oriented.to_string())),
-        ("is_outward", Value::Str(sol.topology.is_outward.to_string())),
-        ("n_components", Value::Int(sol.topology.num_components as i64)),
+        (
+            "watertight",
+            Value::Str(sol.topology.watertight.to_string()),
+        ),
+        (
+            "oriented",
+            Value::Str(sol.topology.consistently_oriented.to_string()),
+        ),
+        (
+            "is_outward",
+            Value::Str(sol.topology.is_outward.to_string()),
+        ),
+        (
+            "n_components",
+            Value::Int(sol.topology.num_components as i64),
+        ),
         ("n_cavities", Value::Int(sol.topology.num_cavities as i64)),
-        ("flipped_to_outward", Value::Str(sol.flipped_to_outward.to_string())),
+        (
+            "flipped_to_outward",
+            Value::Str(sol.flipped_to_outward.to_string()),
+        ),
         ("n_self_intersections", Value::Str(n_self)),
         ("min_angle_deg", Value::F64(sol.quality.min_angle_deg)),
         ("max_aspect_ratio", Value::F64(sol.quality.max_aspect_ratio)),

@@ -118,9 +118,15 @@ impl CollocationTreecode {
             .enumerate()
             .filter(|(_, node)| node.children.is_empty())
             .map(|(i, node)| {
-                let panels: Vec<(Tri, f64)> =
-                    node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
-                (i, cartesian::single_layer_moments(node.center, node.radius, &panels, self.p))
+                let panels: Vec<(Tri, f64)> = node
+                    .panels
+                    .iter()
+                    .map(|&j| (self.elements[j], x[j]))
+                    .collect();
+                (
+                    i,
+                    cartesian::single_layer_moments(node.center, node.radius, &panels, self.p),
+                )
             })
             .collect();
         let mut moments: Vec<Vec<f64>> = vec![Vec::new(); nn];
@@ -158,9 +164,15 @@ impl CollocationTreecode {
             .enumerate()
             .filter(|(_, node)| node.children.is_empty())
             .map(|(i, node)| {
-                let panels: Vec<(Tri, f64)> =
-                    node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
-                (i, cartesian::double_layer_moments(node.center, node.radius, &panels, self.p))
+                let panels: Vec<(Tri, f64)> = node
+                    .panels
+                    .iter()
+                    .map(|&j| (self.elements[j], x[j]))
+                    .collect();
+                (
+                    i,
+                    cartesian::double_layer_moments(node.center, node.radius, &panels, self.p),
+                )
             })
             .collect();
         let mut moments: Vec<Vec<Vec3>> = vec![Vec::new(); nn];
@@ -202,12 +214,20 @@ impl CollocationTreecode {
         // Box-separation MAC on the vertex-enclosing box.
         if d > 0.0 && node.radius <= self.theta * d {
             return match self.kind {
-                PotentialKind::Single => {
-                    cartesian::eval_single_layer(node.center, node.radius, &sl[node_idx], xi, self.p)
-                }
-                PotentialKind::Double => {
-                    cartesian::eval_double_layer(node.center, node.radius, &dl[node_idx], xi, self.p)
-                }
+                PotentialKind::Single => cartesian::eval_single_layer(
+                    node.center,
+                    node.radius,
+                    &sl[node_idx],
+                    xi,
+                    self.p,
+                ),
+                PotentialKind::Double => cartesian::eval_double_layer(
+                    node.center,
+                    node.radius,
+                    &dl[node_idx],
+                    xi,
+                    self.p,
+                ),
             };
         }
         if node.children.is_empty() {
@@ -306,12 +326,20 @@ impl CollocationTreecode {
                 return 0.0;
             }
             return match self.kind {
-                PotentialKind::Single => {
-                    cartesian::eval_single_layer(node.center, node.radius, &sl[node_idx], xi, self.p)
-                }
-                PotentialKind::Double => {
-                    cartesian::eval_double_layer(node.center, node.radius, &dl[node_idx], xi, self.p)
-                }
+                PotentialKind::Single => cartesian::eval_single_layer(
+                    node.center,
+                    node.radius,
+                    &sl[node_idx],
+                    xi,
+                    self.p,
+                ),
+                PotentialKind::Double => cartesian::eval_double_layer(
+                    node.center,
+                    node.radius,
+                    &dl[node_idx],
+                    xi,
+                    self.p,
+                ),
             };
         }
         if node.children.is_empty() {
@@ -416,9 +444,21 @@ impl YukawaTreecode {
             .collect();
         let tree = Octree::build(elements, &centroids, DEFAULT_N_LEAF, DEFAULT_MAX_DEPTH);
         // Per-node Chebyshev grids (x-independent — built once).
-        let clusters: Vec<Cluster> =
-            tree.nodes.iter().map(|nd| Cluster::new(nd.lo, nd.hi, p)).collect();
-        Self { elements: elements.to_vec(), centroids, kind, kappa, p, theta, tree, clusters }
+        let clusters: Vec<Cluster> = tree
+            .nodes
+            .iter()
+            .map(|nd| Cluster::new(nd.lo, nd.hi, p))
+            .collect();
+        Self {
+            elements: elements.to_vec(),
+            centroids,
+            kind,
+            kappa,
+            p,
+            theta,
+            tree,
+            clusters,
+        }
     }
 
     /// Per-node moments from the current `x` (direct from each node's subtree panels).
@@ -428,8 +468,11 @@ impl YukawaTreecode {
             .par_iter()
             .enumerate()
             .map(|(i, node)| {
-                let panels: Vec<(Tri, f64)> =
-                    node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
+                let panels: Vec<(Tri, f64)> = node
+                    .panels
+                    .iter()
+                    .map(|&j| (self.elements[j], x[j]))
+                    .collect();
                 bltc_single_moments(&self.clusters[i], &panels, self.p)
             })
             .collect()
@@ -441,8 +484,11 @@ impl YukawaTreecode {
             .par_iter()
             .enumerate()
             .map(|(i, node)| {
-                let panels: Vec<(Tri, f64)> =
-                    node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
+                let panels: Vec<(Tri, f64)> = node
+                    .panels
+                    .iter()
+                    .map(|&j| (self.elements[j], x[j]))
+                    .collect();
                 bltc_double_moments(&self.clusters[i], &panels, self.p)
             })
             .collect()
@@ -460,19 +506,27 @@ impl YukawaTreecode {
         let d = (xi - node.center).norm();
         if d > 0.0 && node.radius <= self.theta * d {
             return match self.kind {
-                PotentialKind::Single => {
-                    eval_single_layer_yukawa(&self.clusters[node_idx], &sl[node_idx], xi, self.kappa)
-                }
-                PotentialKind::Double => {
-                    eval_double_layer_yukawa(&self.clusters[node_idx], &dl[node_idx], xi, self.kappa)
-                }
+                PotentialKind::Single => eval_single_layer_yukawa(
+                    &self.clusters[node_idx],
+                    &sl[node_idx],
+                    xi,
+                    self.kappa,
+                ),
+                PotentialKind::Double => eval_double_layer_yukawa(
+                    &self.clusters[node_idx],
+                    &dl[node_idx],
+                    xi,
+                    self.kappa,
+                ),
             };
         }
         if node.children.is_empty() {
             return node
                 .panels
                 .iter()
-                .map(|&j| regular_yukawa_collocation(self.kind, xi, &self.elements[j], self.kappa) * x[j])
+                .map(|&j| {
+                    regular_yukawa_collocation(self.kind, xi, &self.elements[j], self.kappa) * x[j]
+                })
                 .sum();
         }
         node.children
@@ -497,7 +551,14 @@ impl LinearOperator for YukawaTreecode {
     }
     fn diagonal(&self) -> Vec<f64> {
         (0..self.elements.len())
-            .map(|i| regular_yukawa_collocation(self.kind, self.centroids[i], &self.elements[i], self.kappa))
+            .map(|i| {
+                regular_yukawa_collocation(
+                    self.kind,
+                    self.centroids[i],
+                    &self.elements[i],
+                    self.kappa,
+                )
+            })
             .collect()
     }
 }
@@ -523,7 +584,12 @@ mod tests {
     }
 
     fn rel_l2(a: &[f64], b: &[f64]) -> f64 {
-        let num: f64 = a.iter().zip(b).map(|(p, q)| (p - q).powi(2)).sum::<f64>().sqrt();
+        let num: f64 = a
+            .iter()
+            .zip(b)
+            .map(|(p, q)| (p - q).powi(2))
+            .sum::<f64>()
+            .sqrt();
         let den: f64 = b.iter().map(|q| q * q).sum::<f64>().sqrt().max(1e-300);
         num / den
     }
@@ -544,7 +610,10 @@ mod tests {
 
         let e = rel_l2(&y_tree, &y_dense);
         eprintln!("single-layer matvec rel L2 (p=6, θ=0.5): {e:.3e}");
-        assert!(e < 1e-4, "single-layer treecode matvec off dense by {e:.3e}");
+        assert!(
+            e < 1e-4,
+            "single-layer treecode matvec off dense by {e:.3e}"
+        );
     }
 
     #[test]
@@ -557,7 +626,9 @@ mod tests {
         let (_v, k_dense) = laplace_matrices(&els);
         let tree = CollocationTreecode::new(&els, PotentialKind::Double, 8, 0.45);
 
-        let x: Vec<f64> = (0..n).map(|i| (((i * 5) % 11) as f64 - 5.0) * 0.1).collect();
+        let x: Vec<f64> = (0..n)
+            .map(|i| (((i * 5) % 11) as f64 - 5.0) * 0.1)
+            .collect();
         let mut y_dense = vec![0.0; n];
         let mut y_tree = vec![0.0; n];
         k_dense.matvec(&x, &mut y_dense);
@@ -565,7 +636,10 @@ mod tests {
 
         let e = rel_l2(&y_tree, &y_dense);
         eprintln!("double-layer matvec rel L2 (p=8, θ=0.45): {e:.3e}");
-        assert!(e < 1e-4, "double-layer treecode matvec off dense by {e:.3e}");
+        assert!(
+            e < 1e-4,
+            "double-layer treecode matvec off dense by {e:.3e}"
+        );
     }
 
     #[test]
@@ -585,7 +659,10 @@ mod tests {
         };
         let e3 = err_p(3);
         let e8 = err_p(8);
-        assert!(e8 < e3, "matvec error should fall with p: {e3:.3e} -> {e8:.3e}");
+        assert!(
+            e8 < e3,
+            "matvec error should fall with p: {e3:.3e} -> {e8:.3e}"
+        );
     }
 
     /// Max over rows of `|y_tree[i] − y_dense[i]| / (|y_dense[i]| + scale)` — catches a
@@ -655,7 +732,10 @@ mod tests {
         let x: Vec<f64> = (0..n).map(|i| ((i % 7) as f64) - 3.0).collect();
 
         let run = |threads: usize| {
-            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
             let mut y = vec![0.0; n];
             pool.install(|| tree.matvec(&x, &mut y));
             y
@@ -680,7 +760,9 @@ mod tests {
         let n = els.len();
         let kappa = 0.25;
         let (vy_dense, ky_dense) = yukawa_matrices(&els, kappa);
-        let x: Vec<f64> = (0..n).map(|i| (((i * 5) % 11) as f64 - 5.0) * 0.1).collect();
+        let x: Vec<f64> = (0..n)
+            .map(|i| (((i * 5) % 11) as f64 - 5.0) * 0.1)
+            .collect();
 
         for (kind, dense) in [
             (PotentialKind::Single, &vy_dense),

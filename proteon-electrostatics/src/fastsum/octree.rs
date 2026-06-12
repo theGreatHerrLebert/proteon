@@ -159,7 +159,10 @@ mod tests {
                 }
             }
         }
-        assert!(seen.iter().all(|&c| c == 1), "each panel in exactly one leaf");
+        assert!(
+            seen.iter().all(|&c| c == 1),
+            "each panel in exactly one leaf"
+        );
     }
 
     #[test]
@@ -171,9 +174,12 @@ mod tests {
             for &j in &node.panels {
                 for v in [els[j].v1, els[j].v2, els[j].v3] {
                     assert!(
-                        v.x >= node.lo.x - 1e-12 && v.x <= node.hi.x + 1e-12
-                            && v.y >= node.lo.y - 1e-12 && v.y <= node.hi.y + 1e-12
-                            && v.z >= node.lo.z - 1e-12 && v.z <= node.hi.z + 1e-12,
+                        v.x >= node.lo.x - 1e-12
+                            && v.x <= node.hi.x + 1e-12
+                            && v.y >= node.lo.y - 1e-12
+                            && v.y <= node.hi.y + 1e-12
+                            && v.z >= node.lo.z - 1e-12
+                            && v.z <= node.hi.z + 1e-12,
                         "vertex outside node box"
                     );
                 }
@@ -208,14 +214,21 @@ mod tests {
         let cs: Vec<Vec3> = els.iter().map(centroid).collect();
         let tree = Octree::build(&els, &cs, 4, 0);
         assert_eq!(tree.nodes.len(), 1, "max_depth=0 ⇒ root only");
-        assert_eq!(tree.nodes[0].panels.len(), els.len(), "root holds all panels");
+        assert_eq!(
+            tree.nodes[0].panels.len(),
+            els.len(),
+            "root holds all panels"
+        );
         assert!(tree.nodes[0].children.is_empty());
     }
 
     #[test]
     fn empty_geometry_builds_empty_tree() {
         let tree = Octree::build(&[], &[], 4, 10);
-        assert!(tree.nodes.is_empty(), "empty geometry ⇒ no nodes (no NaN root)");
+        assert!(
+            tree.nodes.is_empty(),
+            "empty geometry ⇒ no nodes (no NaN root)"
+        );
     }
 
     #[test]

@@ -572,10 +572,10 @@ mod tests {
         let b = Vec3::new(2.0, 0.0, 0.0);
         let c = Vec3::new(4.0, 0.0, 0.0); // collinear with a, b
         for (p, want) in [
-            (Vec3::new(1.0, 1.0, 0.0), 1.0),   // above the segment interior
-            (Vec3::new(5.0, 0.0, 0.0), 1.0),   // beyond c → distance to c
-            (Vec3::new(-1.0, 0.0, 0.0), 1.0),  // before a → distance to a
-            (Vec3::new(3.0, 0.0, 0.0), 0.0),   // on the collinear span
+            (Vec3::new(1.0, 1.0, 0.0), 1.0),  // above the segment interior
+            (Vec3::new(5.0, 0.0, 0.0), 1.0),  // beyond c → distance to c
+            (Vec3::new(-1.0, 0.0, 0.0), 1.0), // before a → distance to a
+            (Vec3::new(3.0, 0.0, 0.0), 0.0),  // on the collinear span
         ] {
             let d = point_to_triangle_distance(p, a, b, c);
             assert!(d.is_finite(), "degenerate distance must be finite, got {d}");
@@ -587,7 +587,10 @@ mod tests {
     fn distance_zero_on_face_and_vertices() {
         let (a, b, c) = tri();
         for q in [a, b, c, (a + b + c) * (1.0 / 3.0), (a + b) * 0.5] {
-            assert!(point_to_triangle_distance(q, a, b, c) < 1e-12, "on-tri q={q:?}");
+            assert!(
+                point_to_triangle_distance(q, a, b, c) < 1e-12,
+                "on-tri q={q:?}"
+            );
         }
     }
 
@@ -599,8 +602,14 @@ mod tests {
             Vec3::new(0.0, 1.0, 0.0),
         );
         // Longest edge = hypotenuse √2 ≈ 1.414; NEAR_FACTOR·h ≈ 5.66.
-        assert!(is_near(Vec3::new(0.3, 0.3, 0.1), &t), "on/over the panel is near");
-        assert!(is_near(Vec3::new(0.3, 0.3, 5.0), &t), "5 above is still within 4·h");
+        assert!(
+            is_near(Vec3::new(0.3, 0.3, 0.1), &t),
+            "on/over the panel is near"
+        );
+        assert!(
+            is_near(Vec3::new(0.3, 0.3, 5.0), &t),
+            "5 above is still within 4·h"
+        );
         assert!(!is_near(Vec3::new(0.3, 0.3, 20.0), &t), "20 above is far");
     }
 
@@ -668,8 +677,14 @@ mod tests {
         let suma: f64 = kids.iter().map(|k| k.area).sum();
         assert!((suma - t.area).abs() < 1e-13, "area {suma} vs {}", t.area);
         for k in &kids {
-            assert!((k.normal - t.normal).norm() < 1e-13, "child normal preserved");
-            assert!((k.area - t.area / 4.0).abs() < 1e-13, "congruent quarter-area");
+            assert!(
+                (k.normal - t.normal).norm() < 1e-13,
+                "child normal preserved"
+            );
+            assert!(
+                (k.area - t.area / 4.0).abs() < 1e-13,
+                "congruent quarter-area"
+            );
         }
     }
 
@@ -679,7 +694,11 @@ mod tests {
         let p = (t.v1 + t.v2 + t.v3) * (1.0 / 3.0);
         let fan = centroid_fan(&t, p);
         let suma: f64 = fan.iter().map(|k| k.area).sum();
-        assert!((suma - t.area).abs() < 1e-13, "fan area {suma} vs {}", t.area);
+        assert!(
+            (suma - t.area).abs() < 1e-13,
+            "fan area {suma} vs {}",
+            t.area
+        );
         for k in &fan {
             assert!((k.normal - t.normal).norm() < 1e-13);
         }
@@ -752,7 +771,8 @@ mod tests {
         let y = 0.8;
         assert!(!is_near(xi, &t));
         for kind in [PotentialKind::Single, PotentialKind::Double] {
-            let (adapt, st) = adaptive_regular_yukawa_collocation(kind, xi, &t, y, &Default::default());
+            let (adapt, st) =
+                adaptive_regular_yukawa_collocation(kind, xi, &t, y, &Default::default());
             let fixed = regular_yukawa_collocation_parts(kind, xi, &t, y).0;
             assert_eq!(adapt, fixed, "far field must be bit-identical ({kind:?})");
             assert_eq!(st, Status::Converged);
@@ -820,7 +840,10 @@ mod tests {
             let d32 = duffy_self_single(&sk, y, 32);
             let conv = (d16 - d32).abs() / d32.abs().max(1e-300);
             eprintln!("skinny(4:1) y={y}: GL16 vs GL32 {conv:.2e}");
-            assert!(conv < 5e-5, "skinny y={y}: GL16 vs GL32 {conv:.2e} (not converged)");
+            assert!(
+                conv < 5e-5,
+                "skinny y={y}: GL16 vs GL32 {conv:.2e} (not converged)"
+            );
         }
     }
 
@@ -841,8 +864,14 @@ mod tests {
         let e16 = (d16 - d32).abs(); // GL-32 as the best available value
         let efixed = (fixed - d32).abs();
         eprintln!("extreme sliver: GL16 vs GL32 {conv:.2e}, fixed err {efixed:.2e}");
-        assert!(conv < 2e-3, "extreme sliver GL16 vs GL32 {conv:.2e} (unbounded)");
-        assert!(e16 < efixed, "even on an extreme sliver, Duffy must beat fixed");
+        assert!(
+            conv < 2e-3,
+            "extreme sliver GL16 vs GL32 {conv:.2e} (unbounded)"
+        );
+        assert!(
+            e16 < efixed,
+            "even on an extreme sliver, Duffy must beat fixed"
+        );
     }
 
     #[test]
@@ -870,7 +899,10 @@ mod tests {
         let centroid_val = duffy_self_single(&tri, y, DUFFY_ORDER);
         let rel = (duffy - reference).abs() / reference.abs();
         eprintln!("non-centroid: duffy {duffy:.6} ref {reference:.6} (centroid would be {centroid_val:.6})");
-        assert!(rel < 1e-3, "non-centroid on-panel duffy vs reference rel {rel:.2e}");
+        assert!(
+            rel < 1e-3,
+            "non-centroid on-panel duffy vs reference rel {rel:.2e}"
+        );
         // And it must genuinely differ from the centroid value (proves xi is honoured).
         assert!(
             (duffy - centroid_val).abs() / centroid_val.abs() > 1e-3,
@@ -887,7 +919,11 @@ mod tests {
         // barycentric reference is itself cusp/sliver-limited (~1e-3 on slivers), so this
         // asserts a clear relative improvement, not an absolute Duffy tolerance — the
         // tight Duffy convergence is proved separately above.
-        for (name, tri) in [("equi", equilateral()), ("skinny", skinny()), ("obtuse", obtuse())] {
+        for (name, tri) in [
+            ("equi", equilateral()),
+            ("skinny", skinny()),
+            ("obtuse", obtuse()),
+        ] {
             for &y in &[0.4_f64, 1.3, 3.0] {
                 let xi = (tri.v1 + tri.v2 + tri.v3) * (1.0 / 3.0);
                 let reference = polar_self_single_reference(&tri, y, 4001);
@@ -944,7 +980,10 @@ mod tests {
                 "cleft {kind:?}: adaptive rel {e_adapt:.2e}, fixed rel {e_fixed:.2e} (ref {reference:.6})"
             );
             assert_eq!(st, Status::Converged, "{kind:?} cleft not converged");
-            assert!(e_adapt < 1e-4, "{kind:?} cleft adaptive rel err {e_adapt:.2e}");
+            assert!(
+                e_adapt < 1e-4,
+                "{kind:?} cleft adaptive rel err {e_adapt:.2e}"
+            );
             assert!(
                 e_adapt < 0.25 * e_fixed,
                 "{kind:?} cleft: adaptive {e_adapt:.2e} not ≪ fixed {e_fixed:.2e}"

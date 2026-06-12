@@ -112,7 +112,11 @@ pub fn read_off(path: impl AsRef<Path>) -> io::Result<Mesh> {
         if f.len() < 3 {
             return Err(parse_err(format!("OFF node line needs x y z: {line:?}")));
         }
-        verts.push(Vec3::new(f64_field(f[0])?, f64_field(f[1])?, f64_field(f[2])?));
+        verts.push(Vec3::new(
+            f64_field(f[0])?,
+            f64_field(f[1])?,
+            f64_field(f[2])?,
+        ));
     }
 
     let mut tris = Vec::with_capacity(n_elem.min(PREALLOC_CAP));
@@ -139,7 +143,11 @@ pub fn read_off(path: impl AsRef<Path>) -> io::Result<Mesh> {
         tris.push([i, j, k]);
     }
 
-    Ok(Mesh { verts, normals: Vec::new(), tris })
+    Ok(Mesh {
+        verts,
+        normals: Vec::new(),
+        tris,
+    })
 }
 
 /// Write a [`Mesh`](proteon_core::surface::mesh::Mesh) as Geomview **OFF**.
@@ -187,7 +195,10 @@ pub fn read_pqr(path: impl AsRef<Path>) -> io::Result<Vec<Charge>> {
         if val == 0.0 {
             continue;
         }
-        charges.push(Charge { pos: Vec3::new(x, y, z), val });
+        charges.push(Charge {
+            pos: Vec3::new(x, y, z),
+            val,
+        });
     }
     Ok(charges)
 }
@@ -260,14 +271,12 @@ pub fn read_hmo(path: impl AsRef<Path>) -> io::Result<(Mesh, Vec<Charge>)> {
                 if !row.is_empty() {
                     let f: Vec<&str> = row.split_whitespace().collect();
                     if f.len() < 5 {
-                        return Err(parse_err(format!("HMO charge row needs id x y z val: {row:?}")));
+                        return Err(parse_err(format!(
+                            "HMO charge row needs id x y z val: {row:?}"
+                        )));
                     }
                     charges.push(Charge {
-                        pos: Vec3::new(
-                            f64_field(f[1])?,
-                            f64_field(f[2])?,
-                            f64_field(f[3])?,
-                        ),
+                        pos: Vec3::new(f64_field(f[1])?, f64_field(f[2])?, f64_field(f[3])?),
                         val: f64_field(f[4])?,
                     });
                 }
@@ -279,11 +288,20 @@ pub fn read_hmo(path: impl AsRef<Path>) -> io::Result<(Mesh, Vec<Charge>)> {
     }
 
     if !saw_nodl || !saw_elem {
-        return Err(parse_err("HMO file missing BEG_NODL_DATA or BEG_ELEM_DATA block"));
+        return Err(parse_err(
+            "HMO file missing BEG_NODL_DATA or BEG_ELEM_DATA block",
+        ));
     }
     let _ = saw_charge; // charge block is optional
 
-    Ok((Mesh { verts, normals: Vec::new(), tris }, charges))
+    Ok((
+        Mesh {
+            verts,
+            normals: Vec::new(),
+            tris,
+        },
+        charges,
+    ))
 }
 
 /// Read an **MSMS** surface from its `.vert` / `.face` pair.
@@ -323,7 +341,11 @@ pub fn read_msms(vert_path: impl AsRef<Path>, face_path: impl AsRef<Path>) -> io
         if f.len() < 3 {
             return Err(parse_err(format!("MSMS vertex row needs x y z: {line:?}")));
         }
-        verts.push(Vec3::new(f64_field(f[0])?, f64_field(f[1])?, f64_field(f[2])?));
+        verts.push(Vec3::new(
+            f64_field(f[0])?,
+            f64_field(f[1])?,
+            f64_field(f[2])?,
+        ));
     }
 
     let mut tris: Vec<[u32; 3]> = Vec::new();
@@ -358,5 +380,9 @@ pub fn read_msms(vert_path: impl AsRef<Path>, face_path: impl AsRef<Path>) -> io
         }
     }
 
-    Ok(Mesh { verts, normals: Vec::new(), tris })
+    Ok(Mesh {
+        verts,
+        normals: Vec::new(),
+        tris,
+    })
 }

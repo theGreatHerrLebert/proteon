@@ -209,7 +209,11 @@ impl Mesh {
         if self.tris.is_empty() {
             return 0;
         }
-        self.component_labels().iter().copied().max().map_or(0, |m| m + 1)
+        self.component_labels()
+            .iter()
+            .copied()
+            .max()
+            .map_or(0, |m| m + 1)
     }
 
     /// `(signed volume, area)` of **each** connected component (divergence theorem +
@@ -233,7 +237,11 @@ impl Mesh {
     /// without disturbing already-outward bodies.
     pub fn orient_outward(&mut self) -> bool {
         let labels = self.component_labels();
-        let vols: Vec<f64> = self.component_volumes_areas().iter().map(|&(v, _)| v).collect();
+        let vols: Vec<f64> = self
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
         let mut flipped = false;
         for (ti, t) in self.tris.iter_mut().enumerate() {
             if vols[labels[ti]] < 0.0 {
@@ -287,7 +295,10 @@ impl Mesh {
         // Per-triangle points must be finite (NaN/inf would corrupt the cell keys).
         let pts: Vec<(Vec3, Vec3, Vec3)> = self.tris.iter().map(|&t| self.tri_points(t)).collect();
         let finite = |v: Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
-        if !pts.iter().all(|&(a, b, c)| finite(a) && finite(b) && finite(c)) {
+        if !pts
+            .iter()
+            .all(|&(a, b, c)| finite(a) && finite(b) && finite(c))
+        {
             return None;
         }
 
@@ -328,7 +339,8 @@ impl Mesh {
             if keys.iter().any(|k| !k.is_finite() || k.abs() > MAX_KEY) {
                 return None;
             }
-            let span = (keys[1] - keys[0] + 1.0) * (keys[3] - keys[2] + 1.0) * (keys[5] - keys[4] + 1.0);
+            let span =
+                (keys[1] - keys[0] + 1.0) * (keys[3] - keys[2] + 1.0) * (keys[5] - keys[4] + 1.0);
             if !span.is_finite() || span > SPAN_CAP {
                 return None; // a triangle spans too many cells — multi-scale mesh
             }
@@ -469,7 +481,11 @@ impl Mesh {
     pub fn orient_by_nesting(&mut self) -> bool {
         let labels = self.component_labels();
         let depths = self.component_nesting_depths();
-        let vols: Vec<f64> = self.component_volumes_areas().iter().map(|&(v, _)| v).collect();
+        let vols: Vec<f64> = self
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
         let flip: Vec<bool> = (0..vols.len())
             .map(|c| {
                 let want = if depths[c] % 2 == 0 { 1.0 } else { -1.0 };
@@ -497,7 +513,10 @@ impl Mesh {
     /// [`Self::has_touching_components`] first (edge-manifold / self-intersection checks
     /// miss vertex-only contact).
     pub fn num_nested_components(&self) -> usize {
-        self.component_nesting_depths().iter().filter(|&&d| d > 0).count()
+        self.component_nesting_depths()
+            .iter()
+            .filter(|&&d| d > 0)
+            .count()
     }
 
     /// Euler characteristic V − E + F, counting only vertices actually used by a
@@ -999,7 +1018,11 @@ mod tests {
     #[test]
     fn connected_components_and_duplicate_faces() {
         let one = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1);
-        assert_eq!(one.num_connected_components(), 1, "a single sphere is one body");
+        assert_eq!(
+            one.num_connected_components(),
+            1,
+            "a single sphere is one body"
+        );
         assert_eq!(one.num_duplicate_faces(), 0);
 
         // Two disjoint spheres → two components (append offsets indices, so no shared
@@ -1020,7 +1043,11 @@ mod tests {
         // A clean icosphere has no self-intersections (no false positives from the now
         // un-skipped adjacent triangles — the strict-interior test excludes them).
         let clean = icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 3);
-        assert_eq!(clean.count_self_intersections(), Some(0), "a clean sphere is clean");
+        assert_eq!(
+            clean.count_self_intersections(),
+            Some(0),
+            "a clean sphere is clean"
+        );
 
         let cross_mesh = |s: f64| Mesh {
             verts: vec![
@@ -1036,8 +1063,16 @@ mod tests {
         };
         // Crossing pair detected at small AND large scale (scale-invariant det cutoff).
         assert_eq!(cross_mesh(1.0).count_self_intersections(), Some(1));
-        assert_eq!(cross_mesh(1e-4).count_self_intersections(), Some(1), "small scale");
-        assert_eq!(cross_mesh(1e5).count_self_intersections(), Some(1), "large scale");
+        assert_eq!(
+            cross_mesh(1e-4).count_self_intersections(),
+            Some(1),
+            "small scale"
+        );
+        assert_eq!(
+            cross_mesh(1e5).count_self_intersections(),
+            Some(1),
+            "large scale"
+        );
 
         // Two coplanar, non-overlapping triangles → no penetration.
         let apart = Mesh {
@@ -1061,7 +1096,7 @@ mod tests {
             verts: vec![
                 Vec3::new(0.0, 0.0, 0.0), // shared vertex
                 Vec3::new(2.0, 0.0, 0.0),
-                Vec3::new(0.0, 2.0, 0.0), // tri A in z=0
+                Vec3::new(0.0, 2.0, 0.0),  // tri A in z=0
                 Vec3::new(1.0, 0.5, -1.0), // tri B straddles z=0; its far edge punches
                 Vec3::new(1.0, 0.5, 1.0),  //   through A's interior at (1, 0.5, 0)
             ],
@@ -1086,7 +1121,11 @@ mod tests {
             normals: Vec::new(),
             tris: vec![[0, 1, 2], [0, 1, 3]], // share edge 0-1
         };
-        assert_eq!(fold.count_self_intersections(), Some(0), "a clean fold is not a crossing");
+        assert_eq!(
+            fold.count_self_intersections(),
+            Some(0),
+            "a clean fold is not a crossing"
+        );
 
         // Non-finite coordinate → inconclusive (None), not a false "clean".
         let nan = Mesh {
@@ -1101,7 +1140,11 @@ mod tests {
             normals: Vec::new(),
             tris: vec![[0, 1, 2], [3, 4, 5]],
         };
-        assert_eq!(nan.count_self_intersections(), None, "non-finite input is inconclusive");
+        assert_eq!(
+            nan.count_self_intersections(),
+            None,
+            "non-finite input is inconclusive"
+        );
 
         // Multi-scale mesh trips SPAN_CAP → inconclusive (one huge triangle over a tiny
         // median cell would span a vast cell range).
@@ -1140,17 +1183,34 @@ mod tests {
         // Two SEPARATE bodies → no nesting; a point at each centre is in its own body.
         let mut separate = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2);
         separate.append(&icosphere(Vec3::new(6.0, 0.0, 0.0), 1.0, 2));
-        assert_eq!(separate.num_nested_components(), 0, "separate bodies are not nested");
-        assert_eq!(separate.containing_component(Vec3::new(0.0, 0.0, 0.0)), Some(0));
+        assert_eq!(
+            separate.num_nested_components(),
+            0,
+            "separate bodies are not nested"
+        );
+        assert_eq!(
+            separate.containing_component(Vec3::new(0.0, 0.0, 0.0)),
+            Some(0)
+        );
         // The second body is component 1; a point at its centre is inside it.
-        assert_eq!(separate.containing_component(Vec3::new(6.0, 0.0, 0.0)), Some(1));
+        assert_eq!(
+            separate.containing_component(Vec3::new(6.0, 0.0, 0.0)),
+            Some(1)
+        );
         // A point outside both → in none.
-        assert_eq!(separate.containing_component(Vec3::new(3.0, 0.0, 0.0)), None);
+        assert_eq!(
+            separate.containing_component(Vec3::new(3.0, 0.0, 0.0)),
+            None
+        );
 
         // A small sphere INSIDE a big one (a buried cavity) → one nested component.
         let mut cavity = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
         cavity.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
-        assert_eq!(cavity.num_nested_components(), 1, "the inner shell is nested");
+        assert_eq!(
+            cavity.num_nested_components(),
+            1,
+            "the inner shell is nested"
+        );
 
         // Parity-based charge region on a 3-shell concentric (island/cavity/body):
         // a charge in the island (inside 3 ⇒ odd ⇒ solute, deepest = island) vs in the
@@ -1158,10 +1218,26 @@ mod tests {
         let mut shells = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2); // body  (comp 0)
         shells.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 2)); // cavity (comp 1)
         shells.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2)); // island (comp 2)
-        assert_eq!(shells.containing_component(Vec3::new(0.0, 0.0, 0.0)), Some(2), "island = solute");
-        assert_eq!(shells.containing_component(Vec3::new(1.5, 0.0, 0.0)), None, "cavity = solvent");
-        assert_eq!(shells.containing_component(Vec3::new(2.5, 0.0, 0.0)), Some(0), "shell = solute body");
-        assert_eq!(shells.containing_component(Vec3::new(9.0, 0.0, 0.0)), None, "exterior = solvent");
+        assert_eq!(
+            shells.containing_component(Vec3::new(0.0, 0.0, 0.0)),
+            Some(2),
+            "island = solute"
+        );
+        assert_eq!(
+            shells.containing_component(Vec3::new(1.5, 0.0, 0.0)),
+            None,
+            "cavity = solvent"
+        );
+        assert_eq!(
+            shells.containing_component(Vec3::new(2.5, 0.0, 0.0)),
+            Some(0),
+            "shell = solute body"
+        );
+        assert_eq!(
+            shells.containing_component(Vec3::new(9.0, 0.0, 0.0)),
+            None,
+            "exterior = solvent"
+        );
 
         // Three concentric shells with ALTERNATING orientation (outward, inward, outward)
         // — the cavity-with-island case. A summed-winding test would cancel and miss the
@@ -1172,8 +1248,16 @@ mod tests {
         let inner = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2); // outward island
         three.append(&mid);
         three.append(&inner);
-        assert_eq!(three.num_nested_components(), 2, "both inner shells are nested");
-        assert_eq!(three.component_nesting_depths(), vec![0, 1, 2], "body/cavity/island depths");
+        assert_eq!(
+            three.num_nested_components(),
+            2,
+            "both inner shells are nested"
+        );
+        assert_eq!(
+            three.component_nesting_depths(),
+            vec![0, 1, 2],
+            "body/cavity/island depths"
+        );
     }
 
     #[test]
@@ -1205,7 +1289,11 @@ mod tests {
             normals: Vec::new(),
             tris,
         };
-        assert_eq!(touching.num_connected_components(), 2, "edge-disjoint ⇒ two components");
+        assert_eq!(
+            touching.num_connected_components(),
+            2,
+            "edge-disjoint ⇒ two components"
+        );
         assert!(touching.has_touching_components(), "they share vertex 0");
 
         // Two genuinely-disjoint tetrahedra (no shared index) do NOT touch.
@@ -1224,10 +1312,19 @@ mod tests {
         m.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1)); // island, depth 2
         assert!(m.orient_by_nesting(), "the cavity shell must be flipped");
         let depths = m.component_nesting_depths();
-        let vols: Vec<f64> = m.component_volumes_areas().iter().map(|&(v, _)| v).collect();
+        let vols: Vec<f64> = m
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
         for (c, &d) in depths.iter().enumerate() {
             let want = if d % 2 == 0 { 1.0 } else { -1.0 };
-            assert_eq!(vols[c].signum(), want, "component {c} depth {d}: sign {}", vols[c]);
+            assert_eq!(
+                vols[c].signum(),
+                want,
+                "component {c} depth {d}: sign {}",
+                vols[c]
+            );
         }
         // Idempotent: a second pass flips nothing.
         assert!(!m.orient_by_nesting(), "already correctly oriented");
@@ -1244,21 +1341,40 @@ mod tests {
         let mut mixed = outward.clone();
         mixed.append(&inward);
 
-        let vols: Vec<f64> = mixed.component_volumes_areas().iter().map(|&(v, _)| v).collect();
+        let vols: Vec<f64> = mixed
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
         assert_eq!(vols.len(), 2);
         assert!(
             vols.iter().any(|&v| v > 0.0) && vols.iter().any(|&v| v < 0.0),
             "mixed orientation: {vols:?}"
         );
 
-        assert!(mixed.orient_outward(), "the inward component must be flipped");
-        let fixed: Vec<f64> = mixed.component_volumes_areas().iter().map(|&(v, _)| v).collect();
-        assert!(fixed.iter().all(|&v| v > 0.0), "both components outward now: {fixed:?}");
+        assert!(
+            mixed.orient_outward(),
+            "the inward component must be flipped"
+        );
+        let fixed: Vec<f64> = mixed
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
+        assert!(
+            fixed.iter().all(|&v| v > 0.0),
+            "both components outward now: {fixed:?}"
+        );
         // The already-outward component is untouched (same volume).
-        assert!((fixed.iter().cloned().fold(f64::INFINITY, f64::min)
-            - vols.iter().cloned().fold(f64::INFINITY, |a, b| a.min(b.abs())))
+        assert!(
+            (fixed.iter().cloned().fold(f64::INFINITY, f64::min)
+                - vols
+                    .iter()
+                    .cloned()
+                    .fold(f64::INFINITY, |a, b| a.min(b.abs())))
             .abs()
-            < 1e-9);
+                < 1e-9
+        );
     }
 
     #[test]

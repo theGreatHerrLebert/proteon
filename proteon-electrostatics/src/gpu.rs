@@ -420,9 +420,11 @@ pub fn solve_local_gpu(
 
     // A direct (pre/inter-stage) matvec; on CUDA error log and fall back to CPU (None).
     let direct = |kind: i32, x: &[f64]| -> Option<Vec<f64>> {
-        geom.matvec(kind, x).map_err(|e| {
-            eprintln!("proteon-electrostatics: GPU matvec failed, using CPU ({e})");
-        }).ok()
+        geom.matvec(kind, x)
+            .map_err(|e| {
+                eprintln!("proteon-electrostatics: GPU matvec failed, using CPU ({e})");
+            })
+            .ok()
     };
 
     let (umol, qmol) = mol_potentials(elements, charges, params.eps_omega);

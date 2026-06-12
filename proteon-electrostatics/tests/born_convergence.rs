@@ -43,8 +43,11 @@ fn nonlocal_adaptive_matches_fixed_on_convex_sphere() {
     let born = born_rfenergy(1.0, radius, &params(), Locality::Nonlocal);
     for s in [1u32, 2, 3] {
         let (ef, _) = sphere_bem_energy_nonlocal_q(radius, s, Quadrature::Fixed);
-        let (ea, capped) =
-            sphere_bem_energy_nonlocal_q(radius, s, Quadrature::Adaptive(AdaptiveConfig::default()));
+        let (ea, capped) = sphere_bem_energy_nonlocal_q(
+            radius,
+            s,
+            Quadrature::Adaptive(AdaptiveConfig::default()),
+        );
         let rf = (ef - born).abs() / born.abs();
         let ra = (ea - born).abs() / born.abs();
         eprintln!("subdiv {s}: fixed rel {rf:.4}  adaptive rel {ra:.4}  (capped {capped})");

@@ -10,13 +10,18 @@ use proteon_electrostatics::system::{laplace_matrices_cpu, LinearOperator};
 use proteon_electrostatics::{
     analytic_sphere_mesh,
     gpu::{laplace_matrices_gpu, laplace_matvec_gpu, solve_nonlocal_gpu, yukawa_matvec_gpu},
-    solve_local_elements, solve_local_gpu, solve_nonlocal_elements, yukawa_matrices, Charge, Params,
-    SolveConfig, Tri,
+    solve_local_elements, solve_local_gpu, solve_nonlocal_elements, yukawa_matrices, Charge,
+    Params, SolveConfig, Tri,
 };
 
 /// Relative L2 error `‖a − b‖ / ‖b‖`.
 fn rel(a: &[f64], b: &[f64]) -> f64 {
-    let num: f64 = a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f64>().sqrt();
+    let num: f64 = a
+        .iter()
+        .zip(b)
+        .map(|(x, y)| (x - y) * (x - y))
+        .sum::<f64>()
+        .sqrt();
     let den: f64 = b.iter().map(|y| y * y).sum::<f64>().sqrt();
     num / den.max(1e-300)
 }
@@ -112,7 +117,12 @@ fn gpu_matrix_free_matvec_matches_cpu_dense() {
     kc.matvec(&x, &mut kx_cpu);
 
     let rel = |a: &[f64], b: &[f64]| {
-        let num: f64 = a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f64>().sqrt();
+        let num: f64 = a
+            .iter()
+            .zip(b)
+            .map(|(x, y)| (x - y) * (x - y))
+            .sum::<f64>()
+            .sqrt();
         let den: f64 = b.iter().map(|y| y * y).sum::<f64>().sqrt();
         num / den.max(1e-300)
     };
@@ -155,7 +165,12 @@ fn gpu_matrix_free_local_solve_matches_cpu_dense() {
             solve_local_elements(&elements, &charges, &params, &cfg).expect("dense solve");
 
         let rel = |a: &[f64], b: &[f64]| {
-            let num: f64 = a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f64>().sqrt();
+            let num: f64 = a
+                .iter()
+                .zip(b)
+                .map(|(x, y)| (x - y) * (x - y))
+                .sum::<f64>()
+                .sqrt();
             let den: f64 = b.iter().map(|y| y * y).sum::<f64>().sqrt();
             num / den.max(1e-300)
         };
@@ -169,7 +184,10 @@ fn gpu_matrix_free_local_solve_matches_cpu_dense() {
         // differs only by GPU-vs-CPU rounding, so the solutions agree well within it.
         assert!(ru < 1e-6, "u rel err {ru:.2e} @ {charge_pos:?}");
         assert!(rq < 1e-6, "q rel err {rq:.2e} @ {charge_pos:?}");
-        assert!(gstats.converged, "GPU solve did not converge @ {charge_pos:?}");
+        assert!(
+            gstats.converged,
+            "GPU solve did not converge @ {charge_pos:?}"
+        );
     }
 }
 
@@ -239,7 +257,10 @@ fn gpu_matrix_free_nonlocal_solve_matches_cpu_dense() {
         assert!(ru < 1e-6, "u rel err {ru:.2e} @ {charge_pos:?}");
         assert!(rq < 1e-6, "q rel err {rq:.2e} @ {charge_pos:?}");
         assert!(rw < 1e-6, "w rel err {rw:.2e} @ {charge_pos:?}");
-        assert!(gstats.converged, "nonlocal GPU solve did not converge @ {charge_pos:?}");
+        assert!(
+            gstats.converged,
+            "nonlocal GPU solve did not converge @ {charge_pos:?}"
+        );
     }
 }
 
@@ -248,7 +269,9 @@ fn gpu_matrix_free_nonlocal_solve_matches_cpu_dense() {
 /// engages above [`proteon_electrostatics::DENSE_MATRIX_BUDGET`].
 #[test]
 fn dispatcher_matches_dense_below_budget() {
-    use proteon_electrostatics::{dense_matrix_bytes, solve_local_elements_auto, DENSE_MATRIX_BUDGET};
+    use proteon_electrostatics::{
+        dense_matrix_bytes, solve_local_elements_auto, DENSE_MATRIX_BUDGET,
+    };
 
     let elements = sphere_elements(2.0, 2); // 320 triangles — well under budget
     assert!(
@@ -313,12 +336,16 @@ fn gpu_matrix_free_nonlocal_scales_past_dense_budget() {
         eprintln!("no CUDA device — skipping nonlocal scale demo");
         return;
     };
-    let (_, stats) = res.expect("matrix-free nonlocal solve on a mesh too large for dense host RAM");
+    let (_, stats) =
+        res.expect("matrix-free nonlocal solve on a mesh too large for dense host RAM");
     eprintln!(
         "matrix-free nonlocal solved {n} elements (dense ~13 GiB): {} iters, residual {:.2e}",
         stats.iterations, stats.residual
     );
-    assert!(stats.converged, "matrix-free nonlocal large solve did not converge");
+    assert!(
+        stats.converged,
+        "matrix-free nonlocal large solve did not converge"
+    );
 }
 
 /// Scale demonstration: the matrix-free path solves a mesh whose dense `V`+`K` would

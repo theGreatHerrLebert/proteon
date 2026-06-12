@@ -217,10 +217,18 @@ pub fn yukawa_matrices_q(
                     if i == j {
                         // xi is element i's centroid (= ej's, since j == i) — the BEM self
                         // observation point; pass it through explicitly.
-                        vrow[j] =
-                            crate::adaptive::self_collocation(PotentialKind::Single, xi, ej, yukawa);
-                        krow[j] =
-                            crate::adaptive::self_collocation(PotentialKind::Double, xi, ej, yukawa);
+                        vrow[j] = crate::adaptive::self_collocation(
+                            PotentialKind::Single,
+                            xi,
+                            ej,
+                            yukawa,
+                        );
+                        krow[j] = crate::adaptive::self_collocation(
+                            PotentialKind::Double,
+                            xi,
+                            ej,
+                            yukawa,
+                        );
                         continue;
                     }
                     let (vs, ss) = crate::adaptive::adaptive_regular_yukawa_collocation(

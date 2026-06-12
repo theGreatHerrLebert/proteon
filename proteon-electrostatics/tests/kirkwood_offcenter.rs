@@ -61,20 +61,26 @@ fn kirkwood_offset_zero_is_born() {
 fn offcenter_bem_matches_kirkwood() {
     let radius = 2.0;
     let subdiv = 3; // 1280 triangles
-    // As the charge moves off-centre the reaction field strengthens (more negative); the
-    // BEM must track the Kirkwood series at each offset, not just the l=0 value.
+                    // As the charge moves off-centre the reaction field strengthens (more negative); the
+                    // BEM must track the Kirkwood series at each offset, not just the l=0 value.
     for &offset in &[0.0_f64, 0.7, 1.2, 1.5] {
         let bem = sphere_bem_energy(radius, subdiv, offset);
         let kirk = kirkwood_rfenergy(1.0, radius, offset, EPS_OMEGA, EPS_SIGMA, 60);
         let rel = (bem - kirk).abs() / kirk.abs();
         eprintln!("offset {offset}: BEM {bem:.3} vs Kirkwood {kirk:.3} (rel {rel:.3})");
         assert!(bem < 0.0 && kirk < 0.0, "offset {offset}: both negative");
-        assert!(rel < 0.04, "offset {offset}: BEM off Kirkwood by {rel:.3} (> 4%)");
+        assert!(
+            rel < 0.04,
+            "offset {offset}: BEM off Kirkwood by {rel:.3} (> 4%)"
+        );
     }
 
     // The off-centre energy must be meaningfully MORE negative than the central (l>0
     // contribution is real, not negligible) — otherwise the test could pass on l=0 alone.
     let central = kirkwood_rfenergy(1.0, radius, 0.0, EPS_OMEGA, EPS_SIGMA, 60);
     let edge = kirkwood_rfenergy(1.0, radius, 1.5, EPS_OMEGA, EPS_SIGMA, 60);
-    assert!(edge < 1.15 * central, "off-centre must add real l>0 reaction: {edge} vs {central}");
+    assert!(
+        edge < 1.15 * central,
+        "off-centre must add real l>0 reaction: {edge} vs {central}"
+    );
 }

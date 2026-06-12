@@ -285,7 +285,10 @@ fn electrostatics_solves_off_plus_pqr() {
     // Header + one data row; rfenergy is the first column and strongly negative
     // (Born-like solvation of a +1 ion), the solve converged, n_elements = 512.
     let rfenergy: f64 = col(&stdout, "rfenergy_kj_mol").parse().expect("rfenergy");
-    assert!(rfenergy < 0.0, "solvation energy should be negative, got {rfenergy}");
+    assert!(
+        rfenergy < 0.0,
+        "solvation energy should be negative, got {rfenergy}"
+    );
     assert_eq!(col(&stdout, "converged"), "true");
     assert_eq!(col(&stdout, "n_elements"), "512");
 
@@ -323,7 +326,10 @@ fn electrostatics_fast_summation_matches_dense() {
     let e_dense: f64 = col(&dense.0, "rfenergy_kj_mol").parse().unwrap();
     let e_tc: f64 = col(&tc.0, "rfenergy_kj_mol").parse().unwrap();
     let rel = (e_tc - e_dense).abs() / e_dense.abs();
-    assert!(rel < 1e-3, "treecode rfenergy {e_tc} off dense {e_dense} (rel {rel:.2e})");
+    assert!(
+        rel < 1e-3,
+        "treecode rfenergy {e_tc} off dense {e_dense} (rel {rel:.2e})"
+    );
 }
 
 #[test]
@@ -331,5 +337,8 @@ fn electrostatics_off_without_pqr_fails() {
     let off = format_fixture("na.off");
     let (_stdout, stderr, code) = run(&["electrostatics", "--off", off.to_str().unwrap()]);
     assert_ne!(code, 0, "missing --pqr must fail");
-    assert!(stderr.contains("pqr"), "error should mention the missing --pqr");
+    assert!(
+        stderr.contains("pqr"),
+        "error should mention the missing --pqr"
+    );
 }

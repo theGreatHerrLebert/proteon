@@ -22,9 +22,18 @@ fn xie_local_validates_bem_multicharge() {
     // analytic central-charge ε∞ branch is not involved). First multi-charge BEM gate.
     let (radius, eo, es) = (5.0, 1.0, 78.0);
     let raw = [
-        Charge { pos: Vec3::new(1.0, 0.0, 0.0), val: 1.0 },
-        Charge { pos: Vec3::new(-0.5, 0.6, 0.2), val: -1.0 },
-        Charge { pos: Vec3::new(0.2, -0.7, 0.3), val: 0.5 },
+        Charge {
+            pos: Vec3::new(1.0, 0.0, 0.0),
+            val: 1.0,
+        },
+        Charge {
+            pos: Vec3::new(-0.5, 0.6, 0.2),
+            val: -1.0,
+        },
+        Charge {
+            pos: Vec3::new(0.2, -0.7, 0.3),
+            val: 0.5,
+        },
     ];
     let scaled = scalemodel(&raw, radius, true);
     let xie = XieModel::new(XieKind::Local, radius, &raw, eo, es, 1.8, 20.0, 40).rfenergy();
@@ -33,10 +42,24 @@ fn xie_local_validates_bem_multicharge() {
     let els: Vec<Tri> = mesh
         .tris
         .iter()
-        .map(|t| Tri::new(mesh.verts[t[0] as usize], mesh.verts[t[1] as usize], mesh.verts[t[2] as usize]))
+        .map(|t| {
+            Tri::new(
+                mesh.verts[t[0] as usize],
+                mesh.verts[t[1] as usize],
+                mesh.verts[t[2] as usize],
+            )
+        })
         .collect();
-    let params = Params { eps_omega: eo, eps_sigma: es, eps_inf: 1.8, lambda: 20.0 };
-    let cfg = SolveConfig { tol: 1e-9, ..Default::default() };
+    let params = Params {
+        eps_omega: eo,
+        eps_sigma: es,
+        eps_inf: 1.8,
+        lambda: 20.0,
+    };
+    let cfg = SolveConfig {
+        tol: 1e-9,
+        ..Default::default()
+    };
     let (res, _) = solve_local_elements(&els, &scaled, &params, &cfg).expect("solve");
     let bem = rfenergy(&els, &scaled, &res);
 
@@ -105,7 +128,10 @@ fn xie_models_match_nessie() {
 
             let want_e = block["rfenergy"].as_f64().unwrap();
             let got_e = model.rfenergy();
-            assert!(rel(got_e, want_e) < 1e-9, "{key} rfenergy {got_e} vs {want_e}");
+            assert!(
+                rel(got_e, want_e) < 1e-9,
+                "{key} rfenergy {got_e} vs {want_e}"
+            );
 
             let want_es = block["espotential"].as_array().unwrap();
             let want_mol = block["molpotential"].as_array().unwrap();
@@ -115,7 +141,10 @@ fn xie_models_match_nessie() {
                 assert!(rel(g_es, w_es) < 1e-8, "{key} espot[{i}] {g_es} vs {w_es}");
                 let g_mol = model.molpotential(*xi);
                 let w_mol = want_mol[i].as_f64().unwrap();
-                assert!(rel(g_mol, w_mol) < 1e-8, "{key} molpot[{i}] {g_mol} vs {w_mol}");
+                assert!(
+                    rel(g_mol, w_mol) < 1e-8,
+                    "{key} molpot[{i}] {g_mol} vs {w_mol}"
+                );
             }
         }
     }

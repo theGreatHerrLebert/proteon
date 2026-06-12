@@ -207,9 +207,10 @@ impl XieModel {
         let u: Vec<f64> = (0..len)
             .map(|n| {
                 let nf = n as f64;
-                -nf * eo + (es - ei) * nf * (nf + 1.0) * 2.0 * a / std::f64::consts::PI / lam
-                    * ia[n + 1]
-                    * ka[n + 1]
+                -nf * eo
+                    + (es - ei) * nf * (nf + 1.0) * 2.0 * a / std::f64::consts::PI / lam
+                        * ia[n + 1]
+                        * ka[n + 1]
             })
             .collect();
         let s: Vec<f64> = (0..len)

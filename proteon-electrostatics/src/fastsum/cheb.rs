@@ -116,7 +116,10 @@ mod tests {
             let l = lagrange_basis(&nd, &w, xm);
             for (k, &lk) in l.iter().enumerate() {
                 let want = f64::from(u8::from(k == m));
-                assert!((lk - want).abs() < 1e-12, "L_{k}(x_{m}) = {lk}, want {want}");
+                assert!(
+                    (lk - want).abs() < 1e-12,
+                    "L_{k}(x_{m}) = {lk}, want {want}"
+                );
             }
         }
     }
@@ -129,12 +132,18 @@ mod tests {
         let nd = nodes(p, a, b);
         let w = bary_weights(p);
         // f(x) = 1 - 2x + 0.5x^2 - x^3 + 0.2x^4 - 0.1x^5 + 0.03x^6 (degree 6 = p).
-        let f = |x: f64| 1.0 - 2.0 * x + 0.5 * x * x - x.powi(3) + 0.2 * x.powi(4)
-            - 0.1 * x.powi(5) + 0.03 * x.powi(6);
+        let f = |x: f64| {
+            1.0 - 2.0 * x + 0.5 * x * x - x.powi(3) + 0.2 * x.powi(4) - 0.1 * x.powi(5)
+                + 0.03 * x.powi(6)
+        };
         let samples: Vec<f64> = nd.iter().map(|&x| f(x)).collect();
         for &y in &[-1.2, 0.0, 0.4, 1.7, 2.3] {
             let got = interpolate(&nd, &w, &samples, y);
-            assert!((got - f(y)).abs() < 1e-9, "poly reproduction at {y}: {got} vs {}", f(y));
+            assert!(
+                (got - f(y)).abs() < 1e-9,
+                "poly reproduction at {y}: {got} vs {}",
+                f(y)
+            );
         }
     }
 

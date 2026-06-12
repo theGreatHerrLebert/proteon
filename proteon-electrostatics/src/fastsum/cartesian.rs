@@ -73,8 +73,7 @@ pub fn coulomb_taylor_coeffs(r_vec: Vec3, p: usize) -> Vec<f64> {
                     }
                 }
                 let degf = deg as f64;
-                a[cidx(i, j, k, p)] =
-                    ((2.0 * degf - 1.0) * s1 - (degf - 1.0) * s2) / (degf * r2);
+                a[cidx(i, j, k, p)] = ((2.0 * degf - 1.0) * s1 - (degf - 1.0) * s2) / (degf * r2);
             }
         }
     }
@@ -88,7 +87,12 @@ pub fn coulomb_taylor_coeffs(r_vec: Vec3, p: usize) -> Vec<f64> {
 /// `R^|k|` to recover the physical value. This removes the over/underflow path the raw
 /// `u^k · a_k` product risks on scaled meshes / larger `p`.
 #[must_use]
-pub fn single_layer_moments(center: Vec3, radius: f64, panels: &[(Tri, f64)], p: usize) -> Vec<f64> {
+pub fn single_layer_moments(
+    center: Vec3,
+    radius: f64,
+    panels: &[(Tri, f64)],
+    p: usize,
+) -> Vec<f64> {
     let n = p + 1;
     let mut m = vec![0.0; n * n * n];
     let cub_order = panel_order_for_cartesian(p);
@@ -148,7 +152,12 @@ pub fn eval_single_layer(center: Vec3, radius: f64, moments: &[f64], xi: Vec3, p
 /// (the dipole eval uses degrees `|m| ≤ p−1`). Normalization as in
 /// [`single_layer_moments`].
 #[must_use]
-pub fn double_layer_moments(center: Vec3, radius: f64, panels: &[(Tri, f64)], p: usize) -> Vec<Vec3> {
+pub fn double_layer_moments(
+    center: Vec3,
+    radius: f64,
+    panels: &[(Tri, f64)],
+    p: usize,
+) -> Vec<Vec3> {
     let n = p + 1;
     let mut w = vec![Vec3::new(0.0, 0.0, 0.0); n * n * n];
     let cub_order = panel_order_for_cartesian(p);
@@ -359,7 +368,10 @@ pub(crate) fn m2l_single(
 ) -> Vec<f64> {
     let n = p + 1;
     debug_assert_eq!(src_moments.len(), n * n * n, "moment slice must be (p+1)³");
-    debug_assert!(r_s.is_finite() && r_s > 0.0 && r_t.is_finite() && r_t > 0.0, "radii > 0");
+    debug_assert!(
+        r_s.is_finite() && r_s > 0.0 && r_t.is_finite() && r_t > 0.0,
+        "radii > 0"
+    );
     debug_assert!(c_s.x.is_finite() && c_t.x.is_finite(), "finite centers");
     let d_vec = c_t - c_s;
     let d = d_vec.norm();
@@ -367,7 +379,10 @@ pub(crate) fn m2l_single(
     // centers (D = 0) or overlapping balls produce nonphysical local coefficients. The
     // production FMM admissibility (a stricter `(r_s+r_t)/|D| ≤ θ`) is enforced by the
     // interaction-list builder; this is the minimal validity precondition.
-    debug_assert!(d.is_finite() && r_s + r_t < d, "clusters must not overlap: r_s+r_t < |D|");
+    debug_assert!(
+        d.is_finite() && r_s + r_t < d,
+        "clusters must not overlap: r_s+r_t < |D|"
+    );
     let a = coulomb_taylor_coeffs(d_vec, 2 * p); // (2p+1)³ Taylor cube
     let bcap = 2 * p + 1;
     // Pascal triangle C(i,j) up to 2p.
@@ -459,7 +474,9 @@ pub fn n_terms(p: usize) -> usize {
 mod tests {
     use super::*;
     use crate::fastsum::expansion::{direct_single_layer, tri_bbox, Cluster};
-    use crate::fastsum::expansion::{eval_single_layer as bltc_eval, single_layer_moments as bltc_moments};
+    use crate::fastsum::expansion::{
+        eval_single_layer as bltc_eval, single_layer_moments as bltc_moments,
+    };
 
     fn tilted_tri() -> Tri {
         Tri::new(
@@ -500,8 +517,14 @@ mod tests {
         };
         let e2 = err(2);
         let e8 = err(8);
-        assert!(e8 < e2, "Cartesian error should fall with p: {e2:.3e} -> {e8:.3e}");
-        assert!(e8 < 1e-9, "p=8 Cartesian far field should be tight, got {e8:.3e}");
+        assert!(
+            e8 < e2,
+            "Cartesian error should fall with p: {e2:.3e} -> {e8:.3e}"
+        );
+        assert!(
+            e8 < 1e-9,
+            "p=8 Cartesian far field should be tight, got {e8:.3e}"
+        );
     }
 
     #[test]
@@ -544,8 +567,14 @@ mod tests {
         };
         let e3 = err(3);
         let e8 = err(8);
-        assert!(e8 < e3, "Cartesian dipole should converge: {e3:.3e} -> {e8:.3e}");
-        assert!(e8 < 1e-8, "p=8 Cartesian dipole should be tight, got {e8:.3e}");
+        assert!(
+            e8 < e3,
+            "Cartesian dipole should converge: {e3:.3e} -> {e8:.3e}"
+        );
+        assert!(
+            e8 < 1e-8,
+            "p=8 Cartesian dipole should be tight, got {e8:.3e}"
+        );
     }
 
     #[test]
@@ -578,7 +607,12 @@ mod tests {
         let r_parent = r_child * 2.5;
 
         let child = single_layer_moments(c_child, r_child, &[(tri, 1.3)], p);
-        let translated = m2m_single(&child, r_child / r_parent, (c_child - c_parent) * (1.0 / r_parent), p);
+        let translated = m2m_single(
+            &child,
+            r_child / r_parent,
+            (c_child - c_parent) * (1.0 / r_parent),
+            p,
+        );
         let direct = single_layer_moments(c_parent, r_parent, &[(tri, 1.3)], p);
 
         let n = p + 1;
@@ -591,7 +625,10 @@ mod tests {
                 }
             }
         }
-        assert!(maxerr < 1e-12, "M2M vs direct parent moments max abs err {maxerr:.3e}");
+        assert!(
+            maxerr < 1e-12,
+            "M2M vs direct parent moments max abs err {maxerr:.3e}"
+        );
     }
 
     #[test]
@@ -605,7 +642,12 @@ mod tests {
         let r_parent = r_child * 3.0;
 
         let child = double_layer_moments(c_child, r_child, &[(tri, 0.7)], p);
-        let translated = m2m_double(&child, r_child / r_parent, (c_child - c_parent) * (1.0 / r_parent), p);
+        let translated = m2m_double(
+            &child,
+            r_child / r_parent,
+            (c_child - c_parent) * (1.0 / r_parent),
+            p,
+        );
         let direct = double_layer_moments(c_parent, r_parent, &[(tri, 0.7)], p);
 
         let n = p + 1;
@@ -619,7 +661,10 @@ mod tests {
                 }
             }
         }
-        assert!(maxerr < 1e-12, "M2M dipole vs direct max abs err {maxerr:.3e}");
+        assert!(
+            maxerr < 1e-12,
+            "M2M dipole vs direct max abs err {maxerr:.3e}"
+        );
     }
 
     #[test]
@@ -636,15 +681,22 @@ mod tests {
 
         for (c_t, r_t) in [
             (Vec3::new(6.0, 5.0, 7.0), 0.4),
-            (Vec3::new(6.0, 5.0, 7.0), 1.2),  // r_t ≠ r_s (radius-ratio coverage)
+            (Vec3::new(6.0, 5.0, 7.0), 1.2), // r_t ≠ r_s (radius-ratio coverage)
             (Vec3::new(-5.0, 6.0, -4.0), 0.7), // different direction
         ] {
             let local = m2l_single(&m_src, r_s, c_s, r_t, c_t, p);
-            for off in [Vec3::new(0.1, -0.05, 0.08), Vec3::new(-0.12, 0.2, -0.07), Vec3::new(0.0, 0.0, 0.0)] {
+            for off in [
+                Vec3::new(0.1, -0.05, 0.08),
+                Vec3::new(-0.12, 0.2, -0.07),
+                Vec3::new(0.0, 0.0, 0.0),
+            ] {
                 let t = c_t + off * (r_t / 0.4); // stay inside the target ball
                 let via_local = eval_local_single(&local, r_t, c_t, t, p);
                 let direct = eval_single_layer(c_s, r_s, &m_src, t, p);
-                assert!(rel(via_local, direct) < 1e-9, "M2L+L2P {via_local} vs multipole {direct}");
+                assert!(
+                    rel(via_local, direct) < 1e-9,
+                    "M2L+L2P {via_local} vs multipole {direct}"
+                );
             }
         }
     }
@@ -669,7 +721,11 @@ mod tests {
             let local = m2l_single(&m, r_s, c_s, r_t, c_t, p);
             rel(eval_local_single(&local, r_t, c_t, t, p), reference)
         };
-        assert!(err(10) < 1e-9, "well-separated M2L+L2P vs panel integral: {:.2e}", err(10));
+        assert!(
+            err(10) < 1e-9,
+            "well-separated M2L+L2P vs panel integral: {:.2e}",
+            err(10)
+        );
 
         // Near the admissibility boundary. Source-side MAC ratio r_s/|D| = 0.75/1.6 =
         // 0.47 (just inside the treecode θ=0.5); the stricter cluster-cluster criterion
@@ -688,8 +744,14 @@ mod tests {
         // Must converge AND reach an absolute tolerance at high p (not just e4 > e10,
         // which a 0.9 < 1.0 'pass' could satisfy without being right).
         let (e4, e10) = (err2(4), err2(10));
-        assert!(e10 < e4 * 0.1, "near-boundary M2L should converge an order+: {e4:.2e}->{e10:.2e}");
-        assert!(e10 < 1e-3, "near-boundary M2L p=10 absolute accuracy: {e10:.2e}");
+        assert!(
+            e10 < e4 * 0.1,
+            "near-boundary M2L should converge an order+: {e4:.2e}->{e10:.2e}"
+        );
+        assert!(
+            e10 < 1e-3,
+            "near-boundary M2L p=10 absolute accuracy: {e10:.2e}"
+        );
     }
 
     #[test]
@@ -698,7 +760,11 @@ mod tests {
         // sum of per-panel M2Ls — superposition, since moments are linear in the sources.
         let p = 7;
         let t1 = tilted_tri();
-        let t2 = Tri::new(Vec3::new(0.1, 0.2, 0.0), Vec3::new(1.1, 0.1, 0.3), Vec3::new(0.3, 1.2, 0.4));
+        let t2 = Tri::new(
+            Vec3::new(0.1, 0.2, 0.0),
+            Vec3::new(1.1, 0.1, 0.3),
+            Vec3::new(0.3, 1.2, 0.4),
+        );
         let (lo, hi) = tri_bbox(&t1);
         let c_s = (lo + hi) * 0.5;
         let r_s = 1.5; // encloses both panels
@@ -706,12 +772,29 @@ mod tests {
         let target = c_t + Vec3::new(0.1, -0.06, 0.05);
 
         let m_both = single_layer_moments(c_s, r_s, &[(t1, 1.3), (t2, -0.7)], p);
-        let both = eval_local_single(&m2l_single(&m_both, r_s, c_s, r_t, c_t, p), r_t, c_t, target, p);
+        let both = eval_local_single(
+            &m2l_single(&m_both, r_s, c_s, r_t, c_t, p),
+            r_t,
+            c_t,
+            target,
+            p,
+        );
 
         let m_a = single_layer_moments(c_s, r_s, &[(t1, 1.3)], p);
         let m_b = single_layer_moments(c_s, r_s, &[(t2, -0.7)], p);
-        let sum = eval_local_single(&m2l_single(&m_a, r_s, c_s, r_t, c_t, p), r_t, c_t, target, p)
-            + eval_local_single(&m2l_single(&m_b, r_s, c_s, r_t, c_t, p), r_t, c_t, target, p);
+        let sum = eval_local_single(
+            &m2l_single(&m_a, r_s, c_s, r_t, c_t, p),
+            r_t,
+            c_t,
+            target,
+            p,
+        ) + eval_local_single(
+            &m2l_single(&m_b, r_s, c_s, r_t, c_t, p),
+            r_t,
+            c_t,
+            target,
+            p,
+        );
 
         assert!(rel(both, sum) < 1e-12, "M2L superposition: {both} vs {sum}");
     }
@@ -722,7 +805,10 @@ mod tests {
         for p in [2, 4, 6, 8] {
             let cart = n_terms(p);
             let bltc = (p + 1).pow(3);
-            assert!(cart < bltc, "p={p}: cartesian {cart} should be < bltc {bltc}");
+            assert!(
+                cart < bltc,
+                "p={p}: cartesian {cart} should be < bltc {bltc}"
+            );
         }
         assert_eq!(n_terms(4), 35);
         assert_eq!((4 + 1usize).pow(3), 125);

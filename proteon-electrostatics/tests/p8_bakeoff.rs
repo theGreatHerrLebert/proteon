@@ -41,7 +41,10 @@ fn min_p_cartesian(tri: &Tri, xi: Vec3, reference: f64, pmax: usize) -> Option<u
     let radius = (hi - lo).norm() * 0.5;
     (1..=pmax).find(|&p| {
         let m = cartesian::single_layer_moments(center, radius, &[(*tri, 1.0)], p);
-        rel(cartesian::eval_single_layer(center, radius, &m, xi, p), reference) < TARGET
+        rel(
+            cartesian::eval_single_layer(center, radius, &m, xi, p),
+            reference,
+        ) < TARGET
     })
 }
 
@@ -70,7 +73,10 @@ fn make_tri(aspect: f64, rot_deg: f64) -> Tri {
 
 #[test]
 fn bakeoff_cartesian_costs_no_more_than_bltc() {
-    eprintln!("\n{:>8} {:>6} {:>8} {:>8} {:>8} {:>8}", "sep", "aspect", "p_bltc", "p_cart", "t_bltc", "t_cart");
+    eprintln!(
+        "\n{:>8} {:>6} {:>8} {:>8} {:>8} {:>8}",
+        "sep", "aspect", "p_bltc", "p_cart", "t_bltc", "t_cart"
+    );
     let mut all_ok = true;
     for &sep in &[3.0_f64, 5.0, 8.0] {
         for &aspect in &[1.0_f64, 2.0, 4.0] {
@@ -89,7 +95,10 @@ fn bakeoff_cartesian_costs_no_more_than_bltc() {
             let tc = cartesian::n_terms(pc);
             eprintln!("{sep:>8.1} {aspect:>6.1} {pb:>8} {pc:>8} {tb:>8} {tc:>8}");
             // The headline: at matched accuracy Cartesian never costs MORE terms than BLTC.
-            assert!(tc <= tb, "sep={sep} aspect={aspect}: cartesian {tc} > bltc {tb}");
+            assert!(
+                tc <= tb,
+                "sep={sep} aspect={aspect}: cartesian {tc} > bltc {tb}"
+            );
         }
     }
     assert!(all_ok, "every config should converge within p≤14");
@@ -112,9 +121,18 @@ fn error_decreases_monotonically_with_distance() {
         let xi = Vec3::new(d, d * 0.6, d * 0.9);
         let reference = expansion::direct_single_layer(&[(tri, 1.0)], xi, REF_ORDER);
         let eb = rel(expansion::eval_single_layer(&c, &qb, xi), reference);
-        let ec = rel(cartesian::eval_single_layer(center, radius, &mc, xi, 6), reference);
-        assert!(eb < prev_b, "BLTC error should fall with distance at d={d}: {eb:.2e}");
-        assert!(ec < prev_c, "Cartesian error should fall with distance at d={d}: {ec:.2e}");
+        let ec = rel(
+            cartesian::eval_single_layer(center, radius, &mc, xi, 6),
+            reference,
+        );
+        assert!(
+            eb < prev_b,
+            "BLTC error should fall with distance at d={d}: {eb:.2e}"
+        );
+        assert!(
+            ec < prev_c,
+            "Cartesian error should fall with distance at d={d}: {ec:.2e}"
+        );
         prev_b = eb;
         prev_c = ec;
     }
@@ -131,7 +149,11 @@ fn accuracy_robust_to_aspect_ratio() {
         let reference = expansion::direct_single_layer(&[(tri, 1.0)], xi, REF_ORDER);
         let p = min_p_bltc(&tri, xi, reference, 14);
         assert!(p.is_some(), "aspect={aspect} should converge by p=14");
-        assert!(p.unwrap() <= 10, "aspect={aspect} needed p={} (>10)", p.unwrap());
+        assert!(
+            p.unwrap() <= 10,
+            "aspect={aspect} needed p={} (>10)",
+            p.unwrap()
+        );
     }
 }
 
@@ -151,7 +173,10 @@ fn accuracy_invariant_under_orientation() {
         errs.push(rel(expansion::eval_single_layer(&c, &q, xi), reference));
     }
     let max = errs.iter().copied().fold(0.0_f64, f64::max);
-    assert!(max < 1e-5, "orientation sweep errors should all be small: {errs:?}");
+    assert!(
+        max < 1e-5,
+        "orientation sweep errors should all be small: {errs:?}"
+    );
 }
 
 #[test]
