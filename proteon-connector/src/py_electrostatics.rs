@@ -20,14 +20,11 @@ use pyo3::types::PyDict;
 use proteon_core::surface::geom::Vec3;
 use proteon_core::surface::mesh::Mesh;
 use proteon_electrostatics::{
-    born_rfenergy, espotential, read_hmo, read_msms, read_off, read_pqr, rfenergy,
-    solve_local_elements_auto, solve_nonlocal_elements_auto, solve_nonlocal_elements_q, write_off,
-    AdaptiveConfig, Charge, Domain, Locality, Params, Quadrature, QualityReport, Severity,
-    SolveConfig, TopologyReport, Tri,
+    born_rfenergy, read_hmo, read_msms, read_off, read_pqr, solve_surface, write_off,
+    AdaptiveConfig, Charge, Locality, Params, Quadrature, SolveConfig, SurfaceSolveError,
+    SurfaceSolveOptions,
 };
 
-/// Triangle count past which the dense O(N²) solve is warned about.
-const N_WARN: usize = 15_000;
 
 /// Closed-form Born reaction-field (solvation) energy of a single ion (kJ/mol).
 ///
@@ -89,23 +86,16 @@ fn validate_params(eps_omega: f64, eps_sigma: f64, eps_inf: f64, lambda_: f64) -
     Ok(())
 }
 
-/// Owned solve result (no Python types — built off the GIL).
-struct SolveOut {
-    phi: Vec<f64>,
-    rfenergy: f64,
-    iterations: usize,
-    residual: f64,
-    converged: bool,
-    /// Regular-Yukawa quadrature actually used ("fixed" / "adaptive") — surfaced so an
-    /// adaptive request that fell back, or a fixed run, is never silently confused.
-    quadrature: &'static str,
-    /// Adaptive panels that hit the depth cap with the error still above tolerance
-    /// (0 for fixed). Non-zero ⇒ the near-singular result is not certified for those.
-    capped_panels: usize,
-}
-
 /// Solve the local/nonlocal BEM on a surface mesh with point charges and return the
 /// per-vertex electrostatic potential plus diagnostics.
+///
+/// A thin shim over `proteon_electrostatics::solve_surface` — the connector validates
+/// the numpy inputs, runs the (heavy) solve off the GIL, re-emits the solve's advisories
+/// as Python warnings, and packs the outcome into a dict. The science (degeneracy guard,
+/// topological acceptance + auto-orient, cavity gate, mesh-acceptance quality gate,
+/// charge→body assignment, local/nonlocal dispatch, Γ-trace potential) lives in the
+/// pure-Rust entry point, shared with the `proteon electrostatics` CLI so they cannot
+/// drift.
 ///
 /// Inputs: `vertices` (V×3 float64), `triangles` (F×3 int), `charge_positions` (Q×3
 /// float64), `charge_values` (Q,). `quadrature` selects the regular-Yukawa rule for the
@@ -146,7 +136,7 @@ fn solve_surface_py<'py>(
     quadrature: &str,
     allow_low_quality: bool,
 ) -> PyResult<Py<PyDict>> {
-    // --- validate shapes -----------------------------------------------------
+    // --- validate numpy shapes -----------------------------------------------
     if vertices.shape().len() != 2 || vertices.shape()[1] != 3 {
         return Err(PyValueError::new_err("vertices must be V×3"));
     }
@@ -157,16 +147,10 @@ fn solve_surface_py<'py>(
         return Err(PyValueError::new_err("charge_positions must be Q×3"));
     }
     let nv = vertices.shape()[0];
-    let nf = triangles.shape()[0];
     let nq = charge_positions.shape()[0];
     if charge_values.shape() != [nq] {
         return Err(PyValueError::new_err(
             "charge_values length must match charge_positions",
-        ));
-    }
-    if nf == 0 || nq == 0 {
-        return Err(PyValueError::new_err(
-            "need at least one triangle and one charge",
         ));
     }
     if !(tol.is_finite() && tol > 0.0) || max_iter == 0 || restart == 0 {
@@ -177,8 +161,7 @@ fn solve_surface_py<'py>(
     validate_params(eps_omega, eps_sigma, eps_inf, lambda_)?;
 
     // Quadrature selector (nonlocal regular-Yukawa). Adaptive is CPU-only and accurate
-    // near clefts; fixed is the fast default. Parsed here (with the GIL) so the off-GIL
-    // closure just consumes the Copy enum.
+    // near clefts; fixed is the fast default.
     let quad = match quadrature {
         "fixed" => Quadrature::Fixed,
         "adaptive" => Quadrature::Adaptive(AdaptiveConfig::default()),
@@ -197,257 +180,76 @@ fn solve_surface_py<'py>(
         )?;
     }
 
-    // Memory guard: the dense BEM holds 2 (local) or 4 (nonlocal) N×N f64 matrices.
-    // Refuse a job that would blow past the budget unless the caller opts in.
-    const MEM_BUDGET: u128 = 6 * (1 << 30); // 6 GiB
-    let blocks: u128 = if nonlocal_ { 4 } else { 2 };
-    let est = (nf as u128).saturating_mul(nf as u128).saturating_mul(8) * blocks;
-    if est > MEM_BUDGET && !allow_large {
-        return Err(PyValueError::new_err(format!(
-            "{nf} triangles would allocate ~{} GiB of dense matrices (the BEM is O(N²)); \
-             coarsen the SES mesh or pass allow_large=True to override.",
-            est >> 30
-        )));
-    }
-    if nf >= N_WARN {
-        let warnings = py.import("warnings")?;
-        let tail = "the dense BEM is O(N²) in memory and time — this will be slow/RAM-heavy. \
-             Over the dense budget it switches to the O(N)-memory matrix-free GPU solve \
-             if a CUDA device is present (slower per solve, but uncapped in mesh size).";
-        warnings.call_method1("warn", (format!("{nf} triangles: {tail}"),))?;
-    }
-
+    // --- extract C-contiguous slices -----------------------------------------
     let vflat = vertices
         .as_slice()
-        .map_err(|e| PyValueError::new_err(format!("vertices not C-contiguous: {e}")))?
-        .to_vec();
+        .map_err(|e| PyValueError::new_err(format!("vertices not C-contiguous: {e}")))?;
     let tflat = triangles
         .as_slice()
-        .map_err(|e| PyValueError::new_err(format!("triangles not C-contiguous: {e}")))?
-        .to_vec();
+        .map_err(|e| PyValueError::new_err(format!("triangles not C-contiguous: {e}")))?;
     let qpos = charge_positions
         .as_slice()
-        .map_err(|e| PyValueError::new_err(format!("charge_positions not C-contiguous: {e}")))?
-        .to_vec();
+        .map_err(|e| PyValueError::new_err(format!("charge_positions not C-contiguous: {e}")))?;
     let qval = charge_values
         .as_slice()
-        .map_err(|e| PyValueError::new_err(format!("charge_values not C-contiguous: {e}")))?
-        .to_vec();
+        .map_err(|e| PyValueError::new_err(format!("charge_values not C-contiguous: {e}")))?;
 
-    // Finite checks (a NaN/inf would otherwise propagate silently into the solve).
-    if vflat
-        .iter()
-        .chain(&qpos)
-        .chain(&qval)
-        .any(|v| !v.is_finite())
-    {
-        return Err(PyValueError::new_err(
-            "non-finite value in vertices / charge_positions / charge_values",
-        ));
-    }
-    // Triangle indices in range, and each triangle non-degenerate (so `Tri::new` —
-    // which asserts on a zero / non-finite normal — cannot panic off the GIL).
-    for f in 0..nf {
-        let mut idx = [0usize; 3];
-        for (k, slot) in idx.iter_mut().enumerate() {
-            let i = tflat[f * 3 + k];
-            if i < 0 || i as usize >= nv {
-                return Err(PyValueError::new_err("triangle index out of range"));
-            }
-            *slot = i as usize;
-        }
-        let p = |k: usize| Vec3::new(vflat[k * 3], vflat[k * 3 + 1], vflat[k * 3 + 2]);
-        let cross = (p(idx[1]) - p(idx[0])).cross(p(idx[2]) - p(idx[0]));
-        if !(cross.norm() > 0.0 && cross.norm().is_finite()) {
-            return Err(PyValueError::new_err(format!(
-                "degenerate (zero-area / collinear) triangle at index {f}"
-            )));
+    // Triangle indices must be in range here (negative / overflow would corrupt the u32
+    // cast); the pure solver re-checks degeneracy and finiteness.
+    for &i in tflat {
+        if i < 0 || i as usize >= nv {
+            return Err(PyValueError::new_err("triangle index out of range"));
         }
     }
 
-    let params = Params {
-        eps_omega,
-        eps_sigma,
-        eps_inf,
-        lambda: lambda_,
-    };
-    let cfg = SolveConfig {
-        tol,
-        restart,
-        max_iter,
-    };
-
-    // Build elements/charges (cheap, O(N)) and run the P6.5 mesh-acceptance check WITH
-    // the GIL — so issues are warned (and a refusal raised) BEFORE the heavy solve and
-    // survive even if the solve later fails. `Tri::new` cannot panic here: the
-    // per-triangle degeneracy guard above already rejected zero-area faces.
-    let vert = |k: usize| Vec3::new(vflat[k * 3], vflat[k * 3 + 1], vflat[k * 3 + 2]);
-    let mut mesh = Mesh {
-        verts: (0..nv).map(vert).collect(),
+    let mesh = Mesh {
+        verts: vflat
+            .chunks_exact(3)
+            .map(|c| Vec3::new(c[0], c[1], c[2]))
+            .collect(),
         normals: Vec::new(),
-        tris: (0..nf)
-            .map(|f| [tflat[f * 3] as u32, tflat[f * 3 + 1] as u32, tflat[f * 3 + 2] as u32])
+        tris: tflat
+            .chunks_exact(3)
+            .map(|c| [c[0] as u32, c[1] as u32, c[2] as u32])
             .collect(),
     };
+    let charges: Vec<Charge> = qpos
+        .chunks_exact(3)
+        .zip(qval)
+        .map(|(p, &val)| Charge { pos: Vec3::new(p[0], p[1], p[2]), val })
+        .collect();
 
-    // Topological acceptance + auto-flip: a closed, consistently-oriented mesh whose
-    // components are inside-out has the right geometry but a reversed double-layer sign.
-    // Flip each inward component to outward (PER COMPONENT — a single aggregate volume
-    // would mis-handle a multi-body mesh) and warn, rather than refuse. Genuinely broken
-    // topology (open / non-manifold / inconsistent winding / duplicate) refuses below.
-    // Component volumes are only meaningful for a closed, consistent mesh, so only
-    // auto-orient then.
-    let topo0 = TopologyReport::assess(&mesh);
-    // Auto-orient outward-from-solute by NESTING parity (body +, cavity −, island +) on a
-    // closed, consistent mesh — this is correct for cavities too (the scalar-f solve then
-    // handles them; multi-region cavity science gate passes). Component volumes are only
-    // meaningful for a closed, consistent mesh, so only orient then.
-    let flipped = if topo0.watertight && topo0.consistently_oriented {
-        mesh.orient_by_nesting()
-    } else {
-        false
+    let opts = SurfaceSolveOptions {
+        params: Params { eps_omega, eps_sigma, eps_inf, lambda: lambda_ },
+        cfg: SolveConfig { tol, restart, max_iter },
+        nonlocal: nonlocal_,
+        quadrature: quad,
+        allow_large,
+        allow_low_quality,
     };
-    if flipped {
-        let warnings = py.import("warnings")?;
-        warnings.call_method1(
-            "warn",
-            ("one or more mesh components were re-oriented outward-from-solute (by nesting \
-              parity) so the double-layer sign is correct.",),
-        )?;
-    }
-    let topology = TopologyReport::assess(&mesh);
-
-    // Build elements honouring any flip (swap the last two vertices when flipped).
-    let elements: Vec<Tri> = mesh
-        .tris
-        .iter()
-        .map(|t| {
-            Tri::new(
-                mesh.verts[t[0] as usize],
-                mesh.verts[t[1] as usize],
-                mesh.verts[t[2] as usize],
-            )
-        })
-        .collect();
-    let charges: Vec<Charge> = (0..nq)
-        .map(|q| Charge {
-            pos: Vec3::new(qpos[q * 3], qpos[q * 3 + 1], qpos[q * 3 + 2]),
-            val: qval[q],
-        })
-        .collect();
-
-    // Charge → solute-body assignment (which connected component contains each charge).
-    // With no nested components a charge is inside at most one body; `None` ⇒ in solvent
-    // (or, degenerately, ambiguous). A diagnostic that closes the "which component?"
-    // question; the single-region solve uses one dielectric regardless.
-    let charge_components: Vec<Option<usize>> =
-        charges.iter().map(|c| mesh.containing_component(c.pos)).collect();
-
-    // Cavities are validated for the LOCAL solve only (the cavity science gate is local;
-    // the nonlocal Yukawa formulation on alternating regions is not yet gated). This is a
-    // SCIENCE boundary, not a mesh-quality issue, so it is refused UNCONDITIONALLY — the
-    // allow_low_quality mesh-quality override must not enable unvalidated physics (review).
-    if nonlocal_ && topology.num_cavities > 0 {
-        return Err(PyValueError::new_err(format!(
-            "{} buried cavity / nested component(s) with nonlocal_=True: the nonlocal \
-             formulation on cavities is not yet validated (the cavity science gate is \
-             local-only). Use a single-region mesh, or the local solve.",
-            topology.num_cavities
-        )));
-    }
-
-    // Combined mesh-acceptance: topology + per-element geometry + charge placement.
-    let quality = QualityReport::assess(&elements, &charges);
-    let issues: Vec<_> = topology.issues().into_iter().chain(quality.issues()).collect();
-    {
-        let warnings = py.import("warnings")?;
-        for issue in &issues {
-            warnings.call_method1("warn", (format!("mesh/charge quality: {}", issue.message),))?;
-        }
-    }
-    if issues.iter().any(|i| i.severity == Severity::Error) && !allow_low_quality {
-        let msgs: Vec<String> = issues
-            .iter()
-            .filter(|i| i.severity == Severity::Error)
-            .map(|i| i.message.clone())
-            .collect();
-        return Err(PyValueError::new_err(format!(
-            "mesh/charge quality unacceptable for a reliable solve: {}. \
-             Fix the mesh/charge placement, or pass allow_low_quality=True to override.",
-            msgs.join("; ")
-        )));
-    }
 
     // --- heavy compute off the GIL -------------------------------------------
-    let result = py.allow_threads(move || -> Result<SolveOut, String> {
-        let vert = |k: usize| Vec3::new(vflat[k * 3], vflat[k * 3 + 1], vflat[k * 3 + 2]);
+    let sol = py
+        .allow_threads(|| solve_surface(mesh, &charges, &opts))
+        .map_err(surface_err_to_py)?;
 
-        // The CauchyData trait is object-safe; box the result so both localities share
-        // the post-processing path.
-        let (cauchy, engy, stats): (Box<dyn proteon_electrostatics::CauchyData>, f64, _) =
-            if nonlocal_ {
-                // Adaptive (accuracy requested) → CPU adaptive path DIRECTLY, never the
-                // size dispatcher, which could route a large mesh to the fixed-quadrature
-                // GPU path and silently swap accuracy. Fixed → the auto (GPU-capable) path.
-                let (r, s) = match quad {
-                    Quadrature::Adaptive(_) => {
-                        solve_nonlocal_elements_q(&elements, &charges, &params, &cfg, quad)
-                    }
-                    Quadrature::Fixed => {
-                        solve_nonlocal_elements_auto(&elements, &charges, &params, &cfg)
-                    }
-                }
-                .map_err(|e| e.to_string())?;
-                let e = rfenergy(&elements, &charges, &r);
-                (Box::new(r), e, s)
-            } else {
-                let (r, s) = solve_local_elements_auto(&elements, &charges, &params, &cfg)
-                    .map_err(|e| e.to_string())?;
-                let e = rfenergy(&elements, &charges, &r);
-                (Box::new(r), e, s)
-            };
-
-        // Per-vertex surface potential (Γ trace).
-        let phi: Vec<f64> = (0..nv)
-            .map(|k| {
-                espotential(
-                    Domain::Gamma,
-                    vert(k),
-                    &elements,
-                    &charges,
-                    &params,
-                    &*cauchy,
-                )
-            })
-            .collect();
-
-        if !engy.is_finite() || phi.iter().any(|v| !v.is_finite()) {
-            return Err("solve produced a non-finite energy / potential".to_string());
+    // Re-emit the solve's advisories (size, auto-flip, quality issues) as Python warnings.
+    {
+        let warnings = py.import("warnings")?;
+        for w in &sol.warnings {
+            warnings.call_method1("warn", (w.clone(),))?;
         }
+    }
 
-        Ok(SolveOut {
-            phi,
-            rfenergy: engy,
-            iterations: stats.iterations,
-            residual: stats.residual,
-            converged: stats.converged,
-            quadrature: match stats.quadrature {
-                Quadrature::Fixed => "fixed",
-                Quadrature::Adaptive(_) => "adaptive",
-            },
-            capped_panels: stats.capped_panels,
-        })
-    });
-
-    let out = result.map_err(PyValueError::new_err)?;
-
+    let topology = &sol.topology;
+    let quality = &sol.quality;
     let dict = PyDict::new(py);
-    dict.set_item("surface_potential", PyArray1::from_vec(py, out.phi))?;
-    dict.set_item("rfenergy", out.rfenergy)?;
-    dict.set_item("iterations", out.iterations)?;
-    dict.set_item("residual", out.residual)?;
-    dict.set_item("converged", out.converged)?;
-    dict.set_item("n_elements", nf)?;
+    dict.set_item("surface_potential", PyArray1::from_vec(py, sol.potential.clone()))?;
+    dict.set_item("rfenergy", sol.rfenergy)?;
+    dict.set_item("iterations", sol.iterations)?;
+    dict.set_item("residual", sol.residual)?;
+    dict.set_item("converged", sol.converged)?;
+    dict.set_item("n_elements", sol.n_elements)?;
     dict.set_item("watertight", topology.watertight)?;
     dict.set_item("oriented", topology.consistently_oriented)?;
     dict.set_item("is_outward", topology.is_outward)?;
@@ -455,43 +257,44 @@ fn solve_surface_py<'py>(
     dict.set_item("n_components", topology.num_components)?;
     dict.set_item("n_cavities", topology.num_cavities)?;
     dict.set_item("components_touch", topology.components_touch)?;
-    // Per-charge solute-body index (None ⇒ in solvent / not inside a single body).
     dict.set_item(
         "charge_components",
-        charge_components
+        sol.charge_components
             .iter()
             .map(|c| c.map(|i| i as i64))
             .collect::<Vec<Option<i64>>>(),
     )?;
     dict.set_item("n_duplicate_faces", topology.num_duplicate_faces)?;
-    // Some(k) → int; None (inconclusive) → Python None.
     dict.set_item("n_self_intersections", topology.num_self_intersections)?;
-    dict.set_item("flipped_to_outward", flipped)?;
-    dict.set_item("quadrature", out.quadrature)?;
-    dict.set_item("capped_panels", out.capped_panels)?;
-    // P6.5 mesh-acceptance metrics (the corresponding warnings were emitted before the
-    // solve, so they survive even a solve failure).
+    dict.set_item("flipped_to_outward", sol.flipped_to_outward)?;
+    dict.set_item("quadrature", sol.quadrature)?;
+    dict.set_item("capped_panels", sol.capped_panels)?;
     dict.set_item("min_angle_deg", quality.min_angle_deg)?;
     dict.set_item("max_aspect_ratio", quality.max_aspect_ratio)?;
     dict.set_item("n_near_degenerate", quality.n_near_degenerate)?;
     dict.set_item("min_charge_gap_ratio", quality.min_charge_gap_ratio)?;
     dict.set_item("n_charges_outside", quality.n_charges_outside)?;
 
-    // A capped adaptive solve means some near-singular panels did not reach tolerance;
-    // surface it so the caller can raise the depth or distrust those entries.
-    if out.capped_panels > 0 {
+    // A capped adaptive solve means some near-singular panels did not reach tolerance.
+    if sol.capped_panels > 0 {
         let warnings = py.import("warnings")?;
         warnings.call_method1(
             "warn",
             (format!(
                 "{} adaptive panels hit the depth cap without converging; the near-singular \
                  result is not certified for those entries.",
-                out.capped_panels
+                sol.capped_panels
             ),),
         )?;
     }
     Ok(dict.unbind())
 }
+
+/// Map a `SurfaceSolveError` to a Python exception (all are caller-fixable ⇒ `ValueError`).
+fn surface_err_to_py(e: SurfaceSolveError) -> PyErr {
+    PyValueError::new_err(e.to_string())
+}
+
 
 // =========================================================================================
 // File-format I/O (the NESSie `format/` layer) — load a surface mesh + charge set
