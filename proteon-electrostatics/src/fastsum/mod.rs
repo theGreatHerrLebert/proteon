@@ -21,3 +21,4 @@
 
 pub mod cheb;
 pub mod cubature;
+pub mod expansion;
