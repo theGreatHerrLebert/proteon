@@ -48,30 +48,40 @@ It should first become:
 
 ## Current State
 
+> **STATUS UPDATE (2026-06): this section was written against the groundwork stage
+> and is now largely obsolete.** The structural search is a **working end-to-end
+> product** — most of the "placeholder" list below is done. See the status notes.
+
 ### What Is Real
 
-- `proteon-align/src/search/alphabet.rs` contains:
-  - virtual-center construction
-  - nearest spatial neighbor selection
-  - 10D geometric feature extraction
-  - placeholder encoder and centroid lookup scaffolding
-  - unit tests for geometry / feature extraction
+- `proteon-align/src/search/alphabet.rs`: virtual-center construction, nearest
+  spatial-neighbor selection, 10D feature extraction, and the **trained** VQ-VAE
+  encoder (weights in `validation/alphabet_vqvae_rust.txt` — 9407 structures, 20-state
+  codebook, all 20 states used). Encoder is `10→10(ReLU)→10(ReLU)→2→VQ(20)`.
+- **Python search product** (`packages/proteon/src/proteon/search.py`): `encode_alphabet`
+  / `batch_encode_alphabet` (Rust-backed), `build_search_db` (k-mer postings + Arrow/
+  Parquet persistence, versioned), `save_search_db` / `load_search_db`, and `search`
+  (prefilter → diagonal voting → diagonal rescore → **TM-align rerank**) returning ranked
+  `SearchHit`s with `tm_score`/`rmsd`/`n_aligned`/`seq_identity`.
+- **CLI** (`proteon-search build | query | inspect`, `packages/proteon/src/proteon/search_cli.py`).
+- Tests: `tests/test_search.py`, `tests/test_search_index.py`, `tests/test_search_cli.py`.
+- `validation/train_alphabet.py` (training/distillation) + `validation/bench_foldseek.py`.
 
-- `validation/train_alphabet.py` exists for training / distillation work
-- `validation/bench_foldseek.py` exists for external benchmarking
+### What Is Still Placeholder / Missing
 
-### What Is Still Placeholder
-
-- encoder weights are placeholders
-- centroids are placeholders
-- no public API exposure
-- no database search implementation
-- no indexing layer
-- no retrieval metrics in CI
+- ~~encoder weights are placeholders~~ → **done** (trained VQ-VAE).
+- ~~no public API exposure~~ → **done** (Python `encode_alphabet`/`build_search_db`/`search`).
+- ~~no database search implementation~~ → **done** (`search`, end-to-end with rerank).
+- ~~no indexing layer~~ → **done** (k-mer postings + positional postings, persisted).
+- ~~no CLI~~ → **done** (`proteon-search`).
+- **no retrieval metrics in CI** — still missing (Recall@K / nDCG vs a Foldseek baseline
+  on a labeled set; roadmap P5 §12–13). **This is now the main open gap.**
+- domain/chain splitting, GPU encoding — open, lower priority.
 
 Implication:
 
-**Proteon currently has search groundwork, not a search product.**
+**Proteon now has a working structural-search product; the open work is retrieval-quality
+benchmarking + reliability gates, not the core pipeline.**
 
 ---
 
@@ -464,11 +474,15 @@ Tests:
 
 ## Immediate Next Steps
 
-1. Replace placeholder alphabet weights with trained parameters.
-2. Expose `encode_alphabet()` publicly.
-3. Define and implement the encoded-corpus format.
-4. Add a k-mer prefilter and top-K retrieval.
-5. Rerank top candidates with TM-align.
+> **All five original "first real search capability" steps are DONE** (trained weights,
+> `encode_alphabet`, corpus/DB format, k-mer prefilter + top-K, TM-align rerank), plus a
+> `proteon-search` CLI. Proteon has a usable Foldseek-style search.
 
-If these five steps are complete, proteon will have its first real search capability.
-Before that, it has search research code and validation scripts, but not a usable Foldseek-style interface.
+The remaining work is **reliability + quality**:
+
+1. **Retrieval benchmark suite** (P5 §12) — Recall@K / nDCG / MRR on a labeled set
+   (SCOP/CATH families) against a Foldseek baseline, runnable from a script.
+2. **Pin a small retrieval gate in CI** (P5 §13) — a tiny fixed corpus + expected top-K so
+   regressions in the prefilter/rerank are caught.
+3. Then, quality work guided by those metrics (prefilter sensitivity, `k`/weight tuning,
+   domain splitting).
