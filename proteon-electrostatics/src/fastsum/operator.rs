@@ -302,6 +302,10 @@ impl YukawaTreecode {
             (1..=MAX_FS_ORDER).contains(&p),
             "treecode order p must be in 1..={MAX_FS_ORDER}, got {p}"
         );
+        assert!(
+            kappa.is_finite() && kappa >= 0.0,
+            "Yukawa exponent kappa must be finite and >= 0, got {kappa}"
+        );
         let centroids: Vec<Vec3> = elements
             .iter()
             .map(|t| (t.v1 + t.v2 + t.v3) * (1.0 / 3.0))

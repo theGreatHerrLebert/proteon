@@ -806,7 +806,44 @@ pub fn solve_nonlocal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::system::{DenseOperator, JacobiPreconditioner};
+    use crate::system::{DenseOperator, JacobiPreconditioner, NonlocalOperator};
+
+    #[test]
+    fn nonlocal_opref_equals_nonlocal_operator() {
+        // The refactor's NonlocalOpRef (borrowed &dyn) must be operation-identical to the
+        // existing NonlocalOperator (owned DenseOperators) — same matvec and same
+        // preconditioner diagonal — so the dense nonlocal path cannot drift.
+        let n = 4;
+        let mk = |seed: usize| {
+            let mut a = DenseOperator::zeros(n);
+            for i in 0..n {
+                for j in 0..n {
+                    a.set(i, j, (((i * 7 + j * 3 + seed) % 11) as f64 - 5.0) * 0.1);
+                }
+            }
+            a
+        };
+        let (v, k, vy, ky) = (mk(0), mk(1), mk(2), mk(3));
+        let (eo, es, ei) = (1.0, 78.0, 1.8);
+        let owned = NonlocalOperator {
+            v: v.clone(),
+            k: k.clone(),
+            vy: vy.clone(),
+            ky: ky.clone(),
+            eps_omega: eo,
+            eps_sigma: es,
+            eps_inf: ei,
+        };
+        let borrowed = NonlocalOpRef { v: &v, k: &k, vy: &vy, ky: &ky, eps_omega: eo, eps_sigma: es, eps_inf: ei };
+
+        let x: Vec<f64> = (0..3 * n).map(|i| ((i % 5) as f64) - 2.0).collect();
+        let mut yo = vec![0.0; 3 * n];
+        let mut yb = vec![0.0; 3 * n];
+        owned.matvec(&x, &mut yo);
+        borrowed.matvec(&x, &mut yb);
+        assert_eq!(yo, yb, "matvec must be bit-identical");
+        assert_eq!(owned.diagonal(), borrowed.diagonal(), "preconditioner diagonal identical");
+    }
 
     fn op_3x3() -> DenseOperator {
         // Diagonally dominant, non-symmetric — a well-posed small system.

@@ -29,14 +29,12 @@ use proteon_core::surface::geom::Vec3;
 /// Series/closed-form branch threshold on `yukawa·|x−ξ|` (NESSie uses `0.1`).
 pub const SERIES_THRESHOLD: f64 = 0.1;
 
-/// Regular part of the single-layer Yukawa potential at quadrature point `x` for
-/// observation point `ξ` (premultiplied by 4π). NESSie `_regularyukawapot(SingleLayer…)`.
-#[inline]
-fn regular_yukawa_pot_single(x: Vec3, xi: Vec3, yukawa: f64) -> f64 {
-    let rnorm = (x - xi).norm();
-    if rnorm <= ETOL_F64 {
-        return -yukawa; // limit r → 0
-    }
+/// Stable scalar `(e^{−κr} − 1)/r` (the single-layer regular-Yukawa kernel value), with
+/// the alternating-series branch for small `κr` (`< 0.1`) to guard the `e^{−c} − 1`
+/// cancellation. Assumes `r > 0`. Shared by the dense collocation and the P8 treecode
+/// far-field eval so both use the *same* numerically-stable kernel.
+#[must_use]
+pub(crate) fn regyuk_single_scalar(rnorm: f64, yukawa: f64) -> f64 {
     let scalednorm = yukawa * rnorm;
     if scalednorm < SERIES_THRESHOLD {
         // Alternating series for e^(−c) − 1 = Σ (−c)^i / i!, guarding cancellation.
@@ -55,15 +53,12 @@ fn regular_yukawa_pot_single(x: Vec3, xi: Vec3, yukawa: f64) -> f64 {
     ((-scalednorm).exp() - 1.0) / rnorm
 }
 
-/// Regular part of the double-layer Yukawa potential (normal derivative) at `x` for
-/// `ξ` (premultiplied by 4π). NESSie `_regularyukawapot(DoubleLayer…)`.
-#[inline]
-fn regular_yukawa_pot_double(x: Vec3, xi: Vec3, yukawa: f64, normal: Vec3) -> f64 {
-    let rnorm = (x - xi).norm();
-    if rnorm <= ETOL_F64 {
-        return yukawa * yukawa / 2.0 / 3.0_f64.sqrt(); // limit r → 0
-    }
-    let cosovernorm2 = (x - xi).dot(normal) / (rnorm * rnorm * rnorm);
+/// Stable scalar coefficient `1 − (1 + κr)e^{−κr}` (the double-layer regular-Yukawa
+/// magnitude, geometry factored out), with the series branch for small `κr`. Its true
+/// value is `O((κr)²)`, so the closed form catastrophically cancels for small `κr` — the
+/// series recovers it. Assumes `r > 0`.
+#[must_use]
+pub(crate) fn regyuk_double_coef(rnorm: f64, yukawa: f64) -> f64 {
     let scalednorm = yukawa * rnorm;
     if scalednorm < SERIES_THRESHOLD {
         // Series for 1 − (c+1)e^(−c) = Σ (−c)^i (i−1) / i!  (i ≥ 2).
@@ -77,9 +72,32 @@ fn regular_yukawa_pot_double(x: Vec3, xi: Vec3, yukawa: f64, normal: Vec3) -> f6
             tsum += term * (f64::from(i) - 1.0);
             term *= -scalednorm / (f64::from(i) + 1.0);
         }
-        return tsum * cosovernorm2;
+        return tsum;
     }
-    (1.0 - (1.0 + scalednorm) * (-scalednorm).exp()) * cosovernorm2
+    1.0 - (1.0 + scalednorm) * (-scalednorm).exp()
+}
+
+/// Regular part of the single-layer Yukawa potential at quadrature point `x` for
+/// observation point `ξ` (premultiplied by 4π). NESSie `_regularyukawapot(SingleLayer…)`.
+#[inline]
+fn regular_yukawa_pot_single(x: Vec3, xi: Vec3, yukawa: f64) -> f64 {
+    let rnorm = (x - xi).norm();
+    if rnorm <= ETOL_F64 {
+        return -yukawa; // limit r → 0
+    }
+    regyuk_single_scalar(rnorm, yukawa)
+}
+
+/// Regular part of the double-layer Yukawa potential (normal derivative) at `x` for
+/// `ξ` (premultiplied by 4π). NESSie `_regularyukawapot(DoubleLayer…)`.
+#[inline]
+fn regular_yukawa_pot_double(x: Vec3, xi: Vec3, yukawa: f64, normal: Vec3) -> f64 {
+    let rnorm = (x - xi).norm();
+    if rnorm <= ETOL_F64 {
+        return yukawa * yukawa / 2.0 / 3.0_f64.sqrt(); // limit r → 0
+    }
+    let cosovernorm2 = (x - xi).dot(normal) / (rnorm * rnorm * rnorm);
+    regyuk_double_coef(rnorm, yukawa) * cosovernorm2
 }
 
 /// Regular part of the single/double-layer Yukawa potential at `x` for `ξ` (×4π). Used
