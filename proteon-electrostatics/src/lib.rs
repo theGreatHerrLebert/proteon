@@ -87,7 +87,8 @@ pub use post::{espotential, rfenergy, ENERGY_FACTOR, POTPREFACTOR};
 pub use quadrature::{radon7, TriangleQuad};
 pub use quality::{QualityIssue, QualityReport, Severity, TopologyReport};
 pub use surface::{
-    solve_surface, SurfaceSolution, SurfaceSolveError, SurfaceSolveOptions, MEM_BUDGET, N_WARN,
+    solve_surface, FastSummation, SurfaceSolution, SurfaceSolveError, SurfaceSolveOptions,
+    MEM_BUDGET, N_WARN,
 };
 pub use xie::{scalemodel, XieKind, XieModel};
 pub use solve::{

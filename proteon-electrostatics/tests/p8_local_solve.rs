@@ -6,8 +6,8 @@
 use proteon_core::surface::geom::Vec3;
 use proteon_electrostatics::{
     analytic_sphere_mesh, born_rfenergy, laplace_matrices, rfenergy, solve_local_elements,
-    solve_local_elements_treecode, Charge, LinearOperator, Locality, LocalOperator, Params,
-    SolveConfig, Tri, TWO_PI,
+    solve_local_elements_treecode, solve_surface, Charge, FastSummation, LinearOperator, Locality,
+    LocalOperator, Params, SolveConfig, SurfaceSolveOptions, Tri, TWO_PI,
 };
 
 fn sphere_elements(radius: f64, subdiv: u32) -> Vec<Tri> {
@@ -94,6 +94,42 @@ fn treecode_solution_solves_the_dense_system() {
     let rel_resid = l2(&resid) / l2(&b1).max(1e-300);
     eprintln!("treecode u dense-residual: {rel_resid:.3e}");
     assert!(rel_resid < 2e-3, "treecode u doesn't solve the dense system: {rel_resid:.3e}");
+}
+
+#[test]
+fn solve_surface_fast_summation_matches_dense() {
+    // The opt-in SurfaceSolveOptions.fast_summation routes the local solve through the
+    // treecode and must reproduce the dense surface_potential pipeline's energy + per-
+    // vertex potential.
+    let mesh = analytic_sphere_mesh(2.0, 3);
+    let charges = [Charge { pos: Vec3::new(0.0, 0.0, 0.0), val: 1.0 }];
+    let params = Params { eps_omega: 1.0, eps_sigma: 78.0, eps_inf: 1.8, lambda: 20.0 };
+    let cfg = SolveConfig { tol: 1e-9, ..Default::default() };
+
+    let dense_opts = SurfaceSolveOptions { params, cfg, ..Default::default() };
+    let out_dense = solve_surface(mesh.clone(), &charges, &dense_opts).result.expect("dense");
+
+    let tc_opts = SurfaceSolveOptions {
+        params,
+        cfg,
+        fast_summation: Some(FastSummation { p: 8, theta: 0.45 }),
+        ..Default::default()
+    };
+    let out_tc = solve_surface(mesh, &charges, &tc_opts).result.expect("treecode");
+
+    assert!(out_tc.converged);
+    let re = rel(out_tc.rfenergy, out_dense.rfenergy);
+    eprintln!("surface_solve fast_summation rfenergy rel: {re:.3e}");
+    assert!(re < 2e-3, "fast_summation rfenergy off dense by {re:.3e}");
+    // Per-vertex potentials agree too.
+    let dp = l2(&out_dense.potential);
+    let diff: Vec<f64> = out_tc
+        .potential
+        .iter()
+        .zip(&out_dense.potential)
+        .map(|(a, b)| a - b)
+        .collect();
+    assert!(l2(&diff) / dp.max(1e-300) < 5e-3, "per-vertex potential drift too large");
 }
 
 #[test]

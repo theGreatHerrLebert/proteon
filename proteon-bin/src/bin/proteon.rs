@@ -274,6 +274,16 @@ struct ElectrostaticsArgs {
     /// Solve despite Error-severity mesh/charge quality issues (still reported).
     #[arg(long)]
     allow_low_quality: bool,
+    /// Use the P8 treecode fast-summation local solve (O(N) memory — for meshes too
+    /// large for the dense O(N²) matrices). Local solve only; no effect with --nonlocal.
+    #[arg(long)]
+    fast_summation: bool,
+    /// Treecode Cartesian expansion order (accuracy; higher = tighter, costlier).
+    #[arg(long = "fs-order", default_value_t = 8)]
+    fs_order: usize,
+    /// Treecode MAC admissibility ratio, in (0, 1).
+    #[arg(long = "fs-theta", default_value_t = 0.45)]
+    fs_theta: f64,
     /// Write the per-vertex potential to this file as TSV (`x\ty\tz\tpotential`).
     #[arg(long)]
     potential_out: Option<PathBuf>,
@@ -845,6 +855,12 @@ fn run_electrostatics(args: &ElectrostaticsArgs) -> Result<()> {
         quadrature: quad,
         allow_large: args.allow_large,
         allow_low_quality: args.allow_low_quality,
+        // Opt-in treecode (local only): enabled when --fast-summation is passed.
+        fast_summation: if args.fast_summation {
+            Some(electro::FastSummation { p: args.fs_order, theta: args.fs_theta })
+        } else {
+            None
+        },
     };
 
     let output = electro::solve_surface(mesh, &charges, &opts);

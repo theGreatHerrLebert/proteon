@@ -232,6 +232,7 @@ fn solve_surface_py<'py>(
         quadrature: quad,
         allow_large,
         allow_low_quality,
+        fast_summation: None, // dense by default; treecode opt-in exposed via the CLI / Rust API
     };
 
     // --- heavy compute off the GIL -------------------------------------------

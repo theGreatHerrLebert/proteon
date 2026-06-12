@@ -296,6 +296,37 @@ fn electrostatics_solves_off_plus_pqr() {
 }
 
 #[test]
+fn electrostatics_fast_summation_matches_dense() {
+    let off = format_fixture("na.off");
+    let pqr = format_fixture("na.pqr");
+    let dense = run(&[
+        "electrostatics",
+        "--off",
+        off.to_str().unwrap(),
+        "--pqr",
+        pqr.to_str().unwrap(),
+    ]);
+    let tc = run(&[
+        "electrostatics",
+        "--off",
+        off.to_str().unwrap(),
+        "--pqr",
+        pqr.to_str().unwrap(),
+        "--fast-summation",
+        "--fs-order",
+        "8",
+        "--fs-theta",
+        "0.45",
+    ]);
+    assert_eq!(dense.2, 0);
+    assert_eq!(tc.2, 0, "fast-summation solve should succeed: {}", tc.1);
+    let e_dense: f64 = col(&dense.0, "rfenergy_kj_mol").parse().unwrap();
+    let e_tc: f64 = col(&tc.0, "rfenergy_kj_mol").parse().unwrap();
+    let rel = (e_tc - e_dense).abs() / e_dense.abs();
+    assert!(rel < 1e-3, "treecode rfenergy {e_tc} off dense {e_dense} (rel {rel:.2e})");
+}
+
+#[test]
 fn electrostatics_off_without_pqr_fails() {
     let off = format_fixture("na.off");
     let (_stdout, stderr, code) = run(&["electrostatics", "--off", off.to_str().unwrap()]);

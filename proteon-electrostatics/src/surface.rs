@@ -22,8 +22,8 @@ use crate::model::{Charge, Domain, Params, Tri};
 use crate::post::{espotential, rfenergy};
 use crate::quality::{QualityReport, Severity, TopologyReport};
 use crate::solve::{
-    solve_local_elements_auto, solve_nonlocal_elements_auto, solve_nonlocal_elements_q, CauchyData,
-    SolveConfig,
+    solve_local_elements_auto, solve_local_elements_treecode, solve_nonlocal_elements_auto,
+    solve_nonlocal_elements_q, CauchyData, SolveConfig,
 };
 use crate::system::Quadrature;
 
@@ -34,6 +34,18 @@ pub const MEM_BUDGET: u128 = 6 * (1 << 30); // 6 GiB
 
 /// Triangle count past which the dense O(N²) solve earns a "this will be slow" advisory.
 pub const N_WARN: usize = 15_000;
+
+/// Opt-in fast-summation (P8 treecode) settings for the **local** solve. The treecode's
+/// realized win today is O(N) memory — solving meshes too large for the dense O(N²)
+/// matrices — not raw matvec speed (see `devdocs/TO_ELECTROSTATICS_P8.md` §5.1), so it is
+/// **never** auto-enabled; a caller asks for it explicitly with calibrated `(p, θ)`.
+#[derive(Clone, Copy)]
+pub struct FastSummation {
+    /// Cartesian expansion order (accuracy knob; higher = tighter, costlier).
+    pub p: usize,
+    /// MAC admissibility ratio, in `(0, 1)`.
+    pub theta: f64,
+}
 
 /// Tunables for [`solve_surface`] beyond the mesh + charges themselves.
 pub struct SurfaceSolveOptions {
@@ -49,6 +61,10 @@ pub struct SurfaceSolveOptions {
     pub allow_large: bool,
     /// Override the mesh-acceptance refusal (solve despite Error-severity quality issues).
     pub allow_low_quality: bool,
+    /// Opt-in treecode fast summation for the local solve (`None` = exact dense). When
+    /// set, the dense-matrix memory guard is bypassed (the treecode is the point of
+    /// asking). Has no effect on the nonlocal solve (warned), which stays dense (P8.4).
+    pub fast_summation: Option<FastSummation>,
 }
 
 impl Default for SurfaceSolveOptions {
@@ -65,6 +81,7 @@ impl Default for SurfaceSolveOptions {
             quadrature: Quadrature::Fixed,
             allow_large: false,
             allow_low_quality: false,
+            fast_summation: None,
         }
     }
 }
@@ -212,6 +229,19 @@ fn validate_options(opts: &SurfaceSolveOptions) -> Result<(), SurfaceSolveError>
             )));
         }
     }
+    if let Some(fs) = opts.fast_summation {
+        if fs.p == 0 {
+            return Err(SurfaceSolveError::InvalidParams(
+                "fast_summation.p (expansion order) must be ≥ 1".to_string(),
+            ));
+        }
+        if !(fs.theta.is_finite() && fs.theta > 0.0 && fs.theta < 1.0) {
+            return Err(SurfaceSolveError::InvalidParams(format!(
+                "fast_summation.theta must be in (0, 1), got {}",
+                fs.theta
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -229,11 +259,23 @@ fn solve_surface_inner(
 
     validate_options(opts)?;
 
+    // A local fast-summation request is treecode-only (O(N) memory), so it bypasses the
+    // dense guard; it has no nonlocal back-end yet (P8.4) — warn and fall through to the
+    // dense nonlocal solve rather than silently ignoring the request.
+    let use_treecode = opts.fast_summation.is_some() && !opts.nonlocal;
+    if opts.fast_summation.is_some() && opts.nonlocal {
+        warnings.push(
+            "fast_summation has no effect on the nonlocal solve yet (treecode is local-only, \
+             P8.4); the dense nonlocal path is used."
+                .to_string(),
+        );
+    }
+
     // Dense memory guard (before the per-element work, matching the original ordering) +
-    // the size advisory.
+    // the size advisory. The treecode path is O(N) memory, so the guard does not apply.
     let blocks: u128 = if opts.nonlocal { 4 } else { 2 };
     let est = (nf as u128).saturating_mul(nf as u128).saturating_mul(8) * blocks;
-    if est > MEM_BUDGET && !opts.allow_large {
+    if est > MEM_BUDGET && !opts.allow_large && !use_treecode {
         return Err(SurfaceSolveError::OverBudget {
             n_elements: nf,
             gib: est >> 30,
@@ -349,6 +391,13 @@ fn solve_surface_inner(
             }
         }
         .map_err(|e| SurfaceSolveError::Solve(e.to_string()))?;
+        let e = rfenergy(&elements, charges, &r);
+        (Box::new(r), e, s)
+    } else if let Some(fs) = opts.fast_summation {
+        // Opt-in treecode local solve (O(N) memory; see FastSummation docs).
+        let (r, s) =
+            solve_local_elements_treecode(&elements, charges, &opts.params, &opts.cfg, fs.p, fs.theta)
+                .map_err(|e| SurfaceSolveError::Solve(e.to_string()))?;
         let e = rfenergy(&elements, charges, &r);
         (Box::new(r), e, s)
     } else {
