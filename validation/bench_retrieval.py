@@ -62,8 +62,19 @@ def build_truth_for_query(
         n_threads=-1,
         fast=True,
     )
+    # tm_align_one_to_many returns a BatchResult: item.index is the target index and
+    # item.value is the AlignResult. Map by index so a failed alignment simply drops that
+    # target rather than shifting the path alignment.
+    by_target: dict[int, object] = {}
+    for item in results.items:
+        if not item.ok:
+            continue
+        by_target[item.index] = item.value
     rows = []
-    for path, result in zip(target_paths, results):
+    for ti, path in enumerate(target_paths):
+        result = by_target.get(ti)
+        if result is None:
+            continue
         score = max(result.tm_score_chain1, result.tm_score_chain2)
         rows.append(
             {
