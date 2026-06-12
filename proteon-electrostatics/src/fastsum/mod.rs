@@ -23,3 +23,5 @@ pub mod cartesian;
 pub mod cheb;
 pub mod cubature;
 pub mod expansion;
+pub mod octree;
+pub mod operator;

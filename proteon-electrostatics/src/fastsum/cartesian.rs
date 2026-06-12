@@ -119,6 +119,73 @@ pub fn eval_single_layer(center: Vec3, moments: &[f64], xi: Vec3, p: usize) -> f
     acc
 }
 
+/// Panel-aware double-layer **vector** moments `W_m = Σ_j x_j n_j ∫_{T_j} (y−y_c)^m dS`,
+/// dense `(p+1)³` of `Vec3` (the dipole eval uses degrees `|m| ≤ p−1`).
+#[must_use]
+pub fn double_layer_moments(center: Vec3, panels: &[(Tri, f64)], p: usize) -> Vec<Vec3> {
+    let n = p + 1;
+    let mut w = vec![Vec3::new(0.0, 0.0, 0.0); n * n * n];
+    let cub_order = panel_order_for_degree(p);
+    for (tri, x) in panels {
+        let nrm = tri.normal;
+        for cp in triangle_cubature(tri, cub_order) {
+            let u = cp.pos - center;
+            let mut px = vec![1.0; n];
+            let mut py = vec![1.0; n];
+            let mut pz = vec![1.0; n];
+            for t in 1..n {
+                px[t] = px[t - 1] * u.x;
+                py[t] = py[t - 1] * u.y;
+                pz[t] = pz[t - 1] * u.z;
+            }
+            let scale = x * cp.w;
+            for i in 0..n {
+                for j in 0..(n - i) {
+                    let pij = scale * px[i] * py[j];
+                    for k in 0..(n - i - j) {
+                        let id = cidx(i, j, k, p);
+                        w[id] = w[id] + nrm * (pij * pz[k]);
+                    }
+                }
+            }
+        }
+    }
+    w
+}
+
+/// Evaluate the double-layer Cartesian far field: `n·∇_y G` expanded gives
+/// `Σ_{|k|≤p} a_k Σ_i k_i (W_{k−e_i})_i` — the Taylor coefficients contracted with the
+/// degree-lowered vector moments.
+#[must_use]
+pub fn eval_double_layer(center: Vec3, w_moments: &[Vec3], xi: Vec3, p: usize) -> f64 {
+    let a = coulomb_taylor_coeffs(xi - center, p);
+    let n = p + 1;
+    let mut acc = 0.0;
+    for i in 0..n {
+        for j in 0..(n - i) {
+            for k in 0..(n - i - j) {
+                if i + j + k == 0 {
+                    continue; // k_i ≥ 1 required for the degree-lowered moment
+                }
+                let ak = a[cidx(i, j, k, p)];
+                let idx = [i, j, k];
+                let mut s = 0.0;
+                for (d, &kd) in idx.iter().enumerate() {
+                    if kd >= 1 {
+                        let mut m = idx;
+                        m[d] -= 1;
+                        let wm = w_moments[cidx(m[0], m[1], m[2], p)];
+                        let wcomp = [wm.x, wm.y, wm.z][d];
+                        s += kd as f64 * wcomp;
+                    }
+                }
+                acc += ak * s;
+            }
+        }
+    }
+    acc
+}
+
 /// Number of terms in a total-degree-`p` Cartesian expansion, `C(p+3, 3)`.
 #[must_use]
 pub fn n_terms(p: usize) -> usize {
@@ -194,6 +261,39 @@ mod tests {
         assert!(rel(cart, reference) < 1e-9, "cartesian vs ref");
         assert!(rel(bltc, reference) < 1e-9, "bltc vs ref");
         assert!(rel(cart, bltc) < 1e-8, "cartesian {cart} vs bltc {bltc}");
+    }
+
+    #[test]
+    fn cartesian_double_layer_converges_and_matches() {
+        use crate::fastsum::expansion::direct_double_layer;
+        let tri = tilted_tri();
+        let (lo, hi) = tri_bbox(&tri);
+        let center = (lo + hi) * 0.5;
+        let xi = Vec3::new(5.0, 4.0, 6.0);
+        let reference = direct_double_layer(&[(tri, 1.0)], xi, 24);
+        assert!(reference.abs() > 1e-6, "non-trivial reference: {reference}");
+        let err = |p: usize| {
+            let w = double_layer_moments(center, &[(tri, 1.0)], p);
+            rel(eval_double_layer(center, &w, xi, p), reference)
+        };
+        let e3 = err(3);
+        let e8 = err(8);
+        assert!(e8 < e3, "Cartesian dipole should converge: {e3:.3e} -> {e8:.3e}");
+        assert!(e8 < 1e-8, "p=8 Cartesian dipole should be tight, got {e8:.3e}");
+    }
+
+    #[test]
+    fn cartesian_dipole_flips_with_normal() {
+        use crate::fastsum::expansion::direct_double_layer;
+        let tri = tilted_tri();
+        let xi = Vec3::new(4.0, 5.0, 3.0);
+        let bare = direct_double_layer(&[(tri, 1.0)], xi, 24);
+        let flipped = Tri::new(tri.v1, tri.v3, tri.v2);
+        let (lo, hi) = tri_bbox(&flipped);
+        let center = (lo + hi) * 0.5;
+        let w = double_layer_moments(center, &[(flipped, 1.0)], 8);
+        let got = eval_double_layer(center, &w, xi, 8);
+        assert!(rel(got, -bare) < 1e-6, "flipped {got} vs -bare {}", -bare);
     }
 
     #[test]
