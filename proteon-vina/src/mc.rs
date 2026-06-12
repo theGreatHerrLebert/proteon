@@ -143,6 +143,10 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
 
     for step in 0..params.global_steps {
         // Mutate a copy of the current pose, then locally minimise it.
+        // gyration radius is taken from the *current* pose (at step 0, the
+        // randomized placement). Upstream reads it from stale model coords
+        // at step 0 (it mutates before refreshing coords); using the actual
+        // pose here is more principled and only shifts the seeded trajectory.
         let gr = gyration_radius(&tree.apply(&cur_conf), cur_conf.center);
         let mut candidate = cur_conf.clone();
         mutate_conf(&mut candidate, gr, params.mutation_amplitude, rng);
@@ -197,12 +201,15 @@ fn insert_clustered(pool: &mut Vec<DockPose>, pose: DockPose, min_rmsd: f64, cap
     *pool = greedy_cluster(merged, min_rmsd, capacity);
 }
 
-/// Sort poses by ascending search energy, then greedily keep each pose
-/// only if it is ≥ `min_rmsd` from every already-kept (lower-energy)
-/// pose, up to `capacity`. Because it always keeps the best of any
-/// near-duplicate set and re-checks every candidate against the *whole*
-/// kept set, the result is guaranteed pairwise ≥ `min_rmsd` (the
-/// non-transitive case a replace-first-match scheme misses).
+/// Greedy *leader* clustering by energy: sort poses ascending, then keep
+/// each pose only if it is ≥ `min_rmsd` from every already-kept pose, up
+/// to `capacity`. Because RMSD neighbourhoods are non-transitive this is
+/// not a unique partition, but two guarantees hold and are what we need:
+/// every retained pair is ≥ `min_rmsd` apart, and every dropped pose is
+/// within `min_rmsd` of an earlier (no-higher-energy) retained leader.
+/// This is the non-transitive case a replace-first-match scheme misses.
+/// Like upstream `add_to_output_container`, the pool is bounded: a pose
+/// dropped while at capacity is not later recoverable.
 fn greedy_cluster(mut poses: Vec<DockPose>, min_rmsd: f64, capacity: usize) -> Vec<DockPose> {
     poses.sort_by(|a, b| a.search_energy.total_cmp(&b.search_energy));
     let mut kept: Vec<DockPose> = Vec::new();
