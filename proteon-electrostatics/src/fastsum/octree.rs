@@ -56,6 +56,10 @@ impl Octree {
     /// collocation point (used for octant assignment).
     #[must_use]
     pub fn build(elements: &[Tri], centroids: &[Vec3], n_leaf: usize, max_depth: usize) -> Self {
+        // An empty geometry has no root — avoid a NaN bbox `(+∞, −∞)`.
+        if elements.is_empty() {
+            return Self { nodes: Vec::new() };
+        }
         let mut nodes = Vec::new();
         let all: Vec<usize> = (0..elements.len()).collect();
         build_node(elements, centroids, all, 0, n_leaf, max_depth, &mut nodes);
@@ -178,15 +182,39 @@ mod tests {
     }
 
     #[test]
-    fn leaves_respect_n_leaf() {
-        let els = grid_panels(4);
+    fn leaves_respect_n_leaf_when_depth_allows() {
+        // A well-distributed grid with a generous depth cap: every leaf must actually
+        // fit n_leaf (the split terminated on capacity, not the depth backstop).
+        let els = grid_panels(4); // 64 panels, spread over a 4³ cube
         let cs: Vec<Vec3> = els.iter().map(centroid).collect();
-        let tree = Octree::build(&els, &cs, 4, 12);
+        let n_leaf = 4;
+        let tree = Octree::build(&els, &cs, n_leaf, 20);
         for node in &tree.nodes {
             if node.children.is_empty() {
-                // A leaf either fits n_leaf or could not be split further.
-                assert!(node.panels.len() <= 4 || node.children.is_empty());
+                assert!(
+                    node.panels.len() <= n_leaf,
+                    "leaf has {} panels > n_leaf {n_leaf} despite a generous depth cap",
+                    node.panels.len()
+                );
             }
         }
+    }
+
+    #[test]
+    fn depth_cap_forces_oversized_leaves() {
+        // With max_depth = 0 the root is the only (leaf) node and holds everything — the
+        // non-tautological complement: oversized leaves occur exactly when forced.
+        let els = grid_panels(4);
+        let cs: Vec<Vec3> = els.iter().map(centroid).collect();
+        let tree = Octree::build(&els, &cs, 4, 0);
+        assert_eq!(tree.nodes.len(), 1, "max_depth=0 ⇒ root only");
+        assert_eq!(tree.nodes[0].panels.len(), els.len(), "root holds all panels");
+        assert!(tree.nodes[0].children.is_empty());
+    }
+
+    #[test]
+    fn empty_geometry_builds_empty_tree() {
+        let tree = Octree::build(&[], &[], 4, 10);
+        assert!(tree.nodes.is_empty(), "empty geometry ⇒ no nodes (no NaN root)");
     }
 }

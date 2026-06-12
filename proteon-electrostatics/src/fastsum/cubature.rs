@@ -63,13 +63,26 @@ pub struct CubPoint {
     pub w: f64,
 }
 
-/// Gauss–Legendre order needed to integrate a degree-`p` tensor cluster basis over a
-/// panel exactly: total degree on the triangle is `≤ 3p`, and the collapsed rule loses
-/// one degree to the Jacobian, so `2n − 2 ≥ 3p`.
+/// Gauss–Legendre order to integrate a polynomial of total degree `deg` over a panel
+/// exactly: the collapsed rule loses one degree to the Jacobian, so `2n − 2 ≥ deg`,
+/// i.e. `n = ⌈(deg + 2)/2⌉`.
+#[must_use]
+pub fn panel_order_for_total_degree(deg: usize) -> usize {
+    (deg + 2).div_ceil(2)
+}
+
+/// Order for the **tensor BLTC** cluster basis (degree `p` per axis ⇒ total degree
+/// `≤ 3p` on the planar panel).
 #[must_use]
 pub fn panel_order_for_degree(p: usize) -> usize {
-    // n = ceil((3p + 2) / 2), with a floor so even p = 0 gets a usable rule.
-    (3 * p + 2).div_ceil(2) + 1
+    panel_order_for_total_degree(3 * p)
+}
+
+/// Order for the **Cartesian** monomial moments `u^k`, `|k| ≤ p` (total degree `p` —
+/// a third of BLTC's, so a much cheaper panel rule).
+#[must_use]
+pub fn panel_order_for_cartesian(p: usize) -> usize {
+    panel_order_for_total_degree(p)
 }
 
 /// Triangle cubature by the collapsed (Duffy) tensor Gauss–Legendre map of order `n`.

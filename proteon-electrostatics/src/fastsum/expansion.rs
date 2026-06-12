@@ -180,6 +180,11 @@ pub fn direct_double_layer(panels: &[(Tri, f64)], xi: Vec3, cub_order: usize) ->
 }
 
 /// Evaluate the single-layer far field at target `xi`: `Σ_K (1/|xi − s_K|) · Q_K`.
+///
+/// **Precondition:** `xi` is outside the cluster box (a valid `θ < 1` MAC guarantees
+/// this in the operator). A target coinciding with a proxy point `s_K` divides by zero
+/// and yields a non-finite result — this evaluator is a far-field kernel, not a
+/// general-position one.
 #[must_use]
 pub fn eval_single_layer(cluster: &Cluster, moments: &[f64], xi: Vec3) -> f64 {
     let (nx, ny, nz) = cluster.dims();

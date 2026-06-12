@@ -53,12 +53,17 @@ pub fn bary_weights(p: usize) -> Vec<f64> {
 pub fn lagrange_basis(nodes: &[f64], weights: &[f64], y: f64) -> Vec<f64> {
     let n = nodes.len();
     let mut l = vec![0.0; n];
+    // Scale-aware on-node threshold: within this of a node, `weights/diff` can overflow
+    // and yield `∞/∞ → NaN`, so snap to the cardinal basis (`L_k(x_m) = δ_km`). The
+    // threshold is relative to the node span so it tracks the coordinate scale.
+    let span = (nodes[n - 1] - nodes[0]).abs().max(f64::MIN_POSITIVE);
+    let on_node_tol = span * 1e-13;
     let mut denom = 0.0;
     for k in 0..n {
         let diff = y - nodes[k];
-        if diff == 0.0 {
-            // Exactly on a node: L is the unit vector there. Clear any partial `t`
-            // values already written for earlier nodes before returning.
+        if diff.abs() <= on_node_tol {
+            // On (or within rounding of) a node: clear any partial `t` values already
+            // written for earlier nodes and return the unit vector there.
             l.fill(0.0);
             l[k] = 1.0;
             return l;

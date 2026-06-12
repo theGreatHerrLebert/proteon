@@ -38,9 +38,10 @@ fn min_p_bltc(tri: &Tri, xi: Vec3, reference: f64, pmax: usize) -> Option<usize>
 fn min_p_cartesian(tri: &Tri, xi: Vec3, reference: f64, pmax: usize) -> Option<usize> {
     let (lo, hi) = expansion::tri_bbox(tri);
     let center = (lo + hi) * 0.5;
+    let radius = (hi - lo).norm() * 0.5;
     (1..=pmax).find(|&p| {
-        let m = cartesian::single_layer_moments(center, &[(*tri, 1.0)], p);
-        rel(cartesian::eval_single_layer(center, &m, xi, p), reference) < TARGET
+        let m = cartesian::single_layer_moments(center, radius, &[(*tri, 1.0)], p);
+        rel(cartesian::eval_single_layer(center, radius, &m, xi, p), reference) < TARGET
     })
 }
 
@@ -100,9 +101,10 @@ fn error_decreases_monotonically_with_distance() {
     let tri = make_tri(1.0, 15.0);
     let (lo, hi) = expansion::tri_bbox(&tri);
     let center = (lo + hi) * 0.5;
+    let radius = (hi - lo).norm() * 0.5;
     let c = expansion::Cluster::new(lo, hi, 6);
     let qb = expansion::single_layer_moments(&c, &[(tri, 1.0)], 6);
-    let mc = cartesian::single_layer_moments(center, &[(tri, 1.0)], 6);
+    let mc = cartesian::single_layer_moments(center, radius, &[(tri, 1.0)], 6);
 
     let mut prev_b = f64::INFINITY;
     let mut prev_c = f64::INFINITY;
@@ -110,7 +112,7 @@ fn error_decreases_monotonically_with_distance() {
         let xi = Vec3::new(d, d * 0.6, d * 0.9);
         let reference = expansion::direct_single_layer(&[(tri, 1.0)], xi, REF_ORDER);
         let eb = rel(expansion::eval_single_layer(&c, &qb, xi), reference);
-        let ec = rel(cartesian::eval_single_layer(center, &mc, xi, 6), reference);
+        let ec = rel(cartesian::eval_single_layer(center, radius, &mc, xi, 6), reference);
         assert!(eb < prev_b, "BLTC error should fall with distance at d={d}: {eb:.2e}");
         assert!(ec < prev_c, "Cartesian error should fall with distance at d={d}: {ec:.2e}");
         prev_b = eb;

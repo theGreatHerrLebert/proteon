@@ -53,6 +53,13 @@ impl CollocationTreecode {
     }
 
     /// Build with explicit octree parameters.
+    ///
+    /// # Panics
+    /// If `theta` is not in `(0, 1)`. The enclosing-box MAC `radius/dist ≤ θ` is only
+    /// sound for `0 < θ < 1`: a panel point satisfies `|u| ≤ radius`, so `θ < 1`
+    /// guarantees the target is strictly outside the box and the Taylor expansion
+    /// converges. With `θ ≥ 1` a target inside the box could pass the MAC and hit a
+    /// singular/divergent expansion instead of the exact near field.
     #[must_use]
     pub fn with_params(
         elements: &[Tri],
@@ -62,6 +69,10 @@ impl CollocationTreecode {
         n_leaf: usize,
         max_depth: usize,
     ) -> Self {
+        assert!(
+            theta.is_finite() && theta > 0.0 && theta < 1.0,
+            "treecode MAC ratio theta must be in (0, 1), got {theta}"
+        );
         let centroids: Vec<Vec3> = elements
             .iter()
             .map(|t| (t.v1 + t.v2 + t.v3) * (1.0 / 3.0))
@@ -85,7 +96,7 @@ impl CollocationTreecode {
             .map(|node| {
                 let panels: Vec<(Tri, f64)> =
                     node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
-                cartesian::single_layer_moments(node.center, &panels, self.p)
+                cartesian::single_layer_moments(node.center, node.radius, &panels, self.p)
             })
             .collect()
     }
@@ -98,7 +109,7 @@ impl CollocationTreecode {
             .map(|node| {
                 let panels: Vec<(Tri, f64)> =
                     node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
-                cartesian::double_layer_moments(node.center, &panels, self.p)
+                cartesian::double_layer_moments(node.center, node.radius, &panels, self.p)
             })
             .collect()
     }
@@ -119,10 +130,10 @@ impl CollocationTreecode {
         if d > 0.0 && node.radius <= self.theta * d {
             return match self.kind {
                 PotentialKind::Single => {
-                    cartesian::eval_single_layer(node.center, &sl[node_idx], xi, self.p)
+                    cartesian::eval_single_layer(node.center, node.radius, &sl[node_idx], xi, self.p)
                 }
                 PotentialKind::Double => {
-                    cartesian::eval_double_layer(node.center, &dl[node_idx], xi, self.p)
+                    cartesian::eval_double_layer(node.center, node.radius, &dl[node_idx], xi, self.p)
                 }
             };
         }
@@ -169,7 +180,7 @@ impl LinearOperator for CollocationTreecode {
 mod tests {
     use super::*;
     use crate::analytic::analytic_sphere_mesh;
-    use crate::system::{laplace_matrices, DenseOperator};
+    use crate::system::laplace_matrices;
 
     fn sphere_elements(subdiv: u32) -> Vec<Tri> {
         let mesh = analytic_sphere_mesh(2.0, subdiv);
@@ -249,6 +260,90 @@ mod tests {
         let e3 = err_p(3);
         let e8 = err_p(8);
         assert!(e8 < e3, "matvec error should fall with p: {e3:.3e} -> {e8:.3e}");
+    }
+
+    /// Max over rows of `|y_tree[i] − y_dense[i]| / (|y_dense[i]| + scale)` — catches a
+    /// single bad row that an L2 norm could average away.
+    fn rowwise_max(a: &[f64], b: &[f64]) -> f64 {
+        let scale = b.iter().map(|v| v.abs()).fold(0.0_f64, f64::max).max(1e-30);
+        a.iter()
+            .zip(b)
+            .map(|(p, q)| (p - q).abs() / (q.abs() + scale))
+            .fold(0.0_f64, f64::max)
+    }
+
+    #[test]
+    fn matvec_rowwise_max_matches_dense() {
+        // L2 can hide a localized bad row (especially the double layer) — gate the worst
+        // row directly, for both layers.
+        let els = sphere_elements(3);
+        let n = els.len();
+        let (v_dense, k_dense) = laplace_matrices(&els);
+        let x: Vec<f64> = (0..n).map(|i| ((i * 3 % 17) as f64 - 8.0) * 0.25).collect();
+
+        for (kind, dense) in [
+            (PotentialKind::Single, &v_dense),
+            (PotentialKind::Double, &k_dense),
+        ] {
+            let (p, theta) = match kind {
+                PotentialKind::Single => (7, 0.5),
+                PotentialKind::Double => (9, 0.45),
+            };
+            let tree = CollocationTreecode::new(&els, kind, p, theta);
+            let mut yd = vec![0.0; n];
+            let mut yt = vec![0.0; n];
+            dense.matvec(&x, &mut yd);
+            tree.matvec(&x, &mut yt);
+            let e = rowwise_max(&yt, &yd);
+            eprintln!("{kind:?} rowwise-max: {e:.3e}");
+            assert!(e < 1e-3, "{kind:?} worst-row error {e:.3e} too large");
+        }
+    }
+
+    #[test]
+    fn basis_vector_rhs_recovers_dense_column() {
+        // x = e_j isolates column j: y_i must reproduce M[i][j] = collocation(c_i, T_j).
+        // Tests an individual source's far field to every target (not just an aggregate).
+        let els = sphere_elements(3);
+        let n = els.len();
+        let (v_dense, _k) = laplace_matrices(&els);
+        let tree = CollocationTreecode::new(&els, PotentialKind::Single, 7, 0.5);
+        for &j in &[0usize, n / 3, n / 2, n - 1] {
+            let mut x = vec![0.0; n];
+            x[j] = 1.0;
+            let mut y = vec![0.0; n];
+            tree.matvec(&x, &mut y);
+            let col: Vec<f64> = (0..n).map(|i| v_dense.get(i, j)).collect();
+            let e = rowwise_max(&y, &col);
+            assert!(e < 1e-3, "column {j} off dense by {e:.3e}");
+        }
+    }
+
+    #[test]
+    fn matvec_reproducible_across_thread_counts() {
+        // Determinism: parallel-over-targets + serial per-target traversal ⇒ a fixed
+        // summation order, so the result is bit-identical regardless of thread count.
+        let els = sphere_elements(3);
+        let n = els.len();
+        let tree = CollocationTreecode::new(&els, PotentialKind::Double, 6, 0.5);
+        let x: Vec<f64> = (0..n).map(|i| ((i % 7) as f64) - 3.0).collect();
+
+        let run = |threads: usize| {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+            let mut y = vec![0.0; n];
+            pool.install(|| tree.matvec(&x, &mut y));
+            y
+        };
+        let y1 = run(1);
+        let y4 = run(4);
+        assert_eq!(y1, y4, "matvec must be bit-identical across thread counts");
+    }
+
+    #[test]
+    #[should_panic(expected = "theta must be in (0, 1)")]
+    fn invalid_theta_rejected() {
+        let els = sphere_elements(2);
+        let _ = CollocationTreecode::new(&els, PotentialKind::Single, 4, 1.0);
     }
 
     #[test]

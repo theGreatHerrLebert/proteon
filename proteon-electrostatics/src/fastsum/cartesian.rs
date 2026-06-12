@@ -19,8 +19,12 @@
 
 use proteon_core::surface::geom::Vec3;
 
-use super::cubature::{panel_order_for_degree, triangle_cubature};
+use super::cubature::{panel_order_for_cartesian, triangle_cubature};
 use crate::model::Tri;
+
+/// Lower bound on a cluster radius used for normalization (a genuinely zero-radius
+/// cluster — all panel points coincident — cannot arise from non-degenerate triangles).
+const MIN_RADIUS: f64 = 1e-300;
 
 /// Flat index of multi-index `(i, j, k)` in a dense `(p+1)³` cube.
 #[inline]
@@ -69,17 +73,21 @@ pub fn coulomb_taylor_coeffs(r_vec: Vec3, p: usize) -> Vec<f64> {
     a
 }
 
-/// Panel-aware single-layer Cartesian moments `M_k = Σ_j x_j ∫_{T_j} (y − y_c)^k dS`,
-/// dense `(p+1)³` (entries with `i+j+k > p` unused / 0).
+/// Panel-aware single-layer Cartesian moments in **radius-normalized** coordinates
+/// `û = (y − y_c)/R`: `M̂_k = Σ_j x_j ∫_{T_j} û^k dS`, dense `(p+1)³`. Normalizing by
+/// the cluster radius `R` keeps `û ∈ [−1,1]` (panel points lie inside the box), so the
+/// monomial moments stay O(area) instead of growing like `R^|k|` — the eval rescales by
+/// `R^|k|` to recover the physical value. This removes the over/underflow path the raw
+/// `u^k · a_k` product risks on scaled meshes / larger `p`.
 #[must_use]
-pub fn single_layer_moments(center: Vec3, panels: &[(Tri, f64)], p: usize) -> Vec<f64> {
+pub fn single_layer_moments(center: Vec3, radius: f64, panels: &[(Tri, f64)], p: usize) -> Vec<f64> {
     let n = p + 1;
     let mut m = vec![0.0; n * n * n];
-    let cub_order = panel_order_for_degree(p);
+    let cub_order = panel_order_for_cartesian(p);
+    let inv_r = 1.0 / radius.max(MIN_RADIUS);
     for (tri, x) in panels {
         for cp in triangle_cubature(tri, cub_order) {
-            let u = cp.pos - center;
-            // Powers of each component up to p.
+            let u = (cp.pos - center) * inv_r; // normalized
             let mut px = vec![1.0; n];
             let mut py = vec![1.0; n];
             let mut pz = vec![1.0; n];
@@ -102,34 +110,45 @@ pub fn single_layer_moments(center: Vec3, panels: &[(Tri, f64)], p: usize) -> Ve
     m
 }
 
-/// Evaluate the single-layer Cartesian far field: `Σ_{|k|≤p} a_k(ξ − y_c) · M_k`.
+/// Evaluate the single-layer Cartesian far field: `Σ_{|k|≤p} [a_k(ξ−y_c)·R^|k|] · M̂_k`,
+/// the radius-scaled Taylor coefficients contracted with the normalized moments. With
+/// `R/dist ≤ θ < 1` (the MAC), the scaled coefficients are bounded by `θ^|k|` — no
+/// overflow regardless of mesh scale.
 #[must_use]
-pub fn eval_single_layer(center: Vec3, moments: &[f64], xi: Vec3, p: usize) -> f64 {
+pub fn eval_single_layer(center: Vec3, radius: f64, moments: &[f64], xi: Vec3, p: usize) -> f64 {
     let a = coulomb_taylor_coeffs(xi - center, p);
+    let r = radius.max(MIN_RADIUS);
+    let mut rpow = vec![1.0; p + 1];
+    for d in 1..=p {
+        rpow[d] = rpow[d - 1] * r;
+    }
     let n = p + 1;
     let mut acc = 0.0;
     for i in 0..n {
         for j in 0..(n - i) {
             for k in 0..(n - i - j) {
                 let id = cidx(i, j, k, p);
-                acc += a[id] * moments[id];
+                acc += a[id] * rpow[i + j + k] * moments[id];
             }
         }
     }
     acc
 }
 
-/// Panel-aware double-layer **vector** moments `W_m = Σ_j x_j n_j ∫_{T_j} (y−y_c)^m dS`,
-/// dense `(p+1)³` of `Vec3` (the dipole eval uses degrees `|m| ≤ p−1`).
+/// Panel-aware double-layer **vector** moments in radius-normalized coordinates
+/// `û = (y−y_c)/R`: `Ŵ_m = Σ_j x_j n_j ∫_{T_j} û^m dS`, dense `(p+1)³` of `Vec3`
+/// (the dipole eval uses degrees `|m| ≤ p−1`). Normalization as in
+/// [`single_layer_moments`].
 #[must_use]
-pub fn double_layer_moments(center: Vec3, panels: &[(Tri, f64)], p: usize) -> Vec<Vec3> {
+pub fn double_layer_moments(center: Vec3, radius: f64, panels: &[(Tri, f64)], p: usize) -> Vec<Vec3> {
     let n = p + 1;
     let mut w = vec![Vec3::new(0.0, 0.0, 0.0); n * n * n];
-    let cub_order = panel_order_for_degree(p);
+    let cub_order = panel_order_for_cartesian(p);
+    let inv_r = 1.0 / radius.max(MIN_RADIUS);
     for (tri, x) in panels {
         let nrm = tri.normal;
         for cp in triangle_cubature(tri, cub_order) {
-            let u = cp.pos - center;
+            let u = (cp.pos - center) * inv_r; // normalized
             let mut px = vec![1.0; n];
             let mut py = vec![1.0; n];
             let mut pz = vec![1.0; n];
@@ -154,20 +173,28 @@ pub fn double_layer_moments(center: Vec3, panels: &[(Tri, f64)], p: usize) -> Ve
 }
 
 /// Evaluate the double-layer Cartesian far field: `n·∇_y G` expanded gives
-/// `Σ_{|k|≤p} a_k Σ_i k_i (W_{k−e_i})_i` — the Taylor coefficients contracted with the
-/// degree-lowered vector moments.
+/// `Σ_{|k|≤p} a_k Σ_i k_i (W_{k−e_i})_i`. In normalized coordinates the moment of
+/// degree `|k|−1` carries `R^{|k|−1}` and the `∇_y` (acting on `û = u/R`) carries an
+/// extra `1/R`, so the term scale is `a_k · R^{|k|−1}` — applied here as the
+/// radius-scaled coefficient against the normalized vector moment.
 #[must_use]
-pub fn eval_double_layer(center: Vec3, w_moments: &[Vec3], xi: Vec3, p: usize) -> f64 {
+pub fn eval_double_layer(center: Vec3, radius: f64, w_moments: &[Vec3], xi: Vec3, p: usize) -> f64 {
     let a = coulomb_taylor_coeffs(xi - center, p);
+    let r = radius.max(MIN_RADIUS);
+    let mut rpow = vec![1.0; p + 1];
+    for d in 1..=p {
+        rpow[d] = rpow[d - 1] * r;
+    }
     let n = p + 1;
     let mut acc = 0.0;
     for i in 0..n {
         for j in 0..(n - i) {
             for k in 0..(n - i - j) {
-                if i + j + k == 0 {
+                let deg = i + j + k;
+                if deg == 0 {
                     continue; // k_i ≥ 1 required for the degree-lowered moment
                 }
-                let ak = a[cidx(i, j, k, p)];
+                let ak = a[cidx(i, j, k, p)] * rpow[deg - 1];
                 let idx = [i, j, k];
                 let mut s = 0.0;
                 for (d, &kd) in idx.iter().enumerate() {
@@ -228,11 +255,12 @@ mod tests {
         let tri = tilted_tri();
         let (lo, hi) = tri_bbox(&tri);
         let center = (lo + hi) * 0.5;
+        let radius = (hi - lo).norm() * 0.5;
         let xi = Vec3::new(5.0, 4.0, 6.0);
         let reference = direct_single_layer(&[(tri, 1.0)], xi, 24);
         let err = |p: usize| {
-            let m = single_layer_moments(center, &[(tri, 1.0)], p);
-            rel(eval_single_layer(center, &m, xi, p), reference)
+            let m = single_layer_moments(center, radius, &[(tri, 1.0)], p);
+            rel(eval_single_layer(center, radius, &m, xi, p), reference)
         };
         let e2 = err(2);
         let e8 = err(8);
@@ -247,12 +275,13 @@ mod tests {
         let tri = tilted_tri();
         let (lo, hi) = tri_bbox(&tri);
         let center = (lo + hi) * 0.5;
+        let radius = (hi - lo).norm() * 0.5;
         let xi = Vec3::new(6.0, 5.0, 7.0);
         let p = 8;
         let reference = direct_single_layer(&[(tri, 1.0)], xi, 24);
 
-        let cm = single_layer_moments(center, &[(tri, 1.0)], p);
-        let cart = eval_single_layer(center, &cm, xi, p);
+        let cm = single_layer_moments(center, radius, &[(tri, 1.0)], p);
+        let cart = eval_single_layer(center, radius, &cm, xi, p);
 
         let c = Cluster::new(lo, hi, p);
         let bm = bltc_moments(&c, &[(tri, 1.0)], p);
@@ -269,12 +298,13 @@ mod tests {
         let tri = tilted_tri();
         let (lo, hi) = tri_bbox(&tri);
         let center = (lo + hi) * 0.5;
+        let radius = (hi - lo).norm() * 0.5;
         let xi = Vec3::new(5.0, 4.0, 6.0);
         let reference = direct_double_layer(&[(tri, 1.0)], xi, 24);
         assert!(reference.abs() > 1e-6, "non-trivial reference: {reference}");
         let err = |p: usize| {
-            let w = double_layer_moments(center, &[(tri, 1.0)], p);
-            rel(eval_double_layer(center, &w, xi, p), reference)
+            let w = double_layer_moments(center, radius, &[(tri, 1.0)], p);
+            rel(eval_double_layer(center, radius, &w, xi, p), reference)
         };
         let e3 = err(3);
         let e8 = err(8);
@@ -291,8 +321,9 @@ mod tests {
         let flipped = Tri::new(tri.v1, tri.v3, tri.v2);
         let (lo, hi) = tri_bbox(&flipped);
         let center = (lo + hi) * 0.5;
-        let w = double_layer_moments(center, &[(flipped, 1.0)], 8);
-        let got = eval_double_layer(center, &w, xi, 8);
+        let radius = (hi - lo).norm() * 0.5;
+        let w = double_layer_moments(center, radius, &[(flipped, 1.0)], 8);
+        let got = eval_double_layer(center, radius, &w, xi, 8);
         assert!(rel(got, -bare) < 1e-6, "flipped {got} vs -bare {}", -bare);
     }
 
