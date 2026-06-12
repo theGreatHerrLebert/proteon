@@ -166,7 +166,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_query.add_argument("query", help="Query structure file (PDB/mmCIF).")
     p_query.add_argument("--top-k", type=_positive_int, default=10, help="Number of hits to return (default 10).")
     p_query.add_argument("--no-rerank", action="store_true", help="Skip TM-align reranking (prefilter/diagonal only).")
-    p_query.add_argument("--rerank-top-k", type=_positive_int, default=5, help="How many top hits to TM-align rerank (default 5).")
+    # Default 20 (vs the library's 5): the retrieval benchmark shows reranking a deeper
+    # candidate pool pulls homologs the prefilter ranks 6-20 up into the returned top-K
+    # — recall@10 rises ~0.80->0.85 (TM>=0.5) / 0.96->0.98 (TM>=0.7) at a modest extra
+    # TM-align cost. See validation/bench_retrieval.py and SEARCH_ROADMAP.md §quality.
+    p_query.add_argument("--rerank-top-k", type=_positive_int, default=20, help="How many top hits to TM-align rerank (default 20).")
     p_query.add_argument("--format", choices=["tsv", "json"], default="tsv", help="Output format.")
     p_query.set_defaults(func=_cmd_query)
 

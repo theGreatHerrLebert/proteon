@@ -478,11 +478,31 @@ Tests:
 > `encode_alphabet`, corpus/DB format, k-mer prefilter + top-K, TM-align rerank), plus a
 > `proteon-search` CLI. Proteon has a usable Foldseek-style search.
 
-The remaining work is **reliability + quality**:
+The remaining work is **reliability + quality** — both now under way:
 
-1. **Retrieval benchmark suite** (P5 §12) — Recall@K / nDCG / MRR on a labeled set
-   (SCOP/CATH families) against a Foldseek baseline, runnable from a script.
-2. **Pin a small retrieval gate in CI** (P5 §13) — a tiny fixed corpus + expected top-K so
-   regressions in the prefilter/rerank are caught.
-3. Then, quality work guided by those metrics (prefilter sensitivity, `k`/weight tuning,
-   domain splitting).
+1. **Retrieval benchmark suite** (P5 §12) — `validation/bench_retrieval.py` (recall@K vs
+   all-vs-all TM-align ground truth, prefilter-vs-rerank, truth-cached so parameter
+   sweeps are cheap). **Done** (was bit-rotted; fixed).
+2. **CI retrieval gate** (P5 §13) — `tests/test_search_retrieval.py` (self-retrieval +
+   benchmark smoke). **Done.**
+3. Quality work guided by the metrics — **in progress** (see below).
+
+## Measured retrieval quality (quality §)
+
+Benchmark on a 317-PDB corpus (100×25 sample, TM-align ground truth):
+
+- **Baseline (k=6, top-10):** recall@K = 0.80 (TM≥0.5) / 0.96 (TM≥0.7) / 1.00 (TM≥0.9).
+- **k-mer length is NOT a lever:** k=4, k=5, k=6, and multi-k `[3,4,5,6]` give *identical*
+  recall — the misses are not a k-mer-resolution problem.
+- **Rerank depth IS the lever:** the missed homologs are recoverable candidates ranked
+  6–~20 that the default shallow rerank (`rerank_top_k=5`) never TM-aligns. At a fixed
+  top-10 return, deepening rerank to 20 raises recall@10 to **0.85 (TM≥0.5) / 0.98
+  (TM≥0.7)** — monotonic by construction (TM-align reorders a superset). Cost: more
+  TM-aligns per query (still fast).
+- **Action taken:** the `proteon-search query` CLI defaults `--rerank-top-k=20` (vs the
+  library `search()` default of 5). The library default is left conservative on purpose —
+  changing it is a latency/behaviour decision for the maintainer.
+
+Next quality levers to measure: confirm the rerank-depth gain across seeds/corpora and
+revisit the `search()` default; alphabet/AA weight tuning; domain splitting for the
+remote-homolog tail (TM 0.5–0.7).
