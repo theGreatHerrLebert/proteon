@@ -1276,6 +1276,7 @@ dependencies = [
  "proteon-align",
  "proteon-arrow",
  "proteon-core",
+ "proteon-electrostatics",
  "proteon-io",
  "proteon-search",
  "rayon",

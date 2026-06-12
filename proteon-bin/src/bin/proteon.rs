@@ -43,6 +43,7 @@ use proteon_core::forcefield::api as ff_api;
 use proteon_core::hbond;
 use proteon_core::prepare::{self, PrepareOptions, PrepareReport};
 use proteon_core::sasa;
+use proteon_electrostatics as electro;
 
 #[derive(Parser)]
 #[command(
@@ -71,6 +72,8 @@ enum Cmd {
     Protonate(ProtonateArgs),
     /// Energy-minimize the input as-is (writes structures).
     Minimize(MinimizeArgs),
+    /// Continuum-electrostatics BEM solve on a surface mesh + point charges (NESSie port).
+    Electrostatics(ElectrostaticsArgs),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -213,6 +216,66 @@ struct MinimizeArgs {
     /// Maximum minimizer steps.
     #[arg(long, default_value_t = 500)]
     minimize_steps: usize,
+}
+
+/// Continuum-electrostatics solve. Unlike the other subcommands this is not a
+/// PDB-batch command: it takes a surface mesh + a charge set (from NESSie-style
+/// format files) and emits one summary row, optionally writing the per-vertex
+/// potential. Input is one of: `--hmo` (mesh + charges in one file), `--off` +
+/// `--pqr`, or `--msms PREFIX` (reads `PREFIX.vert`/`PREFIX.face`) + `--pqr`.
+#[derive(Args)]
+struct ElectrostaticsArgs {
+    /// OFF surface mesh (requires --pqr for charges).
+    #[arg(long, conflicts_with_all = ["hmo", "msms"])]
+    off: Option<PathBuf>,
+    /// MSMS mesh prefix; reads <prefix>.vert and <prefix>.face (requires --pqr).
+    #[arg(long, conflicts_with_all = ["hmo", "off"])]
+    msms: Option<PathBuf>,
+    /// HMO file providing BOTH the mesh and the charges.
+    #[arg(long, conflicts_with_all = ["off", "msms", "pqr"])]
+    hmo: Option<PathBuf>,
+    /// PQR charge set (used with --off / --msms).
+    #[arg(long)]
+    pqr: Option<PathBuf>,
+    /// Solute (interior) dielectric.
+    #[arg(long, default_value_t = 1.0)]
+    eps_omega: f64,
+    /// Solvent (bulk) dielectric.
+    #[arg(long, default_value_t = 78.0)]
+    eps_sigma: f64,
+    /// High-frequency (optical) dielectric — nonlocal only.
+    #[arg(long, default_value_t = 1.8)]
+    eps_inf: f64,
+    /// Solvent correlation length in Angstroms — nonlocal only.
+    #[arg(long = "lambda", default_value_t = 20.0)]
+    lambda: f64,
+    /// Nonlocal (Lorentz/Yukawa) solve instead of local Poisson.
+    #[arg(long)]
+    nonlocal: bool,
+    /// Regular-Yukawa cubature for the nonlocal solve: fixed (fast) | adaptive (accurate).
+    #[arg(long, default_value = "fixed")]
+    quadrature: String,
+    /// GMRES relative-residual tolerance.
+    #[arg(long, default_value_t = 1e-7)]
+    tol: f64,
+    /// GMRES restart length.
+    #[arg(long, default_value_t = 200)]
+    restart: usize,
+    /// GMRES maximum iterations.
+    #[arg(long, default_value_t = 10000)]
+    max_iter: usize,
+    /// Override the ~6 GiB dense-matrix memory guard.
+    #[arg(long)]
+    allow_large: bool,
+    /// Solve despite Error-severity mesh/charge quality issues (still reported).
+    #[arg(long)]
+    allow_low_quality: bool,
+    /// Write the per-vertex potential to this file as TSV (`x\ty\tz\tpotential`).
+    #[arg(long)]
+    potential_out: Option<PathBuf>,
+    /// Summary output format.
+    #[arg(long, value_enum, default_value_t = Format::Tsv)]
+    format: Format,
 }
 
 /// kcal/mol → kJ/mol. Mirrors `_KCAL_TO_KJ` in the Python wrapper
@@ -720,6 +783,109 @@ fn run_minimize(a: &MinimizeArgs) -> Result<()> {
     )
 }
 
+/// Resolve the (mesh, charges) pair from whichever input mode the user selected.
+fn load_mesh_and_charges(
+    args: &ElectrostaticsArgs,
+) -> Result<(proteon_core::surface::mesh::Mesh, Vec<electro::Charge>)> {
+    if let Some(hmo) = &args.hmo {
+        return electro::read_hmo(hmo)
+            .with_context(|| format!("reading HMO {}", hmo.display()));
+    }
+    let charges_path = args
+        .pqr
+        .as_ref()
+        .ok_or_else(|| anyhow!("--pqr is required with --off / --msms"))?;
+    let charges =
+        electro::read_pqr(charges_path).with_context(|| format!("reading PQR {}", charges_path.display()))?;
+    let mesh = if let Some(off) = &args.off {
+        electro::read_off(off).with_context(|| format!("reading OFF {}", off.display()))?
+    } else if let Some(prefix) = &args.msms {
+        let vert = prefix.with_extension("vert");
+        let face = prefix.with_extension("face");
+        electro::read_msms(&vert, &face)
+            .with_context(|| format!("reading MSMS {}.{{vert,face}}", prefix.display()))?
+    } else {
+        return Err(anyhow!("specify a mesh: --off FILE, --msms PREFIX, or --hmo FILE"));
+    };
+    Ok((mesh, charges))
+}
+
+fn run_electrostatics(args: &ElectrostaticsArgs) -> Result<()> {
+    let quad = match args.quadrature.to_lowercase().as_str() {
+        "fixed" => electro::Quadrature::Fixed,
+        "adaptive" => electro::Quadrature::Adaptive(electro::AdaptiveConfig::default()),
+        other => {
+            return Err(anyhow!(
+                "quadrature must be 'fixed' or 'adaptive', got '{other}'"
+            ))
+        }
+    };
+    let (mesh, charges) = load_mesh_and_charges(args)?;
+    // Vertex order is preserved across the solve (auto-orient only re-winds triangles),
+    // so this snapshot aligns 1:1 with the returned per-vertex potential.
+    let verts = mesh.verts.clone();
+
+    let opts = electro::SurfaceSolveOptions {
+        params: electro::Params {
+            eps_omega: args.eps_omega,
+            eps_sigma: args.eps_sigma,
+            eps_inf: args.eps_inf,
+            lambda: args.lambda,
+        },
+        cfg: electro::SolveConfig {
+            tol: args.tol,
+            restart: args.restart,
+            max_iter: args.max_iter,
+        },
+        nonlocal: args.nonlocal,
+        quadrature: quad,
+        allow_large: args.allow_large,
+        allow_low_quality: args.allow_low_quality,
+    };
+
+    let sol = electro::solve_surface(mesh, &charges, &opts).map_err(|e| anyhow!(e.to_string()))?;
+
+    // Advisories (auto-flip, quality, size) to stderr — the summary stays clean on stdout.
+    for w in &sol.warnings {
+        eprintln!("WARN {w}");
+    }
+
+    if let Some(path) = &args.potential_out {
+        let mut w = io::BufWriter::new(
+            std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
+        );
+        writeln!(w, "x\ty\tz\tpotential")?;
+        for (v, phi) in verts.iter().zip(&sol.potential) {
+            writeln!(w, "{:.6}\t{:.6}\t{:.6}\t{:.8}", v.x, v.y, v.z, phi)?;
+        }
+        w.flush()?;
+    }
+
+    let n_self = match sol.topology.num_self_intersections {
+        Some(k) => k.to_string(),
+        None => "inconclusive".to_string(),
+    };
+    let row: Row = vec![
+        ("rfenergy_kj_mol", Value::F64(sol.rfenergy)),
+        ("n_elements", Value::Int(sol.n_elements as i64)),
+        ("converged", Value::Str(sol.converged.to_string())),
+        ("iterations", Value::Int(sol.iterations as i64)),
+        ("residual", Value::F64(sol.residual)),
+        ("quadrature", Value::Str(sol.quadrature.to_string())),
+        ("capped_panels", Value::Int(sol.capped_panels as i64)),
+        ("watertight", Value::Str(sol.topology.watertight.to_string())),
+        ("oriented", Value::Str(sol.topology.consistently_oriented.to_string())),
+        ("is_outward", Value::Str(sol.topology.is_outward.to_string())),
+        ("n_components", Value::Int(sol.topology.num_components as i64)),
+        ("n_cavities", Value::Int(sol.topology.num_cavities as i64)),
+        ("flipped_to_outward", Value::Str(sol.flipped_to_outward.to_string())),
+        ("n_self_intersections", Value::Str(n_self)),
+        ("min_angle_deg", Value::F64(sol.quality.min_angle_deg)),
+        ("max_aspect_ratio", Value::F64(sol.quality.max_aspect_ratio)),
+    ];
+    emit(args.format, &[(String::new(), row)])
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.cmd {
@@ -730,5 +896,6 @@ fn main() -> Result<()> {
         Cmd::Prepare(a) => run_prepare(a),
         Cmd::Protonate(a) => run_protonate(a),
         Cmd::Minimize(a) => run_minimize(a),
+        Cmd::Electrostatics(a) => run_electrostatics(a),
     }
 }
