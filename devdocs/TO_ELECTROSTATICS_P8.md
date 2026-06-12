@@ -205,10 +205,30 @@ bottleneck:
 The matvec is **traversal-bound (~86%)**: per-target far-field Taylor evaluations (a `p³`
 recurrence per accepted cluster) plus exact near-field analytic collocations — each pair
 far costlier than dense's single FMA. So dense wins on *speed* wherever its `O(N²)` matrix
-still fits; the treecode's realized value is and stays **O(N) memory**. A genuine speed
-crossover needs traversal-constant work (cheaper kernel eval, level-batching, or the FMM
-L2L *downward* pass — for which the M2M is the prerequisite), not more moment-build
-optimization. This is now a *measured* statement, per §0/§3.3 — no speed claim is made.
+still fits; the treecode's realized value is and stays **O(N) memory**.
+
+### 5.3 Near vs far cost split (decides whether an FMM can help)
+
+An FMM accelerates only the **far** field, so it is worth building **only if the far
+field dominates the traversal cost**. Measured (`examples/p8_scaling.rs`, timing
+near-only vs far-only traversal):
+
+| N | rebuild | near | far | **far cost share** |
+|------:|--------:|------:|------:|-------:|
+| 1280  | 1.6 ms | 5.9 ms  | 4.6 ms  | 44% |
+| 5120  | 8.3 ms | 19.6 ms | 36.7 ms | 65% |
+| 20480 | 38 ms  | 73 ms   | 215 ms  | **75%** |
+
+Crucially the **count** is near-dominated (near-collocations are 60–84% of the work
+items) but the **cost** is **far-dominated and growing** (75% at 20k): each far
+cluster-eval recomputes the `O(p³)` Coulomb Taylor recurrence per target-cluster pair,
+far costlier than one near collocation. So the matvec is **far-field-cost-bound** — and
+that is exactly what an FMM amortizes (one M2L per source/target-cluster pair, shared by
+all targets in the cluster, then a cheap L2P per particle), turning the per-target `p³`
+recurrence work into per-cluster work. **The measurement justifies the FMM downward
+pass** (M2L + L2L + L2P), for which the M2M (§5.2) is the prerequisite. Near-field
+exact collocation is untouched (it carries the reference accuracy), so the achievable
+speedup is bounded by the far share (~75% at scale).
 
 ## 6. Phasing
 

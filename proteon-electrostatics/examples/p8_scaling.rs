@@ -71,9 +71,19 @@ fn main() {
             tmv = tmv.min(time_ms(|| tree.matvec(&x, &mut y_tree)));
             trebuild = trebuild.min(time_ms(|| tree.bench_rebuild(&x)));
         }
+        let (near, far) = tree.traversal_counts();
+        let mut t_near = f64::INFINITY;
+        let mut t_far = f64::INFINITY;
+        for _ in 0..n_reps {
+            t_near = t_near.min(time_ms(|| tree.bench_near_only(&x)));
+            t_far = t_far.min(time_ms(|| tree.bench_far_only(&x)));
+        }
+        // bench_far_only includes the moment rebuild; subtract it for the pure far cost.
+        let t_far_pure = (t_far - trebuild).max(0.0);
         eprintln!(
-            "  [N={n}] matvec {tmv:.2}ms = moment-rebuild {trebuild:.2}ms + traversal {:.2}ms",
-            tmv - trebuild
+            "  [N={n}] matvec {tmv:.1}ms: rebuild {trebuild:.1} + near {t_near:.1} + far {t_far_pure:.1}ms  \
+             | counts {near} near / {far} far | FAR COST SHARE {:.0}%",
+            100.0 * t_far_pure / (t_near + t_far_pure).max(1e-9)
         );
 
         if n <= dense_cap_n {

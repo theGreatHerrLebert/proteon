@@ -226,6 +226,107 @@ impl CollocationTreecode {
 }
 
 impl CollocationTreecode {
+    /// Diagnostic (geometry-only, `x`-independent): total **near-field panel collocations**
+    /// and **far-field cluster expansions** summed over all targets in one matvec. The
+    /// near/far cost ratio decides whether an FMM (which only accelerates the far field)
+    /// can help — if the exact near-field collocations dominate, it cannot.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn traversal_counts(&self) -> (u64, u64) {
+        let mut near = 0u64;
+        let mut far = 0u64;
+        for i in 0..self.centroids.len() {
+            self.count_target(self.centroids[i], 0, &mut near, &mut far);
+        }
+        (near, far)
+    }
+
+    fn count_target(&self, xi: Vec3, node_idx: usize, near: &mut u64, far: &mut u64) {
+        let node = &self.tree.nodes[node_idx];
+        let d = (xi - node.center).norm();
+        if d > 0.0 && node.radius <= self.theta * d {
+            *far += 1;
+            return;
+        }
+        if node.children.is_empty() {
+            *near += node.panels.len() as u64;
+            return;
+        }
+        for &c in &node.children {
+            self.count_target(xi, c, near, far);
+        }
+    }
+
+    /// Benchmark hook: a full matvec doing **only the far-field** cluster expansions
+    /// (near leaves skipped) — times the part an FMM would accelerate.
+    #[doc(hidden)]
+    pub fn bench_far_only(&self, x: &[f64]) {
+        let (sl, dl) = match self.kind {
+            PotentialKind::Single => (self.single_moments(x), Vec::new()),
+            PotentialKind::Double => (Vec::new(), self.double_moments(x)),
+        };
+        let mut y = vec![0.0; self.elements.len()];
+        y.par_iter_mut().enumerate().for_each(|(i, yi)| {
+            *yi = self.eval_split(self.centroids[i], x, &sl, &dl, 0, false, true);
+        });
+        std::hint::black_box(&y);
+    }
+
+    /// Benchmark hook: a full matvec doing **only the near-field** exact collocations
+    /// (far clusters skipped) — times the part an FMM does *not* change.
+    #[doc(hidden)]
+    pub fn bench_near_only(&self, x: &[f64]) {
+        let empty_sl: Vec<Vec<f64>> = Vec::new();
+        let empty_dl: Vec<Vec<Vec3>> = Vec::new();
+        let mut y = vec![0.0; self.elements.len()];
+        y.par_iter_mut().enumerate().for_each(|(i, yi)| {
+            *yi = self.eval_split(self.centroids[i], x, &empty_sl, &empty_dl, 0, true, false);
+        });
+        std::hint::black_box(&y);
+    }
+
+    /// Traversal that conditionally does near and/or far work (for the cost-split bench).
+    fn eval_split(
+        &self,
+        xi: Vec3,
+        x: &[f64],
+        sl: &[Vec<f64>],
+        dl: &[Vec<Vec3>],
+        node_idx: usize,
+        do_near: bool,
+        do_far: bool,
+    ) -> f64 {
+        let node = &self.tree.nodes[node_idx];
+        let d = (xi - node.center).norm();
+        if d > 0.0 && node.radius <= self.theta * d {
+            if !do_far {
+                return 0.0;
+            }
+            return match self.kind {
+                PotentialKind::Single => {
+                    cartesian::eval_single_layer(node.center, node.radius, &sl[node_idx], xi, self.p)
+                }
+                PotentialKind::Double => {
+                    cartesian::eval_double_layer(node.center, node.radius, &dl[node_idx], xi, self.p)
+                }
+            };
+        }
+        if node.children.is_empty() {
+            if !do_near {
+                return 0.0;
+            }
+            return node
+                .panels
+                .iter()
+                .map(|&j| laplace_collocation(self.kind, xi, &self.elements[j]) * x[j])
+                .sum();
+        }
+        node.children
+            .iter()
+            .map(|&c| self.eval_split(xi, x, sl, dl, c, do_near, do_far))
+            .sum()
+    }
+
     /// Benchmark hook: run only the per-matvec moment rebuild (no traversal), so a caller
     /// can measure the rebuild's share of the matvec. Not part of the solve path.
     #[doc(hidden)]
