@@ -18,7 +18,7 @@
 use crate::model::{BemModel, Charge, Params, Tri};
 use crate::system::{
     laplace_matrices, mol_potentials, yukawa_matrices_q, JacobiPreconditioner, LinearOperator,
-    LocalOperator, NonlocalOperator, Preconditioner, Quadrature, TWO_PI,
+    NonlocalOperator, Preconditioner, Quadrature, TWO_PI,
 };
 
 /// Why a solve failed (codex review: non-convergence / non-finite is a hard error,
@@ -357,14 +357,75 @@ pub fn solve_local_elements(
     params: &Params,
     cfg: &SolveConfig,
 ) -> Result<(LocalResult, SolveStats), SolveError> {
-    let n = elements.len();
-    if n == 0 {
+    if elements.is_empty() {
         return Err(SolveError::Empty);
     }
+    let (v, k) = laplace_matrices(elements);
+    solve_local_with_ops(&k, &v, elements, charges, params, cfg)
+}
+
+/// Local Poisson solve with the **treecode** `V`/`K` operators (P8 fast summation)
+/// instead of the dense matrices — the same two-stage solve, so it cannot drift from
+/// [`solve_local_elements`]. `p` is the Cartesian expansion order, `theta ∈ (0,1)` the
+/// MAC ratio. The near field stays exact, so the reaction-field energy converges to the
+/// dense result (and the analytic Born/Xie energy) as `(p, θ)` tighten.
+pub fn solve_local_elements_treecode(
+    elements: &[Tri],
+    charges: &[Charge],
+    params: &Params,
+    cfg: &SolveConfig,
+    p: usize,
+    theta: f64,
+) -> Result<(LocalResult, SolveStats), SolveError> {
+    use crate::fastsum::operator::CollocationTreecode;
+    use crate::model::PotentialKind;
+    if elements.is_empty() {
+        return Err(SolveError::Empty);
+    }
+    let k = CollocationTreecode::new(elements, PotentialKind::Double, p, theta);
+    let v = CollocationTreecode::new(elements, PotentialKind::Single, p, theta);
+    solve_local_with_ops(&k, &v, elements, charges, params, cfg)
+}
+
+/// `M_u = 2π(1 + frac)·I + (frac − 1)·K` over a borrowed `K` operator — the local
+/// system operator, generic over how `K·x` is applied (dense or treecode). Mirrors
+/// [`crate::system::LocalOperator`] but holds `&dyn LinearOperator` so the solve core is
+/// shared by both back-ends.
+struct LocalOpRef<'a> {
+    k: &'a dyn LinearOperator,
+    frac: f64,
+}
+
+impl LinearOperator for LocalOpRef<'_> {
+    fn dim(&self) -> usize {
+        self.k.dim()
+    }
+    fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        self.k.matvec(x, y); // y = K·x
+        let diag = TWO_PI * (1.0 + self.frac);
+        let off = self.frac - 1.0;
+        for i in 0..y.len() {
+            y[i] = diag * x[i] + off * y[i];
+        }
+    }
+    fn diagonal(&self) -> Vec<f64> {
+        vec![TWO_PI * (1.0 + self.frac); self.k.dim()]
+    }
+}
+
+/// The shared two-stage local solve over abstract `V`/`K` operators (dense or treecode).
+fn solve_local_with_ops(
+    k: &dyn LinearOperator,
+    v: &dyn LinearOperator,
+    elements: &[Tri],
+    charges: &[Charge],
+    params: &Params,
+    cfg: &SolveConfig,
+) -> Result<(LocalResult, SolveStats), SolveError> {
+    let n = elements.len();
     let frac = params.eps_omega / params.eps_sigma;
 
     let (umol, qmol) = mol_potentials(elements, charges, params.eps_omega);
-    let (v, k) = laplace_matrices(elements);
 
     // Stage 1: b₁ = K·umol − 2π·umol − frac·(V·qmol).
     let mut k_umol = vec![0.0; n];
@@ -375,7 +436,7 @@ pub fn solve_local_elements(
         .map(|i| k_umol[i] - TWO_PI * umol[i] - frac * v_qmol[i])
         .collect();
 
-    let m_op = LocalOperator { k: k.clone(), frac };
+    let m_op = LocalOpRef { k, frac };
     let m_pre = JacobiPreconditioner::from_operator(&m_op);
     let u_sol = gmres(&m_op, &b1, &m_pre, cfg)?;
     let u = u_sol.x;
@@ -385,10 +446,10 @@ pub fn solve_local_elements(
     let mut k_u = vec![0.0; n];
     k.matvec(&u, &mut k_u);
     let b2: Vec<f64> = (0..n).map(|i| TWO_PI * u[i] + k_u[i]).collect();
-    let v_pre = JacobiPreconditioner::from_operator(&v);
-    let q_sol = gmres(&v, &b2, &v_pre, cfg)?;
+    let v_pre = JacobiPreconditioner::from_operator(v);
+    let q_sol = gmres(v, &b2, &v_pre, cfg)?;
     let q = q_sol.x;
-    let res_q = true_residual(&v, &q, &b2);
+    let res_q = true_residual(v, &q, &b2);
 
     if !u.iter().chain(&q).all(|x| x.is_finite()) {
         return Err(SolveError::NonFinite);
