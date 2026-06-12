@@ -314,7 +314,7 @@ pub fn compute_num_tors(ligand: &Molecule, rotatable_bonds: &[(u32, u32)]) -> f6
 /// (`SF_VINA`, rigid receptor, no flex side chains).
 ///
 /// Field names and order mirror upstream's verbose `show_score` output.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ScoreComponents {
     /// Conf-independent-adjusted total (the value shown as "Affinity").
     pub total: f64,

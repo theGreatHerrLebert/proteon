@@ -15,6 +15,10 @@ Functions:
                         The receptor and the ~2 MB pair-potential
                         table are built once and reused.
     batch_local_only  — same parallelism on the refined pose.
+    dock              — full Monte-Carlo global search (flexible-ligand
+                        docking): random placement + Metropolis MC +
+                        BFGS, over parallel replicates, returning ranked
+                        binding modes.
 
 Classes:
     VinaScoreComponents   — 8 energy-component getters + as_dict().
@@ -22,6 +26,8 @@ Classes:
                             converged flag.
     VinaLocalOnlyOutcome  — components + bfgs + (N, 3) coords +
                             original_serials.
+    VinaDockPose          — one docked mode: components + (N, 3) coords +
+                            original_serials + search_energy + center.
 
 Examples:
 
@@ -40,7 +46,7 @@ Examples:
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 try:
     from proteon_connector import py_vina as _v  # type: ignore
@@ -52,6 +58,7 @@ except ImportError:  # pragma: no cover
 VinaScoreComponents = getattr(_v, "VinaScoreComponents", None) if _v else None
 BfgsOutcome = getattr(_v, "BfgsOutcome", None) if _v else None
 VinaLocalOnlyOutcome = getattr(_v, "VinaLocalOnlyOutcome", None) if _v else None
+VinaDockPose = getattr(_v, "VinaDockPose", None) if _v else None
 
 
 def score_only(receptor_pdbqt: str, ligand_pdbqt: str):
@@ -180,12 +187,84 @@ def batch_local_only(
     )
 
 
+def dock(
+    receptor_pdbqt: str,
+    ligand_pdbqt: str,
+    *,
+    center: Optional[Tuple[float, float, float]] = None,
+    size: Optional[Tuple[float, float, float]] = None,
+    padding: float = 6.0,
+    exhaustiveness: int = 8,
+    n_poses: int = 9,
+    seed: int = 0,
+    global_steps: int = 2500,
+    n_threads: Optional[int] = None,
+) -> List:
+    """Dock a flexible ligand into a receptor (Monte-Carlo global search).
+
+    Runs upstream Vina's outer search — random placement, then
+    `global_steps` of *mutate → BFGS → Metropolis* per replicate, over
+    `exhaustiveness` parallel replicates — and returns distinct binding
+    modes ranked best-first.
+
+    Parameters
+    ----------
+    receptor_pdbqt, ligand_pdbqt
+        PDBQT text (not file paths).
+    center, size
+        Search-box center and side lengths in Å, as 3-tuples. Give both
+        or neither: if both are omitted the box is the ligand's bounding
+        box grown by `padding` Å (i.e. redocking around the input pose).
+    padding
+        Autobox padding in Å, used only when `center`/`size` are omitted.
+    exhaustiveness
+        Number of independent MC replicates (parallel). Higher is more
+        thorough and slower.
+    n_poses
+        Maximum number of distinct modes to return.
+    seed
+        RNG seed; a given `(seed, params)` reproduces the run exactly.
+    global_steps
+        MC steps per replicate (upstream default 2500). Lower it for
+        quick exploratory runs — docking is much heavier than
+        `score_only` / `local_only`.
+    n_threads
+        `None`/0 uses every core; positive caps the pool.
+
+    Returns
+    -------
+    list[VinaDockPose]
+        Ranked modes (best search energy first). Each has `.components`
+        (8-component score), `.total`, `.search_energy`, `.coords`
+        ((N, 3) float64), `.original_serials`, and `.center`.
+
+    Docking parity is statistical, not bit-exact: on the 1iep fixture
+    the top modes recover the crystal pose to < 1 Å.
+    """
+    if _v is None:  # pragma: no cover
+        raise ImportError("proteon_connector is not installed")
+    return _v.dock(
+        receptor_pdbqt,
+        ligand_pdbqt,
+        center=center,
+        size=size,
+        padding=padding,
+        exhaustiveness=exhaustiveness,
+        n_poses=n_poses,
+        seed=seed,
+        global_steps=global_steps,
+        n_threads=n_threads,
+    )
+
+
 __all__ = [
     "VinaScoreComponents",
     "BfgsOutcome",
     "VinaLocalOnlyOutcome",
+    "VinaDockPose",
     "score_only",
     "local_only",
     "batch_score_only",
     "batch_local_only",
+    "dock",
 ]

@@ -1,11 +1,11 @@
 # Vina Roadmap
 
-**Last updated: 2026-04-24**
+**Last updated: 2026-06-12**
 
 This file tracks what's not done yet for `proteon-vina` — the
-AutoDock-Vina scorer + local-optimiser port. For what's already
-covered, read the crate source (`proteon-vina/src/`), the parity
-test suite (`proteon-vina/tests/`), and the Python bindings at
+AutoDock-Vina scorer + local-optimiser + Monte-Carlo docking port. For
+what's already covered, read the crate source (`proteon-vina/src/`), the
+parity test suite (`proteon-vina/tests/`), and the Python bindings at
 `packages/proteon/src/proteon/vina.py`.
 
 ## Shipped (rebased onto current main as `proteon-vina`)
@@ -31,7 +31,19 @@ classes + single-call + batch APIs that parse receptor and the
 promoted to the top-level `proteon.*` namespace alongside
 `proteon.vina.*` submodule access.
 
-168 Rust tests + 19 Python tests; clippy clean.
+**Phase E — full docking (Monte-Carlo global search).** Random
+placement + `mutate → BFGS → Metropolis` per replicate
+(`mutate.rs`, `mc.rs`), parallel replicates with cross-replicate
+RMSD clustering and box / autobox handling (`global_search.rs`), a
+linear out-of-box confinement penalty (`BoxPenalty`) that replaces
+upstream's grid out-of-bounds slope so the unconstrained translation
+DoF can't drift the ligand into empty space, and a `proteon.dock` /
+`proteon.vina.dock` binding returning ranked `VinaDockPose` modes.
+Seeded (`ChaCha8Rng`) so a run is reproducible. Docking parity is
+statistical: on 1iep the top modes redock the crystal pose to
+**< 1 Å** (deterministic Rust test `tests/redock.rs`).
+
+183 Rust tests + 22 Python tests; clippy clean.
 
 ## In flight / not done yet
 
@@ -63,36 +75,47 @@ take ~5 min per fixture — no behavioural change.
 
 ---
 
-## Phase E — Monte Carlo outer search (full docking)
+## Phase E — Monte Carlo outer search (full docking) — DONE
 
-The scorer + local optimiser is now the reusable kernel a full docking
-run sits on top of. Upstream's `Vina::global_search` is:
+Shipped (`mutate.rs`, `mc.rs`, `global_search.rs`, `py_vina::dock`,
+`proteon.dock`). Upstream's `Vina::global_search`, reproduced:
 
-1. Initial random placement in the box.
-2. Monte-Carlo step on the Conf: perturb translation / orientation /
-   one torsion, run BFGS (already have it), accept/reject by
-   Metropolis at T = 1.2 (upstream default).
-3. Repeat `global_steps` times (default 2500 per replicate).
-4. Multiple replicates in parallel; collect top-N poses, cluster by
-   RMSD, report.
+1. Random placement in the box (`randomize_conf`).
+2. Per step: mutate one DoF (translation / orientation / one torsion,
+   `mutate_conf`), BFGS-minimise, Metropolis accept at T = 1.2.
+3. `global_steps` per replicate (default 2500).
+4. `exhaustiveness` replicates in parallel (rayon), pools merged and
+   RMSD-clustered into ranked `VinaDockPose` modes.
 
-Estimated effort: **4–6 focused hours**. Most of the interesting parts
-are already done — random Conf generation, MC mutation rules, and the
-parallel replicate loop. The parity conversation shifts from
-"bit-for-bit energies" to "find a pose within X Å RMSD of upstream's
-best pose on Y% of runs" — statistical rather than deterministic.
+Notes for whoever extends this:
 
-Suggested sub-phases:
+- **The roadmap's earlier "most parts already done" was wrong** — none
+  of `mutate` / `mc` / the replicate loop existed, and no `rand` /
+  `rand_chacha` was pinned anywhere. All of it is new here.
+- **Box confinement was the non-obvious correctness fix.** Without a
+  receptor grid, BFGS's free translation DoF drifts the ligand out of
+  the box into empty space (no contacts → energy ≈ 0, a spurious
+  "minimum"). `BoxPenalty` (in `local_only.rs`) adds a linear per-atom
+  out-of-box penalty + restoring force, mirroring upstream's grid
+  out-of-bounds slope. Without it, docking silently fails.
+- Search and final scoring both use the authentic `v = 1000` cap (not
+  upstream's tighter search-time `hunt_cap`) so the BFGS gradient stays
+  exactly consistent with the parity-validated `local_only` energy.
+- Parity is statistical: 1iep redocks to < 1 Å (`tests/redock.rs`).
 
-- **E.1** — `mutate.rs`: random Conf perturbation (translation,
-  quaternion, torsion). Upstream's step sizes are in `monte_carlo.h`.
-- **E.2** — `mc.rs`: the MC loop. Needs an RNG seed arg for
-  reproducibility; use `rand_chacha` (proteon already pins this
-  elsewhere).
-- **E.3** — `global_search.rs`: parallel replicates over rayon, top-N
-  collection, RMSD clustering.
-- **E.4** — `vina --docking` equivalent Python binding + fixture test
-  against upstream's final pose RMSD.
+Still open under Phase E for a follow-up:
+
+- **Grid rasterisation** (see Scaling below) — would replace `BoxPenalty`
+  with real out-of-bounds affinity grids and give the 10–50× speedup;
+  the per-pair `O(N_rec)` cost currently makes large-receptor docking
+  slow (the trimmed-pocket fixtures dock in seconds; a full protein
+  would not).
+- **`hunt_cap` during search** — upstream tightens the cap while
+  searching to escape clashes faster; we left it authentic. Worth
+  revisiting if random placements are seen to waste BFGS budget.
+- **Multi-seed redock benchmark** — current validation is one fixture,
+  one seed. A success-rate-over-N-seeds sweep on a PDBbind subset would
+  quantify docking quality properly.
 
 ---
 

@@ -269,9 +269,53 @@ def test_top_level_exports_listed_in_all():
         "local_only",
         "batch_score_only",
         "batch_local_only",
+        "dock",
         "VinaScoreComponents",
         "VinaLocalOnlyOutcome",
+        "VinaDockPose",
         "BfgsOutcome",
         "vina",
     ):
         assert name in proteon.__all__, f"{name!r} not in proteon.__all__"
+
+
+# ----------------------------------------------------------------------
+# dock — Monte-Carlo global search (Phase E)
+# ----------------------------------------------------------------------
+# Small budgets keep these fast: they exercise the binding plumbing and
+# output contract. Redocking *quality* (crystal-pose recovery to < 1 Å)
+# is validated deterministically in the Rust suite (proteon-vina
+# tests/redock.rs).
+
+
+def test_dock_returns_ranked_modes(rec_text, lig_text):
+    import proteon
+
+    modes = proteon.dock(
+        rec_text, lig_text,
+        exhaustiveness=2, n_poses=4, seed=7, global_steps=40,
+    )
+    assert isinstance(modes, list) and modes, "dock returned no modes"
+    # Ranked best-first by search energy.
+    energies = [m.search_energy for m in modes]
+    assert energies == sorted(energies), "modes not ranked by search energy"
+    top = modes[0]
+    assert np.isfinite(top.total)
+    assert top.coords.shape[1] == 3 and top.coords.shape[0] == top.original_serials.shape[0]
+    assert top.center.shape == (3,)
+
+
+def test_dock_is_reproducible_for_fixed_seed(rec_text, lig_text):
+    import proteon
+
+    kw = dict(exhaustiveness=2, n_poses=3, seed=11, global_steps=30)
+    a = proteon.dock(rec_text, lig_text, **kw)
+    b = proteon.dock(rec_text, lig_text, **kw)
+    assert [m.search_energy for m in a] == [m.search_energy for m in b]
+
+
+def test_dock_half_specified_box_is_an_error(rec_text, lig_text):
+    import proteon
+
+    with pytest.raises(ValueError):
+        proteon.dock(rec_text, lig_text, center=(0.0, 0.0, 0.0), global_steps=10)

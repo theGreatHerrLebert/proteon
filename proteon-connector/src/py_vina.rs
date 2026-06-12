@@ -19,7 +19,9 @@ use pyo3::wrap_pyfunction;
 use rayon::prelude::*;
 
 use crate::parallel::resolve_threads;
+use proteon_vina::global_search::{dock as rust_dock, DockParams, SearchBox};
 use proteon_vina::local_only::{local_only as rust_local_only, LocalOnlyOptions};
+use proteon_vina::mc::McParams;
 use proteon_vina::molecule::Molecule;
 use proteon_vina::pdbqt::parse_pdbqt;
 use proteon_vina::precalculate::Precalculate;
@@ -381,15 +383,154 @@ pub(crate) fn py_batch_local_only(
     Ok(outcomes)
 }
 
+/// One docked binding mode from `dock`: refined pose + score.
+#[pyclass(name = "VinaDockPose")]
+pub struct PyDockPose {
+    components: PyScoreComponents,
+    coords: Vec<[f64; 3]>,
+    serials: Vec<u32>,
+    search_energy: f64,
+    center: [f64; 3],
+}
+
+#[pymethods]
+impl PyDockPose {
+    /// 8-component energy vector at this pose (same layout as
+    /// `score_only`). `components.total` is the reported affinity.
+    #[getter]
+    fn components(&self) -> PyScoreComponents {
+        self.components.clone()
+    }
+    /// Search energy used for ranking and the Metropolis test
+    /// (inter+intra; upstream `output_type::e`). Lower is better.
+    #[getter]
+    fn search_energy(&self) -> f64 {
+        self.search_energy
+    }
+    /// Shortcut: conf-independent-adjusted affinity (== `components.total`).
+    #[getter]
+    fn total(&self) -> f64 {
+        self.components.inner.total
+    }
+    /// Docked ligand coordinates as an (N, 3) float64 numpy array,
+    /// parallel to `original_serials`.
+    #[getter]
+    fn coords<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
+        let flat: Vec<f64> = self.coords.iter().flat_map(|c| [c[0], c[1], c[2]]).collect();
+        let n = self.coords.len();
+        PyArray1::from_vec(py, flat).reshape([n, 3]).unwrap()
+    }
+    /// Original PDBQT serial numbers of the ligand atoms (parallel to
+    /// `coords`).
+    #[getter]
+    fn original_serials<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
+        self.serials.clone().into_pyarray(py)
+    }
+    /// World-space center of the ligand root for this pose, as a (3,)
+    /// float64 numpy array.
+    #[getter]
+    fn center<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        self.center.to_vec().into_pyarray(py)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "VinaDockPose(total={:.4}, search_energy={:.4})",
+            self.components.inner.total, self.search_energy,
+        )
+    }
+}
+
+/// Dock a flexible ligand into a receptor with AutoDock-Vina's
+/// Monte-Carlo global search, returning ranked binding modes (best
+/// first). Inputs are PDBQT text (not file paths).
+///
+/// The search box is either given explicitly (`center` + `size`, both
+/// 3-tuples in Å) or, if both are omitted, taken as the bounding box of
+/// the ligand's input coordinates grown by `padding` Å (redocking).
+///
+/// `exhaustiveness` independent replicates run in parallel; `seed` makes
+/// a run reproducible. `global_steps` is the Monte-Carlo step count per
+/// replicate (upstream default 2500 — lower it for quick exploratory
+/// runs). Docking is compute-heavy relative to `score_only` / `local_only`.
+#[pyfunction]
+#[pyo3(
+    name = "dock",
+    signature = (
+        receptor_pdbqt, ligand_pdbqt, *,
+        center=None, size=None, padding=6.0,
+        exhaustiveness=8, n_poses=9, seed=0, global_steps=2500,
+        n_threads=None,
+    )
+)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn py_dock(
+    py: Python<'_>,
+    receptor_pdbqt: &str,
+    ligand_pdbqt: &str,
+    center: Option<(f64, f64, f64)>,
+    size: Option<(f64, f64, f64)>,
+    padding: f64,
+    exhaustiveness: usize,
+    n_poses: usize,
+    seed: u64,
+    global_steps: usize,
+    n_threads: Option<i32>,
+) -> PyResult<Vec<PyDockPose>> {
+    if center.is_some() ^ size.is_some() {
+        return Err(PyValueError::new_err(
+            "center and size must be given together (or both omitted to autobox the ligand)",
+        ));
+    }
+    let rec_text = receptor_pdbqt.to_owned();
+    let lig_text = ligand_pdbqt.to_owned();
+    let n = resolve_threads(n_threads);
+
+    let poses = py.allow_threads(move || -> PyResult<Vec<PyDockPose>> {
+        let receptor = Molecule::from_pdbqt_str(&rec_text).map_err(to_py_err)?;
+        let ligand = Molecule::from_pdbqt_str(&lig_text).map_err(to_py_err)?;
+        let file = parse_pdbqt(&lig_text).map_err(to_py_err)?;
+        let precalc = Precalculate::vina();
+
+        let sbox = match (center, size) {
+            (Some(c), Some(s)) => SearchBox::new([c.0, c.1, c.2], [s.0, s.1, s.2]),
+            _ => SearchBox::around_ligand(&ligand, padding),
+        };
+        let params = DockParams {
+            exhaustiveness,
+            n_poses,
+            seed,
+            mc: McParams { global_steps, ..McParams::default() },
+            ..DockParams::default()
+        };
+
+        let pool = build_pool(n);
+        let modes = pool.install(|| rust_dock(&receptor, &ligand, &file, &precalc, sbox, &params));
+        Ok(modes
+            .into_iter()
+            .map(|m| PyDockPose {
+                components: PyScoreComponents { inner: m.components },
+                coords: m.coords,
+                serials: ligand.original_serials.clone(),
+                search_energy: m.search_energy,
+                center: m.conf.center,
+            })
+            .collect())
+    })?;
+    Ok(poses)
+}
+
 /// Python module entry point: proteon_connector.py_vina
 #[pymodule]
 pub(crate) fn py_vina(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScoreComponents>()?;
     m.add_class::<PyBfgsOutcome>()?;
     m.add_class::<PyLocalOnlyOutcome>()?;
+    m.add_class::<PyDockPose>()?;
     m.add_function(wrap_pyfunction!(py_score_only, m)?)?;
     m.add_function(wrap_pyfunction!(py_local_only, m)?)?;
     m.add_function(wrap_pyfunction!(py_batch_score_only, m)?)?;
     m.add_function(wrap_pyfunction!(py_batch_local_only, m)?)?;
+    m.add_function(wrap_pyfunction!(py_dock, m)?)?;
     Ok(())
 }

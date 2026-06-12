@@ -24,7 +24,7 @@
 //! components match what upstream prints after its post-BFGS score().
 
 use crate::bfgs::{bfgs, BfgsOutcome};
-use crate::conf::Conf;
+use crate::conf::{Conf, Vec3};
 use crate::gradient::gradient_from_forces;
 use crate::molecule::Molecule;
 use crate::pdbqt::PdbqtFile;
@@ -93,47 +93,23 @@ pub fn local_only(
 ) -> LocalOnlyOutcome {
     let tree = TorsionTree::from_molecule(ligand, ligand_file);
     let pairs = intra_pair_list(ligand);
-
-    // Scratch Molecule whose coords we overwrite at every energy
-    // evaluation. Everything else (types, bonds, fragment_mask) is
-    // invariant under pose changes, so we clone once.
     let mut scratch = ligand.clone();
 
-    let mut bfgs_evals = 0_usize;
-    let mut f = |conf: &Conf| {
-        bfgs_evals += 1;
-        let applied = tree.apply_full(conf);
-        scratch.coords.clone_from(&applied.coords);
-
-        let (e_inter, forces_inter) =
-            inter_pair_energy_with_forces(receptor, &scratch, precalc, opts.v_curl);
-        let (e_intra, forces_intra) =
-            intra_pair_energy_with_forces(&scratch, &pairs, precalc, opts.v_curl);
-
-        // Sum per-atom forces.
-        let mut per_atom_force = forces_inter;
-        for (a, b) in per_atom_force.iter_mut().zip(forces_intra.iter()) {
-            a[0] += b[0];
-            a[1] += b[1];
-            a[2] += b[2];
-        }
-
-        // DoF gradient in "force" sign. BFGS wants +∂E/∂DoF → negate.
-        let force_grad = gradient_from_forces(&tree, &applied, &per_atom_force);
-        let grad_for_bfgs = force_grad.negated();
-
-        (e_inter + e_intra, grad_for_bfgs)
-    };
-
-    let mut conf = tree.identity_conf();
     // Upstream `Vina::optimize` computes max_steps = (25 + N_movable) / 3
     // when the caller passes 0; we mirror that formula when
     // `opts.max_steps` is `None`.
-    let max_steps = opts
-        .max_steps
-        .unwrap_or((25 + ligand.len()) / 3);
-    let bfgs_outcome = bfgs(&mut f, &mut conf, max_steps);
-    let _ = bfgs_evals; // eval count already tracked inside bfgs_outcome.n_evals
+    let max_steps = opts.max_steps.unwrap_or((25 + ligand.len()) / 3);
+
+    let (conf, bfgs_outcome) = minimise_conf(
+        receptor,
+        &tree,
+        &pairs,
+        &mut scratch,
+        precalc,
+        tree.identity_conf(),
+        max_steps,
+        opts.v_curl,
+    );
 
     // Re-score the minimised pose with eval_fast for upstream-parity
     // reporting of the 8-component vector.
@@ -148,6 +124,124 @@ pub fn local_only(
     );
 
     LocalOnlyOutcome { conf, components, bfgs: bfgs_outcome }
+}
+
+/// Minimise a single conformation to its nearest BFGS local minimum,
+/// reusing prebuilt topology so a search loop can call it thousands of
+/// times without rebuilding the torsion tree / intra-pair list.
+///
+/// Returns the minimised [`Conf`] and the [`BfgsOutcome`]; the outcome's
+/// `final_energy` is the inter+intra search energy (what the Monte-Carlo
+/// Metropolis test compares). `scratch` is a throwaway [`Molecule`] whose
+/// `coords` are overwritten on every evaluation — pass a clone of the
+/// ligand. This is the kernel shared by [`local_only`] and the
+/// [`crate::mc`] search.
+///
+/// * `tree` — `TorsionTree::from_molecule(ligand, ligand_file)`.
+/// * `pairs` — `intra_pair_list(ligand)`.
+/// * `start` — the conformation to descend from.
+/// * `max_steps` — BFGS iteration budget.
+/// * `v_curl` — soft energy cap (see [`LocalOnlyOptions::v_curl`]).
+#[must_use]
+pub fn minimise_conf(
+    receptor: &Molecule,
+    tree: &TorsionTree,
+    pairs: &[(usize, usize)],
+    scratch: &mut Molecule,
+    precalc: &Precalculate,
+    start: Conf,
+    max_steps: usize,
+    v_curl: f64,
+) -> (Conf, BfgsOutcome) {
+    minimise_conf_confined(
+        receptor, tree, pairs, scratch, precalc, start, max_steps, v_curl, None,
+    )
+}
+
+/// Box-confinement penalty for the search minimiser.
+///
+/// During global docking there is nothing to stop BFGS translating the
+/// ligand out of the search box into empty space (where it has no
+/// receptor contacts and so scores ~0) — upstream confines it via the
+/// grid's out-of-bounds slope. This reproduces that with a per-atom
+/// linear penalty: every ligand atom outside `[corner1, corner2]`
+/// contributes `slope · (Å outside, summed per axis)` to the energy plus
+/// a constant restoring force pulling it back in. Poses fully inside the
+/// box pay nothing, so it never perturbs a docked minimum.
+#[derive(Clone, Copy, Debug)]
+pub struct BoxPenalty {
+    /// Lower box corner (`corner1[i] < corner2[i]`).
+    pub corner1: Vec3,
+    /// Upper box corner.
+    pub corner2: Vec3,
+    /// Penalty per Å outside the box, per axis.
+    pub slope: f64,
+}
+
+impl BoxPenalty {
+    /// Add the confinement energy and restoring forces (physics sign,
+    /// `−∂E/∂x`) for `coords` into `energy` / `forces`.
+    fn accumulate(&self, coords: &[Vec3], energy: &mut f64, forces: &mut [Vec3]) {
+        for (i, c) in coords.iter().enumerate() {
+            for ax in 0..3 {
+                if c[ax] < self.corner1[ax] {
+                    *energy += self.slope * (self.corner1[ax] - c[ax]);
+                    forces[i][ax] += self.slope; // push back toward +
+                } else if c[ax] > self.corner2[ax] {
+                    *energy += self.slope * (c[ax] - self.corner2[ax]);
+                    forces[i][ax] -= self.slope; // push back toward −
+                }
+            }
+        }
+    }
+}
+
+/// [`minimise_conf`] with an optional [`BoxPenalty`] confining the ligand
+/// to the search box. `local_only` calls this with `confine = None`; the
+/// Monte-Carlo search passes the box.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn minimise_conf_confined(
+    receptor: &Molecule,
+    tree: &TorsionTree,
+    pairs: &[(usize, usize)],
+    scratch: &mut Molecule,
+    precalc: &Precalculate,
+    start: Conf,
+    max_steps: usize,
+    v_curl: f64,
+    confine: Option<BoxPenalty>,
+) -> (Conf, BfgsOutcome) {
+    let mut f = |conf: &Conf| {
+        let applied = tree.apply_full(conf);
+        scratch.coords.clone_from(&applied.coords);
+
+        let (e_inter, forces_inter) =
+            inter_pair_energy_with_forces(receptor, scratch, precalc, v_curl);
+        let (e_intra, forces_intra) =
+            intra_pair_energy_with_forces(scratch, pairs, precalc, v_curl);
+
+        // Sum per-atom forces.
+        let mut per_atom_force = forces_inter;
+        for (a, b) in per_atom_force.iter_mut().zip(forces_intra.iter()) {
+            a[0] += b[0];
+            a[1] += b[1];
+            a[2] += b[2];
+        }
+
+        let mut energy = e_inter + e_intra;
+        if let Some(bp) = confine {
+            bp.accumulate(&applied.coords, &mut energy, &mut per_atom_force);
+        }
+
+        // DoF gradient in "force" sign. BFGS wants +∂E/∂DoF → negate.
+        let force_grad = gradient_from_forces(tree, &applied, &per_atom_force);
+        (energy, force_grad.negated())
+    };
+
+    let mut conf = start;
+    let bfgs_outcome = bfgs(&mut f, &mut conf, max_steps);
+    (conf, bfgs_outcome)
 }
 
 #[cfg(test)]

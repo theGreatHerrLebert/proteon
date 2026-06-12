@@ -307,10 +307,12 @@ from .loader_failure_analysis import (
 from . import vina
 from .vina import (
     BfgsOutcome,
+    VinaDockPose,
     VinaLocalOnlyOutcome,
     VinaScoreComponents,
     batch_local_only,
     batch_score_only,
+    dock,
     local_only,
     score_only,
 )
@@ -632,8 +634,10 @@ _VINA_API = (
     "local_only",
     "batch_score_only",
     "batch_local_only",
+    "dock",
     "VinaScoreComponents",
     "VinaLocalOnlyOutcome",
+    "VinaDockPose",
     "BfgsOutcome",
     "vina",  # submodule itself, for proteon.vina.* access
 )
