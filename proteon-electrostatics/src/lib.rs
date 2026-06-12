@@ -59,6 +59,7 @@
 
 pub mod adaptive;
 pub mod analytic;
+pub mod fastsum;
 pub mod format;
 #[cfg(feature = "cuda")]
 pub mod gpu;

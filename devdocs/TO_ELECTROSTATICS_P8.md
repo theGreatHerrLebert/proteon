@@ -1,0 +1,186 @@
+# P8 — Fast summation for the BEM matvec (breaking the O(N²) ceiling)
+
+Status: **design, pre-implementation.** This is the one open piece of the NESSie
+BEM port (`TO_ELECTROSTATICS.md` §6/P8). Everything below the matvec — kernels,
+assembly, GMRES, post-processing, mesh gates, Python/CLI — is shipped and gated.
+The remaining ceiling is the dense O(N²) matvec; this plan replaces it with an
+approximate **treecode** so a useful bounded protein-scale regime becomes
+reachable without abandoning the reference-tier accuracy story.
+
+## 1. The bottleneck, precisely
+
+The local solve's operator is `y = K·x` (double-layer); the nonlocal solve adds
+`V`, `Vy`, `Ky` matvecs (`system.rs::NonlocalOperator`). Each dense operator is
+
+```
+y_i = Σ_j  M[i][j] · x_j ,   M[i][j] = laplace_collocation(kind, ξ_i, tri_j)
+```
+
+with the collocation point `ξ_i = centroid(element_i)` and `tri_j` the source
+triangle (`laplace_matrices_cpu`). Building `M` is O(N²) memory; each matvec is
+O(N²) time. The matrix-free `LocalOperator`/`NonlocalOperator` already drop the
+memory to O(N) by re-deriving entries, but the **time** per matvec stays O(N²).
+GMRES does tens of matvecs, so the whole solve is O(iters · N²).
+
+## 2. Far-field reduction (why a particle method applies)
+
+`laplace_collocation` is the **exact Rjasanow analytic integral** of the kernel
+over `tri_j`. When `ξ_i` is far from `tri_j` relative to the triangle's size, that
+integral converges to the point kernel at the triangle centroid `c_j` times area:
+
+- Single layer:  `V[i][j] → Area_j / |ξ_i − c_j|`
+- Double layer:  `K[i][j] → Area_j · (ξ_i − c_j)·n_j / |ξ_i − c_j|³`
+
+So the matvec splits into:
+
+```
+y_i =  Σ_{j near i}  M_exact[i][j] · x_j        (NEAR: exact analytic collocation)
+     + Σ_{j far  i}  kernel(ξ_i, c_j) · w_j      (FAR: point kernel, w_j folds in Area_j/x_j)
+```
+
+The far sum is a Laplace N-body sum. **But the centroid collapse alone is not
+enough for a reference tier** — see §3.1.
+
+## 3. Method choice
+
+**Treecode (Barnes–Hut), not FMM, for v1.** Treecode is O(N log N) — enough to
+lift the ceiling substantially (the actual reach depends on measured constants,
+§3.3) — and needs only *particle/panel→cluster* expansions (no M2M/M2L/L2L). It is
+far simpler to implement and to **gate** against the dense matvec. FMM (O(N)) is a
+later phase only if benchmarks demand it, and only via a mature library — rolling
+our own is disproportionate.
+
+### 3.1 Panel-aware moments (the correctness fix — review catch)
+
+Collapsing each panel to its centroid gives the monopole/dipole far field
+
+```
+∫_{T_j} G(ξ,y) dS_y  =  A_j·G(ξ,c_j) + O(A_j · h_j² / r³)
+```
+
+whose `O(h_j²/r³)` error is a **fixed floor that interpolation degree p cannot
+reduce** — disqualifying for a reference tier. Instead carry **panel-aware
+Chebyshev moments**: integrate the Lagrange basis over the panel,
+
+```
+single layer:   Q_k = Σ_j  x_j  ∫_{T_j} L_k(y) dS_y          (scalar moment)
+double layer:   Q_k = Σ_j  x_j n_j  ∫_{T_j} L_k(y) dS_y       (vector moment)
+```
+
+with the panel integrals `∫_{T_j} L_k dS` precomputed accurately (a low-order
+triangle cubature of a polynomial — exact to cubature order). A far cluster's
+contribution to target ξ is then `Σ_k G(ξ,s_k)·Q_k` (single) /
+`Σ_k ∇_y G(ξ,s_k)·Q_k` (double), where `s_k` are the cluster's Chebyshev proxy
+points. This preserves finite-panel geometry while keeping barycentric
+interpolation, so accuracy is genuinely controlled by `(p,θ)`.
+
+The **dipole** is an explicit data-model decision: interpolate the three
+components of `∇_y G` against the vector moment `Q_k` (chosen here), *not* a scalar
+"carry n_j into the weight". Sign / normal orientation / derivative accuracy are
+tested in isolation against `laplace_collocation(Double, …)` before any wiring.
+
+### 3.2 Barycentric-Lagrange vs Cartesian multipole — decide by bake-off
+
+BLTC (Wang–Krasny–Tlupova 2020) is kernel-independent and uniform across `V/K/
+Vy/Ky`, but pays a `(p+1)³` constant per accepted interaction (kernel values are
+target-dependent — only geometry + moments are storable, the `(p+1)³` kernel
+evaluations happen per target-cluster pair). For the *only two* kernels we need
+(Laplace + Yukawa), **Cartesian multipole/Taylor expansions are cheaper and handle
+dipoles naturally**. P8.1 builds an isolated summation harness and benchmarks BLTC
+vs Cartesian *before* committing the operator architecture.
+
+### 3.3 Honest complexity
+
+Direct moment rebuild touches every ancestor cluster of each source — one cluster
+per level — so it is **O(N·p³·depth)**, not O(N·p³). True linear rebuild needs
+upward translations (M2M), which reintroduces FMM machinery; v1 accepts the
+`·depth` factor and **measures** it. Per matvec the costs are, separately:
+tree build (once per solve, x-independent), **moment rebuild** (per iteration,
+O(N·p³·depth)), **traversal** (O(N·log N · p³) with `(p+1)³` kernel evals per
+accepted pair), and the **exact near field** (O(N · near-list-size)). No reach
+claim (10⁵ etc.) is made until these constants are measured.
+
+## 4. The pieces to build
+
+1. **Octree** whose cluster bounds **enclose triangle vertices** (not just
+   centroids): a large / high-aspect panel can reach a target while its centroid
+   looks far, so admissibility must see the true panel extent. Subdivide until
+   ≤ `n_leaf` panels per leaf; store bounds, center, radius.
+2. **Two independent length-scale tests** (review catch — these are *different*,
+   neither derived from the other):
+   - **Tree MAC** (is a cluster separated enough to expand?):
+     `cluster_radius / dist(ξ, center) ≤ θ`.
+   - **Rjasanow near-singular** (is a target close enough to an *individual* panel
+     to need the exact/near-singular closed form?): the existing element-size
+     criterion, unchanged.
+   A cluster is expandable only if the MAC holds **and** every represented panel
+   passes the panel-separation test `panel_radius / dist(ξ, panel) ≤ η`; otherwise
+   recurse; at leaves use **exact** `laplace_collocation` per panel (this is where
+   self / near-singular entries stay exact, preserving reference accuracy).
+3. **Panel-aware moments** (§3.1): precompute `∫_{T_j} L_k dS` once; refresh the
+   `x`-dependent moments each matvec.
+4. **`TreecodeOperator: LinearOperator`** — drop-in for `DenseOperator` inside
+   `LocalOperator`/`NonlocalOperator`. Octree + proxy geometry + panel integrals
+   built once per solve; only the moments refresh per matvec.
+5. **Wiring**: `solve_*_auto` selects the treecode past a triangle threshold
+   (mirrors the GPU-vs-dense `DENSE_MATRIX_BUDGET` switch); `SurfaceSolveOptions`
+   gains an accuracy knob. **No auto-enable** until §5 establishes calibrated
+   `(p,θ,η)` presets; default stays exact dense for small meshes.
+
+## 5. Gating (the reference-tier bar)
+
+- **Isolated kernel sweeps** (before any operator): single-panel far-field error
+  vs distance, triangle size, **aspect ratio**, and orientation — for both scalar
+  (single) and dipole (double), the latter sign-checked against `laplace_collocation`.
+- **Matvec approximation tolerance** (not "bit-error"): on real meshes (sphere
+  ladder + a protein SES) and **several `x`** — random, constant, localized, and a
+  physically representative right-hand side (relative error alone is unstable when
+  `‖y‖` is small) — assert `‖y_tree − y_dense‖/‖y_dense‖ ≤ tol(p,θ,η)` for a ladder
+  of `(p,θ,η)`, with **monotone** error decrease in `p` and with tightening `θ`.
+- **Near/far continuity**: error stays smooth across the MAC boundary; adversarial
+  non-uniform / mixed-scale meshes don't blow the near list or the error.
+- **GMRES true-dense residual**: convergence judged on the **dense** operator
+  residual, not the tree operator's — plus iteration-count regression and
+  **charge-density (solution) error**, not energy alone.
+- **End-to-end energy**: treecode rfenergy vs dense and vs analytic Born/Xie within
+  a stated tolerance; treecode error must not dominate mesh discretization error on
+  a refinement ladder (else it silently caps accuracy).
+- **Invariance**: rotation, translation, scaling, normal-reversal.
+- **Scaling**: per-stage timing/memory (tree build, moment rebuild, traversal,
+  exact near field, each nonlocal kernel) vs N — show the cross-over N where the
+  treecode beats dense O(N²). Determinism: parallelize over targets, serial
+  per-target traversal, fixed reduction order.
+
+## 6. Phasing
+
+- **P8.1** Isolated summation harness: octree (vertex-enclosing) + **panel-aware
+  scalar AND dipole** expansions, BLTC vs Cartesian bake-off, single-panel error
+  sweeps. (A single-layer-only start would not unlock the local solve and risks
+  validating the wrong dipole data model.)
+- **P8.2** `TreecodeOperator` for `K` (and `V`) → the local solve runs on the
+  treecode; matvec-tolerance + true-residual + energy/Born gates.
+- **P8.3** Wire into `LocalOperator` + `solve_local_*` threshold + `SurfaceSolve`
+  knob (opt-in, **no** auto-enable yet); scaling benchmark; calibrated presets;
+  CLI/Python knob.
+- **P8.4** Nonlocal `Vy`/`Ky`. **Not** truly optional if large-mesh *nonlocal*
+  scaling matters: leaving them dense keeps the nonlocal solve O(N²). Optional only
+  if nonlocal-at-scale is explicitly out of scope. FMM only if O(N log N) proves
+  insufficient *and* via a mature library.
+
+## 7. Risks / watch
+
+- **Panel-collapse floor** — the headline correctness risk; addressed by §3.1
+  panel-aware moments. Guard with the single-panel aspect-ratio sweep.
+- **Two length scales conflated** — MAC (cluster separation) ≠ Rjasanow
+  near-singular (panel proximity). Kept independent (§4.2); octree bounds enclose
+  vertices so panel extent is visible to admissibility.
+- **Rebuild cost** — `O(N·p³·depth)` per matvec, every GMRES iteration; measured,
+  not assumed. Octree/proxy/panel-integrals built once per solve; only moments
+  refresh.
+- **Dipole sign/orientation** — invisible until the energy gate; tested in
+  isolation first (§3.1).
+- **Determinism vs rayon** — parallelize over targets, serial per-target traversal,
+  fixed reduction order.
+- **Scope honesty (§0)** — stays reference/research tier; GB-style energy-component
+  wiring is out of scope until a bounded regime is demonstrated with measured
+  constants.
