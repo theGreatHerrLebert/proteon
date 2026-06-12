@@ -66,9 +66,15 @@ fn main() {
         let tree = tree.unwrap();
         let mut y_tree = vec![0.0; n];
         let mut tmv = f64::INFINITY;
+        let mut trebuild = f64::INFINITY;
         for _ in 0..n_reps {
             tmv = tmv.min(time_ms(|| tree.matvec(&x, &mut y_tree)));
+            trebuild = trebuild.min(time_ms(|| tree.bench_rebuild(&x)));
         }
+        eprintln!(
+            "  [N={n}] matvec {tmv:.2}ms = moment-rebuild {trebuild:.2}ms + traversal {:.2}ms",
+            tmv - trebuild
+        );
 
         if n <= dense_cap_n {
             let mut dense = None;
@@ -95,9 +101,13 @@ fn main() {
     }
 
     println!(
-        "\nNote: speedup < 1 means the v1 direct moment rebuild (O(N·depth·p³)) is slower\n\
-         per matvec than the tight dense O(N²) loop at this N; the treecode's win is\n\
-         O(N) MEMORY (dense is capped out past ~{dense_cap_n} triangles) and the matvec\n\
-         crossover moves in once the M2M upward pass replaces the direct rebuild."
+        "\nNote: the M2M upward pass makes the moment rebuild linear — but the breakdown\n\
+         above shows it is only ~12–14% of the matvec; the rest is TRAVERSAL (per-target\n\
+         far-field Taylor evals + exact near-field collocations). Each treecode pair costs\n\
+         far more than dense's single FMA, so dense wins on speed wherever its O(N²)\n\
+         matrix still fits (capped ~{dense_cap_n} triangles here). The treecode's realized\n\
+         win is O(N) MEMORY — it solves meshes dense cannot hold (350 ms/matvec at 20k,\n\
+         where dense needs 6.7 GiB). A speed crossover needs traversal-constant work\n\
+         (cheaper kernel eval / level-batching / the FMM L2L downward pass), not more M2M."
     );
 }

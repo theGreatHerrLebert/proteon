@@ -88,30 +88,86 @@ impl CollocationTreecode {
         }
     }
 
-    /// Per-node single-layer moments about each node center, from the current `x`.
+    /// Per-node single-layer moments via the **M2M upward pass**: leaf moments are built
+    /// from their panels (parallel, the only cubature), then each internal node's moments
+    /// are the M2M-translated sum of its children's — `O(N·p³)` leaf work + `O(N·p⁴)`
+    /// translations, instead of the direct `O(N·depth·p³·cub)` per-node rebuild. (`build`
+    /// guarantees a parent's index is below its children's, so a reverse pass has every
+    /// child ready.)
     fn single_moments(&self, x: &[f64]) -> Vec<Vec<f64>> {
-        self.tree
-            .nodes
+        let nodes = &self.tree.nodes;
+        let nn = nodes.len();
+        let sz = (self.p + 1).pow(3);
+        let leaves: Vec<(usize, Vec<f64>)> = nodes
             .par_iter()
-            .map(|node| {
+            .enumerate()
+            .filter(|(_, node)| node.children.is_empty())
+            .map(|(i, node)| {
                 let panels: Vec<(Tri, f64)> =
                     node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
-                cartesian::single_layer_moments(node.center, node.radius, &panels, self.p)
+                (i, cartesian::single_layer_moments(node.center, node.radius, &panels, self.p))
             })
-            .collect()
+            .collect();
+        let mut moments: Vec<Vec<f64>> = vec![Vec::new(); nn];
+        for (i, m) in leaves {
+            moments[i] = m;
+        }
+        for i in (0..nn).rev() {
+            let node = &nodes[i];
+            if node.children.is_empty() {
+                continue;
+            }
+            let mut acc = vec![0.0; sz];
+            for &c in &node.children {
+                let s = nodes[c].radius / node.radius;
+                let t = (nodes[c].center - node.center) * (1.0 / node.radius);
+                let tc = cartesian::m2m_single(&moments[c], s, t, self.p);
+                for (a, b) in acc.iter_mut().zip(&tc) {
+                    *a += *b;
+                }
+            }
+            moments[i] = acc;
+        }
+        moments
     }
 
-    /// Per-node double-layer vector moments about each node center, from the current `x`.
+    /// Per-node double-layer vector moments via the M2M upward pass (as [`single_moments`]).
     fn double_moments(&self, x: &[f64]) -> Vec<Vec<Vec3>> {
-        self.tree
-            .nodes
+        let nodes = &self.tree.nodes;
+        let nn = nodes.len();
+        let sz = (self.p + 1).pow(3);
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        let leaves: Vec<(usize, Vec<Vec3>)> = nodes
             .par_iter()
-            .map(|node| {
+            .enumerate()
+            .filter(|(_, node)| node.children.is_empty())
+            .map(|(i, node)| {
                 let panels: Vec<(Tri, f64)> =
                     node.panels.iter().map(|&j| (self.elements[j], x[j])).collect();
-                cartesian::double_layer_moments(node.center, node.radius, &panels, self.p)
+                (i, cartesian::double_layer_moments(node.center, node.radius, &panels, self.p))
             })
-            .collect()
+            .collect();
+        let mut moments: Vec<Vec<Vec3>> = vec![Vec::new(); nn];
+        for (i, m) in leaves {
+            moments[i] = m;
+        }
+        for i in (0..nn).rev() {
+            let node = &nodes[i];
+            if node.children.is_empty() {
+                continue;
+            }
+            let mut acc = vec![zero; sz];
+            for &c in &node.children {
+                let s = nodes[c].radius / node.radius;
+                let t = (nodes[c].center - node.center) * (1.0 / node.radius);
+                let tc = cartesian::m2m_double(&moments[c], s, t, self.p);
+                for (a, b) in acc.iter_mut().zip(&tc) {
+                    *a = *a + *b;
+                }
+            }
+            moments[i] = acc;
+        }
+        moments
     }
 
     /// Evaluate `y_i` at target `xi` by traversing the tree (serial per target, so the
@@ -149,6 +205,22 @@ impl CollocationTreecode {
             .iter()
             .map(|&c| self.eval_target(xi, x, sl, dl, c))
             .sum()
+    }
+}
+
+impl CollocationTreecode {
+    /// Benchmark hook: run only the per-matvec moment rebuild (no traversal), so a caller
+    /// can measure the rebuild's share of the matvec. Not part of the solve path.
+    #[doc(hidden)]
+    pub fn bench_rebuild(&self, x: &[f64]) {
+        match self.kind {
+            PotentialKind::Single => {
+                std::hint::black_box(self.single_moments(x));
+            }
+            PotentialKind::Double => {
+                std::hint::black_box(self.double_moments(x));
+            }
+        }
     }
 }
 

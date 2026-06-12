@@ -213,6 +213,105 @@ pub fn eval_double_layer(center: Vec3, radius: f64, w_moments: &[Vec3], xi: Vec3
     acc
 }
 
+/// 1-D translation matrix `T[k][m] = C(k,m)·s^m·t^{k−m}` (`m ≤ k`, else 0), flattened
+/// row-major `(p+1)²`. Re-expresses normalized monomials of a child cluster
+/// (`û_child = (y−c_child)/R_child`) in the parent's normalized coordinate
+/// (`û_parent = (y−c_parent)/R_parent`) along one axis, with `s = R_child/R_parent` and
+/// `t = (c_child−c_parent)/R_parent`.
+fn trans_matrix_1d(s: f64, t: f64, p: usize) -> Vec<f64> {
+    let n = p + 1;
+    // Pascal triangle for C(k,m).
+    let mut binom = vec![0.0; n * n];
+    for k in 0..n {
+        binom[k * n] = 1.0;
+        for m in 1..=k {
+            binom[k * n + m] = binom[(k - 1) * n + m - 1] + binom[(k - 1) * n + m];
+        }
+    }
+    let mut spow = vec![1.0; n];
+    let mut tpow = vec![1.0; n];
+    for i in 1..n {
+        spow[i] = spow[i - 1] * s;
+        tpow[i] = tpow[i - 1] * t;
+    }
+    let mut tm = vec![0.0; n * n];
+    for k in 0..n {
+        for m in 0..=k {
+            tm[k * n + m] = binom[k * n + m] * spow[m] * tpow[k - m];
+        }
+    }
+    tm
+}
+
+/// Translate a child cluster's **normalized** scalar moments to the parent center/radius
+/// (Cartesian M2M). `s = R_child/R_parent`, `t = (c_child − c_parent)/R_parent`. Separable
+/// per axis (`O(p⁴)`), so the upward pass that builds all node moments is `O(N·p⁴)`
+/// instead of the direct `O(N·depth·p³·cub)` rebuild. Returns the parent-frame
+/// contribution of this child (sum over a node's children to get its moments).
+#[must_use]
+pub fn m2m_single(child: &[f64], s: f64, t: Vec3, p: usize) -> Vec<f64> {
+    let n = p + 1;
+    let tx = trans_matrix_1d(s, t.x, p);
+    let ty = trans_matrix_1d(s, t.y, p);
+    let tz = trans_matrix_1d(s, t.z, p);
+    // Step z: B[mx][my][kz] = Σ_{mz≤kz} Tz[kz][mz] · child[mx][my][mz].
+    let mut b = vec![0.0; n * n * n];
+    for mx in 0..n {
+        for my in 0..n {
+            let base = (mx * n + my) * n;
+            for kz in 0..n {
+                let mut acc = 0.0;
+                for mz in 0..=kz {
+                    acc += tz[kz * n + mz] * child[base + mz];
+                }
+                b[base + kz] = acc;
+            }
+        }
+    }
+    // Step y: C[mx][ky][kz] = Σ_{my≤ky} Ty[ky][my] · B[mx][my][kz].
+    let mut c = vec![0.0; n * n * n];
+    for mx in 0..n {
+        for ky in 0..n {
+            for kz in 0..n {
+                let mut acc = 0.0;
+                for my in 0..=ky {
+                    acc += ty[ky * n + my] * b[(mx * n + my) * n + kz];
+                }
+                c[(mx * n + ky) * n + kz] = acc;
+            }
+        }
+    }
+    // Step x: P[kx][ky][kz] = Σ_{mx≤kx} Tx[kx][mx] · C[mx][ky][kz].
+    let mut out = vec![0.0; n * n * n];
+    for kx in 0..n {
+        for ky in 0..n {
+            for kz in 0..n {
+                let mut acc = 0.0;
+                for mx in 0..=kx {
+                    acc += tx[kx * n + mx] * c[(mx * n + ky) * n + kz];
+                }
+                out[(kx * n + ky) * n + kz] = acc;
+            }
+        }
+    }
+    out
+}
+
+/// Cartesian M2M for the double-layer **vector** moments — the same scalar translation
+/// applied to each component independently (the shift acts on the polynomial index
+/// structure, not the vector component).
+#[must_use]
+pub fn m2m_double(child: &[Vec3], s: f64, t: Vec3, p: usize) -> Vec<Vec3> {
+    let len = child.len();
+    let cx: Vec<f64> = child.iter().map(|v| v.x).collect();
+    let cy: Vec<f64> = child.iter().map(|v| v.y).collect();
+    let cz: Vec<f64> = child.iter().map(|v| v.z).collect();
+    let px = m2m_single(&cx, s, t, p);
+    let py = m2m_single(&cy, s, t, p);
+    let pz = m2m_single(&cz, s, t, p);
+    (0..len).map(|i| Vec3::new(px[i], py[i], pz[i])).collect()
+}
+
 /// Number of terms in a total-degree-`p` Cartesian expansion, `C(p+3, 3)`.
 #[must_use]
 pub fn n_terms(p: usize) -> usize {
@@ -325,6 +424,65 @@ mod tests {
         let w = double_layer_moments(center, radius, &[(flipped, 1.0)], 8);
         let got = eval_double_layer(center, radius, &w, xi, 8);
         assert!(rel(got, -bare) < 1e-6, "flipped {got} vs -bare {}", -bare);
+    }
+
+    #[test]
+    fn m2m_single_matches_direct_parent_moments() {
+        // A panel's moments translated from its own (child) frame to a parent frame must
+        // equal the panel's moments computed directly about the parent — the M2M identity
+        // the upward pass relies on.
+        let tri = tilted_tri();
+        let p = 7;
+        let (lo, hi) = tri_bbox(&tri);
+        let c_child = (lo + hi) * 0.5;
+        let r_child = (hi - lo).norm() * 0.5;
+        // A larger parent box that contains the panel, with a shifted center.
+        let c_parent = c_child + Vec3::new(0.4, -0.3, 0.2);
+        let r_parent = r_child * 2.5;
+
+        let child = single_layer_moments(c_child, r_child, &[(tri, 1.3)], p);
+        let translated = m2m_single(&child, r_child / r_parent, (c_child - c_parent) * (1.0 / r_parent), p);
+        let direct = single_layer_moments(c_parent, r_parent, &[(tri, 1.3)], p);
+
+        let n = p + 1;
+        let mut maxerr = 0.0_f64;
+        for i in 0..n {
+            for j in 0..(n - i) {
+                for k in 0..(n - i - j) {
+                    let id = cidx(i, j, k, p);
+                    maxerr = maxerr.max((translated[id] - direct[id]).abs());
+                }
+            }
+        }
+        assert!(maxerr < 1e-12, "M2M vs direct parent moments max abs err {maxerr:.3e}");
+    }
+
+    #[test]
+    fn m2m_double_matches_direct_parent_moments() {
+        let tri = tilted_tri();
+        let p = 6;
+        let (lo, hi) = tri_bbox(&tri);
+        let c_child = (lo + hi) * 0.5;
+        let r_child = (hi - lo).norm() * 0.5;
+        let c_parent = c_child + Vec3::new(-0.2, 0.5, 0.1);
+        let r_parent = r_child * 3.0;
+
+        let child = double_layer_moments(c_child, r_child, &[(tri, 0.7)], p);
+        let translated = m2m_double(&child, r_child / r_parent, (c_child - c_parent) * (1.0 / r_parent), p);
+        let direct = double_layer_moments(c_parent, r_parent, &[(tri, 0.7)], p);
+
+        let n = p + 1;
+        let mut maxerr = 0.0_f64;
+        for i in 0..n {
+            for j in 0..(n - i) {
+                for k in 0..(n - i - j) {
+                    let id = cidx(i, j, k, p);
+                    let d = translated[id] - direct[id];
+                    maxerr = maxerr.max(d.x.abs().max(d.y.abs()).max(d.z.abs()));
+                }
+            }
+        }
+        assert!(maxerr < 1e-12, "M2M dipole vs direct max abs err {maxerr:.3e}");
     }
 
     #[test]

@@ -186,11 +186,29 @@ at these sizes — the direct `O(N·depth·p³)` moment rebuild has a large cons
   built past ~12k triangles (6.7 GiB at 20k), where the treecode runs at 350 ms/matvec;
 - dense *build* is already 1 s at 5k and quadratic — the treecode builds in ms.
 
-**Conclusion:** v1 treecode = a *memory* unlock (solve meshes dense can't hold), not yet
-a *time* win. The matvec time crossover needs the **M2M upward pass** to replace the
-direct rebuild (deferred, P8 follow-up). No protein-scale *speed* claim is made until
-that lands — exactly the §0/§3.3 discipline. Accuracy is in hand throughout
-(rel-L2 ≤ 3e-3 at p=6; tighter with higher p).
+**Conclusion:** v1 treecode = a *memory* unlock (solve meshes dense can't hold), not a
+*time* win. Accuracy is in hand throughout (rel-L2 ≤ 3e-3 at p=6; tighter with higher p).
+
+### 5.2 M2M upward pass — and the measured bottleneck
+
+The **M2M upward pass** (Cartesian translation, gated bit-exact vs the direct rebuild)
+makes the moment build linear (`O(N·p³)` leaf cubature + `O(N·p⁴)` translations) instead
+of `O(N·depth·p³·cub)`. But instrumenting the matvec shows the rebuild was **not** the
+bottleneck:
+
+| N | matvec | moment rebuild | traversal |
+|------:|-------:|---------------:|----------:|
+| 1280  | 11.8 ms | 1.6 ms (14%) | 10.2 ms |
+| 5120  | 58 ms   | 8.0 ms (14%) | 50 ms |
+| 20480 | 300 ms  | 37 ms (12%)  | 263 ms |
+
+The matvec is **traversal-bound (~86%)**: per-target far-field Taylor evaluations (a `p³`
+recurrence per accepted cluster) plus exact near-field analytic collocations — each pair
+far costlier than dense's single FMA. So dense wins on *speed* wherever its `O(N²)` matrix
+still fits; the treecode's realized value is and stays **O(N) memory**. A genuine speed
+crossover needs traversal-constant work (cheaper kernel eval, level-batching, or the FMM
+L2L *downward* pass — for which the M2M is the prerequisite), not more moment-build
+optimization. This is now a *measured* statement, per §0/§3.3 — no speed claim is made.
 
 ## 6. Phasing
 
