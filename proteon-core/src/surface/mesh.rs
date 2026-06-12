@@ -1149,7 +1149,7 @@ mod tests {
         // Multi-scale mesh trips SPAN_CAP → inconclusive (one huge triangle over a tiny
         // median cell would span a vast cell range).
         let mut multiscale = Mesh {
-            verts: vec![Vec3::new(0.0, 0.0, 0.0); 0],
+            verts: Vec::new(),
             normals: Vec::new(),
             tris: Vec::new(),
         };
@@ -1367,10 +1367,10 @@ mod tests {
         );
         // The already-outward component is untouched (same volume).
         assert!(
-            (fixed.iter().cloned().fold(f64::INFINITY, f64::min)
+            (fixed.iter().copied().fold(f64::INFINITY, f64::min)
                 - vols
                     .iter()
-                    .cloned()
+                    .copied()
                     .fold(f64::INFINITY, |a, b| a.min(b.abs())))
             .abs()
                 < 1e-9
