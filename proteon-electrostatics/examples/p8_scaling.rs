@@ -78,17 +78,17 @@ fn main() {
             t_near = t_near.min(time_ms(|| tree.bench_near_only(&x)));
             t_far = t_far.min(time_ms(|| tree.bench_far_only(&x)));
         }
-        // NOTE: these are ISOLATED timings, not an additive decomposition of `matvec` —
+        // NOTE: ISOLATED timings, NOT an additive decomposition of `matvec` —
         // bench_near_only/bench_far_only each re-pay allocation + parallel scheduling +
-        // tree-walk overhead, and bench_far_only includes the moment rebuild. They are a
-        // valid relative comparison of the near vs far traversal cost (which dominates),
-        // not a partition that sums to `matvec`.
+        // tree-walk overhead, and bench_far_only includes the moment rebuild (subtracted
+        // here as an independently-sampled minimum, so the result is a rough ratio, not a
+        // bound). Enough to see that the far traversal dominates the near; not a partition.
         let t_far_pure = (t_far - trebuild).max(0.0);
         eprintln!(
             "  [N={n}] matvec {tmv:.1}ms | isolated: rebuild {trebuild:.1}, near-only {t_near:.1}, \
              far-only(−rebuild) {t_far_pure:.1}ms | counts {near} near / {far} far \
-             | far ≳ {:.0}% of traversal cost",
-            100.0 * t_far_pure / (t_near + t_far_pure).max(1e-9)
+             | rough far/near time ratio {:.1}x",
+            t_far_pure / t_near.max(1e-9)
         );
 
         if n <= dense_cap_n {

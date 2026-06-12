@@ -360,8 +360,14 @@ pub(crate) fn m2l_single(
     let n = p + 1;
     debug_assert_eq!(src_moments.len(), n * n * n, "moment slice must be (p+1)³");
     debug_assert!(r_s.is_finite() && r_s > 0.0 && r_t.is_finite() && r_t > 0.0, "radii > 0");
+    debug_assert!(c_s.x.is_finite() && c_t.x.is_finite(), "finite centers");
     let d_vec = c_t - c_s;
-    debug_assert!(d_vec.norm() > 0.0 && d_vec.norm().is_finite(), "centers must differ + be finite");
+    let d = d_vec.norm();
+    // The M2L re-expansion converges only for NON-OVERLAPPING clusters — coincident
+    // centers (D = 0) or overlapping balls produce nonphysical local coefficients. The
+    // production FMM admissibility (a stricter `(r_s+r_t)/|D| ≤ θ`) is enforced by the
+    // interaction-list builder; this is the minimal validity precondition.
+    debug_assert!(d.is_finite() && r_s + r_t < d, "clusters must not overlap: r_s+r_t < |D|");
     let a = coulomb_taylor_coeffs(d_vec, 2 * p); // (2p+1)³ Taylor cube
     let bcap = 2 * p + 1;
     // Pascal triangle C(i,j) up to 2p.
@@ -411,9 +417,18 @@ pub(crate) fn m2l_single(
 /// Evaluate a single-layer **local** expansion `Σ_m L_m·((t−c_t)/R_t)^m` at target `t`
 /// (the FMM L2P step — cheap, no per-source work). `pub(crate)`: internal FMM building
 /// block (see [`m2l_single`]).
+///
+/// # Panics (debug)
+/// On a `local` slice of the wrong length, a non-finite / non-positive `r_t`, or
+/// non-finite coordinates. (In release a short slice still panics on indexing; a long
+/// slice is ignored past `(p+1)³`; a clamped radius yields a rescaled — possibly
+/// meaningless — result. Callers pass validated tree geometry.)
 #[must_use]
 pub(crate) fn eval_local_single(local: &[f64], r_t: f64, c_t: Vec3, t: Vec3, p: usize) -> f64 {
     let n = p + 1;
+    debug_assert_eq!(local.len(), n * n * n, "local slice must be (p+1)³");
+    debug_assert!(r_t.is_finite() && r_t > 0.0, "r_t must be finite and > 0");
+    debug_assert!(c_t.x.is_finite() && t.x.is_finite(), "finite center/target");
     let v = (t - c_t) * (1.0 / r_t.max(MIN_RADIUS));
     let mut vx = vec![1.0; n];
     let mut vy = vec![1.0; n];
@@ -656,10 +671,13 @@ mod tests {
         };
         assert!(err(10) < 1e-9, "well-separated M2L+L2P vs panel integral: {:.2e}", err(10));
 
-        // Near the admissibility boundary (target cluster only ~2.5·r_s away): larger
-        // error, but it must still CONVERGE with p (the expansion is valid, just slower).
+        // Near the admissibility boundary. Source-side MAC ratio r_s/|D| = 0.75/1.6 =
+        // 0.47 (just inside the treecode θ=0.5); the stricter cluster-cluster criterion
+        // (r_s+r_t)/|D| = 0.95/1.6 = 0.59 would be outside, so this is a deliberately HARD
+        // case where the expansion still converges but slowly. (|D|/r_s = 2.13.)
         let c_t2 = c_s + Vec3::new(1.6, 0.0, 0.0);
         let r_t2 = 0.2;
+        assert!(r_s / 1.6 < 0.5, "source MAC ratio should be < treecode θ");
         let t2 = c_t2 + Vec3::new(0.05, 0.03, -0.04);
         let ref2 = direct_single_layer(&[(tri, 1.0)], t2, 24);
         let err2 = |p: usize| {
@@ -667,7 +685,35 @@ mod tests {
             let local = m2l_single(&m, r_s, c_s, r_t2, c_t2, p);
             rel(eval_local_single(&local, r_t2, c_t2, t2, p), ref2)
         };
-        assert!(err2(10) < err2(4), "near-boundary M2L must converge in p: {:.2e}->{:.2e}", err2(4), err2(10));
+        // Must converge AND reach an absolute tolerance at high p (not just e4 > e10,
+        // which a 0.9 < 1.0 'pass' could satisfy without being right).
+        let (e4, e10) = (err2(4), err2(10));
+        assert!(e10 < e4 * 0.1, "near-boundary M2L should converge an order+: {e4:.2e}->{e10:.2e}");
+        assert!(e10 < 1e-3, "near-boundary M2L p=10 absolute accuracy: {e10:.2e}");
+    }
+
+    #[test]
+    fn m2l_is_linear_over_multiple_panels() {
+        // M2L of multi-panel moments (incl. a canceling negative weight) must equal the
+        // sum of per-panel M2Ls — superposition, since moments are linear in the sources.
+        let p = 7;
+        let t1 = tilted_tri();
+        let t2 = Tri::new(Vec3::new(0.1, 0.2, 0.0), Vec3::new(1.1, 0.1, 0.3), Vec3::new(0.3, 1.2, 0.4));
+        let (lo, hi) = tri_bbox(&t1);
+        let c_s = (lo + hi) * 0.5;
+        let r_s = 1.5; // encloses both panels
+        let (c_t, r_t) = (Vec3::new(7.0, 6.0, 8.0), 0.4);
+        let target = c_t + Vec3::new(0.1, -0.06, 0.05);
+
+        let m_both = single_layer_moments(c_s, r_s, &[(t1, 1.3), (t2, -0.7)], p);
+        let both = eval_local_single(&m2l_single(&m_both, r_s, c_s, r_t, c_t, p), r_t, c_t, target, p);
+
+        let m_a = single_layer_moments(c_s, r_s, &[(t1, 1.3)], p);
+        let m_b = single_layer_moments(c_s, r_s, &[(t2, -0.7)], p);
+        let sum = eval_local_single(&m2l_single(&m_a, r_s, c_s, r_t, c_t, p), r_t, c_t, target, p)
+            + eval_local_single(&m2l_single(&m_b, r_s, c_s, r_t, c_t, p), r_t, c_t, target, p);
+
+        assert!(rel(both, sum) < 1e-12, "M2L superposition: {both} vs {sum}");
     }
 
     #[test]
