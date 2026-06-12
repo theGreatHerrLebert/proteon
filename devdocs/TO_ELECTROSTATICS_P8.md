@@ -166,6 +166,32 @@ claim (10⁵ etc.) is made until these constants are measured.
   treecode beats dense O(N²). Determinism: parallelize over targets, serial
   per-target traversal, fixed reduction order.
 
+### 5.1 Measured scaling (P8.3, `examples/p8_scaling.rs`)
+
+Dense vs treecode double-layer matvec on a sphere ladder (`p=6, θ=0.5`, best of 5):
+
+| N | dense build | dense matvec | tree build | tree matvec | matvec rel-L2 | speedup |
+|------:|------------:|-------------:|-----------:|------------:|--------------:|--------:|
+| 320   | 5.7 ms   | 0.031 ms | 0.1 ms | 2.8 ms   | 5.0e-4 | 0.01× |
+| 1280  | 68 ms    | 0.134 ms | 0.3 ms | 15.8 ms  | 8.6e-4 | 0.01× |
+| 5120  | 1019 ms  | 5.36 ms  | 0.7 ms | 69.6 ms  | 2.8e-3 | 0.08× |
+| 20480 | (6.7 GiB — over cap) | — | 3.0 ms | 350 ms | — | — |
+
+**Honest read:** the v1 treecode matvec is **slower** than the tight dense O(N²) loop
+at these sizes — the direct `O(N·depth·p³)` moment rebuild has a large constant. But:
+- the **trend** confirms the asymptotics — tree matvec grows ~linearly (15.8→69.6→350,
+  ≈4× per 4×N) while dense grows ~quadratically (0.134→5.36, ≈40× per 4×N once the
+  matrix leaves cache), so the speedup climbs `0.01→0.08×`;
+- the **realized win today is O(N) memory**: dense `K` is `2·N²·8` B and cannot even be
+  built past ~12k triangles (6.7 GiB at 20k), where the treecode runs at 350 ms/matvec;
+- dense *build* is already 1 s at 5k and quadratic — the treecode builds in ms.
+
+**Conclusion:** v1 treecode = a *memory* unlock (solve meshes dense can't hold), not yet
+a *time* win. The matvec time crossover needs the **M2M upward pass** to replace the
+direct rebuild (deferred, P8 follow-up). No protein-scale *speed* claim is made until
+that lands — exactly the §0/§3.3 discipline. Accuracy is in hand throughout
+(rel-L2 ≤ 3e-3 at p=6; tighter with higher p).
+
 ## 6. Phasing
 
 - **P8.1** Isolated summation harness: octree (vertex-enclosing) + **panel-aware
