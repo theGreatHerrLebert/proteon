@@ -78,11 +78,16 @@ fn main() {
             t_near = t_near.min(time_ms(|| tree.bench_near_only(&x)));
             t_far = t_far.min(time_ms(|| tree.bench_far_only(&x)));
         }
-        // bench_far_only includes the moment rebuild; subtract it for the pure far cost.
+        // NOTE: these are ISOLATED timings, not an additive decomposition of `matvec` —
+        // bench_near_only/bench_far_only each re-pay allocation + parallel scheduling +
+        // tree-walk overhead, and bench_far_only includes the moment rebuild. They are a
+        // valid relative comparison of the near vs far traversal cost (which dominates),
+        // not a partition that sums to `matvec`.
         let t_far_pure = (t_far - trebuild).max(0.0);
         eprintln!(
-            "  [N={n}] matvec {tmv:.1}ms: rebuild {trebuild:.1} + near {t_near:.1} + far {t_far_pure:.1}ms  \
-             | counts {near} near / {far} far | FAR COST SHARE {:.0}%",
+            "  [N={n}] matvec {tmv:.1}ms | isolated: rebuild {trebuild:.1}, near-only {t_near:.1}, \
+             far-only(−rebuild) {t_far_pure:.1}ms | counts {near} near / {far} far \
+             | far ≳ {:.0}% of traversal cost",
             100.0 * t_far_pure / (t_near + t_far_pure).max(1e-9)
         );
 

@@ -335,8 +335,21 @@ pub fn m2m_double(child: &[Vec3], s: f64, t: Vec3, p: usize) -> Vec<Vec3> {
 /// justifies: computed **once per source/target-cluster pair**, then shared by all
 /// targets in the target cluster via [`eval_local_single`]. `O(p⁶)` per pair (the
 /// classic dense Cartesian M2L cost).
+///
+/// `pub(crate)`: an internal FMM building block, not public API — the full downward pass
+/// (interaction lists, L2L, admissibility, accumulation) is deferred (plan §5.4).
+///
+/// **Scaling assumption:** `R_s^|k|`, `R_t^|m|`, and the dimensional `a_{k+m}(D)` are
+/// formed separately, so although their product is well-scaled for a well-separated pair,
+/// the intermediates can over/underflow on *extreme* coordinate scales. Adequate for
+/// molecular meshes (Å, well-separated by the MAC); a nondimensional rewrite
+/// (`R_s/|D|`, `R_t/|D|`, one final `1/|D|`) is the hardening for the production FMM.
+///
+/// # Panics (debug)
+/// On non-finite / non-positive radii, a non-finite or coincident (`D = 0`) center pair,
+/// or a moment slice of the wrong length.
 #[must_use]
-pub fn m2l_single(
+pub(crate) fn m2l_single(
     src_moments: &[f64],
     r_s: f64,
     c_s: Vec3,
@@ -345,7 +358,11 @@ pub fn m2l_single(
     p: usize,
 ) -> Vec<f64> {
     let n = p + 1;
-    let a = coulomb_taylor_coeffs(c_t - c_s, 2 * p); // (2p+1)³ Taylor cube
+    debug_assert_eq!(src_moments.len(), n * n * n, "moment slice must be (p+1)³");
+    debug_assert!(r_s.is_finite() && r_s > 0.0 && r_t.is_finite() && r_t > 0.0, "radii > 0");
+    let d_vec = c_t - c_s;
+    debug_assert!(d_vec.norm() > 0.0 && d_vec.norm().is_finite(), "centers must differ + be finite");
+    let a = coulomb_taylor_coeffs(d_vec, 2 * p); // (2p+1)³ Taylor cube
     let bcap = 2 * p + 1;
     // Pascal triangle C(i,j) up to 2p.
     let mut binom = vec![0.0; bcap * bcap];
@@ -392,9 +409,10 @@ pub fn m2l_single(
 }
 
 /// Evaluate a single-layer **local** expansion `Σ_m L_m·((t−c_t)/R_t)^m` at target `t`
-/// (the FMM L2P step — cheap, no per-source work).
+/// (the FMM L2P step — cheap, no per-source work). `pub(crate)`: internal FMM building
+/// block (see [`m2l_single`]).
 #[must_use]
-pub fn eval_local_single(local: &[f64], r_t: f64, c_t: Vec3, t: Vec3, p: usize) -> f64 {
+pub(crate) fn eval_local_single(local: &[f64], r_t: f64, c_t: Vec3, t: Vec3, p: usize) -> f64 {
     let n = p + 1;
     let v = (t - c_t) * (1.0 / r_t.max(MIN_RADIUS));
     let mut vx = vec![1.0; n];
@@ -591,9 +609,9 @@ mod tests {
 
     #[test]
     fn m2l_then_local_eval_matches_direct_multipole() {
-        // FMM consistency: M2L (source multipole → target local expansion) followed by
-        // local-expansion evaluation must reproduce the direct multipole evaluation at a
-        // target well separated from the source — to truncation accuracy.
+        // FMM self-consistency: M2L (source multipole → target local) + L2P must reproduce
+        // the direct multipole eval at a target inside a well-separated target cluster — to
+        // machine precision (this isolates sign/index errors), across radius ratios.
         let tri = tilted_tri();
         let p = 8;
         let (lo, hi) = tri_bbox(&tri);
@@ -601,25 +619,55 @@ mod tests {
         let r_s = (hi - lo).norm() * 0.5;
         let m_src = single_layer_moments(c_s, r_s, &[(tri, 1.0)], p);
 
-        // A target cluster well separated from the source; evaluate at a point inside it.
+        for (c_t, r_t) in [
+            (Vec3::new(6.0, 5.0, 7.0), 0.4),
+            (Vec3::new(6.0, 5.0, 7.0), 1.2),  // r_t ≠ r_s (radius-ratio coverage)
+            (Vec3::new(-5.0, 6.0, -4.0), 0.7), // different direction
+        ] {
+            let local = m2l_single(&m_src, r_s, c_s, r_t, c_t, p);
+            for off in [Vec3::new(0.1, -0.05, 0.08), Vec3::new(-0.12, 0.2, -0.07), Vec3::new(0.0, 0.0, 0.0)] {
+                let t = c_t + off * (r_t / 0.4); // stay inside the target ball
+                let via_local = eval_local_single(&local, r_t, c_t, t, p);
+                let direct = eval_single_layer(c_s, r_s, &m_src, t, p);
+                assert!(rel(via_local, direct) < 1e-9, "M2L+L2P {via_local} vs multipole {direct}");
+            }
+        }
+    }
+
+    #[test]
+    fn m2l_then_local_eval_matches_true_panel_integral() {
+        // Stronger gate (codex): M2L + L2P vs the DIRECT panel integral — the real far
+        // field, not just the truncated multipole. Tests multipole truncation + M2L + L2P
+        // end to end, well separated (tight) and near the MAC boundary (converges in p).
+        let tri = tilted_tri();
+        let (lo, hi) = tri_bbox(&tri);
+        let c_s = (lo + hi) * 0.5;
+        let r_s = (hi - lo).norm() * 0.5;
+
+        // Well separated (|D| ≈ 8·r_s): p=10 reaches near machine precision.
         let c_t = Vec3::new(6.0, 5.0, 7.0);
         let r_t = 0.4;
-        let local = m2l_single(&m_src, r_s, c_s, r_t, c_t, p);
+        let t = c_t + Vec3::new(0.1, -0.05, 0.08);
+        let reference = direct_single_layer(&[(tri, 1.0)], t, 24);
+        let err = |p: usize| {
+            let m = single_layer_moments(c_s, r_s, &[(tri, 1.0)], p);
+            let local = m2l_single(&m, r_s, c_s, r_t, c_t, p);
+            rel(eval_local_single(&local, r_t, c_t, t, p), reference)
+        };
+        assert!(err(10) < 1e-9, "well-separated M2L+L2P vs panel integral: {:.2e}", err(10));
 
-        for off in [
-            Vec3::new(0.1, -0.05, 0.08),
-            Vec3::new(-0.12, 0.2, -0.07),
-            Vec3::new(0.0, 0.0, 0.0),
-        ] {
-            let t = c_t + off; // inside the target cluster (|off| < r_t)
-            let via_local = eval_local_single(&local, r_t, c_t, t, p);
-            let direct = eval_single_layer(c_s, r_s, &m_src, t, p);
-            assert!(
-                rel(via_local, direct) < 1e-9,
-                "M2L+L2P {via_local} vs direct multipole {direct} (rel {:.2e})",
-                rel(via_local, direct)
-            );
-        }
+        // Near the admissibility boundary (target cluster only ~2.5·r_s away): larger
+        // error, but it must still CONVERGE with p (the expansion is valid, just slower).
+        let c_t2 = c_s + Vec3::new(1.6, 0.0, 0.0);
+        let r_t2 = 0.2;
+        let t2 = c_t2 + Vec3::new(0.05, 0.03, -0.04);
+        let ref2 = direct_single_layer(&[(tri, 1.0)], t2, 24);
+        let err2 = |p: usize| {
+            let m = single_layer_moments(c_s, r_s, &[(tri, 1.0)], p);
+            let local = m2l_single(&m, r_s, c_s, r_t2, c_t2, p);
+            rel(eval_local_single(&local, r_t2, c_t2, t2, p), ref2)
+        };
+        assert!(err2(10) < err2(4), "near-boundary M2L must converge in p: {:.2e}->{:.2e}", err2(4), err2(10));
     }
 
     #[test]

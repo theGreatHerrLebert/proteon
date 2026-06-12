@@ -227,9 +227,12 @@ impl CollocationTreecode {
 
 impl CollocationTreecode {
     /// Diagnostic (geometry-only, `x`-independent): total **near-field panel collocations**
-    /// and **far-field cluster expansions** summed over all targets in one matvec. The
-    /// near/far cost ratio decides whether an FMM (which only accelerates the far field)
-    /// can help — if the exact near-field collocations dominate, it cannot.
+    /// and **far-field cluster expansions** summed over all targets in one *treecode*
+    /// matvec. The near/far cost ratio decides whether an FMM (which only accelerates the
+    /// far field) can help — if the exact near-field collocations dominate, it cannot.
+    /// (The `far` count is per-target treecode evals, **not** the number of M2L
+    /// operations a real FMM would do — an FMM shares one cluster-pair interaction across
+    /// all targets in a cluster.)
     #[doc(hidden)]
     #[must_use]
     pub fn traversal_counts(&self) -> (u64, u64) {
