@@ -32,11 +32,13 @@ extern "C" __global__ void jfa_pass(
     int k = (int)(cell / ((long long)nx * ny));
     double hx = ox + i * h, hy = oy + j * h, hz = oz + k * h;
 
-    // Start from this cell's current feature.
+    // Start from this cell's current feature. NVRTC does not pull in <math.h>,
+    // so `INFINITY` is undefined here; use the same large finite "no feature"
+    // sentinel as seed_kernel.cu (any real squared distance is far below it).
     double bx = src[3 * cell + 0], by = src[3 * cell + 1], bz = src[3 * cell + 2];
     double bestd;
     if (isnan(bx)) {
-        bestd = INFINITY;
+        bestd = 1e300;
     } else {
         double dx = hx - bx, dy = hy - by, dz = hz - bz;
         bestd = dx * dx + dy * dy + dz * dz;

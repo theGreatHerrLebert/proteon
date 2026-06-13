@@ -226,13 +226,19 @@ impl Grid {
 
         let mut feat = vec![NONE; n];
 
-        // GPU seed: with the `cuda` feature and a usable device, compact the
-        // boundary nodes and run the nearest-exposed-point kernel over them
-        // (≈5–6× the 16-core CPU seed; same nearest distance as the CPU seed,
-        // ties aside). Any GPU
-        // failure leaves `seeded_on_gpu = false` → silent CPU fallback.
+        // Features only need to reach nodes within ~probe of the surface (that's
+        // the band straddling f = 0); beyond it the sign alone is correct.
+        let reach = (probe / self.spacing).ceil() as usize + 4;
+
+        // Fused GPU seed + jump-flood: with the `cuda` feature and a usable
+        // device, compact the boundary nodes and run seed→flood *entirely
+        // on-device* — the seeded feature buffer never returns to the host
+        // between the two stages (no boundary-feature download, host scatter, or
+        // full-grid re-upload). Any GPU failure → `fused_on_gpu = false` and the
+        // CPU seed + CPU flood below. Same nearest distance as the CPU seed
+        // (ties aside) and the same JFA+1 schedule.
         #[cfg(feature = "cuda")]
-        let seeded_on_gpu = {
+        let fused_on_gpu = {
             let bidx: Vec<usize> = (0..n)
                 .into_par_iter()
                 .filter(|&idx| is_boundary(idx))
@@ -241,23 +247,29 @@ impl Grid {
                 .iter()
                 .map(|&idx| self.pos(idx % nx, (idx / nx) % ny, idx / nxy))
                 .collect();
-            match super::seed_gpu::seed_boundary_gpu(&bpos, &grid.spheres) {
-                Some(feats) => {
-                    for (b, &idx) in bidx.iter().enumerate() {
-                        feat[idx] = feats[b];
-                    }
+            match super::seed_gpu::seed_and_flood_gpu(
+                &bpos,
+                &bidx,
+                &grid.spheres,
+                self.dims,
+                reach,
+                self.origin,
+                self.spacing,
+            ) {
+                Some(f) => {
+                    feat = f;
                     true
                 }
                 None => false,
             }
         };
         #[cfg(not(feature = "cuda"))]
-        let seeded_on_gpu = false;
+        let fused_on_gpu = false;
 
-        // CPU seed (the parity-validated path): each boundary node carries its
-        // analytic nearest point on the SAS. Every node writes only its own
-        // `feat[idx]` from immutable inputs, so it is order-independent.
-        if !seeded_on_gpu {
+        // CPU fallback (the parity-validated path): seed each boundary node with
+        // its analytic nearest point on the SAS, then jump-flood. Both write only
+        // their own outputs from immutable inputs, so they are order-independent.
+        if !fused_on_gpu {
             feat.par_iter_mut().enumerate().for_each(|(idx, f)| {
                 if is_boundary(idx) {
                     let i = idx % nx;
@@ -268,36 +280,9 @@ impl Grid {
                     }
                 }
             });
-        }
-
-        // Features only need to reach nodes within ~probe of the surface (that's
-        // the band straddling f = 0); beyond it the sign alone is correct.
-        let reach = (probe / self.spacing).ceil() as usize + 4;
-        lap("seed", &mut t);
-
-        // GPU jump-flood when available (same JFA+1 schedule); else CPU. The GPU
-        // path returns the flooded grid; on None we run the CPU transform.
-        #[cfg(feature = "cuda")]
-        let flooded_on_gpu = match super::seed_gpu::jump_flood_gpu(
-            &feat,
-            self.dims,
-            reach,
-            self.origin,
-            self.spacing,
-        ) {
-            Some(f) => {
-                feat = f;
-                true
-            }
-            None => false,
-        };
-        #[cfg(not(feature = "cuda"))]
-        let flooded_on_gpu = false;
-
-        if !flooded_on_gpu {
             jump_flood(&mut feat, self.dims, reach, &|i, j, k| self.pos(i, j, k));
         }
-        lap("jump_flood", &mut t);
+        lap("seed+flood", &mut t);
 
         // signed distance to the SAS, then erode by the probe.
         let mut f = vec![0.0f64; n];
@@ -1251,6 +1236,117 @@ mod tests {
         assert!(
             max_dist_err < 1e-9,
             "GPU vs CPU flooded distance differs by {max_dist_err}"
+        );
+    }
+
+    /// The fused GPU seed+flood (`seed_and_flood_gpu`, the production path) must
+    /// equal the *unfused all-GPU pipeline* — the GPU seed (`seed_boundary_gpu`)
+    /// scattered on the host into the full grid, then the GPU flood
+    /// (`jump_flood_gpu`). Both use the same seed and JFA kernels, so the only
+    /// difference is that the fused path keeps the buffer on-device (NaN fill +
+    /// scatter at each boundary index + JFA chained without a host round-trip)
+    /// instead of downloading, scattering, and re-uploading. The values are
+    /// therefore bit-identical.
+    ///
+    /// (We deliberately do *not* compare against a CPU flood here: on a real,
+    /// tie-rich seed, GPU-JFA and CPU-JFA tie-break equidistant features
+    /// differently, and a downstream node inherits a different — equally near at
+    /// the seed, but not downstream — feature, so distances diverge at the ~1e-2
+    /// level. That is correct behaviour, documented on `gpu_jump_flood_matches_
+    /// cpu`, whose synthetic seed has no ties; it just isn't what *fusion*
+    /// guards.) Cuda + device only.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gpu_fused_seed_flood_matches_unfused() {
+        // Same dense overlapping cluster as the seed-parity test — nontrivial
+        // exposure plus real flooding to propagate.
+        let atoms = vec![
+            s(0.0, 0.0, 0.0, 1.7),
+            s(1.5, 0.0, 0.0, 1.7),
+            s(0.0, 1.5, 0.0, 1.5),
+            s(0.6, 0.6, 1.4, 1.5),
+            s(-1.4, 0.3, 0.2, 1.6),
+        ];
+        let probe = 1.4;
+        let spacing = 0.4;
+        let grid = Grid::enclosing(&atoms, probe, spacing);
+        let [nx, ny, nz] = grid.dims;
+        let n = nx * ny * nz;
+        let ag = AtomGrid::build(&atoms, probe);
+
+        // Boundary nodes + their flat grid indices (positions are exactly
+        // origin + idx·spacing, so the inverse mapping rounds back exactly).
+        let bnodes = boundary_nodes(&grid, &atoms, probe);
+        assert!(!bnodes.is_empty(), "no boundary nodes to test");
+        let bidx: Vec<usize> = bnodes
+            .iter()
+            .map(|p| {
+                let i = ((p.x - grid.origin.x) / spacing).round() as usize;
+                let j = ((p.y - grid.origin.y) / spacing).round() as usize;
+                let k = ((p.z - grid.origin.z) / spacing).round() as usize;
+                grid.idx(i, j, k)
+            })
+            .collect();
+        let reach = (probe / spacing).ceil() as usize + 4;
+
+        // Unfused reference: the SAME GPU seed, scattered on the host into the
+        // full grid, then the GPU jump-flood (identical JFA kernel to the fused
+        // path — so any difference would be the fusion's scatter/chaining).
+        let Some(seed_feats) = crate::surface::seed_gpu::seed_boundary_gpu(&bnodes, &ag.spheres)
+        else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+        let mut seeded = vec![[f64::NAN; 3]; n];
+        for (b, &idx) in bidx.iter().enumerate() {
+            seeded[idx] = seed_feats[b];
+        }
+        let Some(reference) = crate::surface::seed_gpu::jump_flood_gpu(
+            &seeded,
+            grid.dims,
+            reach,
+            grid.origin,
+            spacing,
+        ) else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+
+        let Some(gpu) = crate::surface::seed_gpu::seed_and_flood_gpu(
+            &bnodes,
+            &bidx,
+            &ag.spheres,
+            grid.dims,
+            reach,
+            grid.origin,
+            spacing,
+        ) else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+        assert_eq!(reference.len(), gpu.len());
+
+        let mut max_dist_err = 0.0_f64;
+        let mut nan_mismatch = 0usize;
+        for idx in 0..n {
+            let (i, j, k) = (idx % nx, (idx / nx) % ny, idx / (nx * ny));
+            let here = grid.pos(i, j, k);
+            let dist = |f: &[f64; 3]| (here - Vec3::new(f[0], f[1], f[2])).norm();
+            if reference[idx][0].is_nan() != gpu[idx][0].is_nan() {
+                nan_mismatch += 1;
+                continue;
+            }
+            if !reference[idx][0].is_nan() {
+                max_dist_err = max_dist_err.max((dist(&reference[idx]) - dist(&gpu[idx])).abs());
+            }
+        }
+        assert_eq!(
+            nan_mismatch, 0,
+            "fused vs unfused reached/unreached status differs"
+        );
+        assert!(
+            max_dist_err < 1e-9,
+            "fused GPU vs unfused (GPU seed + CPU flood) flooded distance differs by {max_dist_err}"
         );
     }
 
