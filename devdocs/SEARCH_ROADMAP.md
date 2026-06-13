@@ -48,30 +48,40 @@ It should first become:
 
 ## Current State
 
+> **STATUS UPDATE (2026-06): this section was written against the groundwork stage
+> and is now largely obsolete.** The structural search is a **working end-to-end
+> product** — most of the "placeholder" list below is done. See the status notes.
+
 ### What Is Real
 
-- `proteon-align/src/search/alphabet.rs` contains:
-  - virtual-center construction
-  - nearest spatial neighbor selection
-  - 10D geometric feature extraction
-  - placeholder encoder and centroid lookup scaffolding
-  - unit tests for geometry / feature extraction
+- `proteon-align/src/search/alphabet.rs`: virtual-center construction, nearest
+  spatial-neighbor selection, 10D feature extraction, and the **trained** VQ-VAE
+  encoder (weights in `validation/alphabet_vqvae_rust.txt` — 9407 structures, 20-state
+  codebook, all 20 states used). Encoder is `10→10(ReLU)→10(ReLU)→2→VQ(20)`.
+- **Python search product** (`packages/proteon/src/proteon/search.py`): `encode_alphabet`
+  / `batch_encode_alphabet` (Rust-backed), `build_search_db` (k-mer postings + Arrow/
+  Parquet persistence, versioned), `save_search_db` / `load_search_db`, and `search`
+  (prefilter → diagonal voting → diagonal rescore → **TM-align rerank**) returning ranked
+  `SearchHit`s with `tm_score`/`rmsd`/`n_aligned`/`seq_identity`.
+- **CLI** (`proteon-search build | query | inspect`, `packages/proteon/src/proteon/search_cli.py`).
+- Tests: `tests/test_search.py`, `tests/test_search_index.py`, `tests/test_search_cli.py`.
+- `validation/train_alphabet.py` (training/distillation) + `validation/bench_foldseek.py`.
 
-- `validation/train_alphabet.py` exists for training / distillation work
-- `validation/bench_foldseek.py` exists for external benchmarking
+### What Is Still Placeholder / Missing
 
-### What Is Still Placeholder
-
-- encoder weights are placeholders
-- centroids are placeholders
-- no public API exposure
-- no database search implementation
-- no indexing layer
-- no retrieval metrics in CI
+- ~~encoder weights are placeholders~~ → **done** (trained VQ-VAE).
+- ~~no public API exposure~~ → **done** (Python `encode_alphabet`/`build_search_db`/`search`).
+- ~~no database search implementation~~ → **done** (`search`, end-to-end with rerank).
+- ~~no indexing layer~~ → **done** (k-mer postings + positional postings, persisted).
+- ~~no CLI~~ → **done** (`proteon-search`).
+- **no retrieval metrics in CI** — still missing (Recall@K / nDCG vs a Foldseek baseline
+  on a labeled set; roadmap P5 §12–13). **This is now the main open gap.**
+- domain/chain splitting, GPU encoding — open, lower priority.
 
 Implication:
 
-**Proteon currently has search groundwork, not a search product.**
+**Proteon now has a working structural-search product; the open work is retrieval-quality
+benchmarking + reliability gates, not the core pipeline.**
 
 ---
 
@@ -464,11 +474,42 @@ Tests:
 
 ## Immediate Next Steps
 
-1. Replace placeholder alphabet weights with trained parameters.
-2. Expose `encode_alphabet()` publicly.
-3. Define and implement the encoded-corpus format.
-4. Add a k-mer prefilter and top-K retrieval.
-5. Rerank top candidates with TM-align.
+> **All five original "first real search capability" steps are DONE** (trained weights,
+> `encode_alphabet`, corpus/DB format, k-mer prefilter + top-K, TM-align rerank), plus a
+> `proteon-search` CLI. Proteon has a usable Foldseek-style search.
 
-If these five steps are complete, proteon will have its first real search capability.
-Before that, it has search research code and validation scripts, but not a usable Foldseek-style interface.
+The remaining work is **reliability + quality** — both now under way:
+
+1. **Retrieval benchmark suite** (P5 §12) — `validation/bench_retrieval.py` (recall@K vs
+   all-vs-all TM-align ground truth, prefilter-vs-rerank, truth-cached so parameter
+   sweeps are cheap). **Done** (was bit-rotted; fixed).
+2. **CI retrieval gate** (P5 §13) — `tests/test_search_retrieval.py` (self-retrieval +
+   benchmark smoke). **Done.**
+3. Quality work guided by the metrics — **in progress** (see below).
+
+## Measured retrieval quality (quality §)
+
+Single-run benchmark on a 317-PDB corpus (100×25 sample, one seed, TM-align ground
+truth). These are observations from **one** run — directional, not yet CIs.
+
+- **Baseline (k=6, top-10):** recall@K = 0.80 (TM≥0.5) / 0.96 (TM≥0.7) / 1.00 (TM≥0.9).
+- **k-mer length showed no effect in this run:** k=4, k=5, k=6, and multi-k `[3,4,5,6]`
+  gave identical recall here — so on this corpus the misses were not a k-mer-resolution
+  problem. Not established beyond this corpus/seed.
+- **Rerank depth moved recall:** note the effective rerank depth is
+  `max(top_k, rerank_top_k)`, so at top-10 the library default `rerank_top_k=5` already
+  TM-aligns 10 candidates. Raising `rerank_top_k` to 20 deepens the reranked pool
+  10→20 (~2× the TM-align work, not 4×) and raised recall@10 to **0.85 (TM≥0.5) / 0.98
+  (TM≥0.7)** in this run (+0.044 / +0.021, i.e. ≈1 query-equivalent over 25 queries —
+  within plausible single-seed noise). Recall is non-decreasing in depth *only* under
+  matched conditions (deeper pool is a superset **and** rerank TM scores match the
+  ground-truth TM scores); it observed monotonic here but is not guaranteed in general —
+  ground truth uses batched `tm_align_one_to_many` while rerank uses scalar `tm_align`,
+  and changing `rerank_top_k` also shifts the diagonal candidate/rescore cutoffs.
+- **No default changed.** Both the CLI and library keep `rerank_top_k=5`. The depth
+  effect needs multiple seeds/corpora and a paired bootstrap before it justifies a
+  latency/behaviour change.
+
+Next quality levers to measure: confirm the rerank-depth gain across seeds/corpora with
+paired per-query deltas + a bootstrap interval before revisiting the default; alphabet/AA
+weight tuning; domain splitting for the remote-homolog tail (TM 0.5–0.7).
