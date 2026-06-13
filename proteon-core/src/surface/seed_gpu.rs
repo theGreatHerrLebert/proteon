@@ -12,7 +12,9 @@
 
 use std::sync::{Arc, OnceLock};
 
-use cudarc::driver::{CudaContext, CudaFunction, LaunchConfig, PushKernelArg};
+use cudarc::driver::{
+    CudaContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PushKernelArg,
+};
 use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 
 use super::geom::{Sphere, Vec3};
@@ -38,6 +40,9 @@ struct SurfaceGpu {
     /// Fills a flat device buffer with NaN ("no feature yet").
     fill_nan: CudaFunction,
     jfa: CudaFunction,
+    /// Turns the flooded feature grid into the signed distance field on-device,
+    /// so the host downloads one f64/node instead of the 3-feature grid.
+    finalize: CudaFunction,
 }
 
 static SURFACE_GPU: OnceLock<Option<SurfaceGpu>> = OnceLock::new();
@@ -60,9 +65,9 @@ impl SurfaceGpu {
         let seed_scatter = seed_mod.load_function("seed_scatter")?;
         let seed_hashed = seed_mod.load_function("seed_hashed_scatter")?;
         let fill_nan = seed_mod.load_function("fill_nan")?;
-        let jfa = ctx
-            .load_module(compile_ptx_with_opts(JFA_KERNEL_SRC, opts)?)?
-            .load_function("jfa_pass")?;
+        let jfa_mod = ctx.load_module(compile_ptx_with_opts(JFA_KERNEL_SRC, opts)?)?;
+        let jfa = jfa_mod.load_function("jfa_pass")?;
+        let finalize = jfa_mod.load_function("finalize_field")?;
         Ok(Self {
             ctx,
             seed,
@@ -70,6 +75,7 @@ impl SurfaceGpu {
             seed_hashed,
             fill_nan,
             jfa,
+            finalize,
         })
     }
 }
@@ -456,6 +462,10 @@ impl CellGrid {
 /// node `t`, whose position is `boundary_pos[t]`. Returns the flooded full grid
 /// (`dims` product entries, NaN where JFA never reached), or `None` on any GPU
 /// failure so the caller falls back to the CPU seed + CPU jump-flood.
+///
+/// Retained as the seed+flood entry for `gpu_fused_seed_flood_matches_unfused`;
+/// the production path is `field_gpu` (which also finalizes on-device).
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn seed_and_flood_gpu(
     boundary_pos: &[Vec3],
@@ -483,9 +493,14 @@ pub(super) fn seed_and_flood_gpu(
     .ok()
 }
 
+/// Seed + jump-flood the field into a device buffer, returning the flooded
+/// feature grid (`n*3`, NaN where unreached) **without downloading it**. Shared
+/// by `launch_seed_and_flood` (which downloads the features) and `launch_field`
+/// (which finalizes to the signed distance on-device and downloads that).
 #[allow(clippy::too_many_arguments)]
-fn launch_seed_and_flood(
+fn flood_into_device(
     g: &SurfaceGpu,
+    stream: &Arc<CudaStream>,
     boundary_pos: &[Vec3],
     boundary_idx: &[usize],
     spheres: &[Sphere],
@@ -493,11 +508,10 @@ fn launch_seed_and_flood(
     reach: usize,
     origin: Vec3,
     spacing: f64,
-) -> Result<Vec<[f64; 3]>, Box<dyn std::error::Error>> {
+) -> Result<CudaSlice<f64>, Box<dyn std::error::Error>> {
     debug_assert_eq!(boundary_pos.len(), boundary_idx.len());
     let [nx, ny, nz] = dims;
     let n = nx * ny * nz;
-    let stream = g.ctx.default_stream();
 
     // Checked conversions: an out-of-range grid/index returns Err → CPU
     // fallback, never a silently-wrapped launch size or scatter index.
@@ -616,9 +630,138 @@ fn launch_seed_and_flood(
         std::mem::swap(&mut src, &mut dst);
     }
 
+    // `src` now holds the flooded field (the last swap leaves the result there).
+    Ok(src)
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn launch_seed_and_flood(
+    g: &SurfaceGpu,
+    boundary_pos: &[Vec3],
+    boundary_idx: &[usize],
+    spheres: &[Sphere],
+    dims: [usize; 3],
+    reach: usize,
+    origin: Vec3,
+    spacing: f64,
+) -> Result<Vec<[f64; 3]>, Box<dyn std::error::Error>> {
+    let [nx, ny, nz] = dims;
+    let n = nx * ny * nz;
+    let stream = g.ctx.default_stream();
+    let src = flood_into_device(
+        g,
+        &stream,
+        boundary_pos,
+        boundary_idx,
+        spheres,
+        dims,
+        reach,
+        origin,
+        spacing,
+    )?;
     let out = stream.clone_dtoh(&src)?;
     stream.synchronize()?;
     Ok((0..n)
         .map(|i| [out[3 * i], out[3 * i + 1], out[3 * i + 2]])
         .collect())
+}
+
+/// Full GPU field: seed + jump-flood + **finalize** to the signed distance,
+/// entirely on-device. Returns `f` (one f64 per node) directly, so the host
+/// downloads `n` f64 instead of the `3n` feature grid. `inside[node]` is the
+/// host-computed occupancy (1 = node inside any inflated atom) that already
+/// drives boundary detection; it's uploaded so the finalize matches the CPU
+/// `distance_field` finalize exactly. `None` on any GPU failure → CPU fallback.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn field_gpu(
+    boundary_pos: &[Vec3],
+    boundary_idx: &[usize],
+    spheres: &[Sphere],
+    dims: [usize; 3],
+    reach: usize,
+    origin: Vec3,
+    spacing: f64,
+    inside: &[u8],
+    probe: f64,
+) -> Option<Vec<f64>> {
+    if dims.iter().product::<usize>() == 0 {
+        return Some(Vec::new());
+    }
+    let g = SurfaceGpu::try_global()?;
+    launch_field(
+        g,
+        boundary_pos,
+        boundary_idx,
+        spheres,
+        dims,
+        reach,
+        origin,
+        spacing,
+        inside,
+        probe,
+    )
+    .ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_field(
+    g: &SurfaceGpu,
+    boundary_pos: &[Vec3],
+    boundary_idx: &[usize],
+    spheres: &[Sphere],
+    dims: [usize; 3],
+    reach: usize,
+    origin: Vec3,
+    spacing: f64,
+    inside: &[u8],
+    probe: f64,
+) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
+    let [nx, ny, nz] = dims;
+    let n = nx * ny * nz;
+    if inside.len() != n {
+        return Err("inside length != node count".into());
+    }
+    let stream = g.ctx.default_stream();
+    let src = flood_into_device(
+        g,
+        &stream,
+        boundary_pos,
+        boundary_idx,
+        spheres,
+        dims,
+        reach,
+        origin,
+        spacing,
+    )?;
+
+    // Finalize on-device: f = (inside ? dist : -dist) - probe, from `src`.
+    let n_u32 = u32::try_from(n)?;
+    let nx_i = i32::try_from(nx)?;
+    let ny_i = i32::try_from(ny)?;
+    let nz_i = i32::try_from(nz)?;
+    let (ox, oy, oz) = (origin.x, origin.y, origin.z);
+
+    let d_inside = stream.clone_htod(inside)?;
+    let mut f = stream.alloc_zeros::<f64>(n)?;
+    {
+        let mut a = stream.launch_builder(&g.finalize);
+        a.arg(&src);
+        a.arg(&d_inside);
+        a.arg(&nx_i);
+        a.arg(&ny_i);
+        a.arg(&nz_i);
+        a.arg(&ox);
+        a.arg(&oy);
+        a.arg(&oz);
+        a.arg(&spacing);
+        a.arg(&probe);
+        a.arg(&mut f);
+        unsafe {
+            a.launch(LaunchConfig::for_num_elems(n_u32))?;
+        }
+    }
+    let out = stream.clone_dtoh(&f)?;
+    stream.synchronize()?;
+    Ok(out)
 }

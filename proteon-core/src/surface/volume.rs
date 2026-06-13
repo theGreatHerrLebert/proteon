@@ -224,21 +224,18 @@ impl Grid {
             .any(|nb| inside[nb] != ins)
         };
 
-        let mut feat = vec![NONE; n];
-
         // Features only need to reach nodes within ~probe of the surface (that's
         // the band straddling f = 0); beyond it the sign alone is correct.
         let reach = (probe / self.spacing).ceil() as usize + 4;
 
-        // Fused GPU seed + jump-flood: with the `cuda` feature and a usable
-        // device, compact the boundary nodes and run seed→flood *entirely
-        // on-device* — the seeded feature buffer never returns to the host
-        // between the two stages (no boundary-feature download, host scatter, or
-        // full-grid re-upload). Any GPU failure → `fused_on_gpu = false` and the
-        // CPU seed + CPU flood below. Same nearest distance as the CPU seed
-        // (ties aside) and the same JFA+1 schedule.
+        // GPU field: with the `cuda` feature and a usable device, run seed +
+        // jump-flood + finalize *entirely on-device* and download the signed
+        // distance field directly (one f64/node) — not the 3× feature grid. The
+        // host `inside` occupancy (already computed for boundary detection) is
+        // uploaded so the finalize matches the CPU loop below exactly. Any GPU
+        // failure → CPU seed + flood + finalize.
         #[cfg(feature = "cuda")]
-        let fused_on_gpu = {
+        {
             let bidx: Vec<usize> = (0..n)
                 .into_par_iter()
                 .filter(|&idx| is_boundary(idx))
@@ -247,7 +244,8 @@ impl Grid {
                 .iter()
                 .map(|&idx| self.pos(idx % nx, (idx / nx) % ny, idx / nxy))
                 .collect();
-            match super::seed_gpu::seed_and_flood_gpu(
+            let inside_u8: Vec<u8> = inside.iter().map(|&b| u8::from(b)).collect();
+            if let Some(f) = super::seed_gpu::field_gpu(
                 &bpos,
                 &bidx,
                 &grid.spheres,
@@ -255,33 +253,29 @@ impl Grid {
                 reach,
                 self.origin,
                 self.spacing,
+                &inside_u8,
+                probe,
             ) {
-                Some(f) => {
-                    feat = f;
-                    true
-                }
-                None => false,
+                lap("gpu_field", &mut t);
+                return f;
             }
-        };
-        #[cfg(not(feature = "cuda"))]
-        let fused_on_gpu = false;
+        }
 
         // CPU fallback (the parity-validated path): seed each boundary node with
-        // its analytic nearest point on the SAS, then jump-flood. Both write only
-        // their own outputs from immutable inputs, so they are order-independent.
-        if !fused_on_gpu {
-            feat.par_iter_mut().enumerate().for_each(|(idx, f)| {
-                if is_boundary(idx) {
-                    let i = idx % nx;
-                    let j = (idx / nx) % ny;
-                    let k = idx / nxy;
-                    if let Some(s) = grid.nearest_surface_point(self.pos(i, j, k)) {
-                        *f = [s.x, s.y, s.z];
-                    }
+        // its analytic nearest point on the SAS, jump-flood, then finalize. Each
+        // step writes only its own outputs from immutable inputs.
+        let mut feat = vec![NONE; n];
+        feat.par_iter_mut().enumerate().for_each(|(idx, f)| {
+            if is_boundary(idx) {
+                let i = idx % nx;
+                let j = (idx / nx) % ny;
+                let k = idx / nxy;
+                if let Some(s) = grid.nearest_surface_point(self.pos(i, j, k)) {
+                    *f = [s.x, s.y, s.z];
                 }
-            });
-            jump_flood(&mut feat, self.dims, reach, &|i, j, k| self.pos(i, j, k));
-        }
+            }
+        });
+        jump_flood(&mut feat, self.dims, reach, &|i, j, k| self.pos(i, j, k));
         lap("seed+flood", &mut t);
 
         // signed distance to the SAS, then erode by the probe.
@@ -1311,6 +1305,118 @@ mod tests {
         );
     }
 
+    /// Manual benchmark: the on-device field path (`field_gpu`: seed+flood+
+    /// finalize, download `f`) vs the old split (`seed_and_flood_gpu`: download
+    /// the 3× feature grid, then CPU finalize). Run with `--ignored --nocapture`.
+    /// Informs whether the full K3 (dual contour on-device) is worth pursuing.
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "perf probe; run manually with --ignored --nocapture"]
+    fn bench_field_vs_feat_download() {
+        // A real-ish single blob so the grid is large (many nodes to transfer).
+        let n_lat = 9usize;
+        let step = 2.0;
+        let mut atoms = Vec::new();
+        for i in 0..n_lat {
+            for j in 0..n_lat {
+                for k in 0..n_lat {
+                    atoms.push(s(i as f64 * step, j as f64 * step, k as f64 * step, 1.7));
+                }
+            }
+        }
+        let probe = 1.4;
+        let spacing = 0.4;
+        let grid = Grid::enclosing(&atoms, probe, spacing);
+        let [nx, ny, nz] = grid.dims;
+        let n = nx * ny * nz;
+        let ag = AtomGrid::build(&atoms, probe);
+        let inside: Vec<u8> = (0..n)
+            .map(|idx| {
+                let p = grid.pos(idx % nx, (idx / nx) % ny, idx / (nx * ny));
+                u8::from(
+                    ag.spheres
+                        .iter()
+                        .any(|sp| p.square_distance(sp.center) <= sp.radius * sp.radius),
+                )
+            })
+            .collect();
+        let bnodes = boundary_nodes(&grid, &atoms, probe);
+        let bidx: Vec<usize> = bnodes
+            .iter()
+            .map(|p| {
+                let i = ((p.x - grid.origin.x) / spacing).round() as usize;
+                let j = ((p.y - grid.origin.y) / spacing).round() as usize;
+                let k = ((p.z - grid.origin.z) / spacing).round() as usize;
+                grid.idx(i, j, k)
+            })
+            .collect();
+        let reach = (probe / spacing).ceil() as usize + 4;
+        eprintln!(
+            "bench: {n} nodes ({nx}x{ny}x{nz}), {} boundary",
+            bnodes.len()
+        );
+
+        let reps = 5;
+        let bench = |f: &dyn Fn() -> Option<()>| -> Option<f64> {
+            f()?;
+            let t = std::time::Instant::now();
+            for _ in 0..reps {
+                f()?;
+            }
+            Some(t.elapsed().as_secs_f64() * 1e3 / reps as f64)
+        };
+
+        // Old path: download the feature grid, then CPU finalize.
+        let old = bench(&|| {
+            let feat = crate::surface::seed_gpu::seed_and_flood_gpu(
+                &bnodes,
+                &bidx,
+                &ag.spheres,
+                grid.dims,
+                reach,
+                grid.origin,
+                spacing,
+            )?;
+            let mut f = vec![0.0f64; n];
+            for (idx, fv) in f.iter_mut().enumerate() {
+                let p = grid.pos(idx % nx, (idx / nx) % ny, idx / (nx * ny));
+                let st = feat[idx];
+                let dist = if st[0].is_nan() {
+                    1e18
+                } else {
+                    p.distance(Vec3::new(st[0], st[1], st[2]))
+                };
+                let v = if inside[idx] != 0 { dist } else { -dist } - probe;
+                *fv = if v == 0.0 { f64::EPSILON } else { v };
+            }
+            Some(())
+        });
+        // New path: on-device finalize, download `f`.
+        let new = bench(&|| {
+            crate::surface::seed_gpu::field_gpu(
+                &bnodes,
+                &bidx,
+                &ag.spheres,
+                grid.dims,
+                reach,
+                grid.origin,
+                spacing,
+                &inside,
+                probe,
+            )
+            .map(|_| ())
+        });
+        match (old, new) {
+            (Some(o), Some(nw)) => eprintln!(
+                "bench: feat-download+CPU-finalize {o:.2} ms, on-device field {nw:.2} ms → {:.2}× ({}→{} f64 downloaded)",
+                o / nw,
+                3 * n,
+                n
+            ),
+            _ => eprintln!("skipping: no usable GPU"),
+        }
+    }
+
     /// The GPU jump-flood must reproduce the CPU transform: same reached/unreached
     /// status and the same flooded *distance* at every node (the field input).
     /// Equidistant ties can pick a different but equally-near feature, so we
@@ -1485,6 +1591,110 @@ mod tests {
         assert!(
             max_dist_err < 1e-9,
             "fused GPU vs unfused (GPU seed + CPU flood) flooded distance differs by {max_dist_err}"
+        );
+    }
+
+    /// The on-device finalize (`field_gpu`, the production path: seed + flood +
+    /// finalize → signed distance field) must equal the CPU finalize applied to
+    /// the *same* GPU seed+flood. Both start from the identical GPU feature grid
+    /// (`seed_and_flood_gpu`), so this isolates the finalize kernel (signed
+    /// distance + probe erosion + zero-nudge) from seed/flood tie effects — they
+    /// must agree to float precision. Cuda + device only.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gpu_field_finalize_matches_cpu() {
+        let atoms = vec![
+            s(0.0, 0.0, 0.0, 1.7),
+            s(1.5, 0.0, 0.0, 1.7),
+            s(0.0, 1.5, 0.0, 1.5),
+            s(0.6, 0.6, 1.4, 1.5),
+            s(-1.4, 0.3, 0.2, 1.6),
+        ];
+        let probe = 1.4;
+        let spacing = 0.4;
+        let grid = Grid::enclosing(&atoms, probe, spacing);
+        let [nx, ny, nz] = grid.dims;
+        let n = nx * ny * nz;
+        let ag = AtomGrid::build(&atoms, probe);
+
+        // Occupancy (brute, exact — matches the CPU rasterization result).
+        let inside: Vec<bool> = (0..n)
+            .map(|idx| {
+                let p = grid.pos(idx % nx, (idx / nx) % ny, idx / (nx * ny));
+                ag.spheres
+                    .iter()
+                    .any(|sp| p.square_distance(sp.center) <= sp.radius * sp.radius)
+            })
+            .collect();
+        let inside_u8: Vec<u8> = inside.iter().map(|&b| u8::from(b)).collect();
+
+        // Boundary nodes + indices (positions invert to indices exactly).
+        let bnodes = boundary_nodes(&grid, &atoms, probe);
+        let bidx: Vec<usize> = bnodes
+            .iter()
+            .map(|p| {
+                let i = ((p.x - grid.origin.x) / spacing).round() as usize;
+                let j = ((p.y - grid.origin.y) / spacing).round() as usize;
+                let k = ((p.z - grid.origin.z) / spacing).round() as usize;
+                grid.idx(i, j, k)
+            })
+            .collect();
+        let reach = (probe / spacing).ceil() as usize + 4;
+
+        // Reference: the SAME GPU seed+flood, finalized on the CPU.
+        let Some(feat) = crate::surface::seed_gpu::seed_and_flood_gpu(
+            &bnodes,
+            &bidx,
+            &ag.spheres,
+            grid.dims,
+            reach,
+            grid.origin,
+            spacing,
+        ) else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+        let cpu_f: Vec<f64> = (0..n)
+            .map(|idx| {
+                let p = grid.pos(idx % nx, (idx / nx) % ny, idx / (nx * ny));
+                let s = feat[idx];
+                let dist = if s[0].is_nan() {
+                    1e18
+                } else {
+                    p.distance(Vec3::new(s[0], s[1], s[2]))
+                };
+                let v = if inside[idx] { dist } else { -dist } - probe;
+                if v == 0.0 {
+                    f64::EPSILON
+                } else {
+                    v
+                }
+            })
+            .collect();
+
+        let Some(gpu_f) = crate::surface::seed_gpu::field_gpu(
+            &bnodes,
+            &bidx,
+            &ag.spheres,
+            grid.dims,
+            reach,
+            grid.origin,
+            spacing,
+            &inside_u8,
+            probe,
+        ) else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+        assert_eq!(cpu_f.len(), gpu_f.len());
+
+        let mut max_err = 0.0_f64;
+        for (c, g) in cpu_f.iter().zip(&gpu_f) {
+            max_err = max_err.max((c - g).abs());
+        }
+        assert!(
+            max_err < 1e-9,
+            "GPU finalize vs CPU finalize (same seed+flood) differs by {max_err}"
         );
     }
 
