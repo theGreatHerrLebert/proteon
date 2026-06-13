@@ -20,16 +20,24 @@ CHARMM/SASA/OBC kernels.
   halving, 27-neighbour nearest-by-squared-distance, ping-pong buffers). Gated by
   `gpu_jump_flood_matches_cpu`. Standalone it's only ~on par with the 16-core CPU
   JFA (memory-bound + a full-grid host↔device round-trip per call) — the win
-  needs the fusion below.
+  needs the K1→K2 fusion, now shipped.
+- **K1→K2 fusion — SHIPPED (PR #124).** `seed_gpu::seed_and_flood_gpu` runs seed
+  and flood entirely on-device: a `fill_nan` kernel inits the full-grid feature
+  buffer, the `seed_scatter` kernel writes each boundary node's nearest-exposed
+  point straight at its grid index, and the JFA passes chain on that buffer —
+  dropping the boundary-feature download, the host scatter, and the full-grid
+  re-upload. `distance_field` calls this path. Gated by
+  `gpu_fused_seed_flood_matches_unfused` (bit-identical to the unfused all-GPU
+  pipeline). PR #124 also fixed an NVRTC `INFINITY`-undefined bug in
+  `jfa_kernel.cu` that had silently disabled the *entire* SES GPU path (init
+  compiles both modules) since #121.
 
 ### Still open
 
-- **Fuse K1→K2 on-device** — have the seed kernel scatter into a full-grid device
-  buffer that K2 reads directly, dropping the host scatter + re-upload between
-  them. This is where the seed's 5–6× and the on-device JFA actually compound;
-  the single biggest remaining perf win.
 - **K3 (dual contour)** — still CPU; porting keeps field + contouring on-device.
-  Guidance below.
+  Guidance below. This is now the only SES SDF stage off the GPU.
+- **Spatial-hash seed kernel** — the seed kernel is still O(boundary·atoms) brute
+  force; a spatial hash is the next perf step for very large receptors.
 - One-time NVRTC compile (~2 s for both kernels) is `OnceLock`-amortised, so the
   GPU path helps at batch scale (thousands of structures), not single-mesh
   latency.
