@@ -491,6 +491,8 @@ Derived and paper-inspired components (upstream license preserved in each module
 - `proteon-search/src/gpu/pssm_sw*` — libmarv kernel design, Kallenborn et al. (2025); paper-inspired, no source-code lineage.
 - `proteon-connector/src/reconstruct.rs` — BiochemicalAlgorithms.jl, Hildebrandt et al. (MIT).
 - `proteon-align/src/search/alphabet.rs` — 3Di structural alphabet, van Kempen et al. / Foldseek; paper-inspired, encoder weights independently trained, no GPL-licensed code reused.
+- `proteon-electrostatics` — NESSie.jl, Kemmer / Hildebrandt lab (MIT); boundary-element continuum-electrostatics port, gated against NESSie's fixtures.
+- `proteon-vina` — AutoDock Vina, Trott / Forli lab, Scripps (Apache-2.0); scoring function + BFGS local optimiser + Monte-Carlo docking. This crate is Apache-2.0; the rest of proteon is MIT.
 - `proteon-io` — pdbtbx, Schulte (MIT).
 
 Force-field implementations (CHARMM19, EEF1, AMBER96, OBC generalized Born) are derived from the primary literature cited in §References; parameter files are reproduced from the standard distribution of each force field.
@@ -524,6 +526,15 @@ Sequence and structure search:
 - Steinegger & Söding. "MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets." *Nat Biotechnol* 35(11), 1026-1028 (2017). https://doi.org/10.1038/nbt.3988 — k-mer prefilter, ungapped/gapped Smith-Waterman, and PSSM/MSA pipeline that proteon-search ports.
 - Kallenborn, Chacon, Hundt, Sirelkhatim, Didi, Cha, Dallago, Mirdita, Schmidt, Steinegger. "GPU-accelerated homology search with MMseqs2." *Nat Methods* 22, 2024-2027 (2025). https://doi.org/10.1038/s41592-025-02819-8 — libmarv, the canonical GPU Smith-Waterman kernel design that `proteon-search/src/gpu/pssm_sw*.rs` follows (warp-collaborative PSSM SW, shared-mem PSSM staging, padded-DB coalesced target layout).
 - van Kempen et al. "Fast and accurate protein structure search with Foldseek." *Nat Biotechnol* 42(2), 243-246 (2024). https://doi.org/10.1038/s41587-023-01773-0 — the 3Di structural-alphabet idea that `proteon-align/src/search/alphabet.rs` builds on. Proteon ships an experimental, independently-trained 20-letter structural alphabet (no GPL-licensed code re-used); benchmarks under `validation/bench_foldseek_retrieval.py` are currently ~15% behind Foldseek at TM ≥ 0.5 and close to parity at TM ≥ 0.9.
+
+Electrostatics:
+
+- Kemmer, Rjasanow & Hildebrandt. "NESSie.jl — Efficient and Intuitive Finite Element and Boundary Element Methods for Nonlocal Protein Electrostatics in the Julia Language." *J Comput Sci* 28, 193-203 (2018). https://doi.org/10.1016/j.jocs.2018.08.008 — the boundary-element local/nonlocal continuum-electrostatics solver that `proteon-electrostatics` ports (MIT) and is gated against.
+
+Docking:
+
+- Trott & Olson. "AutoDock Vina: improving the speed and accuracy of docking with a new scoring function, efficient optimization, and multithreading." *J Comput Chem* 31(2), 455-461 (2010). https://doi.org/10.1002/jcc.21334 — the Vina scoring function + local optimiser that `proteon-vina` ports (Apache-2.0).
+- Eberhardt, Santos-Martins, Tillack & Forli. "AutoDock Vina 1.2.0: New Docking Methods, Expanded Force Field, and Python Bindings." *J Chem Inf Model* 61(8), 3891-3898 (2021). https://doi.org/10.1021/acs.jcim.1c00203 — the v1.2 parity target.
 
 Infrastructure:
 
