@@ -18,6 +18,7 @@ use pyo3::types::PyDict;
 use proteon_core::sasa::{vdw_radius, DEFAULT_RADIUS};
 use proteon_core::surface::assemble::{ses_mesh, SesMethod};
 use proteon_core::surface::geom::{Sphere, Vec3};
+use proteon_core::surface::volume::ses_mesh_sdf;
 
 /// Build validated atom spheres from coords (Nx3) and exactly one of `radii` (N,)
 /// or element symbols (length N → vdW radii). Errors on a bad shape/length, a
@@ -206,8 +207,64 @@ fn ses_mesh_py<'py>(
     Ok(dict.unbind())
 }
 
+/// Coarse SES mesh via SDF marching cubes at a fixed grid `spacing` (Å) — a directly
+/// controllable, low-triangle-count surface. Unlike `ses_mesh_py` (which prefers the
+/// exact analytic mesher, easily millions of triangles), this is the right input for
+/// the O(N²) BEM electrostatics: larger `spacing` → fewer triangles → tractable solve.
+///
+/// Returns a dict: `vertices` (M×3 float64), `triangles` (K×3 uint32).
+#[pyfunction]
+#[pyo3(signature = (coords, radii=None, elements=None, probe=1.4, spacing=1.0))]
+fn ses_mesh_coarse_py<'py>(
+    py: Python<'py>,
+    coords: PyReadonlyArray2<'py, f64>,
+    radii: Option<PyReadonlyArray1<'py, f64>>,
+    elements: Option<Vec<String>>,
+    probe: f64,
+    spacing: f64,
+) -> PyResult<Py<PyDict>> {
+    if !(probe.is_finite() && probe >= 0.0) {
+        return Err(PyValueError::new_err("probe must be finite and >= 0"));
+    }
+    if !(spacing.is_finite() && spacing > 0.0) {
+        return Err(PyValueError::new_err("spacing must be finite and > 0"));
+    }
+    let spheres = spheres_from(&coords, radii.as_ref(), elements.as_deref())?;
+    if spheres.len() < 2 {
+        return Err(PyValueError::new_err(
+            "need at least 2 atoms to mesh an SES",
+        ));
+    }
+
+    let (vflat, tflat, nv, nt) = py.allow_threads(|| {
+        let mesh = ses_mesh_sdf(&spheres, probe, spacing);
+        let (nv, nt) = (mesh.verts.len(), mesh.tris.len());
+        let mut vflat = Vec::with_capacity(nv * 3);
+        for v in mesh.verts {
+            vflat.extend_from_slice(&[v.x, v.y, v.z]);
+        }
+        let mut tflat = Vec::with_capacity(nt * 3);
+        for t in mesh.tris {
+            tflat.extend_from_slice(&t);
+        }
+        (vflat, tflat, nv, nt)
+    });
+
+    let vertices = PyArray1::from_vec(py, vflat)
+        .reshape([nv, 3])
+        .map_err(|e| PyValueError::new_err(format!("vertex reshape: {e}")))?;
+    let triangles = PyArray1::from_vec(py, tflat)
+        .reshape([nt, 3])
+        .map_err(|e| PyValueError::new_err(format!("triangle reshape: {e}")))?;
+    let dict = PyDict::new(py);
+    dict.set_item("vertices", vertices)?;
+    dict.set_item("triangles", triangles)?;
+    Ok(dict.unbind())
+}
+
 #[pymodule]
 pub(crate) fn py_surface(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ses_mesh_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ses_mesh_coarse_py, m)?)?;
     Ok(())
 }

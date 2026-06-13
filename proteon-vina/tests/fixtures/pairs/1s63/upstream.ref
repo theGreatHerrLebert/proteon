@@ -1,0 +1,13 @@
+# Captured from upstream AutoDock-Vina v1.2.7-27-g3c65c0b.
+# 1s63: halogenated inhibitor of a zinc metalloprotein. Exercises
+# the MetD XS type (the Zn atom carries AD type Zn → element Met →
+# XS_TYPE_Met_D).
+total             = -8.266
+lig_grids         = -11.166
+inter_pairs       =   0.000
+flex_grids        =   0.000
+intra_pairs       =   0.000
+lig_intra         =  -1.488
+conf_independent  =   2.900
+intramolecular    =  -1.488
+tolerance_kcal    =   0.002

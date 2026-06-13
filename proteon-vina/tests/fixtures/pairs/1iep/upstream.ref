@@ -1,0 +1,13 @@
+# Captured from upstream AutoDock-Vina v1.2.7-27-g3c65c0b via
+#   vina --score_only --autobox \
+#        --receptor receptor.pdbqt --ligand ligand.pdbqt
+# 1iep: imatinib docked against Abl kinase (basic_docking example).
+total             = -12.513
+lig_grids         = -17.634
+inter_pairs       =   0.000
+flex_grids        =   0.000
+intra_pairs       =   0.000
+lig_intra         =  -0.485
+conf_independent  =   5.121
+intramolecular    =  -0.485
+tolerance_kcal    =   0.002

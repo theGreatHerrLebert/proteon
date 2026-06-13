@@ -1,0 +1,130 @@
+claims:
+  - id: proteon-local-energy-converges-to-born
+    title: Proteon's local BEM reaction-field energy converges to the analytic Born energy, and its energy/potentials match NESSie
+    kind: measurement
+    subsystem: electrostatics.post
+    case: claims/electrostatics_post.md
+    source: ..
+    tier: ci
+    trust_strategy:
+      - validation
+    capabilities:
+      - born-energy-converges-to-analytic
+    inputs:
+      corpus: born-analytic-and-nessie-post
+      n: 9
+      class: synthetic
+      fixture_paths:
+        - proteon-electrostatics/tests/fixtures/nessie/analytic.json
+        - proteon-electrostatics/tests/fixtures/nessie/post_local_na.json
+    outputs:
+      born_closed_form:
+        unit: kJ/mol (relative)
+        description: >
+          proteon's closed-form Born reaction-field energy (local and nonlocal) vs
+          NESSie's rfenergy(LocalES|NonlocalES, ion) for all nine built-in ions
+          (li, na, k, rb, cs, mg, ca, sr, ba). Pure closed form, no BEM, no mesh.
+      nessie_post_parity:
+        unit: V and kJ/mol (relative)
+        description: >
+          proteon's rfenergy and espotential over the interior/surface/exterior
+          (Omega/Sigma/Gamma) sample sets vs NESSie's post_dump on the 512-element
+          Born sodium mesh, after solving the local system to get u and q.
+      born_convergence:
+        unit: relative
+        description: >
+          The local BEM reaction-field energy of a unit charge at the centre of a
+          triangulated icosphere vs the closed-form Born energy, as the mesh refines
+          (subdivision 2 -> 3, i.e. 320 -> 1280 triangles). The whole local stack
+          (collocation, assembly, GMRES, post) against analytic physics, independent
+          of any BEM oracle.
+    pinned_versions:
+      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      NESSie: "NESSie.jl 1.5.1 (tree-hash c6c0c478; Manifest pinned in tools/oracle/nessie)"
+      physics-invariant: "local BEM rfenergy of a central charge in a triangulated sphere converges to the closed-form Born energy as the icosphere refines; negative solvation energy; nonlocal magnitude below local"
+      julia: "1.11.5 (fixture generation only; not needed at gate time)"
+      rust: "stable"
+    claim: >
+      proteon's local continuum-electrostatics post-processing -- the reaction-field
+      energy W* and the electrostatic potential in each domain -- reproduces NESSie's
+      post_dump (rfenergy and espotential over Omega/Sigma/Gamma) to 1e-6 relative on
+      the 512-element Born sodium mesh, its closed-form Born energy matches NESSie for
+      all nine built-in ions (local and nonlocal) to 1e-12, and -- the headline
+      result -- the local BEM energy of a central unit charge in a triangulated
+      sphere converges to the analytic Born energy as the icosphere refines (within
+      3% at subdivision 3, monotonically improving from the coarser mesh). The last is
+      independent of any BEM oracle and exercises the entire local stack against
+      analytic physics. This is the L4 local post-processing gate of the BEM
+      electrostatics port (P5).
+    tolerances:
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-12
+        output: born_closed_form
+        prose: >
+          "max |proteon - NESSie| / |NESSie| < 1e-12" on the local and nonlocal Born
+          energy for all nine ions. Both evaluate the same closed form, so only the
+          transcendental calls (sinh/exp/sqrt) can differ. The Born model assumes a
+          vacuum solute (epsOmega = 1); the formula uses (1/epsSigma - 1).
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-6
+        output: nessie_post_parity
+        prose: >
+          "||proteon - NESSie|| / ||NESSie|| < 1e-6" on rfenergy and on espotential
+          over each of the three domains. post_dump omits u/q (it solves the :blas
+          path internally), so proteon solves the local system first; the residual is
+          that solve's GMRES convergence carried through the post-processing, plus the
+          collocation libm.
+      - metric: relative_error
+        op: "<"
+        value: 0.03
+        output: born_convergence
+        prose: >
+          "|BEM energy - Born| / |Born| < 0.03 at subdivision 3", with the
+          subdivision-3 error strictly below subdivision-2 (refinement moves toward
+          the analytic value) and the energy negative at both. This is mesh
+          discretisation error of the centroid-collocation BEM on a sphere, not a
+          parity tolerance -- a coarse triangulated sphere cannot resolve the exact
+          Born surface; the gate asserts convergence toward it, the load-bearing
+          scientific claim.
+    evidence:
+      oracle:
+        - NESSie
+        - physics-invariant
+      command: cargo test -p proteon-electrostatics
+      artifact: cargo test console output (CI-tier; no persisted artifact)
+    provenance: automatic
+    last_verified:
+      commit: null
+      date: null
+      value: null
+      corpus_sha: null
+    assumptions:
+      - The analytic.json and post_local_na.json fixtures are NESSie's own outputs,
+        pinned to NESSie.jl 1.5.1. The post test consumes the fixture's stored normals,
+        charges, and params verbatim and solves the local system to obtain u/q (the
+        dump records rfenergy and espotential but not u/q).
+      - The convergence test builds the sphere with proteon-core's icosphere, whose
+        vertices lie exactly on the sphere; the triangle normals from Tri::new are
+        outward (consistent winding), which the negative-energy and convergence
+        assertions confirm indirectly.
+      - ep0 does not enter numerically (see the local-solve claim); potprefactor =
+        ec/4pi/ep0 and energy_factor = ec*Na*1e-3/2 are the only unit constants, and
+        potprefactor is unit-checked to about 14.3996.
+    failure_modes:
+      - The Born convergence runs at icosphere subdivisions 2 and 3 only (320 and 1280
+        triangles); it shows the trend and a 3% fine-mesh error but is not a formal
+        convergence-rate measurement in a stated norm. A refinement ladder with a
+        fitted order of convergence is the natural strengthening.
+      - The post parity and convergence exercise a single charge configuration
+        (one central charge, spherical surface). Off-centre charges, multiple charges,
+        and the potential near the surface (where the jump-corrected trace matters
+        most) are only lightly covered; the Sigma/Gamma sample sets are scaled copies
+        of the centroids, not independently chosen interior/exterior points.
+      - The Born closed form is gated only against NESSie, which shares the same
+        algebra; an externally-generated high-precision (CAS/mpmath) Born fixture is
+        the owed independent check (an oracle for the oracle).
+      - The convergence tolerance (3%) is a discretisation band specific to this
+        radius and subdivision range; it is not a guarantee for arbitrary meshes or
+        protein-scale surfaces, which need the P6.5 mesh-acceptance work.

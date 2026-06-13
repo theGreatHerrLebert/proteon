@@ -79,3 +79,8 @@ evident/reports/index.html
 # Re-fetched SES robustness repro PDBs (RCSB), local only
 ses-repro/
 .venv-test/
+
+# Electrostatics validation corpus (RCSB PDBs, ~254 MB), local fixture only.
+# Provenance + re-fetch instructions live in validation/corpus/README.md.
+/validation/corpus/*.pdb
+/validation/corpus/*.pqr

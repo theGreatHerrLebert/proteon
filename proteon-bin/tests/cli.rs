@@ -24,6 +24,12 @@ fn pdb(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn format_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../proteon-electrostatics/tests/fixtures/format")
+        .join(name)
+}
+
 fn run(args: &[&str]) -> (String, String, i32) {
     let out = Command::new(bin())
         .args(args)
@@ -258,4 +264,81 @@ fn failure_is_isolated_and_signalled() {
     assert_eq!(code, 1, "any per-file failure must exit nonzero");
 
     let _ = std::fs::remove_file(&bad);
+}
+
+#[test]
+fn electrostatics_solves_off_plus_pqr() {
+    let off = format_fixture("na.off");
+    let pqr = format_fixture("na.pqr");
+    let phi = std::env::temp_dir().join("proteon_cli_na_phi.tsv");
+    let (stdout, stderr, code) = run(&[
+        "electrostatics",
+        "--off",
+        off.to_str().unwrap(),
+        "--pqr",
+        pqr.to_str().unwrap(),
+        "--potential-out",
+        phi.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "electrostatics should succeed: {stderr}");
+
+    // Header + one data row; rfenergy is the first column and strongly negative
+    // (Born-like solvation of a +1 ion), the solve converged, n_elements = 512.
+    let rfenergy: f64 = col(&stdout, "rfenergy_kj_mol").parse().expect("rfenergy");
+    assert!(
+        rfenergy < 0.0,
+        "solvation energy should be negative, got {rfenergy}"
+    );
+    assert_eq!(col(&stdout, "converged"), "true");
+    assert_eq!(col(&stdout, "n_elements"), "512");
+
+    // The potential file carries one row per vertex (258) plus a header.
+    let lines = std::fs::read_to_string(&phi).expect("potential file");
+    assert_eq!(lines.lines().count(), 259);
+    let _ = std::fs::remove_file(&phi);
+}
+
+#[test]
+fn electrostatics_fast_summation_matches_dense() {
+    let off = format_fixture("na.off");
+    let pqr = format_fixture("na.pqr");
+    let dense = run(&[
+        "electrostatics",
+        "--off",
+        off.to_str().unwrap(),
+        "--pqr",
+        pqr.to_str().unwrap(),
+    ]);
+    let tc = run(&[
+        "electrostatics",
+        "--off",
+        off.to_str().unwrap(),
+        "--pqr",
+        pqr.to_str().unwrap(),
+        "--fast-summation",
+        "--fs-order",
+        "8",
+        "--fs-theta",
+        "0.45",
+    ]);
+    assert_eq!(dense.2, 0);
+    assert_eq!(tc.2, 0, "fast-summation solve should succeed: {}", tc.1);
+    let e_dense: f64 = col(&dense.0, "rfenergy_kj_mol").parse().unwrap();
+    let e_tc: f64 = col(&tc.0, "rfenergy_kj_mol").parse().unwrap();
+    let rel = (e_tc - e_dense).abs() / e_dense.abs();
+    assert!(
+        rel < 1e-3,
+        "treecode rfenergy {e_tc} off dense {e_dense} (rel {rel:.2e})"
+    );
+}
+
+#[test]
+fn electrostatics_off_without_pqr_fails() {
+    let off = format_fixture("na.off");
+    let (_stdout, stderr, code) = run(&["electrostatics", "--off", off.to_str().unwrap()]);
+    assert_ne!(code, 0, "missing --pqr must fail");
+    assert!(
+        stderr.contains("pqr"),
+        "error should mention the missing --pqr"
+    );
 }

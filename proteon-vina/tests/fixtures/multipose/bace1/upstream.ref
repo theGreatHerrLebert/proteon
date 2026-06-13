@@ -1,0 +1,63 @@
+# BACE_1 multipose: 9 poses from upstream `vina` default docking
+# of a macrocyclic BACE inhibitor. Receptor: tests/fixtures/pairs/bace1/receptor.pdbqt.
+# Stress-tests the macrocycle-closure accounting (is_closure_clash,
+# mask-filtered bond inference, ad_is_heteroatom) across a range of
+# rotatable-torsion configurations.
+
+receptor = bace1
+
+pose0.total            =  -8.010
+pose0.lig_grids        = -18.077
+pose0.lig_intra        =  -0.720
+pose0.conf_independent =  10.067
+pose0.intramolecular   =  -0.720
+
+pose1.total            =  -6.010
+pose1.lig_grids        = -13.564
+pose1.lig_intra        =  -1.816
+pose1.conf_independent =   7.554
+pose1.intramolecular   =  -1.816
+
+pose2.total            =  -6.195
+pose2.lig_grids        = -13.982
+pose2.lig_intra        =  -1.346
+pose2.conf_independent =   7.787
+pose2.intramolecular   =  -1.346
+
+pose3.total            =  -6.956
+pose3.lig_grids        = -15.700
+pose3.lig_intra        =   0.549
+pose3.conf_independent =   8.743
+pose3.intramolecular   =   0.549
+
+pose4.total            =  -5.477
+pose4.lig_grids        = -12.360
+pose4.lig_intra        =  -2.519
+pose4.conf_independent =   6.883
+pose4.intramolecular   =  -2.519
+
+pose5.total            =  -5.723
+pose5.lig_grids        = -12.916
+pose5.lig_intra        =  -1.812
+pose5.conf_independent =   7.193
+pose5.intramolecular   =  -1.812
+
+pose6.total            =  -5.604
+pose6.lig_grids        = -12.647
+pose6.lig_intra        =  -2.001
+pose6.conf_independent =   7.043
+pose6.intramolecular   =  -2.001
+
+pose7.total            =  -6.088
+pose7.lig_grids        = -13.740
+pose7.lig_intra        =  -0.675
+pose7.conf_independent =   7.652
+pose7.intramolecular   =  -0.675
+
+pose8.total            =  -5.239
+pose8.lig_grids        = -11.824
+pose8.lig_intra        =  -2.323
+pose8.conf_independent =   6.585
+pose8.intramolecular   =  -2.323
+
+tolerance_kcal         =   0.002

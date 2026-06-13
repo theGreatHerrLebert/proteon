@@ -81,6 +81,7 @@ COPY proteon-io          ./proteon-io/
 COPY proteon-arrow       ./proteon-arrow/
 COPY proteon-search      ./proteon-search/
 COPY proteon-core        ./proteon-core/
+COPY proteon-electrostatics ./proteon-electrostatics/
 COPY proteon-bin         ./proteon-bin/
 COPY proteon-connector   ./proteon-connector/
 COPY packages            ./packages/

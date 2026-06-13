@@ -3,10 +3,12 @@ members = [
     "proteon-align",
     "proteon-arrow",
     "proteon-core",
+    "proteon-electrostatics",
     "proteon-io",
     "proteon-bin",
     "proteon-connector",
     "proteon-search",
+    "proteon-vina",
 ]
 exclude = ["gpu-poc"]
 resolver = "2"
