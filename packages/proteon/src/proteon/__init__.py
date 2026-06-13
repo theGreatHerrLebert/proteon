@@ -313,6 +313,18 @@ from .loader_failure_analysis import (
     summarize_loader_failures,
     summaries_to_markdown,
 )
+from . import vina
+from .vina import (
+    BfgsOutcome,
+    VinaDockPose,
+    VinaLocalOnlyOutcome,
+    VinaScoreComponents,
+    batch_local_only,
+    batch_score_only,
+    dock,
+    local_only,
+    score_only,
+)
 # Explicitly govern the top-level ``proteon`` namespace. New exports should be
 # added deliberately here instead of leaking in implicitly via imports.
 _ARROW_API = (
@@ -626,6 +638,19 @@ _CLUSTER_ASSIGNMENTS_API = (
     "cluster_aware_split",
 )
 
+_VINA_API = (
+    "score_only",
+    "local_only",
+    "batch_score_only",
+    "batch_local_only",
+    "dock",
+    "VinaScoreComponents",
+    "VinaLocalOnlyOutcome",
+    "VinaDockPose",
+    "BfgsOutcome",
+    "vina",  # submodule itself, for proteon.vina.* access
+)
+
 _FAILURE_API = (
     "ALL_FAILURE_CLASSES",
     "classify_exception",
@@ -671,5 +696,6 @@ __all__ = (
     *_TRAINING_API,
     *_CORPUS_VALIDATION_API,
     *_CLUSTER_ASSIGNMENTS_API,
+    *_VINA_API,
     *_FAILURE_API,
 )

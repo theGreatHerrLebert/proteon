@@ -1,0 +1,13 @@
+# Captured from upstream AutoDock-Vina v1.2.7-27-g3c65c0b.
+# 1fpu: same imatinib ligand as 1iep but re-prepared with a
+# ring-rooted torsion tree, scored against 1fpu's rigid receptor
+# portion (from the flexible_docking example).
+total             = -4.036
+lig_grids         = -5.687
+inter_pairs       =  0.000
+flex_grids        =  0.000
+intra_pairs       =  0.000
+lig_intra         = -0.485
+conf_independent  =  1.652
+intramolecular    = -0.485
+tolerance_kcal    =  0.002

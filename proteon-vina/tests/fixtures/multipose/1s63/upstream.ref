@@ -1,0 +1,63 @@
+# 1s63 multipose: 9 poses from upstream AutoDock4 docking of a
+# halogenated zinc-metalloprotein inhibitor, scored here with the
+# Vina scoring function. Receptor: tests/fixtures/pairs/1s63/receptor.pdbqt.
+# Stress-tests the Zn (MetD) receptor interaction across AD4-style
+# poses (less binding-pocket-centered than native Vina poses).
+
+receptor = 1s63
+
+pose0.total            =  -6.245
+pose0.lig_grids        =  -8.435
+pose0.lig_intra        =  -0.588
+pose0.conf_independent =   2.190
+pose0.intramolecular   =  -0.588
+
+pose1.total            =  -8.100
+pose1.lig_grids        = -10.941
+pose1.lig_intra        =  -0.474
+pose1.conf_independent =   2.841
+pose1.intramolecular   =  -0.474
+
+pose2.total            =  -6.050
+pose2.lig_grids        =  -8.172
+pose2.lig_intra        =   0.321
+pose2.conf_independent =   2.122
+pose2.intramolecular   =   0.321
+
+pose3.total            =  -5.537
+pose3.lig_grids        =  -7.479
+pose3.lig_intra        =   0.843
+pose3.conf_independent =   1.942
+pose3.intramolecular   =   0.843
+
+pose4.total            =  -5.199
+pose4.lig_grids        =  -7.023
+pose4.lig_intra        =  -0.274
+pose4.conf_independent =   1.824
+pose4.intramolecular   =  -0.274
+
+pose5.total            =  -5.352
+pose5.lig_grids        =  -7.229
+pose5.lig_intra        =  -1.415
+pose5.conf_independent =   1.877
+pose5.intramolecular   =  -1.415
+
+pose6.total            =  -5.191
+pose6.lig_grids        =  -7.011
+pose6.lig_intra        =   0.514
+pose6.conf_independent =   1.821
+pose6.intramolecular   =   0.514
+
+pose7.total            =  -5.572
+pose7.lig_grids        =  -7.527
+pose7.lig_intra        =  -0.687
+pose7.conf_independent =   1.955
+pose7.intramolecular   =  -0.687
+
+pose8.total            =  -5.724
+pose8.lig_grids        =  -7.732
+pose8.lig_intra        =  -0.108
+pose8.conf_independent =   2.008
+pose8.intramolecular   =  -0.108
+
+tolerance_kcal         =   0.002

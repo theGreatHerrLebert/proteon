@@ -1,0 +1,18 @@
+# Captured from upstream AutoDock-Vina v1.2.7-27-g3c65c0b.
+# BACE_1: macrocyclic BACE inhibitor (docking_with_macrocycles example).
+# Exercises the full set of macrocycle-closure rules:
+#   * mask-filtered bond inference (no ghost bonds between co-located
+#     G0 / CG0 pseudo-atoms)
+#   * is_closure_clash pair exclusion (`bonded_to(x, 1)` includes
+#     `x` itself, so CG-CG pairs and CG-neighbour pairs drop out)
+#   * ad_is_heteroatom — treats CG0–CG3 as heteroatoms for the
+#     XS carbon polarity check (CH_CG* vs CP_CG*).
+total             = -7.628
+lig_grids         = -17.216
+inter_pairs       =   0.000
+flex_grids        =   0.000
+intra_pairs       =   0.000
+lig_intra         =  -0.878
+conf_independent  =   9.588
+intramolecular    =  -0.878
+tolerance_kcal    =   0.002
