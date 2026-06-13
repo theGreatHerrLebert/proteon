@@ -340,14 +340,24 @@ struct CellGrid {
 }
 
 impl CellGrid {
-    /// Cap on the dense cell count (`64 M` → 256 MB of `i32` offsets). Beyond it
-    /// the grid is not worth building (a huge bounding box is usually a sparse,
-    /// low-atom-count structure where the brute kernel is fine).
-    const MAX_CELLS: i128 = 64 * 1024 * 1024;
+    /// Hard ceiling on the dense cell count (`16 M` → 64 MB of `i32` offsets).
+    const MAX_CELLS: i128 = 16 * 1024 * 1024;
+    /// Density ceiling: cells per atom. A grid much emptier than this is a sparse
+    /// bounding box (a fibre, a translated multi-domain complex) where the dense
+    /// representation wastes memory and the brute kernel is the better choice —
+    /// so bound the allocation to the atom count, not just an absolute cap.
+    const MAX_CELLS_PER_ATOM: i128 = 64;
+    /// Margin (in cells) kept between the key range and the `i32` bounds, so the
+    /// kernel's `kmax = kmin + dim − 1`, the ±2 exposure gather, and node/
+    /// projection keys (a few cells outside the atom grid) can never overflow
+    /// `int`. Tiny vs `i32::MAX`; only a pathologically translated structure
+    /// (keys near ±2 billion) trips it → brute fallback.
+    const KEY_MARGIN: i64 = 8;
 
-    /// Build the grid from the inflated `spheres`. Returns `None` if empty, if
-    /// the dense grid would exceed [`Self::MAX_CELLS`], or if any key/dimension
-    /// overflows `i32` — in all of which the caller uses the brute kernel.
+    /// Build the grid from the inflated `spheres`. Returns `None` (→ brute
+    /// fallback) if empty, if the dense grid would exceed the absolute or
+    /// per-atom cell caps, or if the cell keys sit too close to the `i32` bounds
+    /// for the kernel's 32-bit arithmetic to be safe.
     fn build(spheres: &[Sphere]) -> Option<CellGrid> {
         if spheres.is_empty() {
             return None;
@@ -361,17 +371,31 @@ impl CellGrid {
             kmin = (kmin.0.min(kx), kmin.1.min(ky), kmin.2.min(kz));
             kmax = (kmax.0.max(kx), kmax.1.max(ky), kmax.2.max(kz));
         }
+        // Both key bounds must sit a margin inside i32 so every key the kernel
+        // forms (kmax, ±2 exposure, node/projection cells) stays in range.
+        let lo = i64::from(i32::MIN) + Self::KEY_MARGIN;
+        let hi = i64::from(i32::MAX) - Self::KEY_MARGIN;
+        for (mn, mx) in [(kmin.0, kmax.0), (kmin.1, kmax.1), (kmin.2, kmax.2)] {
+            if mn < lo || mx > hi {
+                return None;
+            }
+        }
         let (dx, dy, dz) = (
             kmax.0 - kmin.0 + 1,
             kmax.1 - kmin.1 + 1,
             kmax.2 - kmin.2 + 1,
         );
         let ncells = (dx as i128) * (dy as i128) * (dz as i128);
-        if ncells <= 0 || ncells > Self::MAX_CELLS {
+        // Absolute ceiling AND density ceiling (tie the allocation to atom count
+        // so a sparse-but-huge bounding box can't exhaust host memory before the
+        // brute fallback).
+        let density_cap = (spheres.len() as i128).saturating_mul(Self::MAX_CELLS_PER_ATOM);
+        if ncells <= 0 || ncells > Self::MAX_CELLS || ncells > density_cap {
             return None;
         }
         let ncells = ncells as usize;
-        // Kernel params + the +1 prefix entry must fit i32.
+        // Kernel params + the +1 prefix entry must fit i32 (guaranteed by the
+        // margin check above for the keys; dims/len are bounded by the caps).
         let kxmin = i32::try_from(kmin.0).ok()?;
         let kymin = i32::try_from(kmin.1).ok()?;
         let kzmin = i32::try_from(kmin.2).ok()?;
