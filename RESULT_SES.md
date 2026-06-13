@@ -5,7 +5,7 @@ Summary of the work that landed on `main` via PR #110 (squash commit `83cfeee`,
 mesher, makes it tractable on real proteins, and puts a CI-gated parity oracle
 against BALL behind it.
 
-Design/diagnosis detail lives in `devdocs/SES_CDT_CROSSING.md` and
+Design/diagnosis detail lives in `devdocs/archive/SES_CDT_CROSSING.md` and
 `devdocs/SES_DIRECTED_PERTURBATION.md`; this is the results view.
 
 ---

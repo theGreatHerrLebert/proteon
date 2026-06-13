@@ -43,4 +43,4 @@ BALL's *analytic* area (used here) is robust to the near-tangency configs that m
 proteon's *triangulation* fail. BALL's own *triangulation* path
 (`source/STRUCTURE/surfaceProcessor.C`) escapes them by bounded probe-radius
 perturbation retry (±0.01 Å, ≤10×) — the same family of remedy as proteon's
-atom-centre jitter. See `devdocs/SES_CDT_CROSSING.md`.
+atom-centre jitter. See `devdocs/archive/SES_CDT_CROSSING.md`.

@@ -34,7 +34,11 @@ Under `devdocs/`:
 - `ROADMAP.md`, `RELIABILITY_ROADMAP.md`, `SEARCH_ROADMAP.md`, `GEOMETRIC_DL_INFRA_ROADMAP.md` — phased plans
 - `ORACLE.md` — oracle testing strategy (BALL, BALLJL, Biopython, Gemmi, OpenMM, MMseqs2, USAlign)
 - `STRUCTURE_SUPERVISION_SCHEMA.md`, `RUST_BATCH_SUPERVISION_CONTRACT.md` — Layer 5 schemas
-- `AMBER_UPDATE.md`, `TODO_PYPI.md`, `NEXT_SESSION.md`, `TODO_NEXT*.md` — session/release notes
+- `VINA_ROADMAP.md` — docking (`proteon-vina`) remaining work
+- Surface/SES: `GPU_SES_PLAN.md` (GPU port — K3 + K1→K2 fusion remain), `SES_DIRECTED_PERTURBATION.md` (CDT-crossing follow-up)
+- Electrostatics (BEM): `ELECTROSTATICS_FORMULATION.md` (spec, DRAFT), `TO_ELECTROSTATICS_P8.md` (treecode), `MULTI_REGION_BEM.md`, `NEAR_SINGULAR_QUADRATURE.md`
+- `CRATES_IO_PUBLISH_STATUS.md` — publish blockers
+- `archive/` — shipped/superseded designs and point-in-time codex review snapshots (history, not live plans)
 
 ### Reference C++ / external repos
 
