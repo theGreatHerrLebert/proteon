@@ -85,12 +85,16 @@ fn launch(
         .iter()
         .flat_map(|s| [s.center.x, s.center.y, s.center.z, s.radius])
         .collect();
-    let n_i32 = n as i32;
-    let m_i32 = spheres.len() as i32;
+    // Checked conversions: an out-of-range size returns Err → CPU fallback,
+    // never a silently-wrapped launch/param.
+    let n_i32 = i32::try_from(n)?;
+    let m_i32 = i32::try_from(spheres.len())?;
+    let n_u32 = u32::try_from(n)?;
+    let n3 = n.checked_mul(3).ok_or("seed buffer size overflow")?;
 
     let d_nodes = stream.clone_htod(&nodes_flat)?;
     let d_atoms = stream.clone_htod(&atoms_flat)?;
-    let mut d_feat = stream.alloc_zeros::<f64>(n * 3)?;
+    let mut d_feat = stream.alloc_zeros::<f64>(n3)?;
     {
         let mut a = stream.launch_builder(&g.seed);
         a.arg(&d_nodes);
@@ -99,7 +103,7 @@ fn launch(
         a.arg(&m_i32);
         a.arg(&mut d_feat);
         unsafe {
-            a.launch(LaunchConfig::for_num_elems(n as u32))?;
+            a.launch(LaunchConfig::for_num_elems(n_u32))?;
         }
     }
     let flat = stream.clone_dtoh(&d_feat)?;
@@ -143,9 +147,17 @@ fn launch_jfa(
     let n = nx * ny * nz;
     let stream = g.ctx.default_stream();
 
+    // Checked conversions: an out-of-range grid returns Err → CPU fallback,
+    // never a silently-wrapped launch size or kernel param.
+    let n_u32 = u32::try_from(n)?;
+    let n3 = n.checked_mul(3).ok_or("jfa buffer size overflow")?;
+    let nx_i = i32::try_from(nx)?;
+    let ny_i = i32::try_from(ny)?;
+    let nz_i = i32::try_from(nz)?;
+
     let flat: Vec<f64> = feat.iter().flat_map(|f| [f[0], f[1], f[2]]).collect();
     let mut src = stream.clone_htod(&flat)?;
-    let mut dst = stream.alloc_zeros::<f64>(n * 3)?;
+    let mut dst = stream.alloc_zeros::<f64>(n3)?;
 
     // Identical schedule to the CPU jump_flood: next_pow2(reach) … 2, 1, then a
     // final unit pass (JFA+1).
@@ -157,10 +169,9 @@ fn launch_jfa(
     }
     schedule.push(1);
 
-    let (nx_i, ny_i, nz_i) = (nx as i32, ny as i32, nz as i32);
     let (ox, oy, oz) = (origin.x, origin.y, origin.z);
     for step in schedule {
-        let step_i = step as i32;
+        let step_i = i32::try_from(step)?;
         {
             let mut a = stream.launch_builder(&g.jfa);
             a.arg(&src);
@@ -174,7 +185,7 @@ fn launch_jfa(
             a.arg(&oz);
             a.arg(&spacing);
             unsafe {
-                a.launch(LaunchConfig::for_num_elems(n as u32))?;
+                a.launch(LaunchConfig::for_num_elems(n_u32))?;
             }
         }
         // src ← freshly-flooded dst for the next (smaller-step) pass. Stream
