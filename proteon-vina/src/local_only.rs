@@ -210,6 +210,9 @@ pub enum InterSource<'a> {
     },
     /// Precomputed [`GridCache`]: one trilinear lookup per ligand atom, the
     /// out-of-box slope already baked into the grid (so no `BoxPenalty`).
+    /// The slope confines every *interacting* atom; non-interacting glue
+    /// atoms (macrocycle closures) get no grid term but are held in place by
+    /// their bonds to confined atoms.
     Grid(&'a GridCache),
 }
 

@@ -68,8 +68,9 @@ pub struct McParams {
     /// sum. Builds the grids once per replicate, then scores each pose with
     /// one trilinear lookup per atom — much faster for large receptors, at
     /// the cost of the grid's interpolation approximation (its own
-    /// out-of-box slope then replaces `box_slope`). Off by default: the
-    /// exact pair path is the parity-validated one.
+    /// out-of-box slope then replaces `box_slope`, confining every
+    /// interacting atom). Off by default: the exact pair path is the
+    /// parity-validated one.
     pub use_grid: bool,
     /// Grid spacing in Å when `use_grid` is set
     /// ([`GridCache::DEFAULT_GRANULARITY`] = 0.375).

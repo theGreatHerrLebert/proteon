@@ -171,7 +171,6 @@ fn axis_dim(lo: f64, hi: f64, granularity: f64) -> GridDim {
 mod tests {
     use super::*;
     use crate::global_search::SearchBox;
-    use crate::pdbqt::parse_pdbqt;
     use crate::score::{inter_pair_energy, inter_pair_energy_with_forces};
 
     const LIG_1IEP: &str = include_str!("../tests/fixtures/pairs/1iep/ligand.pdbqt");
@@ -230,6 +229,51 @@ mod tests {
         let (mp, mg) = (mag(&pair_f), mag(&grid_f));
         let rel = (mp - mg).abs() / mp.max(1.0);
         assert!(rel < 0.25, "force magnitude pair {mp} vs grid {mg} (rel {rel:.3})");
+    }
+
+    #[test]
+    fn grid_force_sign_matches_finite_difference() {
+        // Guards the end-to-end force *direction* (the magnitude test does
+        // not): the returned per-atom force must be −∂E/∂x of cache.eval's
+        // own energy. Central differences on a few real ligand atoms.
+        let (rec, lig) = load();
+        let precalc = Precalculate::vina();
+        let sbox = SearchBox::around_ligand(&lig, 4.0);
+        let (c1, c2) = sbox.corners();
+        let cache = GridCache::build(
+            &rec, &lig, &precalc, c1, c2, GridCache::DEFAULT_GRANULARITY, GridCache::DEFAULT_SLOPE,
+        );
+        let v = 1000.0;
+        let (_e, forces) = cache.eval(&lig.coords, &lig.xs_types, v);
+        let h = 1e-4;
+        // A handful of interacting atoms (skip any with ~zero force).
+        let mut checked = 0;
+        for i in 0..lig.coords.len() {
+            let fmag = forces[i].iter().map(|x| x * x).sum::<f64>().sqrt();
+            if fmag < 1.0 {
+                continue;
+            }
+            for axis in 0..3 {
+                let mut cp = lig.coords.clone();
+                let mut cm = lig.coords.clone();
+                cp[i][axis] += h;
+                cm[i][axis] -= h;
+                let ep = cache.eval(&cp, &lig.xs_types, v).0;
+                let em = cache.eval(&cm, &lig.xs_types, v).0;
+                let fd_force = -(ep - em) / (2.0 * h); // −∂E/∂x
+                let rel = (forces[i][axis] - fd_force).abs() / forces[i][axis].abs().max(1.0);
+                assert!(
+                    rel < 0.05,
+                    "atom {i} axis {axis}: force {} vs fd {fd_force} (rel {rel:.3})",
+                    forces[i][axis]
+                );
+            }
+            checked += 1;
+            if checked >= 4 {
+                break;
+            }
+        }
+        assert!(checked > 0, "no interacting atom found to check");
     }
 
     #[test]
