@@ -57,7 +57,10 @@ pub struct LocalOnlyOptions {
 
 impl Default for LocalOnlyOptions {
     fn default() -> Self {
-        Self { max_steps: None, v_curl: 1000.0 }
+        Self {
+            max_steps: None,
+            v_curl: 1000.0,
+        }
     }
 }
 
@@ -124,7 +127,11 @@ pub fn local_only(
         opts.v_curl,
     );
 
-    LocalOnlyOutcome { conf, components, bfgs: bfgs_outcome }
+    LocalOnlyOutcome {
+        conf,
+        components,
+        bfgs: bfgs_outcome,
+    }
 }
 
 /// Minimise a single conformation to its nearest BFGS local minimum,
@@ -284,7 +291,10 @@ pub fn minimise_conf_with(
         let mut energy = e_inter + e_intra;
         // The grid bakes its own out-of-box slope; only the pair path needs
         // an explicit BoxPenalty.
-        if let InterSource::Pairs { confine: Some(bp), .. } = inter {
+        if let InterSource::Pairs {
+            confine: Some(bp), ..
+        } = inter
+        {
             bp.accumulate(&applied.coords, &mut energy, &mut per_atom_force);
         }
 
@@ -384,14 +394,13 @@ mod tests {
         upstream_conf: f64,
         upstream_unbound: f64,
     ) {
-        let lig_text =
-            std::fs::read_to_string(format!("tests/fixtures/pairs/{name}/ligand.pdbqt"))
-                .or_else(|_| {
-                    std::fs::read_to_string(format!(
-                        "proteon-vina/tests/fixtures/pairs/{name}/ligand.pdbqt"
-                    ))
-                })
-                .expect("fixture path");
+        let lig_text = std::fs::read_to_string(format!("tests/fixtures/pairs/{name}/ligand.pdbqt"))
+            .or_else(|_| {
+                std::fs::read_to_string(format!(
+                    "proteon-vina/tests/fixtures/pairs/{name}/ligand.pdbqt"
+                ))
+            })
+            .expect("fixture path");
         let rec_text =
             std::fs::read_to_string(format!("tests/fixtures/pairs/{name}/receptor.pdbqt"))
                 .or_else(|_| {
@@ -408,8 +417,16 @@ mod tests {
         assert_relative_eq!(out.components.total, upstream_total, epsilon = tol);
         assert_relative_eq!(out.components.lig_grids, upstream_inter, epsilon = tol);
         assert_relative_eq!(out.components.lig_intra, upstream_intra, epsilon = tol);
-        assert_relative_eq!(out.components.conf_independent, upstream_conf, epsilon = tol);
-        assert_relative_eq!(out.components.intramolecular, upstream_unbound, epsilon = tol);
+        assert_relative_eq!(
+            out.components.conf_independent,
+            upstream_conf,
+            epsilon = tol
+        );
+        assert_relative_eq!(
+            out.components.intramolecular,
+            upstream_unbound,
+            epsilon = tol
+        );
     }
 
     #[test]

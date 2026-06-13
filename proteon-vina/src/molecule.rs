@@ -155,7 +155,6 @@ impl Molecule {
     /// Upper bound on the number of atoms supported per molecule for
     /// the u64 fragment_mask. See `Molecule::fragment_mask`.
     pub const MAX_FRAGMENTS: usize = 64;
-
 }
 
 /// Compute upstream's `DISTANCE_FIXED` extended-group bitmask on the
@@ -204,7 +203,6 @@ fn raw_fragment_mask(file: &PdbqtFile) -> Vec<u64> {
 }
 
 impl Molecule {
-
     /// True when the molecule has no typed atoms.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -269,9 +267,15 @@ mod tests {
     #[test]
     fn receptor_has_ca_and_nd_xs_types_present() {
         let m = Molecule::from_pdbqt_str(RECEPTOR_FIXTURE).unwrap();
-        let has_nd = m.xs_types.iter().any(|&t| matches!(t, XsType::ND | XsType::NDA));
+        let has_nd = m
+            .xs_types
+            .iter()
+            .any(|&t| matches!(t, XsType::ND | XsType::NDA));
         let has_ch = m.xs_types.contains(&XsType::CH);
-        let has_oa = m.xs_types.iter().any(|&t| matches!(t, XsType::OA | XsType::ODA));
+        let has_oa = m
+            .xs_types
+            .iter()
+            .any(|&t| matches!(t, XsType::OA | XsType::ODA));
         assert!(has_nd, "receptor should contain N_D or N_DA");
         assert!(has_ch, "receptor should contain C_H");
         assert!(has_oa, "receptor should contain O_A or O_DA");

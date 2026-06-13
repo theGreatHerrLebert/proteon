@@ -38,7 +38,11 @@ pub struct RawAtom {
 #[derive(Debug, thiserror::Error)]
 pub enum PdbqtError {
     #[error("line {line}: expected at least {expected} columns, got {got}")]
-    LineTooShort { line: usize, expected: usize, got: usize },
+    LineTooShort {
+        line: usize,
+        expected: usize,
+        got: usize,
+    },
 
     #[error("line {line}: column {col_start}-{col_end} ({field}) is not a valid number: {raw:?}")]
     NotANumber {
@@ -129,10 +133,12 @@ pub fn parse_pdbqt_models(text: &str) -> Result<Vec<PdbqtFile>, PdbqtError> {
         if starts_with(line, "ENDMDL") {
             match current.take() {
                 Some(buf) => models.push(parse_pdbqt(&buf)?),
-                None => return Err(PdbqtError::UnknownRecord {
-                    line: i + 1,
-                    tag: "ENDMDL".into(),
-                }),
+                None => {
+                    return Err(PdbqtError::UnknownRecord {
+                        line: i + 1,
+                        tag: "ENDMDL".into(),
+                    })
+                }
             }
             continue;
         }
@@ -255,11 +261,7 @@ pub fn parse_pdbqt(text: &str) -> Result<PdbqtFile, PdbqtError> {
         if is_ignored_prefix(line) {
             continue;
         }
-        let tag = line
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let tag = line.split_whitespace().next().unwrap_or("").to_string();
         return Err(PdbqtError::UnknownRecord { line: line_no, tag });
     }
 
@@ -284,7 +286,11 @@ pub fn parse_pdbqt(text: &str) -> Result<PdbqtFile, PdbqtError> {
 /// Parse a `BRANCH p c` or `ENDBRANCH p c` line. Both have the same
 /// format — two integer atom serials separated by whitespace after the
 /// tag token.
-fn parse_branch_line(line: &str, tag: &'static str, line_no: usize) -> Result<(u32, u32), PdbqtError> {
+fn parse_branch_line(
+    line: &str,
+    tag: &'static str,
+    line_no: usize,
+) -> Result<(u32, u32), PdbqtError> {
     let rest = line.get(tag.len()..).unwrap_or("");
     let mut it = rest.split_whitespace();
     let p = it.next().and_then(|s| s.parse::<u32>().ok());
@@ -663,13 +669,7 @@ END\r
             .lines()
             .filter(|l| l.starts_with("BRANCH"))
             .count();
-        let n_frags = file
-            .fragment_ids
-            .iter()
-            .max()
-            .copied()
-            .unwrap_or(0)
-            + 1;
+        let n_frags = file.fragment_ids.iter().max().copied().unwrap_or(0) + 1;
         // max fragment ID == n_branches (ROOT is id 0, each BRANCH
         // bumps the counter).
         assert_eq!(n_frags as usize, n_branches + 1);

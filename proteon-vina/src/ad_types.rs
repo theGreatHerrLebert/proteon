@@ -103,9 +103,7 @@ pub enum Element {
 #[must_use]
 pub const fn element(ad: AdType) -> Element {
     match ad {
-        AdType::C | AdType::A | AdType::Cg0 | AdType::Cg1 | AdType::Cg2 | AdType::Cg3 => {
-            Element::C
-        }
+        AdType::C | AdType::A | AdType::Cg0 | AdType::Cg1 | AdType::Cg2 | AdType::Cg3 => Element::C,
         AdType::N | AdType::Na => Element::N,
         AdType::O | AdType::Oa => Element::O,
         AdType::P => Element::P,

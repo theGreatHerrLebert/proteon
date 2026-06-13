@@ -208,7 +208,12 @@ mod tests {
             assert!(is_hydrophobic(t), "{t:?} should be hydrophobic");
         }
         for &t in &[
-            XsType::CP, XsType::NP, XsType::NDA, XsType::OA, XsType::SP, XsType::MetD,
+            XsType::CP,
+            XsType::NP,
+            XsType::NDA,
+            XsType::OA,
+            XsType::SP,
+            XsType::MetD,
         ] {
             assert!(!is_hydrophobic(t), "{t:?} should not be hydrophobic");
         }
@@ -221,7 +226,13 @@ mod tests {
             assert!(is_acceptor(t));
         }
         // Donors
-        for &t in &[XsType::ND, XsType::NDA, XsType::OD, XsType::ODA, XsType::MetD] {
+        for &t in &[
+            XsType::ND,
+            XsType::NDA,
+            XsType::OD,
+            XsType::ODA,
+            XsType::MetD,
+        ] {
             assert!(is_donor(t));
         }
         // NP / OP are neither.

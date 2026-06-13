@@ -55,7 +55,10 @@ fn redocks_1iep_within_2_angstrom() {
         exhaustiveness: 4,
         n_poses: 5,
         seed: 0, // pinned: recovers the crystal pose to ~0.4 Å (see header)
-        mc: McParams { global_steps: 120, ..McParams::default() },
+        mc: McParams {
+            global_steps: 120,
+            ..McParams::default()
+        },
         ..DockParams::default()
     };
 
@@ -99,7 +102,11 @@ fn redocks_1iep_on_the_grid() {
         exhaustiveness: 4,
         n_poses: 5,
         seed: 0,
-        mc: McParams { global_steps: 120, use_grid: true, ..McParams::default() },
+        mc: McParams {
+            global_steps: 120,
+            use_grid: true,
+            ..McParams::default()
+        },
         ..DockParams::default()
     };
     let modes = dock(&rec, &lig, &file, &precalc, sbox, &params);
@@ -112,5 +119,8 @@ fn redocks_1iep_on_the_grid() {
         best_rmsd < SUCCESS_RMSD,
         "grid path: no mode within {SUCCESS_RMSD} Å of crystal (best {best_rmsd:.2} Å)"
     );
-    assert!(modes[0].components.total < 0.0, "grid top mode not favourable");
+    assert!(
+        modes[0].components.total < 0.0,
+        "grid top mode not favourable"
+    );
 }

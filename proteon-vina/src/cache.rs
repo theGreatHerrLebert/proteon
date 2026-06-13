@@ -110,8 +110,7 @@ impl GridCache {
             })
             .collect();
 
-        let mut grids: HashMap<XsType, Grid> =
-            needed.iter().map(|&t| (t, Grid::new(gd))).collect();
+        let mut grids: HashMap<XsType, Grid> = needed.iter().map(|&t| (t, Grid::new(gd))).collect();
         for (ix, slab) in slabs.iter().enumerate() {
             for (k, &t) in needed.iter().enumerate() {
                 let g = grids.get_mut(&t).unwrap();
@@ -148,7 +147,9 @@ impl GridCache {
         let mut energy = 0.0;
         let mut forces = vec![[0.0_f64; 3]; coords.len()];
         for (i, (&c, &xs)) in coords.iter().zip(xs_types.iter()).enumerate() {
-            let Some(t) = xs_for_receptor_interaction(xs) else { continue };
+            let Some(t) = xs_for_receptor_interaction(xs) else {
+                continue;
+            };
             if let Some(g) = self.grids.get(&t) {
                 let (e_i, grad) = g.evaluate(c, self.slope, v_curl);
                 energy += e_i;
@@ -164,7 +165,11 @@ impl GridCache {
 fn axis_dim(lo: f64, hi: f64, granularity: f64) -> GridDim {
     let span = hi - lo;
     let n_voxels = (span / granularity).ceil().max(1.0) as usize;
-    GridDim { begin: lo, end: hi, n_voxels }
+    GridDim {
+        begin: lo,
+        end: hi,
+        n_voxels,
+    }
 }
 
 #[cfg(test)]
@@ -190,9 +195,18 @@ mod tests {
         // Box enclosing the crystal pose so no atom is out of bounds (the
         // slope penalty would otherwise diverge from the pair sum).
         let sbox = SearchBox::around_ligand(&lig, 4.0);
-        let cache = { let (c1, c2) = sbox.corners(); GridCache::build(
-            &rec, &lig, &precalc, c1, c2, GridCache::DEFAULT_GRANULARITY, GridCache::DEFAULT_SLOPE,
-        ) };
+        let cache = {
+            let (c1, c2) = sbox.corners();
+            GridCache::build(
+                &rec,
+                &lig,
+                &precalc,
+                c1,
+                c2,
+                GridCache::DEFAULT_GRANULARITY,
+                GridCache::DEFAULT_SLOPE,
+            )
+        };
         assert!(!cache.is_empty());
 
         let v = 1000.0;
@@ -214,9 +228,18 @@ mod tests {
         let (rec, lig) = load();
         let precalc = Precalculate::vina();
         let sbox = SearchBox::around_ligand(&lig, 4.0);
-        let cache = { let (c1, c2) = sbox.corners(); GridCache::build(
-            &rec, &lig, &precalc, c1, c2, GridCache::DEFAULT_GRANULARITY, GridCache::DEFAULT_SLOPE,
-        ) };
+        let cache = {
+            let (c1, c2) = sbox.corners();
+            GridCache::build(
+                &rec,
+                &lig,
+                &precalc,
+                c1,
+                c2,
+                GridCache::DEFAULT_GRANULARITY,
+                GridCache::DEFAULT_SLOPE,
+            )
+        };
         let v = 1000.0;
         let (_e, pair_f) = inter_pair_energy_with_forces(&rec, &lig, &precalc, v);
         let (_ge, grid_f) = cache.eval(&lig.coords, &lig.xs_types, v);
@@ -224,11 +247,16 @@ mod tests {
         // Aggregate force magnitude tracks the pair path (the grid smooths
         // the field, so individual atoms differ more than the total).
         let mag = |fs: &[Vec3]| -> f64 {
-            fs.iter().map(|f| (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt()).sum()
+            fs.iter()
+                .map(|f| (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt())
+                .sum()
         };
         let (mp, mg) = (mag(&pair_f), mag(&grid_f));
         let rel = (mp - mg).abs() / mp.max(1.0);
-        assert!(rel < 0.25, "force magnitude pair {mp} vs grid {mg} (rel {rel:.3})");
+        assert!(
+            rel < 0.25,
+            "force magnitude pair {mp} vs grid {mg} (rel {rel:.3})"
+        );
     }
 
     #[test]
@@ -241,7 +269,13 @@ mod tests {
         let sbox = SearchBox::around_ligand(&lig, 4.0);
         let (c1, c2) = sbox.corners();
         let cache = GridCache::build(
-            &rec, &lig, &precalc, c1, c2, GridCache::DEFAULT_GRANULARITY, GridCache::DEFAULT_SLOPE,
+            &rec,
+            &lig,
+            &precalc,
+            c1,
+            c2,
+            GridCache::DEFAULT_GRANULARITY,
+            GridCache::DEFAULT_SLOPE,
         );
         let v = 1000.0;
         let (_e, forces) = cache.eval(&lig.coords, &lig.xs_types, v);
@@ -287,11 +321,17 @@ mod tests {
         let v = 1000.0;
         let pair = inter_pair_energy(&rec, &lig, &precalc, v);
         let err = |gran: f64| {
-            let c = { let (c1, c2) = sbox.corners(); GridCache::build(&rec, &lig, &precalc, c1, c2, gran, GridCache::DEFAULT_SLOPE) };
+            let c = {
+                let (c1, c2) = sbox.corners();
+                GridCache::build(&rec, &lig, &precalc, c1, c2, gran, GridCache::DEFAULT_SLOPE)
+            };
             (c.eval(&lig.coords, &lig.xs_types, v).0 - pair).abs()
         };
         let coarse = err(0.5);
         let fine = err(0.25);
-        assert!(fine < coarse, "finer grid not closer: fine {fine} coarse {coarse}");
+        assert!(
+            fine < coarse,
+            "finer grid not closer: fine {fine} coarse {coarse}"
+        );
     }
 }

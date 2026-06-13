@@ -109,14 +109,7 @@ pub fn hydrophobic(t1: XsType, t2: XsType, r: f64, good: f64, bad: f64, cutoff: 
 /// non-H-bonding pair and beyond `cutoff`.
 #[inline]
 #[must_use]
-pub fn non_dir_h_bond(
-    t1: XsType,
-    t2: XsType,
-    r: f64,
-    good: f64,
-    bad: f64,
-    cutoff: f64,
-) -> f64 {
+pub fn non_dir_h_bond(t1: XsType, t2: XsType, r: f64, good: f64, bad: f64, cutoff: f64) -> f64 {
     if r >= cutoff {
         return 0.0;
     }
@@ -155,11 +148,7 @@ mod tests {
     #[test]
     fn optimal_distance_sums_radii() {
         // C_H (1.9) + O_A (1.7) = 3.6
-        assert_relative_eq!(
-            optimal_distance(XsType::CH, XsType::OA),
-            3.6,
-            epsilon = EPS
-        );
+        assert_relative_eq!(optimal_distance(XsType::CH, XsType::OA), 3.6, epsilon = EPS);
     }
 
     #[test]
@@ -239,7 +228,10 @@ mod tests {
     #[test]
     fn repulsion_is_zero_at_and_beyond_optimum() {
         let r_opt = optimal_distance(XsType::CH, XsType::CH);
-        assert_eq!(repulsion(XsType::CH, XsType::CH, r_opt, 0.0, VINA_CUTOFF), 0.0);
+        assert_eq!(
+            repulsion(XsType::CH, XsType::CH, r_opt, 0.0, VINA_CUTOFF),
+            0.0
+        );
         assert_eq!(
             repulsion(XsType::CH, XsType::CH, r_opt + 1.0, 0.0, VINA_CUTOFF),
             0.0
@@ -372,8 +364,14 @@ mod tests {
     #[test]
     fn all_terms_zero_at_cutoff() {
         let cutoff = VINA_CUTOFF;
-        assert_eq!(gaussian(XsType::CH, XsType::CH, cutoff, 0.0, 0.5, cutoff), 0.0);
-        assert_eq!(gaussian(XsType::CH, XsType::CH, cutoff, 3.0, 2.0, cutoff), 0.0);
+        assert_eq!(
+            gaussian(XsType::CH, XsType::CH, cutoff, 0.0, 0.5, cutoff),
+            0.0
+        );
+        assert_eq!(
+            gaussian(XsType::CH, XsType::CH, cutoff, 3.0, 2.0, cutoff),
+            0.0
+        );
         assert_eq!(repulsion(XsType::CH, XsType::CH, cutoff, 0.0, cutoff), 0.0);
         assert_eq!(
             hydrophobic(XsType::CH, XsType::CH, cutoff, 0.5, 1.5, cutoff),

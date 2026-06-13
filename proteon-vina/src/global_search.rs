@@ -78,8 +78,16 @@ impl SearchBox {
     pub fn corners(&self) -> (Vec3, Vec3) {
         let h = [self.size[0] * 0.5, self.size[1] * 0.5, self.size[2] * 0.5];
         (
-            [self.center[0] - h[0], self.center[1] - h[1], self.center[2] - h[2]],
-            [self.center[0] + h[0], self.center[1] + h[1], self.center[2] + h[2]],
+            [
+                self.center[0] - h[0],
+                self.center[1] - h[1],
+                self.center[2] - h[2],
+            ],
+            [
+                self.center[0] + h[0],
+                self.center[1] + h[1],
+                self.center[2] + h[2],
+            ],
         )
     }
 }
@@ -141,7 +149,14 @@ pub fn dock(
                 .wrapping_add((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let mut rng = ChaCha8Rng::seed_from_u64(stream);
             monte_carlo_replicate(
-                receptor, ligand, ligand_file, precalc, corner1, corner2, &params.mc, &mut rng,
+                receptor,
+                ligand,
+                ligand_file,
+                precalc,
+                corner1,
+                corner2,
+                &params.mc,
+                &mut rng,
             )
         })
         .collect();
@@ -203,7 +218,10 @@ mod tests {
         let (lo, hi) = ab.corners();
         for c in &lig.coords {
             for i in 0..3 {
-                assert!(c[i] >= lo[i] - 1e-9 && c[i] <= hi[i] + 1e-9, "atom outside autobox");
+                assert!(
+                    c[i] >= lo[i] - 1e-9 && c[i] <= hi[i] + 1e-9,
+                    "atom outside autobox"
+                );
             }
         }
     }
@@ -217,7 +235,10 @@ mod tests {
             exhaustiveness: 4,
             n_poses: 5,
             seed: 7,
-            mc: McParams { global_steps: 50, ..McParams::default() },
+            mc: McParams {
+                global_steps: 50,
+                ..McParams::default()
+            },
             ..DockParams::default()
         };
         let modes = dock(&rec, &lig, &file, &precalc, sbox, &params);
@@ -236,7 +257,11 @@ mod tests {
             }
         }
         // The best mode is a genuinely bound pose (favourable score).
-        assert!(modes[0].components.total < 0.0, "best mode not favourable: {}", modes[0].components.total);
+        assert!(
+            modes[0].components.total < 0.0,
+            "best mode not favourable: {}",
+            modes[0].components.total
+        );
     }
 
     #[test]
@@ -248,14 +273,20 @@ mod tests {
             exhaustiveness: 3,
             n_poses: 3,
             seed: 123,
-            mc: McParams { global_steps: 40, ..McParams::default() },
+            mc: McParams {
+                global_steps: 40,
+                ..McParams::default()
+            },
             ..DockParams::default()
         };
         let a = dock(&rec, &lig, &file, &precalc, sbox, &params);
         let b = dock(&rec, &lig, &file, &precalc, sbox, &params);
         assert_eq!(a.len(), b.len());
         for (x, y) in a.iter().zip(b.iter()) {
-            assert!((x.search_energy - y.search_energy).abs() < 1e-9, "run not reproducible");
+            assert!(
+                (x.search_energy - y.search_energy).abs() < 1e-9,
+                "run not reproducible"
+            );
         }
     }
 }

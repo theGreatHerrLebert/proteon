@@ -31,11 +31,14 @@ const PI: f64 = std::f64::consts::PI;
 /// to the identity.
 #[must_use]
 pub fn angle_to_quaternion(rotation: Vec3) -> Quat {
-    let angle = (rotation[0] * rotation[0] + rotation[1] * rotation[1] + rotation[2] * rotation[2])
-        .sqrt();
+    let angle =
+        (rotation[0] * rotation[0] + rotation[1] * rotation[1] + rotation[2] * rotation[2]).sqrt();
     if angle > f64::EPSILON {
         let inv = 1.0 / angle;
-        Quat::from_axis_angle([rotation[0] * inv, rotation[1] * inv, rotation[2] * inv], angle)
+        Quat::from_axis_angle(
+            [rotation[0] * inv, rotation[1] * inv, rotation[2] * inv],
+            angle,
+        )
     } else {
         Quat::IDENTITY
     }
@@ -202,7 +205,11 @@ mod tests {
         let mut r = rng();
         for _ in 0..10_000 {
             let q = random_orientation(&mut r);
-            assert!((q.norm_sqr() - 1.0).abs() < 1e-9, "non-unit quat: {}", q.norm_sqr());
+            assert!(
+                (q.norm_sqr() - 1.0).abs() < 1e-9,
+                "non-unit quat: {}",
+                q.norm_sqr()
+            );
         }
     }
 

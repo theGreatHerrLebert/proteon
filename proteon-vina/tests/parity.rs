@@ -53,7 +53,11 @@ fn parse_ref(path: &std::path::Path) -> Reference {
             values.insert(k.to_string(), v.parse().unwrap());
         }
     }
-    Reference { values, tolerance, skip }
+    Reference {
+        values,
+        tolerance,
+        skip,
+    }
 }
 
 fn fixture_dir(name: &str) -> PathBuf {

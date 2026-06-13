@@ -114,7 +114,12 @@ pub struct DockPose {
 /// Metropolis acceptance test (upstream `metropolis_accept`): always
 /// accept a downhill move; accept an uphill move with probability
 /// `exp((old − new) / T)`.
-fn metropolis_accept<R: Rng + ?Sized>(old_f: f64, new_f: f64, temperature: f64, rng: &mut R) -> bool {
+fn metropolis_accept<R: Rng + ?Sized>(
+    old_f: f64,
+    new_f: f64,
+    temperature: f64,
+    rng: &mut R,
+) -> bool {
     if new_f < old_f {
         return true;
     }
@@ -149,7 +154,12 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
     // (built once here) or the exact per-atom pair sum with box confinement.
     let cache = if params.use_grid {
         Some(GridCache::build(
-            receptor, ligand, precalc, corner1, corner2, params.grid_granularity,
+            receptor,
+            ligand,
+            precalc,
+            corner1,
+            corner2,
+            params.grid_granularity,
             GridCache::DEFAULT_SLOPE,
         ))
     } else {
@@ -159,7 +169,11 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
         Some(c) => InterSource::Grid(c),
         None => InterSource::Pairs {
             receptor,
-            confine: Some(BoxPenalty { corner1, corner2, slope: params.box_slope }),
+            confine: Some(BoxPenalty {
+                corner1,
+                corner2,
+                slope: params.box_slope,
+            }),
         },
     };
 
@@ -183,7 +197,14 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
         let mut candidate = cur_conf.clone();
         mutate_conf(&mut candidate, gr, params.mutation_amplitude, rng);
         let (cand_conf, cand_out) = minimise_conf_with(
-            &inter, &tree, &pairs, &mut scratch, precalc, candidate, max_steps, params.v_curl,
+            &inter,
+            &tree,
+            &pairs,
+            &mut scratch,
+            precalc,
+            candidate,
+            max_steps,
+            params.v_curl,
         );
         let cand_energy = cand_out.final_energy;
 
@@ -193,8 +214,14 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
 
             if cur_energy < best_e || pool.len() < params.num_saved_mins {
                 let pose = build_pose(
-                    receptor, &tree, &mut scratch, precalc, &cur_conf, cur_energy,
-                    ligand_file, params.v_curl,
+                    receptor,
+                    &tree,
+                    &mut scratch,
+                    precalc,
+                    &cur_conf,
+                    cur_energy,
+                    ligand_file,
+                    params.v_curl,
                 );
                 insert_clustered(&mut pool, pose, params.min_rmsd, params.num_saved_mins);
                 best_e = best_e.min(cur_energy);
@@ -218,8 +245,19 @@ fn build_pose(
 ) -> DockPose {
     let coords = tree.apply(conf);
     scratch.coords.clone_from(&coords);
-    let components = score_only(receptor, scratch, &ligand_file.rotatable_bonds, precalc, v_curl);
-    DockPose { conf: conf.clone(), coords, search_energy, components }
+    let components = score_only(
+        receptor,
+        scratch,
+        &ligand_file.rotatable_bonds,
+        precalc,
+        v_curl,
+    );
+    DockPose {
+        conf: conf.clone(),
+        coords,
+        search_energy,
+        components,
+    }
 }
 
 /// Insert `pose` into `pool` and re-cluster so no two retained poses are
@@ -248,7 +286,10 @@ fn greedy_cluster(mut poses: Vec<DockPose>, min_rmsd: f64, capacity: usize) -> V
         if kept.len() >= capacity {
             break;
         }
-        if kept.iter().all(|k| rmsd(&k.coords, &pose.coords) >= min_rmsd) {
+        if kept
+            .iter()
+            .all(|k| rmsd(&k.coords, &pose.coords) >= min_rmsd)
+        {
             kept.push(pose);
         }
     }
@@ -302,7 +343,10 @@ mod tests {
             .filter(|_| metropolis_accept(0.0, 0.5, 1.2, &mut r))
             .count();
         // exp(-0.5/1.2) ≈ 0.66 — expect a clear majority but not all.
-        assert!((400..900).contains(&accepts), "uphill acceptance {accepts}/1000 off");
+        assert!(
+            (400..900).contains(&accepts),
+            "uphill acceptance {accepts}/1000 off"
+        );
     }
 
     #[test]
@@ -310,7 +354,10 @@ mod tests {
         let (rec, lig, file) = load();
         let precalc = Precalculate::vina();
         let (c1, c2) = box_around(&lig, 4.0);
-        let params = McParams { global_steps: 30, ..McParams::default() };
+        let params = McParams {
+            global_steps: 30,
+            ..McParams::default()
+        };
         let mut r = ChaCha8Rng::seed_from_u64(42);
         let pool = monte_carlo_replicate(&rec, &lig, &file, &precalc, c1, c2, &params, &mut r);
         assert!(!pool.is_empty(), "replicate produced no poses");
@@ -343,7 +390,10 @@ mod tests {
         insert_clustered(&mut pool, mk(coords.clone(), -5.0), 0.5, 50);
         insert_clustered(&mut pool, mk(shifted, -7.0), 0.5, 50);
         assert_eq!(pool.len(), 1, "near-duplicate poses should cluster");
-        assert!((pool[0].search_energy - (-7.0)).abs() < 1e-9, "kept the worse pose");
+        assert!(
+            (pool[0].search_energy - (-7.0)).abs() < 1e-9,
+            "kept the worse pose"
+        );
     }
 
     #[test]

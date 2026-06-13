@@ -35,11 +35,7 @@ pub fn assign_xs_types<A: BondInput>(atoms: &[A], graph: &BondGraph) -> Vec<Opti
         .collect()
 }
 
-fn classify_single<A: BondInput>(
-    atoms: &[A],
-    graph: &BondGraph,
-    i: usize,
-) -> Option<XsType> {
+fn classify_single<A: BondInput>(atoms: &[A], graph: &BondGraph, i: usize) -> Option<XsType> {
     let ad = atoms[i].ad_type();
 
     // Upstream sets `acceptor = (ad == OA || ad == NA)` and
@@ -53,11 +49,41 @@ fn classify_single<A: BondInput>(
         Element::C => {
             let polar = bonded_to_heteroatom(graph, atoms, i);
             Some(match ad {
-                AdType::Cg0 => if polar { XsType::CPCG0 } else { XsType::CHCG0 },
-                AdType::Cg1 => if polar { XsType::CPCG1 } else { XsType::CHCG1 },
-                AdType::Cg2 => if polar { XsType::CPCG2 } else { XsType::CHCG2 },
-                AdType::Cg3 => if polar { XsType::CPCG3 } else { XsType::CHCG3 },
-                _ => if polar { XsType::CP } else { XsType::CH },
+                AdType::Cg0 => {
+                    if polar {
+                        XsType::CPCG0
+                    } else {
+                        XsType::CHCG0
+                    }
+                }
+                AdType::Cg1 => {
+                    if polar {
+                        XsType::CPCG1
+                    } else {
+                        XsType::CHCG1
+                    }
+                }
+                AdType::Cg2 => {
+                    if polar {
+                        XsType::CPCG2
+                    } else {
+                        XsType::CHCG2
+                    }
+                }
+                AdType::Cg3 => {
+                    if polar {
+                        XsType::CPCG3
+                    } else {
+                        XsType::CHCG3
+                    }
+                }
+                _ => {
+                    if polar {
+                        XsType::CP
+                    } else {
+                        XsType::CH
+                    }
+                }
             })
         }
         Element::N => {
@@ -181,17 +207,11 @@ mod tests {
     #[test]
     fn cg0_carbon_routes_to_matching_macrocycle_variant() {
         // CG0 with only C neighbors → C_H_CG0.
-        let atoms = vec![
-            a(AdType::Cg0, 0.0, 0.0, 0.0),
-            a(AdType::C, 1.54, 0.0, 0.0),
-        ];
+        let atoms = vec![a(AdType::Cg0, 0.0, 0.0, 0.0), a(AdType::C, 1.54, 0.0, 0.0)];
         assert_eq!(classify(&atoms), Some(XsType::CHCG0));
 
         // CG0 with an O neighbor → C_P_CG0.
-        let atoms2 = vec![
-            a(AdType::Cg0, 0.0, 0.0, 0.0),
-            a(AdType::Oa, 1.4, 0.0, 0.0),
-        ];
+        let atoms2 = vec![a(AdType::Cg0, 0.0, 0.0, 0.0), a(AdType::Oa, 1.4, 0.0, 0.0)];
         assert_eq!(classify(&atoms2), Some(XsType::CPCG0));
     }
 
@@ -199,37 +219,25 @@ mod tests {
 
     #[test]
     fn nitrogen_na_with_hd_neighbor_is_n_da() {
-        let atoms = vec![
-            a(AdType::Na, 0.0, 0.0, 0.0),
-            a(AdType::Hd, 1.0, 0.0, 0.0),
-        ];
+        let atoms = vec![a(AdType::Na, 0.0, 0.0, 0.0), a(AdType::Hd, 1.0, 0.0, 0.0)];
         assert_eq!(classify(&atoms), Some(XsType::NDA));
     }
 
     #[test]
     fn nitrogen_na_without_hd_is_n_a() {
-        let atoms = vec![
-            a(AdType::Na, 0.0, 0.0, 0.0),
-            a(AdType::C, 1.47, 0.0, 0.0),
-        ];
+        let atoms = vec![a(AdType::Na, 0.0, 0.0, 0.0), a(AdType::C, 1.47, 0.0, 0.0)];
         assert_eq!(classify(&atoms), Some(XsType::NA));
     }
 
     #[test]
     fn nitrogen_n_with_hd_is_n_d() {
-        let atoms = vec![
-            a(AdType::N, 0.0, 0.0, 0.0),
-            a(AdType::Hd, 1.0, 0.0, 0.0),
-        ];
+        let atoms = vec![a(AdType::N, 0.0, 0.0, 0.0), a(AdType::Hd, 1.0, 0.0, 0.0)];
         assert_eq!(classify(&atoms), Some(XsType::ND));
     }
 
     #[test]
     fn nitrogen_n_without_hd_is_n_p() {
-        let atoms = vec![
-            a(AdType::N, 0.0, 0.0, 0.0),
-            a(AdType::C, 1.47, 0.0, 0.0),
-        ];
+        let atoms = vec![a(AdType::N, 0.0, 0.0, 0.0), a(AdType::C, 1.47, 0.0, 0.0)];
         assert_eq!(classify(&atoms), Some(XsType::NP));
     }
 
@@ -238,20 +246,14 @@ mod tests {
     #[test]
     fn oxygen_oa_with_hd_is_o_da() {
         // Carboxylic OH oxygen: OA bonded to HD.
-        let atoms = vec![
-            a(AdType::Oa, 0.0, 0.0, 0.0),
-            a(AdType::Hd, 0.96, 0.0, 0.0),
-        ];
+        let atoms = vec![a(AdType::Oa, 0.0, 0.0, 0.0), a(AdType::Hd, 0.96, 0.0, 0.0)];
         assert_eq!(classify(&atoms), Some(XsType::ODA));
     }
 
     #[test]
     fn oxygen_oa_without_hd_is_o_a() {
         // Carbonyl oxygen: OA bonded to C.
-        let atoms = vec![
-            a(AdType::Oa, 0.0, 0.0, 0.0),
-            a(AdType::C, 1.23, 0.0, 0.0),
-        ];
+        let atoms = vec![a(AdType::Oa, 0.0, 0.0, 0.0), a(AdType::C, 1.23, 0.0, 0.0)];
         assert_eq!(classify(&atoms), Some(XsType::OA));
     }
 
@@ -341,7 +343,9 @@ mod tests {
         assert!(has_ch && has_cp, "expected both C_H and C_P in imatinib");
         // And at least one acceptor nitrogen.
         assert!(
-            xs.iter().flatten().any(|&x| matches!(x, XsType::NA | XsType::NDA)),
+            xs.iter()
+                .flatten()
+                .any(|&x| matches!(x, XsType::NA | XsType::NDA)),
             "expected at least one N_A/N_DA in imatinib"
         );
     }

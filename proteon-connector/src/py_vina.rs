@@ -281,7 +281,9 @@ pub(crate) fn py_local_only(
         let tree = TorsionTree::from_molecule(&ligand, &file);
         let coords = tree.apply(&r.conf);
         Ok(PyLocalOnlyOutcome {
-            components: PyScoreComponents { inner: r.components },
+            components: PyScoreComponents {
+                inner: r.components,
+            },
             bfgs: PyBfgsOutcome { inner: r.bfgs },
             coords,
             serials: ligand.original_serials.clone(),
@@ -314,28 +316,32 @@ pub(crate) fn py_batch_score_only(
 ) -> PyResult<Vec<PyScoreComponents>> {
     let rec_text = receptor_pdbqt.to_owned();
     let n = resolve_threads(n_threads);
-    let results: Vec<ScoreComponents> = py.allow_threads(move || -> PyResult<Vec<ScoreComponents>> {
-        let receptor = Molecule::from_pdbqt_str(&rec_text).map_err(to_py_err)?;
-        let precalc = Precalculate::vina();
-        let pool = build_pool(n);
-        pool.install(|| {
-            ligands_pdbqt
-                .par_iter()
-                .map(|lig_text| {
-                    let ligand = Molecule::from_pdbqt_str(lig_text).map_err(to_py_err)?;
-                    let file = parse_pdbqt(lig_text).map_err(to_py_err)?;
-                    Ok(rust_score_only(
-                        &receptor,
-                        &ligand,
-                        &file.rotatable_bonds,
-                        &precalc,
-                        1000.0,
-                    ))
-                })
-                .collect()
-        })
-    })?;
-    Ok(results.into_iter().map(|c| PyScoreComponents { inner: c }).collect())
+    let results: Vec<ScoreComponents> =
+        py.allow_threads(move || -> PyResult<Vec<ScoreComponents>> {
+            let receptor = Molecule::from_pdbqt_str(&rec_text).map_err(to_py_err)?;
+            let precalc = Precalculate::vina();
+            let pool = build_pool(n);
+            pool.install(|| {
+                ligands_pdbqt
+                    .par_iter()
+                    .map(|lig_text| {
+                        let ligand = Molecule::from_pdbqt_str(lig_text).map_err(to_py_err)?;
+                        let file = parse_pdbqt(lig_text).map_err(to_py_err)?;
+                        Ok(rust_score_only(
+                            &receptor,
+                            &ligand,
+                            &file.rotatable_bonds,
+                            &precalc,
+                            1000.0,
+                        ))
+                    })
+                    .collect()
+            })
+        })?;
+    Ok(results
+        .into_iter()
+        .map(|c| PyScoreComponents { inner: c })
+        .collect())
 }
 
 /// Batch `local_only`: refine every ligand in `ligands_pdbqt`
@@ -371,7 +377,9 @@ pub(crate) fn py_batch_local_only(
                     let tree = TorsionTree::from_molecule(&ligand, &file);
                     let coords = tree.apply(&r.conf);
                     Ok(PyLocalOnlyOutcome {
-                        components: PyScoreComponents { inner: r.components },
+                        components: PyScoreComponents {
+                            inner: r.components,
+                        },
                         bfgs: PyBfgsOutcome { inner: r.bfgs },
                         coords,
                         serials: ligand.original_serials.clone(),
@@ -416,7 +424,11 @@ impl PyDockPose {
     /// parallel to `original_serials`.
     #[getter]
     fn coords<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
-        let flat: Vec<f64> = self.coords.iter().flat_map(|c| [c[0], c[1], c[2]]).collect();
+        let flat: Vec<f64> = self
+            .coords
+            .iter()
+            .flat_map(|c| [c[0], c[1], c[2]])
+            .collect();
         let n = self.coords.len();
         PyArray1::from_vec(py, flat).reshape([n, 3]).unwrap()
     }
@@ -501,7 +513,11 @@ pub(crate) fn py_dock(
             exhaustiveness,
             n_poses,
             seed,
-            mc: McParams { global_steps, use_grid, ..McParams::default() },
+            mc: McParams {
+                global_steps,
+                use_grid,
+                ..McParams::default()
+            },
             ..DockParams::default()
         };
 
@@ -510,7 +526,9 @@ pub(crate) fn py_dock(
         Ok(modes
             .into_iter()
             .map(|m| PyDockPose {
-                components: PyScoreComponents { inner: m.components },
+                components: PyScoreComponents {
+                    inner: m.components,
+                },
                 coords: m.coords,
                 serials: ligand.original_serials.clone(),
                 search_energy: m.search_energy,

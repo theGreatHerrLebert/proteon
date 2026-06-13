@@ -110,7 +110,11 @@ impl Precalculate {
                 // dor + fast — mirrors precalculate_element::init_from_smooth_fst.
                 for i in 0..n {
                     let e_i = smooth[base + i].e;
-                    let e_next = if i + 1 >= n { 0.0 } else { smooth[base + i + 1].e };
+                    let e_next = if i + 1 >= n {
+                        0.0
+                    } else {
+                        smooth[base + i + 1].e
+                    };
                     fast[base + i] = 0.5 * (e_i + e_next);
                 }
                 smooth[base].dor = 0.0;
@@ -213,12 +217,38 @@ fn calculate_rs(n: usize, factor: f64) -> Vec<f64> {
 /// precalc build. Order matches the enum discriminants so
 /// `XS_TYPES[t.index()] == t`.
 const XS_TYPES: [XsType; NUM_XS_TYPES] = [
-    XsType::CH, XsType::CP, XsType::NP, XsType::ND, XsType::NA, XsType::NDA,
-    XsType::OP, XsType::OD, XsType::OA, XsType::ODA, XsType::SP, XsType::PP,
-    XsType::FH, XsType::ClH, XsType::BrH, XsType::IH, XsType::Si, XsType::At,
-    XsType::MetD, XsType::CHCG0, XsType::CPCG0, XsType::G0, XsType::CHCG1,
-    XsType::CPCG1, XsType::G1, XsType::CHCG2, XsType::CPCG2, XsType::G2,
-    XsType::CHCG3, XsType::CPCG3, XsType::G3, XsType::W,
+    XsType::CH,
+    XsType::CP,
+    XsType::NP,
+    XsType::ND,
+    XsType::NA,
+    XsType::NDA,
+    XsType::OP,
+    XsType::OD,
+    XsType::OA,
+    XsType::ODA,
+    XsType::SP,
+    XsType::PP,
+    XsType::FH,
+    XsType::ClH,
+    XsType::BrH,
+    XsType::IH,
+    XsType::Si,
+    XsType::At,
+    XsType::MetD,
+    XsType::CHCG0,
+    XsType::CPCG0,
+    XsType::G0,
+    XsType::CHCG1,
+    XsType::CPCG1,
+    XsType::G1,
+    XsType::CHCG2,
+    XsType::CPCG2,
+    XsType::G2,
+    XsType::CHCG3,
+    XsType::CPCG3,
+    XsType::G3,
+    XsType::W,
 ];
 
 #[cfg(test)]

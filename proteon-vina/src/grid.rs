@@ -142,8 +142,10 @@ impl Grid {
                 s[i] = si - a[i] as f64;
             }
         }
-        let penalty =
-            slope * (miss[0] * self.factor_inv[0] + miss[1] * self.factor_inv[1] + miss[2] * self.factor_inv[2]);
+        let penalty = slope
+            * (miss[0] * self.factor_inv[0]
+                + miss[1] * self.factor_inv[1]
+                + miss[2] * self.factor_inv[2]);
 
         let (x0, y0, z0) = (a[0], a[1], a[2]);
         let (x1, y1, z1) = (x0 + 1, y0 + 1, z0 + 1);
@@ -171,8 +173,7 @@ impl Grid {
 
         // Gradient in index space.
         let mut g = [
-            -f000 * my * mz + f100 * my * mz - f010 * y * mz + f110 * y * mz
-                - f001 * my * z
+            -f000 * my * mz + f100 * my * mz - f010 * y * mz + f110 * y * mz - f001 * my * z
                 + f101 * my * z
                 - f011 * y * z
                 + f111 * y * z,
@@ -222,7 +223,11 @@ mod tests {
     /// from a linear function — trilinear interpolation is *exact* for
     /// linear fields, so we can check values and gradients precisely.
     fn linear_grid(a: f64, b: f64, c: f64, d: f64) -> Grid {
-        let gd = GridDim { begin: 0.0, end: 4.0, n_voxels: 4 };
+        let gd = GridDim {
+            begin: 0.0,
+            end: 4.0,
+            n_voxels: 4,
+        };
         let mut g = Grid::new([gd, gd, gd]);
         for ix in 0..g.dims()[0] {
             for iy in 0..g.dims()[1] {
@@ -265,7 +270,11 @@ mod tests {
             pm[axis] -= h;
             let fd = (g.evaluate(pp, 1e6, f64::INFINITY).0 - g.evaluate(pm, 1e6, f64::INFINITY).0)
                 / (2.0 * h);
-            assert!((grad[axis] - fd).abs() < 1e-4, "axis {axis}: grad {} != fd {fd}", grad[axis]);
+            assert!(
+                (grad[axis] - fd).abs() < 1e-4,
+                "axis {axis}: grad {} != fd {fd}",
+                grad[axis]
+            );
         }
     }
 
@@ -274,7 +283,11 @@ mod tests {
         // Constant-zero grid: in-box energy is 0; outside, energy = slope *
         // distance outside, with a constant restoring gradient of magnitude
         // `slope` along the violated axis.
-        let gd = GridDim { begin: 0.0, end: 4.0, n_voxels: 4 };
+        let gd = GridDim {
+            begin: 0.0,
+            end: 4.0,
+            n_voxels: 4,
+        };
         let g = Grid::new([gd, gd, gd]); // all zeros
         let slope = 100.0;
 
@@ -284,7 +297,11 @@ mod tests {
         // 1.5 Å below the lower x bound.
         let (e_lo, grad_lo) = g.evaluate([-1.5, 2.0, 2.0], slope, f64::INFINITY);
         assert!((e_lo - slope * 1.5).abs() < 1e-9, "penalty {e_lo}");
-        assert!((grad_lo[0] - (-slope)).abs() < 1e-9, "restoring grad {}", grad_lo[0]);
+        assert!(
+            (grad_lo[0] - (-slope)).abs() < 1e-9,
+            "restoring grad {}",
+            grad_lo[0]
+        );
 
         // 0.5 Å above the upper z bound.
         let (e_hi, grad_hi) = g.evaluate([2.0, 2.0, 4.5], slope, f64::INFINITY);
@@ -295,7 +312,11 @@ mod tests {
     #[test]
     fn curl_softens_positive_energy() {
         // Uniform positive grid value E0: curl scales it by v/(v+E0).
-        let gd = GridDim { begin: 0.0, end: 2.0, n_voxels: 2 };
+        let gd = GridDim {
+            begin: 0.0,
+            end: 2.0,
+            n_voxels: 2,
+        };
         let mut g = Grid::new([gd, gd, gd]);
         let e0 = 50.0;
         for ix in 0..g.dims()[0] {

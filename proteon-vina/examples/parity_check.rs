@@ -33,7 +33,13 @@ fn load(name: &str) -> (Molecule, Molecule, PdbqtFile, String) {
 
 fn run(name: &str) -> (ScoreComponents, usize) {
     let (rec, lig, file, _) = load(name);
-    let c = score_only(&rec, &lig, &file.rotatable_bonds, &Precalculate::vina(), 1000.0);
+    let c = score_only(
+        &rec,
+        &lig,
+        &file.rotatable_bonds,
+        &Precalculate::vina(),
+        1000.0,
+    );
     let pairs = intra_pair_list(&lig);
     (c, pairs.len())
 }
@@ -46,7 +52,13 @@ fn summary() {
     println!("{}", "-".repeat(88));
     for (name, up) in UPSTREAM {
         let (c, n_pairs) = run(name);
-        let our = [c.total, c.lig_grids, c.lig_intra, c.conf_independent, c.intramolecular];
+        let our = [
+            c.total,
+            c.lig_grids,
+            c.lig_intra,
+            c.conf_independent,
+            c.intramolecular,
+        ];
         let diffs: Vec<f64> = up.iter().zip(our.iter()).map(|(u, o)| o - u).collect();
         let max = diffs.iter().map(|d| d.abs()).fold(0.0_f64, f64::max);
         println!(
@@ -81,9 +93,7 @@ fn diff(case: &str, log_path: &str) {
                     .collect();
                 [v[0], v[1], v[2]]
             };
-            let num = |tag: &str| -> u8 {
-                tag.split('=').nth(1).unwrap().parse().unwrap()
-            };
+            let num = |tag: &str| -> u8 { tag.split('=').nth(1).unwrap().parse().unwrap() };
             upstream_records.push((xyz(parts[2]), xyz(parts[3]), num(parts[4]), num(parts[5])));
         }
     }
@@ -116,7 +126,11 @@ fn diff(case: &str, log_path: &str) {
         .map(|&(i, j)| {
             let a = lig.original_serials[i];
             let b = lig.original_serials[j];
-            if a < b { (a, b) } else { (b, a) }
+            if a < b {
+                (a, b)
+            } else {
+                (b, a)
+            }
         })
         .collect();
 
@@ -125,7 +139,11 @@ fn diff(case: &str, log_path: &str) {
 
     println!("case: {case}");
     println!("ours {}, upstream {}", ours.len(), theirs.len());
-    println!("only ours: {}, only upstream: {}", only_ours.len(), only_theirs.len());
+    println!(
+        "only ours: {}, only upstream: {}",
+        only_ours.len(),
+        only_theirs.len()
+    );
 
     let describe = |pair: &(u32, u32)| -> String {
         let (sa, sb) = *pair;
@@ -133,12 +151,7 @@ fn diff(case: &str, log_path: &str) {
             file.atoms
                 .iter()
                 .position(|x| x.serial == s)
-                .map(|i| {
-                    format!(
-                        "{:?}/frag{}",
-                        file.atoms[i].ad_type, file.fragment_ids[i]
-                    )
-                })
+                .map(|i| format!("{:?}/frag{}", file.atoms[i].ad_type, file.fragment_ids[i]))
                 .unwrap_or_default()
         };
         let ia = file.atoms.iter().position(|x| x.serial == sa).unwrap();
@@ -153,7 +166,11 @@ fn diff(case: &str, log_path: &str) {
         };
         format!(
             "({:3},{:3}) {} {}  r={:.3}",
-            sa, sb, describe_one(sa), describe_one(sb), r
+            sa,
+            sb,
+            describe_one(sa),
+            describe_one(sb),
+            r
         )
     };
 
@@ -176,9 +193,7 @@ fn diff(case: &str, log_path: &str) {
             .zip(file.fragment_axis_end.iter())
             .enumerate()
         {
-            println!(
-                "  frag {f}: parent={p:?}  axis_begin={ab:?}  axis_end={ae:?}"
-            );
+            println!("  frag {f}: parent={p:?}  axis_begin={ab:?}  axis_end={ae:?}");
         }
         println!("\nMasks for extra-pair atoms:");
         let mut shown = std::collections::BTreeSet::new();

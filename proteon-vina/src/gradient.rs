@@ -308,7 +308,13 @@ mod tests {
 
     /// Central-difference numerical derivative of a scalar function
     /// along a given direction in Conf space.
-    fn fd_energy_directional<F>(tree: &TorsionTree, conf: &Conf, dir: &ConfGrad, h: f64, energy: F) -> f64
+    fn fd_energy_directional<F>(
+        tree: &TorsionTree,
+        conf: &Conf,
+        dir: &ConfGrad,
+        h: f64,
+        energy: F,
+    ) -> f64
     where
         F: Fn(&[Vec3]) -> f64,
     {

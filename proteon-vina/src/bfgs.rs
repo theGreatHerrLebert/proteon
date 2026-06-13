@@ -30,7 +30,10 @@ struct SymMat {
 
 impl SymMat {
     fn new(dim: usize, fill: f64) -> Self {
-        Self { dim, data: vec![fill; dim * (dim + 1) / 2] }
+        Self {
+            dim,
+            data: vec![fill; dim * (dim + 1) / 2],
+        }
     }
     /// Flat index into `data` for `(i, j)` with no ordering
     /// requirement (we swap internally).
@@ -138,7 +141,10 @@ where
         // Break for gradient below threshold OR NaN (hence the
         // partial_cmp + is-less-than-threshold test, matching the
         // `!(gnorm >= 1e-5)` idiom upstream uses).
-        if !matches!(gnorm.partial_cmp(&1e-5), Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)) {
+        if !matches!(
+            gnorm.partial_cmp(&1e-5),
+            Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+        ) {
             converged = true;
             break;
         }
@@ -162,7 +168,10 @@ where
     // Revert to starting point if line search never found an
     // improvement — matches upstream's safeguard at end of bfgs().
     // The `!(f0 <= f_orig)` idiom revert-on-NaN too.
-    let worsened = !matches!(f0.partial_cmp(&f_orig), Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal));
+    let worsened = !matches!(
+        f0.partial_cmp(&f_orig),
+        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+    );
     let final_energy = if worsened {
         *x = x_orig;
         let _ = g_orig;
@@ -268,8 +277,7 @@ fn bfgs_update(h: &mut SymMat, p: &ConfGrad, y: &ConfGrad, alpha: f64) -> bool {
     let r = 1.0 / (alpha * yp);
     for i in 0..n {
         for j in i..n {
-            let term_a =
-                alpha * r * (minus_hy.get(i) * p.get(j) + minus_hy.get(j) * p.get(i));
+            let term_a = alpha * r * (minus_hy.get(i) * p.get(j) + minus_hy.get(j) * p.get(i));
             let term_b = alpha * alpha * (r * r * yhy + r) * p.get(i) * p.get(j);
             h.add(i, j, term_a + term_b);
         }
@@ -334,9 +342,7 @@ mod tests {
     }
 
     /// Quadratic over torsion DoFs: E = Σᵢ (τᵢ − target_i)².
-    fn make_quadratic_torsions(
-        targets: Vec<f64>,
-    ) -> impl FnMut(&Conf) -> (f64, ConfGrad) {
+    fn make_quadratic_torsions(targets: Vec<f64>) -> impl FnMut(&Conf) -> (f64, ConfGrad) {
         move |c: &Conf| -> (f64, ConfGrad) {
             let mut e = 0.0_f64;
             let mut grad_t = Vec::with_capacity(targets.len());
@@ -427,7 +433,10 @@ mod tests {
         };
         let out = bfgs(&mut f, &mut x, 1);
         assert_eq!(out.n_steps, 1);
-        assert!(out.converged, "convergence at the new x must be reported on the same step");
+        assert!(
+            out.converged,
+            "convergence at the new x must be reported on the same step"
+        );
         assert!(out.final_energy < 1e-9);
     }
 

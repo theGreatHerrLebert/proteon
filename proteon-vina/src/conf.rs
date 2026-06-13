@@ -25,7 +25,12 @@ pub struct Quat {
 
 impl Quat {
     /// Identity rotation.
-    pub const IDENTITY: Quat = Quat { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
+    pub const IDENTITY: Quat = Quat {
+        w: 1.0,
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
 
     /// Quaternion representing a rotation of `angle` radians around
     /// `axis` (assumed unit-length). Matches upstream
@@ -139,7 +144,11 @@ impl Frame {
     #[must_use]
     pub fn new(origin: Vec3, orientation: Quat) -> Frame {
         let q = orientation.normalized();
-        Frame { origin, orientation: q, matrix: q.to_matrix() }
+        Frame {
+            origin,
+            orientation: q,
+            matrix: q.to_matrix(),
+        }
     }
 
     /// Transform a point expressed in the frame's local coords into

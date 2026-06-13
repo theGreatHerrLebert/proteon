@@ -145,9 +145,7 @@ fn is_closure_clash(m: &Molecule, i: usize, j: usize) -> bool {
             i_has[l] = true;
         }
     }
-    let check = |x: AdType| -> bool {
-        label_of(x).map(|l| i_has[l]).unwrap_or(false)
-    };
+    let check = |x: AdType| -> bool { label_of(x).map(|l| i_has[l]).unwrap_or(false) };
     if check(aj) {
         return true;
     }
@@ -296,8 +294,12 @@ pub fn compute_num_tors(ligand: &Molecule, rotatable_bonds: &[(u32, u32)]) -> f6
 
     let mut acc = 0.0_f64;
     for &(pa, pb) in rotatable_bonds {
-        let Some(&ia) = serial_to_idx.get(&pa) else { continue };
-        let Some(&ib) = serial_to_idx.get(&pb) else { continue };
+        let Some(&ia) = serial_to_idx.get(&pa) else {
+            continue;
+        };
+        let Some(&ib) = serial_to_idx.get(&pb) else {
+            continue;
+        };
         // From ia's side: count if ib has >1 heavy-atom neighbour.
         if ligand.bonds[ib].len() > 1 {
             acc += 0.5;
@@ -364,7 +366,11 @@ pub fn score_only(
 
     let num_tors = compute_num_tors(ligand, rotatable_bonds);
     let divisor = 1.0 + W_ROT * num_tors;
-    let total = if divisor.abs() < f64::EPSILON { 0.0 } else { x / divisor };
+    let total = if divisor.abs() < f64::EPSILON {
+        0.0
+    } else {
+        x / divisor
+    };
     let conf_independent = total - x;
 
     ScoreComponents {
@@ -587,24 +593,14 @@ mod tests {
 
     #[test]
     fn macrocycle_ch_carbons_remap_to_ch() {
-        for t in [
-            XsType::CHCG0,
-            XsType::CHCG1,
-            XsType::CHCG2,
-            XsType::CHCG3,
-        ] {
+        for t in [XsType::CHCG0, XsType::CHCG1, XsType::CHCG2, XsType::CHCG3] {
             assert_eq!(xs_for_receptor_interaction(t), Some(XsType::CH));
         }
     }
 
     #[test]
     fn macrocycle_cp_carbons_remap_to_cp() {
-        for t in [
-            XsType::CPCG0,
-            XsType::CPCG1,
-            XsType::CPCG2,
-            XsType::CPCG3,
-        ] {
+        for t in [XsType::CPCG0, XsType::CPCG1, XsType::CPCG2, XsType::CPCG3] {
             assert_eq!(xs_for_receptor_interaction(t), Some(XsType::CP));
         }
     }
@@ -630,7 +626,11 @@ mod tests {
         let got = curl(5.0, 1000.0);
         assert_relative_eq!(got, 5.0 * 1000.0 / 1005.0, epsilon = 1e-12);
         // e=100: factor = 1000/1100 ≈ 0.9090909.
-        assert_relative_eq!(curl(100.0, 1000.0), 100.0 * 1000.0 / 1100.0, epsilon = 1e-12);
+        assert_relative_eq!(
+            curl(100.0, 1000.0),
+            100.0 * 1000.0 / 1100.0,
+            epsilon = 1e-12
+        );
     }
 
     #[test]
@@ -643,8 +643,14 @@ mod tests {
 
     #[test]
     fn far_apart_molecules_yield_zero_energy() {
-        let rec = molecule_from(vec![(AdType::C, [0.0, 0.0, 0.0]), (AdType::C, [1.54, 0.0, 0.0])]);
-        let lig = molecule_from(vec![(AdType::C, [100.0, 0.0, 0.0]), (AdType::C, [101.54, 0.0, 0.0])]);
+        let rec = molecule_from(vec![
+            (AdType::C, [0.0, 0.0, 0.0]),
+            (AdType::C, [1.54, 0.0, 0.0]),
+        ]);
+        let lig = molecule_from(vec![
+            (AdType::C, [100.0, 0.0, 0.0]),
+            (AdType::C, [101.54, 0.0, 0.0]),
+        ]);
         let e = inter_pair_energy(&rec, &lig, &precalc(), 1000.0);
         assert_eq!(e, 0.0);
     }
@@ -687,9 +693,15 @@ mod tests {
             (AdType::C, [1.54, 0.0, 0.0]),
             (AdType::Oa, [2.9, 0.0, 0.0]),
         ]);
-        let lig = molecule_from(vec![(AdType::G0, [2.0, 0.0, 0.0]), (AdType::G1, [3.0, 0.0, 0.0])]);
+        let lig = molecule_from(vec![
+            (AdType::G0, [2.0, 0.0, 0.0]),
+            (AdType::G1, [3.0, 0.0, 0.0]),
+        ]);
         // Sanity: ligand indeed typed as G0/G1.
-        assert!(lig.xs_types.iter().all(|&t| matches!(t, XsType::G0 | XsType::G1)));
+        assert!(lig
+            .xs_types
+            .iter()
+            .all(|&t| matches!(t, XsType::G0 | XsType::G1)));
         let e = inter_pair_energy(&rec, &lig, &precalc(), 1000.0);
         assert_eq!(e, 0.0);
     }
@@ -740,7 +752,9 @@ mod tests {
         m.fragment_ids = vec![0, 1, 2];
         let pairs = intra_pair_list(&m);
         assert!(
-            pairs.iter().all(|&(i, j)| m.xs_types[i] != XsType::G0 && m.xs_types[j] != XsType::G0),
+            pairs
+                .iter()
+                .all(|&(i, j)| m.xs_types[i] != XsType::G0 && m.xs_types[j] != XsType::G0),
             "pair list must not contain glue atoms"
         );
     }
@@ -805,11 +819,11 @@ mod tests {
         // Linear C-C-C-C-C: one rotatable bond between atoms 2 and 3
         // (both "core" — each has > 1 heavy neighbour).
         let m = molecule_from(vec![
-            (AdType::C, [0.0, 0.0, 0.0]),    // serial 1
-            (AdType::C, [1.54, 0.0, 0.0]),   // serial 2
-            (AdType::C, [3.08, 0.0, 0.0]),   // serial 3
-            (AdType::C, [4.62, 0.0, 0.0]),   // serial 4
-            (AdType::C, [6.16, 0.0, 0.0]),   // serial 5
+            (AdType::C, [0.0, 0.0, 0.0]),  // serial 1
+            (AdType::C, [1.54, 0.0, 0.0]), // serial 2
+            (AdType::C, [3.08, 0.0, 0.0]), // serial 3
+            (AdType::C, [4.62, 0.0, 0.0]), // serial 4
+            (AdType::C, [6.16, 0.0, 0.0]), // serial 5
         ]);
         // Bond between serials 2 and 3: each has 2 heavy neighbours.
         assert_eq!(compute_num_tors(&m, &[(2, 3)]), 1.0);
@@ -958,8 +972,7 @@ mod tests {
         let pairs = vec![(0_usize, 1_usize)];
         let precalc = Precalculate::vina();
 
-        let (_, forces) =
-            intra_pair_energy_with_forces(&lig, &pairs, &precalc, f64::INFINITY);
+        let (_, forces) = intra_pair_energy_with_forces(&lig, &pairs, &precalc, f64::INFINITY);
 
         let h = 1e-6;
         for i in 0..2 {
@@ -1018,10 +1031,12 @@ mod tests {
         // Ligand forces summed: equal-and-opposite to receptor
         // forces (Newton's third law on the pair sum).
         let (_, forces_rec) = inter_pair_energy_with_forces(&lig, &rec, &precalc, f64::INFINITY);
-        let sum_lig =
-            forces_lig.iter().fold([0.0_f64; 3], |a, f| [a[0] + f[0], a[1] + f[1], a[2] + f[2]]);
-        let sum_rec =
-            forces_rec.iter().fold([0.0_f64; 3], |a, f| [a[0] + f[0], a[1] + f[1], a[2] + f[2]]);
+        let sum_lig = forces_lig
+            .iter()
+            .fold([0.0_f64; 3], |a, f| [a[0] + f[0], a[1] + f[1], a[2] + f[2]]);
+        let sum_rec = forces_rec
+            .iter()
+            .fold([0.0_f64; 3], |a, f| [a[0] + f[0], a[1] + f[1], a[2] + f[2]]);
         for k in 0..3 {
             assert!((sum_lig[k] + sum_rec[k]).abs() < 1e-8);
         }

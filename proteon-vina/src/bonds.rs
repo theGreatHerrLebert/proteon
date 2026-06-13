@@ -64,10 +64,7 @@ pub fn infer_bonds<A: BondInput>(atoms: &[A]) -> BondGraph {
 /// naive graph, corrupting every subsequent 1-2/1-3/1-4 exclusion
 /// check. The mask filter suppresses that.
 #[must_use]
-pub fn infer_bonds_masked<A: BondInput>(
-    atoms: &[A],
-    fragment_mask: Option<&[u64]>,
-) -> BondGraph {
+pub fn infer_bonds_masked<A: BondInput>(atoms: &[A], fragment_mask: Option<&[u64]>) -> BondGraph {
     let n = atoms.len();
     let mut graph = vec![Vec::<usize>::new(); n];
     let cov: Vec<f64> = atoms.iter().map(|a| covalent_radius(a.ad_type())).collect();
@@ -99,9 +96,7 @@ pub fn infer_bonds_masked<A: BondInput>(
 /// hydrogen). Mirrors upstream `model::bonded_to_HD`.
 #[must_use]
 pub fn bonded_to_hd<A: BondInput>(graph: &BondGraph, atoms: &[A], i: usize) -> bool {
-    graph[i]
-        .iter()
-        .any(|&j| atoms[j].ad_type() == AdType::Hd)
+    graph[i].iter().any(|&j| atoms[j].ad_type() == AdType::Hd)
 }
 
 /// True if AD type `ad` counts as a heteroatom per upstream's
@@ -156,7 +151,10 @@ mod tests {
     fn two_carbons_at_cc_bond_distance_are_bonded() {
         // cov(C) = 0.77, threshold = 1.1 * 1.54 = 1.694. At 1.54 Å
         // we're well below.
-        let atoms = vec![atom(AdType::C, 0.0, 0.0, 0.0), atom(AdType::C, 1.54, 0.0, 0.0)];
+        let atoms = vec![
+            atom(AdType::C, 0.0, 0.0, 0.0),
+            atom(AdType::C, 1.54, 0.0, 0.0),
+        ];
         let g = infer_bonds(&atoms);
         assert_eq!(g[0], vec![1]);
         assert_eq!(g[1], vec![0]);
@@ -165,7 +163,10 @@ mod tests {
     #[test]
     fn two_carbons_far_apart_are_not_bonded() {
         // 3.0 Å >> 1.694 Å threshold.
-        let atoms = vec![atom(AdType::C, 0.0, 0.0, 0.0), atom(AdType::C, 3.0, 0.0, 0.0)];
+        let atoms = vec![
+            atom(AdType::C, 0.0, 0.0, 0.0),
+            atom(AdType::C, 3.0, 0.0, 0.0),
+        ];
         let g = infer_bonds(&atoms);
         assert!(g[0].is_empty());
         assert!(g[1].is_empty());
@@ -175,7 +176,10 @@ mod tests {
     fn c_h_at_typical_bond_distance_are_bonded() {
         // cov(C)+cov(H) = 0.77 + 0.37 = 1.14; threshold = 1.254.
         // Typical C-H bond ≈ 1.09 Å.
-        let atoms = vec![atom(AdType::C, 0.0, 0.0, 0.0), atom(AdType::H, 1.09, 0.0, 0.0)];
+        let atoms = vec![
+            atom(AdType::C, 0.0, 0.0, 0.0),
+            atom(AdType::H, 1.09, 0.0, 0.0),
+        ];
         let g = infer_bonds(&atoms);
         assert_eq!(g[0], vec![1]);
     }
@@ -293,11 +297,7 @@ mod tests {
         let atoms = parse_ligand();
         let g = infer_bonds(&atoms);
         for (i, a) in atoms.iter().enumerate() {
-            assert!(
-                !g[i].is_empty(),
-                "atom {i} ({:?}) has no bonds",
-                a.ad_type
-            );
+            assert!(!g[i].is_empty(), "atom {i} ({:?}) has no bonds", a.ad_type);
         }
     }
 
@@ -309,9 +309,6 @@ mod tests {
         let atoms = parse_ligand();
         let g = infer_bonds(&atoms);
         let edges: usize = g.iter().map(|nbrs| nbrs.len()).sum::<usize>() / 2;
-        assert!(
-            (40..80).contains(&edges),
-            "unexpected bond count: {edges}"
-        );
+        assert!((40..80).contains(&edges), "unexpected bond count: {edges}");
     }
 }

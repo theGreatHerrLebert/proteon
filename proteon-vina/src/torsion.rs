@@ -95,9 +95,7 @@ impl TorsionTree {
             // Shift into parent's body frame: (world - parent_world_origin).
             relative_origins[f] = vec_sub(load_origin[f], load_origin[parent]);
             // Axis direction: from axis_begin (in parent) → axis_end (our origin).
-            let axis_begin_serial = file
-                .fragment_axis_begin[f]
-                .expect("non-root has axis_begin");
+            let axis_begin_serial = file.fragment_axis_begin[f].expect("non-root has axis_begin");
             let axis_begin_mi = serial_to_mol[&axis_begin_serial];
             let axis_dir = vec_sub(load_origin[f], mol.coords[axis_begin_mi]);
             relative_axes[f] = vec_normalize(axis_dir);
@@ -197,7 +195,11 @@ impl TorsionTree {
             .map(|(&f, &base)| frames[f as usize].local_to_lab(base))
             .collect();
 
-        AppliedConf { coords, frames, axes_world }
+        AppliedConf {
+            coords,
+            frames,
+            axes_world,
+        }
     }
 }
 
@@ -238,7 +240,6 @@ pub fn cross(a: Vec3, b: Vec3) -> Vec3 {
 pub fn dot(a: Vec3, b: Vec3) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
-
 
 /// Rotate every coordinate in `xs` around `origin` by `q`.
 #[must_use]
