@@ -31,6 +31,9 @@ proteon-core = { path = "../proteon-core" }
 # Pure-Rust BEM electrostatics (no PyO3) — the `electrostatics` subcommand calls
 # the same `solve_surface` entry point the Python connector does.
 proteon-electrostatics = { path = "../proteon-electrostatics" }
+# Pure-Rust AutoDock-Vina scorer + docking (no PyO3) — the `dock` / `vina-score`
+# subcommands call the same entry points the Python connector does.
+proteon-vina = { path = "../proteon-vina" }
 pdbtbx = { git = "https://github.com/theGreatHerrLebert/pdbtbx", rev = "c82e8c08fd539b72117f2147bf4107e125d1efcd" }
 clap = { version = "4", features = ["derive"] }
 parquet = "54"

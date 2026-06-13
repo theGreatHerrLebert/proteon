@@ -1288,6 +1288,7 @@ dependencies = [
  "proteon-electrostatics",
  "proteon-io",
  "proteon-search",
+ "proteon-vina",
  "rayon",
  "serde_json",
 ]

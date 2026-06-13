@@ -44,6 +44,12 @@ use proteon_core::hbond;
 use proteon_core::prepare::{self, PrepareOptions, PrepareReport};
 use proteon_core::sasa;
 use proteon_electrostatics as electro;
+use proteon_vina::global_search::{dock as vina_dock, DockParams, SearchBox};
+use proteon_vina::mc::McParams;
+use proteon_vina::molecule::Molecule as VinaMolecule;
+use proteon_vina::pdbqt::parse_pdbqt;
+use proteon_vina::precalculate::Precalculate;
+use proteon_vina::score::score_only as vina_score_only;
 
 #[derive(Parser)]
 #[command(
@@ -74,6 +80,10 @@ enum Cmd {
     Minimize(MinimizeArgs),
     /// Continuum-electrostatics BEM solve on a surface mesh + point charges (NESSie port).
     Electrostatics(ElectrostaticsArgs),
+    /// AutoDock-Vina score of a ligand pose against a receptor (PDBQT inputs).
+    VinaScore(VinaScoreArgs),
+    /// Flexible-ligand docking: Monte-Carlo global search (PDBQT inputs).
+    Dock(DockArgs),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -289,6 +299,59 @@ struct ElectrostaticsArgs {
     #[arg(long)]
     potential_out: Option<PathBuf>,
     /// Summary output format.
+    #[arg(long, value_enum, default_value_t = Format::Tsv)]
+    format: Format,
+}
+
+/// `vina-score`: AutoDock-Vina score of one ligand pose against a receptor.
+#[derive(Args)]
+struct VinaScoreArgs {
+    /// Receptor PDBQT file (rigid).
+    receptor: PathBuf,
+    /// Ligand PDBQT file at its pose.
+    ligand: PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Tsv)]
+    format: Format,
+}
+
+/// `dock`: flexible-ligand Monte-Carlo global search.
+#[derive(Args)]
+struct DockArgs {
+    /// Receptor PDBQT file (rigid).
+    receptor: PathBuf,
+    /// Ligand PDBQT file (starting pose / topology).
+    ligand: PathBuf,
+    /// Search-box center in Å as `X,Y,Z`. Give with `--size`; omit both to
+    /// autobox around the ligand.
+    #[arg(long, value_delimiter = ',', num_args = 3)]
+    center: Option<Vec<f64>>,
+    /// Search-box side lengths in Å as `SX,SY,SZ`. Give with `--center`.
+    #[arg(long, value_delimiter = ',', num_args = 3)]
+    size: Option<Vec<f64>>,
+    /// Autobox padding in Å when `--center`/`--size` are omitted.
+    #[arg(long, default_value_t = 6.0)]
+    padding: f64,
+    /// Independent MC replicates (run in parallel).
+    #[arg(long, default_value_t = 8)]
+    exhaustiveness: usize,
+    /// Maximum number of distinct binding modes to report.
+    #[arg(long = "num-modes", default_value_t = 9)]
+    num_modes: usize,
+    /// Monte-Carlo steps per replicate.
+    #[arg(long = "global-steps", default_value_t = 2500)]
+    global_steps: usize,
+    /// RNG seed (a given seed reproduces the run exactly).
+    #[arg(long, default_value_t = 0)]
+    seed: u64,
+    /// Score the inter term with precomputed affinity grids — faster for large
+    /// receptors, at the cost of the grid's interpolation approximation.
+    #[arg(long = "use-grid")]
+    use_grid: bool,
+    /// Worker threads (0 = all cores).
+    #[arg(short = 'j', long, default_value_t = 0)]
+    threads: usize,
+    /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Tsv)]
     format: Format,
 }
@@ -928,6 +991,99 @@ fn run_electrostatics(args: &ElectrostaticsArgs) -> Result<()> {
     emit(args.format, &[(String::new(), row)])
 }
 
+fn load_vina_inputs(
+    receptor: &Path,
+    ligand: &Path,
+) -> Result<(VinaMolecule, VinaMolecule, proteon_vina::pdbqt::PdbqtFile)> {
+    let rec_text = std::fs::read_to_string(receptor)
+        .with_context(|| format!("reading {}", receptor.display()))?;
+    let lig_text =
+        std::fs::read_to_string(ligand).with_context(|| format!("reading {}", ligand.display()))?;
+    let rec =
+        VinaMolecule::from_pdbqt_str(&rec_text).map_err(|e| anyhow!("receptor PDBQT: {e}"))?;
+    let lig = VinaMolecule::from_pdbqt_str(&lig_text).map_err(|e| anyhow!("ligand PDBQT: {e}"))?;
+    let file = parse_pdbqt(&lig_text).map_err(|e| anyhow!("ligand PDBQT: {e}"))?;
+    Ok((rec, lig, file))
+}
+
+fn run_vina_score(args: &VinaScoreArgs) -> Result<()> {
+    let (rec, lig, file) = load_vina_inputs(&args.receptor, &args.ligand)?;
+    let precalc = Precalculate::vina();
+    let c = vina_score_only(&rec, &lig, &file.rotatable_bonds, &precalc, 1000.0);
+    let row: Row = vec![
+        ("affinity", Value::F64(c.total)),
+        ("inter", Value::F64(c.lig_grids)),
+        ("intra", Value::F64(c.lig_intra)),
+        ("torsion", Value::F64(c.conf_independent)),
+        ("intramolecular", Value::F64(c.intramolecular)),
+    ];
+    emit(args.format, &[(String::new(), row)])
+}
+
+fn run_dock(args: &DockArgs) -> Result<()> {
+    if args.center.is_some() ^ args.size.is_some() {
+        return Err(anyhow!(
+            "--center and --size must be given together (or both omitted to autobox the ligand)"
+        ));
+    }
+    let (rec, lig, file) = load_vina_inputs(&args.receptor, &args.ligand)?;
+    let precalc = Precalculate::vina();
+
+    let sbox = match (&args.center, &args.size) {
+        (Some(c), Some(s)) => SearchBox::new([c[0], c[1], c[2]], [s[0], s[1], s[2]]),
+        _ => SearchBox::around_ligand(&lig, args.padding),
+    };
+    let params = DockParams {
+        exhaustiveness: args.exhaustiveness,
+        n_poses: args.num_modes,
+        seed: args.seed,
+        mc: McParams {
+            global_steps: args.global_steps,
+            use_grid: args.use_grid,
+            ..McParams::default()
+        },
+        ..DockParams::default()
+    };
+
+    let dock_once = || vina_dock(&rec, &lig, &file, &precalc, sbox, &params);
+    let modes = if args.threads > 0 {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build()
+            .context("building thread pool")?;
+        pool.install(dock_once)
+    } else {
+        dock_once()
+    };
+
+    if modes.is_empty() {
+        return Err(anyhow!("docking produced no poses"));
+    }
+    // dock() returns the distinct modes ranked by search energy; present them
+    // ranked by reported affinity (components.total) as Vina does, with RMSD to
+    // the affinity-best mode.
+    let mut modes = modes;
+    modes.sort_by(|a, b| a.components.total.total_cmp(&b.components.total));
+    let best = modes[0].coords.clone();
+    let rows: Vec<(String, Row)> = modes
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let row: Row = vec![
+                ("mode", Value::Int((i + 1) as i64)),
+                ("affinity", Value::F64(m.components.total)),
+                ("search_energy", Value::F64(m.search_energy)),
+                (
+                    "rmsd_to_best",
+                    Value::F64(proteon_vina::torsion::rmsd(&m.coords, &best)),
+                ),
+            ];
+            (String::new(), row)
+        })
+        .collect();
+    emit(args.format, &rows)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.cmd {
@@ -939,5 +1095,7 @@ fn main() -> Result<()> {
         Cmd::Protonate(a) => run_protonate(a),
         Cmd::Minimize(a) => run_minimize(a),
         Cmd::Electrostatics(a) => run_electrostatics(a),
+        Cmd::VinaScore(a) => run_vina_score(a),
+        Cmd::Dock(a) => run_dock(a),
     }
 }
