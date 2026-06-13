@@ -1,0 +1,260 @@
+{
+  "corpus": {
+    "pdb_dir": "validation/corpus",
+    "db_path": "/tmp/proteon_retrieval_eval",
+    "n_targets": 39,
+    "n_queries": 7,
+    "k": 6,
+    "k_values": [
+      6
+    ],
+    "top_k": 10,
+    "rerank_top_k": 10,
+    "diagonal_top_k": 200,
+    "alphabet_weight": 0.7,
+    "aa_weight": 0.3,
+    "diagonal_rescore": true,
+    "diagonal_prefilter": true,
+    "diagonal_min_support": 1.0,
+    "diagonal_prefilter_top_k": 1000,
+    "rerank": true,
+    "thresholds": [
+      0.5,
+      0.7,
+      0.9
+    ],
+    "truth_cache": "validation/retrieval_bench.json.truth.json",
+    "truth_cache_hit": false
+  },
+  "timing": {
+    "build_s": 0.693,
+    "warm_s": 0.0,
+    "compile_s": 0.0,
+    "brute_force_s": 9.809,
+    "prefilter_s": 0.172,
+    "rerank_s": 8.131
+  },
+  "metrics": {
+    "top1_exact_nonself_prefilter": 0.2857,
+    "top1_exact_nonself_rerank": 0.4286,
+    "recall_at_k": {
+      "0.5": {
+        "prefilter_mean": 0.7143,
+        "rerank_mean": 0.7143
+      },
+      "0.7": {
+        "prefilter_mean": 1.0,
+        "rerank_mean": 1.0
+      },
+      "0.9": {
+        "prefilter_mean": 1.0,
+        "rerank_mean": 1.0
+      }
+    }
+  },
+  "per_query": [
+    {
+      "query": "1ijp.pdb",
+      "best_truth_nonself": {
+        "source_path": "6par.pdb",
+        "tm_score": 0.6433
+      },
+      "prefilter_top_nonself": {
+        "source_path": "5t3m.pdb",
+        "prefilter_score": 0.0512
+      },
+      "rerank_top_nonself": {
+        "source_path": "4ymm.pdb",
+        "tm_score": 0.4099
+      },
+      "thresholds": {
+        "0.5": {
+          "prefilter_recall_at_k": 0.0,
+          "rerank_recall_at_k": 0.0
+        },
+        "0.7": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.9": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        }
+      }
+    },
+    {
+      "query": "2hfk.pdb",
+      "best_truth_nonself": {
+        "source_path": "1hyq.pdb",
+        "tm_score": 0.416
+      },
+      "prefilter_top_nonself": {
+        "source_path": "3js9.pdb",
+        "prefilter_score": 0.0027
+      },
+      "rerank_top_nonself": {
+        "source_path": "1hyq.pdb",
+        "tm_score": 0.416
+      },
+      "thresholds": {
+        "0.5": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.7": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.9": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        }
+      }
+    },
+    {
+      "query": "2not.pdb",
+      "best_truth_nonself": {
+        "source_path": "7dae.pdb",
+        "tm_score": 0.3783
+      },
+      "prefilter_top_nonself": {
+        "source_path": "1byu.pdb",
+        "prefilter_score": 0.0029
+      },
+      "rerank_top_nonself": {
+        "source_path": "3js9.pdb",
+        "tm_score": 0.3546
+      },
+      "thresholds": {
+        "0.5": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.7": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.9": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        }
+      }
+    },
+    {
+      "query": "4ymm.pdb",
+      "best_truth_nonself": {
+        "source_path": "6nks.pdb",
+        "tm_score": 0.854
+      },
+      "prefilter_top_nonself": {
+        "source_path": "6nks.pdb",
+        "prefilter_score": 0.3437
+      },
+      "rerank_top_nonself": {
+        "source_path": "6nks.pdb",
+        "tm_score": 0.854
+      },
+      "thresholds": {
+        "0.5": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.7": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.9": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        }
+      }
+    },
+    {
+      "query": "6nks.pdb",
+      "best_truth_nonself": {
+        "source_path": "4ymm.pdb",
+        "tm_score": 0.854
+      },
+      "prefilter_top_nonself": {
+        "source_path": "4ymm.pdb",
+        "prefilter_score": 0.341
+      },
+      "rerank_top_nonself": {
+        "source_path": "4ymm.pdb",
+        "tm_score": 0.854
+      },
+      "thresholds": {
+        "0.5": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.7": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.9": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        }
+      }
+    },
+    {
+      "query": "6z32.pdb",
+      "best_truth_nonself": {
+        "source_path": "1jze.pdb",
+        "tm_score": 0.373
+      },
+      "prefilter_top_nonself": {
+        "source_path": "4fva.pdb",
+        "prefilter_score": 0.0056
+      },
+      "rerank_top_nonself": {
+        "source_path": "5xdz.pdb",
+        "tm_score": 0.3541
+      },
+      "thresholds": {
+        "0.5": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.7": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.9": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        }
+      }
+    },
+    {
+      "query": "9bw2.pdb",
+      "best_truth_nonself": {
+        "source_path": "1ijp.pdb",
+        "tm_score": 0.5253
+      },
+      "prefilter_top_nonself": {
+        "source_path": "7sv8.pdb",
+        "prefilter_score": 0.0028
+      },
+      "rerank_top_nonself": {
+        "source_path": "1jze.pdb",
+        "tm_score": 0.3418
+      },
+      "thresholds": {
+        "0.5": {
+          "prefilter_recall_at_k": 0.0,
+          "rerank_recall_at_k": 0.0
+        },
+        "0.7": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        },
+        "0.9": {
+          "prefilter_recall_at_k": 1.0,
+          "rerank_recall_at_k": 1.0
+        }
+      }
+    }
+  ]
+}

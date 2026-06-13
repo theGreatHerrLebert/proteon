@@ -225,7 +225,49 @@ distributed under Apache-2.0; the rest of proteon remains MIT.
 
 ---
 
-## 7. Paper-inspired components (no source-code lineage)
+## 7. NESSie.jl — Thomas Kemmer / Hildebrandt lab
+
+**Used in:** `proteon-electrostatics/src/**` — the boundary-element
+(BEM) continuum-electrostatics solver (local and nonlocal Lorentz/Yukawa
+reaction-field energies and potentials) is ported from NESSie.jl and
+gated against its checked-in Cauchy-data fixtures and closed-form
+Born/Xie reference models.
+
+**Upstream:** https://github.com/tkemmer/NESSie.jl
+
+**License (reproduced from NESSie.jl `LICENSE`):**
+
+> MIT License
+>
+> Copyright (c) 2017 Thomas Kemmer
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
+**Primary reference:**
+- Kemmer, Rjasanow & Hildebrandt. "NESSie.jl — Efficient and Intuitive
+  Finite Element and Boundary Element Methods for Nonlocal Protein
+  Electrostatics in the Julia Language." *Journal of Computational
+  Science* 28, 193-203 (2018).
+
+---
+
+## 8. Paper-inspired components (no source-code lineage)
 
 The following components are implemented from primary literature. No
 source code from their reference implementations is incorporated; no
@@ -249,7 +291,7 @@ upstream license notice is required.
 
 ---
 
-## 8. Correctness oracles (not incorporated)
+## 9. Correctness oracles (not incorporated)
 
 The following projects are used at development time to verify proteon's
 numerical and algorithmic correctness. They are NOT linked into
