@@ -460,7 +460,7 @@ impl PyDockPose {
         receptor_pdbqt, ligand_pdbqt, *,
         center=None, size=None, padding=6.0,
         exhaustiveness=8, n_poses=9, seed=0, global_steps=2500,
-        n_threads=None,
+        use_grid=false, n_threads=None,
     )
 )]
 #[allow(clippy::too_many_arguments)]
@@ -475,6 +475,7 @@ pub(crate) fn py_dock(
     n_poses: usize,
     seed: u64,
     global_steps: usize,
+    use_grid: bool,
     n_threads: Option<i32>,
 ) -> PyResult<Vec<PyDockPose>> {
     if center.is_some() ^ size.is_some() {
@@ -500,7 +501,7 @@ pub(crate) fn py_dock(
             exhaustiveness,
             n_poses,
             seed,
-            mc: McParams { global_steps, ..McParams::default() },
+            mc: McParams { global_steps, use_grid, ..McParams::default() },
             ..DockParams::default()
         };
 

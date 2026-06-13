@@ -121,16 +121,22 @@ Still open under Phase E for a follow-up:
 
 ## Scaling / performance
 
-We currently do O(N_ligand × N_receptor) pair evaluation for every
-score. For large receptors (e.g. full proteins rather than the trimmed
-pocket PDBQTs in our fixtures) this is the bottleneck.
-
-- **Grid rasterisation** (Phase C.5 we deferred). Upstream pre-computes
-  a 3D grid of per-XS-type affinities; ligand evaluation becomes
-  `N_ligand_atoms × O(1)` trilerp lookups instead of O(N_rec) pair
-  evals. Changes nothing for correctness; ~10–50× speedup for large
-  receptors. Sits behind a `GridCache` struct with an optional
-  `use_grid: bool` switch in the `LocalOnlyOptions`.
+- **Grid rasterisation — DONE** (`grid.rs`, `cache.rs`). Per-XS-type 3-D
+  affinity grids precompute the whole-receptor field once; ligand scoring
+  is then `N_ligand × O(1)` trilinear lookups instead of `O(N_receptor)`
+  pair evals, and the grid's out-of-bounds slope subsumes `BoxPenalty`.
+  Exposed as `use_grid` on `McParams` / `DockParams` and the
+  `proteon.dock` binding (off by default — the exact pair path stays the
+  parity-validated one). Measured **~3.3× end-to-end** docking speedup on
+  the 2229-atom 1iep receptor (5.1 s vs 17.0 s, same seed/budget),
+  including the one-time grid build; the speedup grows with receptor size
+  since per-pose cost no longer scales with `N_receptor`. The grid
+  trilinearly smooths the steep potential, so it's a slight approximation
+  (redock 1.1 Å vs 0.4 Å exact on 1iep; energy a few % shallower) — it
+  converges to the pair energy as granularity → 0 (cache parity test).
+  Remaining: `szv_grid`-style receptor bucketing would speed the *build*
+  for very large receptors (build is currently O(voxels × N_receptor),
+  rayon-parallel over slabs).
 - **SIMD** in the pair loop. `precalc.eval_deriv` is currently scalar;
   a Vec4 version over 4 pairs at once is ~2× on x86. Low priority
   until a real profile points at it.

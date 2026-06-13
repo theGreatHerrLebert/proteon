@@ -19,7 +19,6 @@
 
 use crate::atom_types::XsType;
 use crate::conf::Vec3;
-use crate::global_search::SearchBox;
 use crate::grid::{Grid, GridDim};
 use crate::molecule::Molecule;
 use crate::precalculate::Precalculate;
@@ -40,20 +39,21 @@ impl GridCache {
     /// Default out-of-box penalty slope (upstream `cache` default).
     pub const DEFAULT_SLOPE: f64 = 1e6;
 
-    /// Build affinity grids over `search_box` for every receptor-interaction
-    /// XS type present in `ligand`. `granularity` is the grid spacing in Å
-    /// (use [`Self::DEFAULT_GRANULARITY`]); `slope` is the out-of-box
-    /// penalty (use [`Self::DEFAULT_SLOPE`]).
+    /// Build affinity grids over the box `[corner1, corner2]` for every
+    /// receptor-interaction XS type present in `ligand`. `granularity` is
+    /// the grid spacing in Å (use [`Self::DEFAULT_GRANULARITY`]); `slope`
+    /// is the out-of-box penalty (use [`Self::DEFAULT_SLOPE`]).
     #[must_use]
     pub fn build(
         receptor: &Molecule,
         ligand: &Molecule,
         precalc: &Precalculate,
-        search_box: SearchBox,
+        corner1: Vec3,
+        corner2: Vec3,
         granularity: f64,
         slope: f64,
     ) -> Self {
-        let (c1, c2) = search_box.corners();
+        let (c1, c2) = (corner1, corner2);
         let gd = [
             axis_dim(c1[0], c2[0], granularity),
             axis_dim(c1[1], c2[1], granularity),
@@ -170,6 +170,7 @@ fn axis_dim(lo: f64, hi: f64, granularity: f64) -> GridDim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::global_search::SearchBox;
     use crate::pdbqt::parse_pdbqt;
     use crate::score::{inter_pair_energy, inter_pair_energy_with_forces};
 
@@ -190,9 +191,9 @@ mod tests {
         // Box enclosing the crystal pose so no atom is out of bounds (the
         // slope penalty would otherwise diverge from the pair sum).
         let sbox = SearchBox::around_ligand(&lig, 4.0);
-        let cache = GridCache::build(
-            &rec, &lig, &precalc, sbox, GridCache::DEFAULT_GRANULARITY, GridCache::DEFAULT_SLOPE,
-        );
+        let cache = { let (c1, c2) = sbox.corners(); GridCache::build(
+            &rec, &lig, &precalc, c1, c2, GridCache::DEFAULT_GRANULARITY, GridCache::DEFAULT_SLOPE,
+        ) };
         assert!(!cache.is_empty());
 
         let v = 1000.0;
@@ -214,9 +215,9 @@ mod tests {
         let (rec, lig) = load();
         let precalc = Precalculate::vina();
         let sbox = SearchBox::around_ligand(&lig, 4.0);
-        let cache = GridCache::build(
-            &rec, &lig, &precalc, sbox, GridCache::DEFAULT_GRANULARITY, GridCache::DEFAULT_SLOPE,
-        );
+        let cache = { let (c1, c2) = sbox.corners(); GridCache::build(
+            &rec, &lig, &precalc, c1, c2, GridCache::DEFAULT_GRANULARITY, GridCache::DEFAULT_SLOPE,
+        ) };
         let v = 1000.0;
         let (_e, pair_f) = inter_pair_energy_with_forces(&rec, &lig, &precalc, v);
         let (_ge, grid_f) = cache.eval(&lig.coords, &lig.xs_types, v);
@@ -242,7 +243,7 @@ mod tests {
         let v = 1000.0;
         let pair = inter_pair_energy(&rec, &lig, &precalc, v);
         let err = |gran: f64| {
-            let c = GridCache::build(&rec, &lig, &precalc, sbox, gran, GridCache::DEFAULT_SLOPE);
+            let c = { let (c1, c2) = sbox.corners(); GridCache::build(&rec, &lig, &precalc, c1, c2, gran, GridCache::DEFAULT_SLOPE) };
             (c.eval(&lig.coords, &lig.xs_types, v).0 - pair).abs()
         };
         let coarse = err(0.5);

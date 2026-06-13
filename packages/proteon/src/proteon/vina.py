@@ -198,6 +198,7 @@ def dock(
     n_poses: int = 9,
     seed: int = 0,
     global_steps: int = 2500,
+    use_grid: bool = False,
     n_threads: Optional[int] = None,
 ) -> List:
     """Dock a flexible ligand into a receptor (Monte-Carlo global search).
@@ -228,6 +229,12 @@ def dock(
         MC steps per replicate (upstream default 2500). Lower it for
         quick exploratory runs — docking is much heavier than
         `score_only` / `local_only`.
+    use_grid
+        Score the inter-molecular term with precomputed receptor affinity
+        grids (built once per replicate) instead of the exact per-atom pair
+        sum. Several-fold faster for large receptors (~3× on a 2k-atom
+        receptor, more as it grows), at the cost of the grid's trilinear
+        interpolation approximation. Off by default (exact path).
     n_threads
         `None`/0 uses every core; positive caps the pool.
 
@@ -253,6 +260,7 @@ def dock(
         n_poses=n_poses,
         seed=seed,
         global_steps=global_steps,
+        use_grid=use_grid,
         n_threads=n_threads,
     )
 

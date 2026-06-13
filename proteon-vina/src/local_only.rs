@@ -24,6 +24,7 @@
 //! components match what upstream prints after its post-BFGS score().
 
 use crate::bfgs::{bfgs, BfgsOutcome};
+use crate::cache::GridCache;
 use crate::conf::{Conf, Vec3};
 use crate::gradient::gradient_from_forces;
 use crate::molecule::Molecule;
@@ -196,6 +197,22 @@ impl BoxPenalty {
     }
 }
 
+/// Where the inter-molecular (ligand–receptor) energy + forces come from
+/// during minimisation.
+pub enum InterSource<'a> {
+    /// Direct pair sum over every receptor atom, with optional box
+    /// confinement. The validated, exact path (`local_only`, default search).
+    Pairs {
+        /// The receptor molecule.
+        receptor: &'a Molecule,
+        /// Optional box confinement (search only; `None` for `local_only`).
+        confine: Option<BoxPenalty>,
+    },
+    /// Precomputed [`GridCache`]: one trilinear lookup per ligand atom, the
+    /// out-of-box slope already baked into the grid (so no `BoxPenalty`).
+    Grid(&'a GridCache),
+}
+
 /// [`minimise_conf`] with an optional [`BoxPenalty`] confining the ligand
 /// to the search box. `local_only` calls this with `confine = None`; the
 /// Monte-Carlo search passes the box.
@@ -212,17 +229,49 @@ pub fn minimise_conf_confined(
     v_curl: f64,
     confine: Option<BoxPenalty>,
 ) -> (Conf, BfgsOutcome) {
+    minimise_conf_with(
+        &InterSource::Pairs { receptor, confine },
+        tree,
+        pairs,
+        scratch,
+        precalc,
+        start,
+        max_steps,
+        v_curl,
+    )
+}
+
+/// Core BFGS minimisation kernel, parameterised by the [`InterSource`] for
+/// the ligand–receptor term (direct pairs or precomputed grid). The intra
+/// term is always the exact pair sum. Shared by [`local_only`],
+/// [`minimise_conf_confined`], and the grid search path.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn minimise_conf_with(
+    inter: &InterSource,
+    tree: &TorsionTree,
+    pairs: &[(usize, usize)],
+    scratch: &mut Molecule,
+    precalc: &Precalculate,
+    start: Conf,
+    max_steps: usize,
+    v_curl: f64,
+) -> (Conf, BfgsOutcome) {
     let mut f = |conf: &Conf| {
         let applied = tree.apply_full(conf);
         scratch.coords.clone_from(&applied.coords);
 
-        let (e_inter, forces_inter) =
-            inter_pair_energy_with_forces(receptor, scratch, precalc, v_curl);
         let (e_intra, forces_intra) =
             intra_pair_energy_with_forces(scratch, pairs, precalc, v_curl);
 
-        // Sum per-atom forces.
-        let mut per_atom_force = forces_inter;
+        let (e_inter, mut per_atom_force) = match inter {
+            InterSource::Pairs { receptor, .. } => {
+                inter_pair_energy_with_forces(receptor, scratch, precalc, v_curl)
+            }
+            InterSource::Grid(cache) => cache.eval(&scratch.coords, &scratch.xs_types, v_curl),
+        };
+
+        // Sum intra forces in.
         for (a, b) in per_atom_force.iter_mut().zip(forces_intra.iter()) {
             a[0] += b[0];
             a[1] += b[1];
@@ -230,7 +279,9 @@ pub fn minimise_conf_confined(
         }
 
         let mut energy = e_inter + e_intra;
-        if let Some(bp) = confine {
+        // The grid bakes its own out-of-box slope; only the pair path needs
+        // an explicit BoxPenalty.
+        if let InterSource::Pairs { confine: Some(bp), .. } = inter {
             bp.accumulate(&applied.coords, &mut energy, &mut per_atom_force);
         }
 

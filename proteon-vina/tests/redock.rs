@@ -84,3 +84,33 @@ fn redocks_1iep_within_2_angstrom() {
         modes[0].components.total
     );
 }
+
+#[test]
+fn redocks_1iep_on_the_grid() {
+    // Same redock through the precomputed affinity-grid path (use_grid):
+    // ~3× faster on this 2229-atom receptor, and the grid's smoothed
+    // landscape still recovers the crystal pose (slightly looser than the
+    // exact path, ~1.1 Å for this seed).
+    let (rec, lig, file) = load("1iep");
+    let precalc = Precalculate::vina();
+    let crystal = lig.coords.clone();
+    let sbox = SearchBox::around_ligand(&lig, 5.0);
+    let params = DockParams {
+        exhaustiveness: 4,
+        n_poses: 5,
+        seed: 0,
+        mc: McParams { global_steps: 120, use_grid: true, ..McParams::default() },
+        ..DockParams::default()
+    };
+    let modes = dock(&rec, &lig, &file, &precalc, sbox, &params);
+    assert!(!modes.is_empty(), "grid docking produced no modes");
+    let best_rmsd = modes
+        .iter()
+        .map(|m| rmsd(&m.coords, &crystal))
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        best_rmsd < SUCCESS_RMSD,
+        "grid path: no mode within {SUCCESS_RMSD} Å of crystal (best {best_rmsd:.2} Å)"
+    );
+    assert!(modes[0].components.total < 0.0, "grid top mode not favourable");
+}

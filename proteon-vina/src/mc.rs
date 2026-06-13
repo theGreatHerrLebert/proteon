@@ -19,8 +19,9 @@
 //! inter+intra *search* energy — the BFGS objective — exactly as
 //! upstream uses `output_type::e`.
 
+use crate::cache::GridCache;
 use crate::conf::{Conf, Vec3};
-use crate::local_only::{minimise_conf_confined, BoxPenalty};
+use crate::local_only::{minimise_conf_with, BoxPenalty, InterSource};
 use crate::molecule::Molecule;
 use crate::mutate::{gyration_radius, mutate_conf, randomize_conf};
 use crate::pdbqt::PdbqtFile;
@@ -62,6 +63,17 @@ pub struct McParams {
     /// [`crate::local_only::BoxPenalty`]) keeps every atom inside the
     /// search box during minimisation. Poses fully inside pay nothing.
     pub box_slope: f64,
+    /// Use precomputed receptor affinity grids ([`crate::cache::GridCache`])
+    /// for the inter-molecular term instead of the direct per-atom pair
+    /// sum. Builds the grids once per replicate, then scores each pose with
+    /// one trilinear lookup per atom — much faster for large receptors, at
+    /// the cost of the grid's interpolation approximation (its own
+    /// out-of-box slope then replaces `box_slope`). Off by default: the
+    /// exact pair path is the parity-validated one.
+    pub use_grid: bool,
+    /// Grid spacing in Å when `use_grid` is set
+    /// ([`GridCache::DEFAULT_GRANULARITY`] = 0.375).
+    pub grid_granularity: f64,
 }
 
 impl Default for McParams {
@@ -75,6 +87,8 @@ impl Default for McParams {
             min_rmsd: 0.5,
             v_curl: 1000.0,
             box_slope: 100.0,
+            use_grid: false,
+            grid_granularity: GridCache::DEFAULT_GRANULARITY,
         }
     }
 }
@@ -129,7 +143,24 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
     let mut scratch = ligand.clone();
     let n_tors = tree.num_torsions();
     let max_steps = params.local_steps.unwrap_or((25 + ligand.len()) / 3);
-    let confine = Some(BoxPenalty { corner1, corner2, slope: params.box_slope });
+
+    // Inter-molecular energy source: either precomputed affinity grids
+    // (built once here) or the exact per-atom pair sum with box confinement.
+    let cache = if params.use_grid {
+        Some(GridCache::build(
+            receptor, ligand, precalc, corner1, corner2, params.grid_granularity,
+            GridCache::DEFAULT_SLOPE,
+        ))
+    } else {
+        None
+    };
+    let inter = match &cache {
+        Some(c) => InterSource::Grid(c),
+        None => InterSource::Pairs {
+            receptor,
+            confine: Some(BoxPenalty { corner1, corner2, slope: params.box_slope }),
+        },
+    };
 
     // Seed with a raw random placement (not yet minimised). As upstream,
     // step 0 mutates this placement, minimises, and is accepted
@@ -150,9 +181,8 @@ pub fn monte_carlo_replicate<R: Rng + ?Sized>(
         let gr = gyration_radius(&tree.apply(&cur_conf), cur_conf.center);
         let mut candidate = cur_conf.clone();
         mutate_conf(&mut candidate, gr, params.mutation_amplitude, rng);
-        let (cand_conf, cand_out) = minimise_conf_confined(
-            receptor, &tree, &pairs, &mut scratch, precalc, candidate, max_steps, params.v_curl,
-            confine,
+        let (cand_conf, cand_out) = minimise_conf_with(
+            &inter, &tree, &pairs, &mut scratch, precalc, candidate, max_steps, params.v_curl,
         );
         let cand_energy = cand_out.final_energy;
 
