@@ -73,3 +73,45 @@ extern "C" __global__ void jfa_pass(
     // step == 0 can't happen (schedule is >= 1); the di=dj=dk=0 self-read just
     // re-confirms the current best (d == bestd, not <), matching the CPU.
 }
+
+// Finalize: turn the flooded feature grid into the signed distance field, so the
+// host downloads one f64 per node instead of the 3-feature grid. One thread per
+// node. Mirrors `volume.rs::distance_field`'s finalize loop EXACTLY:
+//   dist  = isnan(feat) ? UNREACHED(1e18) : |node − feat|
+//   v     = (inside ? dist : −dist) − probe
+//   f     = (v == 0) ? f64::EPSILON : v
+// `inside[node]` (occupancy) is computed on the host (it already drives boundary
+// detection) and uploaded; node position is recomputed from the index.
+extern "C" __global__ void finalize_field(
+    const double* feat,           // n*3 (NaN = unreached)
+    const unsigned char* inside,  // n   (1 = node inside any inflated atom)
+    int nx,
+    int ny,
+    int nz,
+    double ox,
+    double oy,
+    double oz,
+    double h,
+    double probe,
+    double* f)                    // n out
+{
+    long long n = (long long)nx * ny * nz;
+    long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= n) return;
+    int i = (int)(t % nx);
+    int j = (int)((t / nx) % ny);
+    int k = (int)(t / ((long long)nx * ny));
+    double px = ox + i * h, py = oy + j * h, pz = oz + k * h;
+
+    double sx = feat[3 * t + 0], sy = feat[3 * t + 1], sz = feat[3 * t + 2];
+    double dist;
+    if (isnan(sx)) {
+        dist = 1e18; // UNREACHED sentinel, matches the CPU constant
+    } else {
+        double dx = px - sx, dy = py - sy, dz = pz - sz;
+        dist = sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    double v = (inside[t] ? dist : -dist) - probe;
+    // f64::EPSILON = 2^-52; nudge an exact zero consistently off the surface.
+    f[t] = (v == 0.0) ? 2.2204460492503131e-16 : v;
+}
