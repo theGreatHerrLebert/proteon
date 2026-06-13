@@ -1173,6 +1173,144 @@ mod tests {
         );
     }
 
+    /// The spatial-hash seed (`seed_hashed_scatter`, the production seed) must
+    /// reproduce the brute seed and the CPU `nearest_surface_point`: same
+    /// exposed/NaN status and same nearest *distance* at every boundary node.
+    /// The hash only prunes provably-irrelevant cells, so on a tie-free fixture
+    /// it is bit-identical to brute; equidistant ties (none here) would still
+    /// preserve the distance. Cuda + device only.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gpu_hashed_seed_matches_brute_and_cpu() {
+        // Dense overlapping cluster — the nontrivial exposure regime, and enough
+        // spread that the expanding-ring search visits several shells.
+        let atoms = vec![
+            s(0.0, 0.0, 0.0, 1.7),
+            s(1.5, 0.0, 0.0, 1.7),
+            s(0.0, 1.5, 0.0, 1.5),
+            s(0.6, 0.6, 1.4, 1.5),
+            s(-1.4, 0.3, 0.2, 1.6),
+            s(2.8, 1.1, -0.4, 1.7),
+            s(-0.5, -2.2, 0.9, 1.6),
+        ];
+        let probe = 1.4;
+        let spacing = 0.4;
+        let grid = Grid::enclosing(&atoms, probe, spacing);
+        let ag = AtomGrid::build(&atoms, probe);
+        let bnodes = boundary_nodes(&grid, &atoms, probe);
+        assert!(!bnodes.is_empty(), "no boundary nodes to test");
+
+        let Some(hashed) = crate::surface::seed_gpu::seed_hashed_boundary(&bnodes, &ag.spheres)
+        else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+        let Some(brute) = crate::surface::seed_gpu::seed_boundary_gpu(&bnodes, &ag.spheres) else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+        let cpu: Vec<[f64; 3]> = bnodes
+            .iter()
+            .map(|&p| {
+                ag.nearest_surface_point(p)
+                    .map_or([f64::NAN; 3], |q| [q.x, q.y, q.z])
+            })
+            .collect();
+        assert_eq!(hashed.len(), brute.len());
+        assert_eq!(hashed.len(), cpu.len());
+
+        let dist = |p: Vec3, f: &[f64; 3]| (p - Vec3::new(f[0], f[1], f[2])).norm();
+        let mut max_dist_err = 0.0_f64;
+        let mut point_mismatches = 0usize;
+        for (&p, (h, (b, c))) in bnodes.iter().zip(hashed.iter().zip(brute.iter().zip(&cpu))) {
+            assert_eq!(
+                h[0].is_nan(),
+                b[0].is_nan(),
+                "hashed/brute exposed status differs"
+            );
+            assert_eq!(
+                h[0].is_nan(),
+                c[0].is_nan(),
+                "hashed/CPU exposed status differs"
+            );
+            if h[0].is_nan() {
+                continue;
+            }
+            max_dist_err = max_dist_err
+                .max((dist(p, h) - dist(p, b)).abs())
+                .max((dist(p, h) - dist(p, c)).abs());
+            if (0..3).any(|k| (h[k] - b[k]).abs() > 1e-9) {
+                point_mismatches += 1;
+            }
+        }
+        assert!(
+            max_dist_err < 1e-9,
+            "hashed seed nearest distance differs from brute/CPU by {max_dist_err} Å"
+        );
+        // No ties on this fixture → the hash reproduces brute's exact point.
+        assert_eq!(
+            point_mismatches, 0,
+            "hashed vs brute feature-point disagreements"
+        );
+    }
+
+    /// Manual benchmark: spatial-hash vs brute GPU seed on a dense atom cluster.
+    /// Run with `--ignored --nocapture`. Reports the per-call wall time of each
+    /// over the same boundary nodes — the hash should pull ahead as atom count
+    /// grows (brute is O(boundary·atoms²), hash O(boundary·neighbours²)).
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "perf probe; run manually with --ignored --nocapture"]
+    fn bench_hashed_vs_brute_seed() {
+        // A solid ~`n³` lattice of overlapping atoms — a realistic-density blob.
+        let n = 11usize; // 1331 atoms
+        let step = 1.6;
+        let mut atoms = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    atoms.push(s(i as f64 * step, j as f64 * step, k as f64 * step, 1.7));
+                }
+            }
+        }
+        let probe = 1.4;
+        let spacing = 0.5;
+        let grid = Grid::enclosing(&atoms, probe, spacing);
+        let ag = AtomGrid::build(&atoms, probe);
+        let bnodes = boundary_nodes(&grid, &atoms, probe);
+        eprintln!(
+            "bench: {} atoms, {} boundary nodes",
+            atoms.len(),
+            bnodes.len()
+        );
+
+        let time = |f: &dyn Fn() -> Option<Vec<[f64; 3]>>| -> Option<f64> {
+            let _ = f()?; // warm up (compile + first touch)
+            let t = std::time::Instant::now();
+            let reps = 5;
+            for _ in 0..reps {
+                f()?;
+            }
+            Some(t.elapsed().as_secs_f64() * 1e3 / reps as f64)
+        };
+        let Some(brute_ms) =
+            time(&|| crate::surface::seed_gpu::seed_boundary_gpu(&bnodes, &ag.spheres))
+        else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+        let Some(hash_ms) =
+            time(&|| crate::surface::seed_gpu::seed_hashed_boundary(&bnodes, &ag.spheres))
+        else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+        eprintln!(
+            "bench: brute {brute_ms:.2} ms/call, hashed {hash_ms:.2} ms/call → {:.1}× speedup",
+            brute_ms / hash_ms
+        );
+    }
+
     /// The GPU jump-flood must reproduce the CPU transform: same reached/unreached
     /// status and the same flooded *distance* at every node (the field input).
     /// Equidistant ties can pick a different but equally-near feature, so we
