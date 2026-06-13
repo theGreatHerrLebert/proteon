@@ -13,7 +13,7 @@ not re-derived. **`§9` is the P0.5 acceptance checklist** — the spec is "done
 those gates are green.
 
 > Status: DRAFT. Independently reviewed by Codex (2026-06-09,
-> `ELECTROSTATICS_FORMULATION.codex-review.md`) — two critical transcription fixes
+> `archive/ELECTROSTATICS_FORMULATION.codex-review.md`) — two critical transcription fixes
 > applied (the nonlocal matrix-diagonal vs preconditioner-vector split in `§6`; the
 > implicit-RHS dimensional caveat), the `§10` local-limit claim corrected, the unit
 > chain resolved, and the nonlocal `:Σ` potential written out. **Still owed: an
