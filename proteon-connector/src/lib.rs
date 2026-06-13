@@ -17,6 +17,7 @@ mod py_align_funcs;
 mod py_analysis;
 mod py_arrow;
 mod py_dssp;
+mod py_electrostatics;
 mod py_forcefield;
 mod py_geometry;
 mod py_hbond;
@@ -39,6 +40,7 @@ fn proteon_connector(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pymodule!(py_arrow::py_arrow))?;
     m.add_wrapped(wrap_pymodule!(py_analysis::py_analysis))?;
     m.add_wrapped(wrap_pymodule!(py_dssp::py_dssp))?;
+    m.add_wrapped(wrap_pymodule!(py_electrostatics::py_electrostatics))?;
     m.add_wrapped(wrap_pymodule!(py_forcefield::py_forcefield))?;
     m.add_wrapped(wrap_pymodule!(py_geometry::py_geometry))?;
     m.add_wrapped(wrap_pymodule!(py_hbond::py_hbond))?;

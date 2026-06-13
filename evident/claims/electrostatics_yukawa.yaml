@@ -1,0 +1,151 @@
+claims:
+  - id: proteon-regular-yukawa-collocation-vs-nessie
+    title: Proteon's Radon regular-Yukawa collocation reproduces NESSie's yukawa matrices to libm precision
+    kind: measurement
+    subsystem: electrostatics.yukawa
+    case: claims/electrostatics_yukawa.md
+    source: ..
+    tier: ci
+    trust_strategy:
+      - validation
+    capabilities:
+      - regular-yukawa-collocation-parity
+    inputs:
+      corpus: nessie-yukawa-fixture
+      n: 2048
+      class: fixture
+      fixture_paths:
+        - proteon-electrostatics/tests/fixtures/nessie/yukawa_na.json
+    outputs:
+      collocation_value:
+        unit: A or dimensionless
+        description: >
+          Per-element regular-Yukawa (Yukawa minus Laplace) collocation value,
+          premultiplied by 4pi: the single-layer entry integrates
+          (e^(-yukawa*r) - 1)/r, the double-layer entry integrates
+          (1 - (1 + yukawa*r) e^(-yukawa*r)) (x-r').n / r^3, both via the 7-point
+          Radon cubature times 2*area. Gated over both 32x32 matrices (single +
+          double) of NESSie's yukawa_dump on the Born-ion mesh subset at the
+          fixture's yukawa exponent = 2048 entries, byte-identical geometry.
+      quadrature_residual:
+        unit: relative
+        description: >
+          Independent check: the single-layer collocation vs a fine numerical
+          integral of the PHYSICAL regular kernel e^(-yukawa*r)/r - 1/r at
+          non-singular points. Validates the integrand, the Radon mapping, the
+          weights, and the 2*area factor independently of NESSie.
+      limit_and_continuity:
+        unit: bool
+        description: >
+          The r->0 limits (single -> -yukawa, double -> yukawa^2/(2 sqrt 3)), the
+          series matching the directly-evaluated closed form within the cancellation-
+          guard region (scalednorm < 0.1, off-plane so the double-layer projection is
+          nonzero), well-behaved deep-series values just above the r=0 branch, plus
+          the L0 cubature gate (weights sum to 1/2, points inside the reference
+          triangle, monomials exact to total degree 5).
+    pinned_versions:
+      proteon: "PENDING-PIN-AT-NEXT-RELEASE"
+      NESSie: "NESSie.jl 1.5.1 (tree-hash c6c0c478; Manifest pinned in tools/oracle/nessie)"
+      physics-invariant: "single-layer collocation == direct numerical integral of e^(-yr)/r - 1/r at non-singular points (256x256 centroid subdivision), < 1e-4 relative; r->0 limits; series/closed-form continuity"
+      julia: "1.11.5 (fixture generation only; not needed at gate time)"
+      rust: "stable"
+    claim: >
+      proteon's pure-Rust port of NESSie's Radon regular-Yukawa collocation (the
+      7-point degree-5 Radon cubature of the Yukawa-minus-Laplace kernel, with
+      NESSie's alternating-series cancellation guard below scalednorm 0.1 and the
+      r->0 limits) reproduces every entry of NESSie's yukawa_dump single + double
+      matrices (2048 values on the Born-ion mesh subset, byte-identical geometry,
+      at the fixture's yukawa exponent) to max absolute error < 1e-10 and max
+      relative error < 1e-10 -- the only residual being exp/asin/sqrt libm
+      divergence. The single-layer values independently match a direct numerical
+      quadrature of the physical regular kernel to < 1e-4 relative; the r->0 limits
+      and the series/closed-form continuity hold; and the L0 cubature integrates
+      degree-5 monomials exactly. This is the L2 kernel gate of the BEM
+      electrostatics port (P3).
+    tolerances:
+      - metric: absolute_error
+        op: "<"
+        value: 1.0e-10
+        output: collocation_value
+        prose: >
+          "max |proteon - NESSie| < 1e-10" over all 2048 yukawa collocation
+          entries. The port mirrors NESSie operation-for-operation (same Radon
+          points/weights, same series guards, same 2*area factor), so only the
+          transcendental calls (exp/asin/sqrt) can differ, by <= 1 ULP. The band
+          trips on a structural error (wrong factor, branch, series, or limit),
+          not on libm noise.
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-10
+        output: collocation_value
+        prose: >
+          "max |proteon - NESSie| / |NESSie| < 1e-10" on entries whose reference
+          magnitude exceeds 1e-9 (relative error of a near-zero entry is
+          meaningless; the absolute gate covers those). Guards the larger-magnitude
+          entries where an absolute band alone could mask a small relative drift.
+      - metric: relative_error
+        op: "<"
+        value: 1.0e-4
+        output: quadrature_residual
+        prose: >
+          "|collocation - numerical| / |numerical| < 1e-4" at well-separated points,
+          where the integrand is smooth and centroid-subdivision quadrature (256x256
+          sub-triangles) of e^(-yr)/r - 1/r converges. The NESSie-independent gate:
+          it catches a wrong physical kernel, a wrong 2*area factor, or a bad Radon
+          mapping. The near-singular regime (where the fixed 7-point rule is itself
+          inaccurate) is a documented P6.5 follow-up.
+      - metric: pass_rate
+        op: ">="
+        value: 1.0
+        output: limit_and_continuity
+        prose: >
+          All limit/series/cubature invariants must hold (pass_rate == 1.0): the
+          r->0 single (-yukawa) and double (yukawa^2/(2 sqrt 3)) limits, the series
+          matching the closed form within the guard region (off-plane, both layers),
+          and the L0 cubature (weights sum to 1/2, points in the reference triangle,
+          degree-5 exact). These pin the cancellation guard and the rule itself,
+          independent of any oracle.
+    evidence:
+      oracle:
+        - NESSie
+        - physics-invariant
+      command: cargo test -p proteon-electrostatics
+      artifact: cargo test console output (CI-tier; no persisted artifact)
+    provenance: automatic
+    last_verified:
+      commit: null
+      date: null
+      value: null
+      corpus_sha: null
+    assumptions:
+      - The fixture proteon-electrostatics/tests/fixtures/nessie/yukawa_na.json is
+        NESSie's own regularyukawacoll! output (single + double, 32-element subset
+        of the bundled Born sodium mesh) at the model's yukawa exponent, emitted by
+        tools/oracle/nessie/harness.jl and pinned to NESSie.jl 1.5.1 via the
+        committed Manifest.toml + the per-fixture tree-hash.
+      - The kernel subset is a bit-exact top-left block of the full operator -- the
+        Radon collocation has no cross-element coupling (each entry is one triangle's
+        cubature against one observation point), so restricting to the first 32
+        elements yields the exact submatrix.
+      - The test consumes the fixture's stored per-element normal verbatim
+        (Tri::with_normal) and the fixture's yukawa exponent, so the integrand and
+        the double-layer (x-r').n term use byte-identical geometry. area is
+        |(v2-v1)x(v3-v1)|/2, reproducing NESSie props.
+      - The gate needs no Julia at run time -- the NESSie values are the checked-in
+        fixture, so `cargo test` reproduces parity in the standard Rust CI job.
+    failure_modes:
+      - One mesh (NESSie's Born sodium sphere) at one yukawa exponent. The
+        near-singular regime -- nearly-touching non-self elements, where the fixed
+        7-point Radon rule is itself inaccurate and adaptive subdivision is required
+        -- is NOT exercised; that is the mandatory P6.5 remediation, gated against
+        high-precision quadrature there, not here.
+      - The independent quadrature gate covers only the single layer at non-singular
+        points. The double-layer regular kernel is gated against NESSie parity plus
+        the r->0 limit and series continuity, but not an independent surface
+        integral; a from-physics double-layer quadrature oracle is a reasonable
+        addition.
+      - The cancellation-guard series is exercised at the 0.1 boundary and the r->0
+        limit, but the deep-cancellation regime (scalednorm far below 0.1, where the
+        closed form loses precision and the series is essential) is only indirectly
+        covered via the fixture. A targeted high-precision check of the series tail
+        would strengthen it.

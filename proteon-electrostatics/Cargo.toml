@@ -1,0 +1,51 @@
+[package]
+name = "proteon-electrostatics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Pure-Rust boundary-element (BEM) continuum protein electrostatics — local and nonlocal (Lorentz/Yukawa) reaction-field energies and potentials. A high-accuracy reference/research tier ported from NESSie.jl and gated against it. No Python/PyO3 dependency. SCAFFOLD — see TO_ELECTROSTATICS.md."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Geometry kernel + index mesh are reused from proteon-core::surface
+# (Vec3, Sphere, Mesh, icosphere) — do NOT re-derive (TO_ELECTROSTATICS.md §2).
+proteon-core = { path = "../proteon-core" }
+
+# Multicore matrix assembly + matvecs. The dense BEM is O(N^2) in both; rayon
+# parallelizes across independent output rows (results bit-identical — inner sums
+# stay sequential), the cheapest large speedup before matrix-free / GPU / FMM.
+rayon = "1"
+
+# Optional GPU build of the Laplace collocation matrices (the O(N^2) bottleneck), via
+# cudarc + NVRTC — CuNESSie's lever (constant speedup, not the asymptote). Silent CPU
+# fallback when no device. Off by default.
+cudarc = { version = "0.19", features = ["std", "driver", "nvrtc", "cuda-12050"], optional = true }
+
+[features]
+cuda = ["dep:cudarc"]
+
+# TODO(P5): Bessel I/K for the Xie nonlocal analytic model (analytic.rs).
+#   Validate the chosen impl against NESSie's SpecialFunctions before trusting it
+#   as ground truth ("an oracle for the oracle", §6). e.g. `puruspe` or similar.
+# bessel = "..."
+
+[dev-dependencies]
+# Load the checked-in NESSie oracle fixtures (tests/fixtures/nessie/*.json).
+serde_json = "1"
+# Example only (protein_surface): load a PDB to mesh its SES + place charges.
+proteon-io = { path = "../proteon-io" }
+
+# Dense LU as the *solver* oracle (LU-vs-GMRES parity), test-only. NOTE: this is
+# NOT the assembly oracle — when LU solves proteon's *own* explicit M it inherits
+# any assembly bug; the assembly is gated by solving against NESSie's checked-in
+# Cauchy-data fixture (whose values encode NESSie's assembly).
+nalgebra = "0.33"

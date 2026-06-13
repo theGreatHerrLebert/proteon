@@ -11,7 +11,64 @@
 //! SES *is* its sphere, so this alone is gateable against `ses_area` (4πr²).
 
 use super::geom::Vec3;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Signed solid angle subtended by triangle `(a,b,c)` at point `p` (Van Oosterom–
+/// Strackee). Summing over a closed mesh and dividing by 4π gives the winding number.
+fn triangle_solid_angle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> f64 {
+    let (va, vb, vc) = (a - p, b - p, c - p);
+    let (la, lb, lc) = (va.norm(), vb.norm(), vc.norm());
+    let num = va.dot(vb.cross(vc)); // scalar triple product
+    let den = la * lb * lc + va.dot(vb) * lc + vb.dot(vc) * la + vc.dot(va) * lb;
+    2.0 * num.atan2(den)
+}
+
+/// Does segment `p0→p1` pass through the **interior** of triangle `(a,b,c)`?
+/// Möller–Trumbore, with a strict-interior margin so a mere boundary/endpoint touch
+/// (e.g. a shared edge) is not a crossing — only a clear *transverse* penetration counts.
+/// `u`/`v`/`t` are dimensionless (normalized), so their absolute margin is scale-free;
+/// the parallel cutoff is taken **relative** to the operand magnitudes so it does not
+/// become scale-dependent (review).
+fn segment_penetrates_triangle(p0: Vec3, p1: Vec3, a: Vec3, b: Vec3, c: Vec3) -> bool {
+    const EPS: f64 = 1e-9;
+    let dir = p1 - p0;
+    let (e1, e2) = (b - a, c - a);
+    let pvec = dir.cross(e2);
+    let det = e1.dot(pvec);
+    // |det| = |e1||pvec|·|cos∠|; compare relative to |e1||pvec| (scale-invariant).
+    if det.abs() <= EPS * e1.norm() * pvec.norm() {
+        return false; // segment (near-)parallel to the triangle plane
+    }
+    let inv = 1.0 / det;
+    let tvec = p0 - a;
+    let u = tvec.dot(pvec) * inv;
+    if u <= EPS || u >= 1.0 - EPS {
+        return false;
+    }
+    let qvec = tvec.cross(e1);
+    let v = dir.dot(qvec) * inv;
+    if v <= EPS || u + v >= 1.0 - EPS {
+        return false;
+    }
+    let t = e2.dot(qvec) * inv; // position along the segment
+    t > EPS && t < 1.0 - EPS
+}
+
+/// Do two triangles penetrate each other? An interior crossing has the intersection
+/// segment ending on an edge of each triangle, so some edge of one passes through the
+/// other's interior — test all six. (Coplanar overlap is not detected here; that is the
+/// duplicate/overlapping-face defect, handled separately.)
+fn triangles_penetrate(t1: (Vec3, Vec3, Vec3), t2: (Vec3, Vec3, Vec3)) -> bool {
+    let (a1, b1, c1) = t1;
+    let (a2, b2, c2) = t2;
+    let e1 = [(a1, b1), (b1, c1), (c1, a1)];
+    let e2 = [(a2, b2), (b2, c2), (c2, a2)];
+    e1.iter()
+        .any(|&(p, q)| segment_penetrates_triangle(p, q, a2, b2, c2))
+        || e2
+            .iter()
+            .any(|&(p, q)| segment_penetrates_triangle(p, q, a1, b1, c1))
+}
 
 /// An index-based triangle mesh. `normals` is optional (empty if not computed).
 #[derive(Clone, Debug, Default)]
@@ -100,6 +157,366 @@ impl Mesh {
         }
         dir.iter()
             .all(|(&(a, b), &c)| c == 1 && dir.get(&(b, a)) == Some(&1))
+    }
+
+    /// Compact connected-component label (`0..k`) per triangle, components being
+    /// triangles joined transitively by a **shared edge** (union–find, path halving).
+    /// Edge connectivity (not vertex) is the surface notion: two shells touching at a
+    /// single vertex stay separate components.
+    pub fn component_labels(&self) -> Vec<usize> {
+        let n = self.tris.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                parent[x] = parent[parent[x]]; // path halving
+                x = parent[x];
+            }
+            x
+        }
+        // undirected edge → first triangle that owns it; union on the rest.
+        let mut edge_owner: HashMap<(u32, u32), usize> = HashMap::new();
+        for (ti, &t) in self.tris.iter().enumerate() {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if let Some(&other) = edge_owner.get(&key) {
+                    let (ra, rb) = (find(&mut parent, ti), find(&mut parent, other));
+                    if ra != rb {
+                        parent[ra] = rb;
+                    }
+                } else {
+                    edge_owner.insert(key, ti);
+                }
+            }
+        }
+        // Compact roots → 0..k.
+        let mut label = vec![0usize; n];
+        let mut next = 0usize;
+        let mut root_label: HashMap<usize, usize> = HashMap::new();
+        for i in 0..n {
+            let r = find(&mut parent, i);
+            label[i] = *root_label.entry(r).or_insert_with(|| {
+                let l = next;
+                next += 1;
+                l
+            });
+        }
+        label
+    }
+
+    /// Number of connected surface components — `1` for a single sphere, `>1` for a
+    /// multi-body surface (a protein SES: several solute bodies + buried cavities).
+    pub fn num_connected_components(&self) -> usize {
+        if self.tris.is_empty() {
+            return 0;
+        }
+        self.component_labels()
+            .iter()
+            .copied()
+            .max()
+            .map_or(0, |m| m + 1)
+    }
+
+    /// `(signed volume, area)` of **each** connected component (divergence theorem +
+    /// triangle areas). Aggregate `signed_volume` can mask an inward component behind a
+    /// larger outward one, so orientation must be judged per component.
+    pub fn component_volumes_areas(&self) -> Vec<(f64, f64)> {
+        let labels = self.component_labels();
+        let k = labels.iter().copied().max().map_or(0, |m| m + 1);
+        let mut va = vec![(0.0_f64, 0.0_f64); k];
+        for (ti, &t) in self.tris.iter().enumerate() {
+            let (a, b, c) = self.tri_points(t);
+            va[labels[ti]].0 += a.dot(b.cross(c)) / 6.0;
+            va[labels[ti]].1 += 0.5 * (b - a).cross(c - a).norm();
+        }
+        va
+    }
+
+    /// Flip each connected component whose signed volume is **negative** (inside-out) so
+    /// every component is outward-oriented. Returns whether any component was flipped.
+    /// Per-component (not global) — a multi-body mesh with mixed orientation is fixed
+    /// without disturbing already-outward bodies.
+    pub fn orient_outward(&mut self) -> bool {
+        let labels = self.component_labels();
+        let vols: Vec<f64> = self
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
+        let mut flipped = false;
+        for (ti, t) in self.tris.iter_mut().enumerate() {
+            if vols[labels[ti]] < 0.0 {
+                t.swap(1, 2);
+                flipped = true;
+            }
+        }
+        flipped
+    }
+
+    /// Number of **duplicate** faces: triangles sharing the same vertex set (counted
+    /// as the surplus beyond one per distinct set). Coincident faces are a common mesh
+    /// bug that breaks edge-manifold counts and double-counts the surface.
+    pub fn num_duplicate_faces(&self) -> usize {
+        let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
+        let mut dups = 0;
+        for &t in &self.tris {
+            let mut key = t;
+            key.sort_unstable();
+            let c = seen.entry(key).or_insert(0);
+            if *c >= 1 {
+                dups += 1;
+            }
+            *c += 1;
+        }
+        dups
+    }
+
+    /// Count **self-intersecting** triangle pairs — triangles that *transversely*
+    /// penetrate each other — or `None` if the mesh is too irregular to check within a
+    /// bounded budget (degenerate sizing, wildly multi-scale triangles, or pathologically
+    /// dense cells). A self-intersecting surface has no well-defined interior/exterior, so
+    /// the BEM interior-source model breaks.
+    ///
+    /// **Honest semantics (review):** this is a *detector*, biased toward false negatives.
+    /// `Some(k>0)` is authoritative (those crossings are real); `Some(0)` means "no clear
+    /// transverse penetration found", **not** a proof of a clean surface — coplanar
+    /// overlaps, exact vertex-on-face / edge-on-edge contacts, and crossings inside the
+    /// strict-interior margin are not reported. `None` means "could not verify" → the
+    /// caller should surface that, not treat it as clean.
+    ///
+    /// Uses a uniform **spatial hash** (cell ≈ the median triangle size) so it is ~O(N) on
+    /// a clean, roughly-uniform mesh. Adjacent (shared-feature) triangles are *not* skipped
+    /// wholesale — the strict-interior test already excludes their shared edge/vertex,
+    /// while still catching a pair that shares a vertex *and* also crosses elsewhere.
+    pub fn count_self_intersections(&self) -> Option<usize> {
+        let n = self.tris.len();
+        if n < 2 {
+            return Some(0);
+        }
+        // Per-triangle points must be finite (NaN/inf would corrupt the cell keys).
+        let pts: Vec<(Vec3, Vec3, Vec3)> = self.tris.iter().map(|&t| self.tri_points(t)).collect();
+        let finite = |v: Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
+        if !pts
+            .iter()
+            .all(|&(a, b, c)| finite(a) && finite(b) && finite(c))
+        {
+            return None;
+        }
+
+        // Cell size = median longest edge (typical element size).
+        let mut edges: Vec<f64> = pts
+            .iter()
+            .map(|&(a, b, c)| (b - a).norm().max((c - b).norm()).max((a - c).norm()))
+            .collect();
+        edges.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+        let cell = edges[n / 2];
+        if !(cell > 0.0 && cell.is_finite()) {
+            return None; // degenerate sizing — cannot build a grid; not "clean"
+        }
+
+        // Bound the work: cap how many cells one triangle may span (oversized/multi-scale
+        // triangle ⇒ bail) and the total exact tests (dense cells ⇒ bail). Both keep this
+        // safe on adversarial connector input.
+        const SPAN_CAP: f64 = 4096.0;
+        // Cell keys beyond this magnitude (a mesh extent of >1e15 cells) indicate huge
+        // coordinates / a tiny cell — bail rather than loop a vast i64 range.
+        const MAX_KEY: f64 = 1e15;
+        let budget = 64usize.saturating_mul(n);
+
+        let q = |x: f64| (x / cell).floor();
+        let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+        for (i, &(a, b, c)) in pts.iter().enumerate() {
+            // Floored cell keys per axis. Validate finiteness + magnitude BEFORE any cast
+            // to i64: a huge finite coordinate over a tiny cell yields inf/NaN quotients
+            // that would slip past the span check and produce an `i64::MIN..=MAX` loop.
+            let keys = [
+                q(a.x.min(b.x).min(c.x)),
+                q(a.x.max(b.x).max(c.x)),
+                q(a.y.min(b.y).min(c.y)),
+                q(a.y.max(b.y).max(c.y)),
+                q(a.z.min(b.z).min(c.z)),
+                q(a.z.max(b.z).max(c.z)),
+            ];
+            if keys.iter().any(|k| !k.is_finite() || k.abs() > MAX_KEY) {
+                return None;
+            }
+            let span =
+                (keys[1] - keys[0] + 1.0) * (keys[3] - keys[2] + 1.0) * (keys[5] - keys[4] + 1.0);
+            if !span.is_finite() || span > SPAN_CAP {
+                return None; // a triangle spans too many cells — multi-scale mesh
+            }
+            let (xlo, xhi) = (keys[0] as i64, keys[1] as i64);
+            let (ylo, yhi) = (keys[2] as i64, keys[3] as i64);
+            let (zlo, zhi) = (keys[4] as i64, keys[5] as i64);
+            for cx in xlo..=xhi {
+                for cy in ylo..=yhi {
+                    for cz in zlo..=zhi {
+                        grid.entry((cx, cy, cz)).or_default().push(i);
+                    }
+                }
+            }
+        }
+
+        // Exact-test candidate pairs (sharing a cell), once each. The `tested` set and the
+        // exact tests are both bounded by `budget`.
+        let mut tested: HashSet<(usize, usize)> = HashSet::new();
+        let mut count = 0;
+        for ids in grid.values() {
+            for ai in 0..ids.len() {
+                for bi in (ai + 1)..ids.len() {
+                    let (mut a, mut b) = (ids[ai], ids[bi]);
+                    if a > b {
+                        std::mem::swap(&mut a, &mut b);
+                    }
+                    if !tested.insert((a, b)) {
+                        continue; // already tested from another shared cell
+                    }
+                    if tested.len() > budget {
+                        return None; // too many candidate pairs — cannot verify cheaply
+                    }
+                    if triangles_penetrate(pts[a], pts[b]) {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        Some(count)
+    }
+
+    /// Generalized winding number of `p` w.r.t. each connected component
+    /// (`1/4π · Σ Ω`, Van Oosterom–Strackee solid angle, grouped by component label):
+    /// `≈±1` if `p` is inside that component, `≈0` if outside. Topology-free per
+    /// component; the sum over all components is the total winding.
+    pub fn component_windings(&self, p: Vec3) -> Vec<f64> {
+        let labels = self.component_labels();
+        let k = labels.iter().copied().max().map_or(0, |m| m + 1);
+        let mut w = vec![0.0_f64; k];
+        for (ti, &t) in self.tris.iter().enumerate() {
+            let (a, b, c) = self.tri_points(t);
+            w[labels[ti]] += triangle_solid_angle(p, a, b, c);
+        }
+        for wi in &mut w {
+            *wi /= 4.0 * std::f64::consts::PI;
+        }
+        w
+    }
+
+    /// The **solute body** containing `p`, or `None` if `p` is in solvent. With buried
+    /// cavities a point can be inside several nested shells; its region is the **parity**
+    /// of how many contain it — odd ⇒ solute, even (incl. 0) ⇒ solvent. For a solute
+    /// point the body is the **deepest** (most-nested) containing component (the innermost
+    /// boundary it is directly inside).
+    pub fn containing_component(&self, p: Vec3) -> Option<usize> {
+        if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+            return None;
+        }
+        let containing: Vec<usize> = self
+            .component_windings(p)
+            .iter()
+            .enumerate()
+            .filter(|(_, &w)| w.abs() > 0.5)
+            .map(|(i, _)| i)
+            .collect();
+        if containing.len() % 2 == 0 {
+            return None; // solvent (exterior or inside a cavity)
+        }
+        let depths = self.component_nesting_depths();
+        containing.into_iter().max_by_key(|&i| depths[i])
+    }
+
+    /// Whether two **different** connected components share a vertex (touch). The nesting
+    /// / winding machinery assumes pairwise-disjoint components; a touching pair makes a
+    /// representative vertex's winding w.r.t. the other component ill-defined, so the
+    /// region topology cannot be trusted. Edge-manifold and self-intersection checks do
+    /// NOT catch vertex-only contact, so this is a distinct gate.
+    pub fn has_touching_components(&self) -> bool {
+        let labels = self.component_labels();
+        let mut vert_comp: HashMap<u32, usize> = HashMap::new();
+        for (ti, &t) in self.tris.iter().enumerate() {
+            for &v in &t {
+                match vert_comp.get(&v) {
+                    Some(&c) if c != labels[ti] => return true,
+                    None => {
+                        vert_comp.insert(v, labels[ti]);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    /// Nesting **depth** of each connected component: how many *other* components contain
+    /// its representative point (`0` = top-level body, `1` = a cavity inside one body, `2`
+    /// = an island in that cavity, …). Each other component is tested independently so
+    /// alternating-orientation shells cannot cancel. Assumes pairwise-disjoint components.
+    pub fn component_nesting_depths(&self) -> Vec<usize> {
+        let labels = self.component_labels();
+        let k = labels.iter().copied().max().map_or(0, |m| m + 1);
+        let mut rep: Vec<Option<Vec3>> = vec![None; k];
+        for (ti, &t) in self.tris.iter().enumerate() {
+            rep[labels[ti]].get_or_insert(self.verts[t[0] as usize]);
+        }
+        (0..k)
+            .map(|i| {
+                let Some(p) = rep[i] else { return 0 };
+                if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+                    return 0;
+                }
+                self.component_windings(p)
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, &wj)| j != i && wj.abs() > 0.5)
+                    .count()
+            })
+            .collect()
+    }
+
+    /// Orient every component **outward-from-solute** for a multiply-connected (cavity)
+    /// solute: a component at nesting depth `d` should have signed-volume sign `(−1)^d`
+    /// (top-level body +, cavity −, island +, …). With that orientation every panel has
+    /// solute on its interior side and solvent on its exterior side, so the *scalar*
+    /// `f = εΩ/εΣ` solve is correct on cavity meshes too (codex). Flips the components
+    /// whose sign is wrong; returns whether any were flipped. (For a single body this is
+    /// exactly [`Self::orient_outward`].)
+    pub fn orient_by_nesting(&mut self) -> bool {
+        let labels = self.component_labels();
+        let depths = self.component_nesting_depths();
+        let vols: Vec<f64> = self
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
+        let flip: Vec<bool> = (0..vols.len())
+            .map(|c| {
+                let want = if depths[c] % 2 == 0 { 1.0 } else { -1.0 };
+                vols[c] != 0.0 && vols[c].signum() != want
+            })
+            .collect();
+        let mut flipped = false;
+        for (ti, t) in self.tris.iter_mut().enumerate() {
+            if flip[labels[ti]] {
+                t.swap(1, 2);
+                flipped = true;
+            }
+        }
+        flipped
+    }
+
+    /// Number of **nested** components: a component whose own surface lies inside another
+    /// component (a buried cavity / shell-in-shell). `0` for a set of separate bodies.
+    /// O(components × triangles); intended for closed meshes with few components.
+    ///
+    /// Each other component is tested **independently** (not as a summed winding): with
+    /// alternating-orientation nesting — outward solute, inward cavity, outward island —
+    /// a summed winding can cancel to zero and miss the innermost shell (review). Assumes
+    /// pairwise-disjoint components; **touching components are not caught here** — gate on
+    /// [`Self::has_touching_components`] first (edge-manifold / self-intersection checks
+    /// miss vertex-only contact).
+    pub fn num_nested_components(&self) -> usize {
+        self.component_nesting_depths()
+            .iter()
+            .filter(|&&d| d > 0)
+            .count()
     }
 
     /// Euler characteristic V − E + F, counting only vertices actually used by a
@@ -596,6 +1013,368 @@ mod tests {
         let mut m2 = m.clone();
         m2.verts.push(Vec3::new(9.0, 9.0, 9.0));
         assert_eq!(m2.euler_characteristic(), 2);
+    }
+
+    #[test]
+    fn connected_components_and_duplicate_faces() {
+        let one = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1);
+        assert_eq!(
+            one.num_connected_components(),
+            1,
+            "a single sphere is one body"
+        );
+        assert_eq!(one.num_duplicate_faces(), 0);
+
+        // Two disjoint spheres → two components (append offsets indices, so no shared
+        // edges between them).
+        let mut two = one.clone();
+        let mut other = icosphere(Vec3::new(5.0, 0.0, 0.0), 1.0, 1);
+        // Detach `other`'s vertices/indices via append.
+        two.append(&other);
+        assert_eq!(two.num_connected_components(), 2, "two disjoint spheres");
+
+        // Duplicate a face → one duplicate.
+        other.tris.push(other.tris[0]);
+        assert_eq!(other.num_duplicate_faces(), 1);
+    }
+
+    #[test]
+    fn self_intersection_detection() {
+        // A clean icosphere has no self-intersections (no false positives from the now
+        // un-skipped adjacent triangles — the strict-interior test excludes them).
+        let clean = icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 3);
+        assert_eq!(
+            clean.count_self_intersections(),
+            Some(0),
+            "a clean sphere is clean"
+        );
+
+        let cross_mesh = |s: f64| Mesh {
+            verts: vec![
+                Vec3::new(-s, 0.0, 0.0),
+                Vec3::new(s, 0.0, 0.0),
+                Vec3::new(0.0, s, 0.5 * s),
+                Vec3::new(0.0, -s, 0.0),
+                Vec3::new(0.0, s, 0.0),
+                Vec3::new(0.5 * s, 0.0, s),
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [3, 4, 5]],
+        };
+        // Crossing pair detected at small AND large scale (scale-invariant det cutoff).
+        assert_eq!(cross_mesh(1.0).count_self_intersections(), Some(1));
+        assert_eq!(
+            cross_mesh(1e-4).count_self_intersections(),
+            Some(1),
+            "small scale"
+        );
+        assert_eq!(
+            cross_mesh(1e5).count_self_intersections(),
+            Some(1),
+            "large scale"
+        );
+
+        // Two coplanar, non-overlapping triangles → no penetration.
+        let apart = Mesh {
+            verts: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(5.0, 5.0, 5.0),
+                Vec3::new(6.0, 5.0, 5.0),
+                Vec3::new(5.0, 6.0, 5.0),
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [3, 4, 5]],
+        };
+        assert_eq!(apart.count_self_intersections(), Some(0));
+
+        // Shared-vertex pair that ALSO crosses elsewhere: the old any-shared-vertex skip
+        // would miss it; now it must be caught (review). Two triangles share vertex 0;
+        // the second folds back through the first's interior.
+        let shared_and_crossing = Mesh {
+            verts: vec![
+                Vec3::new(0.0, 0.0, 0.0), // shared vertex
+                Vec3::new(2.0, 0.0, 0.0),
+                Vec3::new(0.0, 2.0, 0.0),  // tri A in z=0
+                Vec3::new(1.0, 0.5, -1.0), // tri B straddles z=0; its far edge punches
+                Vec3::new(1.0, 0.5, 1.0),  //   through A's interior at (1, 0.5, 0)
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [0, 3, 4]],
+        };
+        assert_eq!(
+            shared_and_crossing.count_self_intersections(),
+            Some(1),
+            "a shared-vertex pair that also crosses must be detected"
+        );
+
+        // A clean edge-adjacent pair (two tetra faces sharing an edge, folded) → no
+        // penetration, no false positive.
+        let fold = Mesh {
+            verts: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [0, 1, 3]], // share edge 0-1
+        };
+        assert_eq!(
+            fold.count_self_intersections(),
+            Some(0),
+            "a clean fold is not a crossing"
+        );
+
+        // Non-finite coordinate → inconclusive (None), not a false "clean".
+        let nan = Mesh {
+            verts: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, f64::NAN, 0.0),
+                Vec3::new(2.0, 2.0, 2.0),
+                Vec3::new(3.0, 2.0, 2.0),
+                Vec3::new(2.0, 3.0, 2.0),
+            ],
+            normals: Vec::new(),
+            tris: vec![[0, 1, 2], [3, 4, 5]],
+        };
+        assert_eq!(
+            nan.count_self_intersections(),
+            None,
+            "non-finite input is inconclusive"
+        );
+
+        // Multi-scale mesh trips SPAN_CAP → inconclusive (one huge triangle over a tiny
+        // median cell would span a vast cell range).
+        let mut multiscale = Mesh {
+            verts: Vec::new(),
+            normals: Vec::new(),
+            tris: Vec::new(),
+        };
+        for i in 0..5 {
+            // five unit triangles (set the median cell ≈ 1)
+            let o = i as f64 * 3.0;
+            let b = multiscale.verts.len() as u32;
+            multiscale.verts.extend([
+                Vec3::new(o, 0.0, 0.0),
+                Vec3::new(o + 1.0, 0.0, 0.0),
+                Vec3::new(o, 1.0, 0.0),
+            ]);
+            multiscale.tris.push([b, b + 1, b + 2]);
+        }
+        let b = multiscale.verts.len() as u32;
+        multiscale.verts.extend([
+            Vec3::new(0.0, 0.0, 100.0),
+            Vec3::new(300.0, 0.0, 100.0),
+            Vec3::new(0.0, 300.0, 100.0), // extent ~300 cells/axis ≫ SPAN_CAP
+        ]);
+        multiscale.tris.push([b, b + 1, b + 2]);
+        assert_eq!(
+            multiscale.count_self_intersections(),
+            None,
+            "a multi-scale mesh is inconclusive, not silently clean"
+        );
+    }
+
+    #[test]
+    fn nesting_and_charge_containment() {
+        // Two SEPARATE bodies → no nesting; a point at each centre is in its own body.
+        let mut separate = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2);
+        separate.append(&icosphere(Vec3::new(6.0, 0.0, 0.0), 1.0, 2));
+        assert_eq!(
+            separate.num_nested_components(),
+            0,
+            "separate bodies are not nested"
+        );
+        assert_eq!(
+            separate.containing_component(Vec3::new(0.0, 0.0, 0.0)),
+            Some(0)
+        );
+        // The second body is component 1; a point at its centre is inside it.
+        assert_eq!(
+            separate.containing_component(Vec3::new(6.0, 0.0, 0.0)),
+            Some(1)
+        );
+        // A point outside both → in none.
+        assert_eq!(
+            separate.containing_component(Vec3::new(3.0, 0.0, 0.0)),
+            None
+        );
+
+        // A small sphere INSIDE a big one (a buried cavity) → one nested component.
+        let mut cavity = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
+        cavity.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2));
+        assert_eq!(
+            cavity.num_nested_components(),
+            1,
+            "the inner shell is nested"
+        );
+
+        // Parity-based charge region on a 3-shell concentric (island/cavity/body):
+        // a charge in the island (inside 3 ⇒ odd ⇒ solute, deepest = island) vs in the
+        // cavity (inside 2 ⇒ even ⇒ solvent ⇒ None).
+        let mut shells = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2); // body  (comp 0)
+        shells.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 2)); // cavity (comp 1)
+        shells.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2)); // island (comp 2)
+        assert_eq!(
+            shells.containing_component(Vec3::new(0.0, 0.0, 0.0)),
+            Some(2),
+            "island = solute"
+        );
+        assert_eq!(
+            shells.containing_component(Vec3::new(1.5, 0.0, 0.0)),
+            None,
+            "cavity = solvent"
+        );
+        assert_eq!(
+            shells.containing_component(Vec3::new(2.5, 0.0, 0.0)),
+            Some(0),
+            "shell = solute body"
+        );
+        assert_eq!(
+            shells.containing_component(Vec3::new(9.0, 0.0, 0.0)),
+            None,
+            "exterior = solvent"
+        );
+
+        // Three concentric shells with ALTERNATING orientation (outward, inward, outward)
+        // — the cavity-with-island case. A summed-winding test would cancel and miss the
+        // innermost; the per-component test must report BOTH inner shells nested (review).
+        let mut three = icosphere(Vec3::new(0.0, 0.0, 0.0), 5.0, 2); // outward
+        let mut mid = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 2);
+        mid.flip(); // inward cavity shell
+        let inner = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 2); // outward island
+        three.append(&mid);
+        three.append(&inner);
+        assert_eq!(
+            three.num_nested_components(),
+            2,
+            "both inner shells are nested"
+        );
+        assert_eq!(
+            three.component_nesting_depths(),
+            vec![0, 1, 2],
+            "body/cavity/island depths"
+        );
+    }
+
+    #[test]
+    fn touching_components_detected() {
+        // Two tetrahedra sharing ONLY vertex 0 (edge-disjoint ⇒ two components, but they
+        // touch at a vertex). Edge-manifoldness doesn't see this; has_touching_components
+        // must.
+        let mut verts = vec![
+            Vec3::new(0.0, 0.0, 0.0), // shared vertex 0
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(-1.0, 0.0, 0.0), // tetra B
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+        ];
+        let tetra = |b: u32| {
+            vec![
+                [b, b + 1, b + 2],
+                [b, b + 2, b + 3],
+                [b, b + 3, b + 1],
+                [b + 1, b + 3, b + 2],
+            ]
+        };
+        let mut tris = tetra(0); // A: 0,1,2,3
+        tris.extend([[0, 4, 5], [0, 5, 6], [0, 6, 4], [4, 6, 5]]); // B shares vertex 0
+        let touching = Mesh {
+            verts: std::mem::take(&mut verts),
+            normals: Vec::new(),
+            tris,
+        };
+        assert_eq!(
+            touching.num_connected_components(),
+            2,
+            "edge-disjoint ⇒ two components"
+        );
+        assert!(touching.has_touching_components(), "they share vertex 0");
+
+        // Two genuinely-disjoint tetrahedra (no shared index) do NOT touch.
+        let mut t2 = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 0);
+        t2.append(&icosphere(Vec3::new(5.0, 0.0, 0.0), 1.0, 0));
+        assert!(!t2.has_touching_components());
+    }
+
+    #[test]
+    fn orient_by_nesting_alternates_signs() {
+        // Three concentric icospheres (all built outward = +volume): orient_by_nesting
+        // must leave the body (+), flip the cavity (−), keep the island (+) so each panel
+        // faces solute-inside / solvent-outside (codex correction).
+        let mut m = icosphere(Vec3::new(0.0, 0.0, 0.0), 3.0, 1); // body, depth 0
+        m.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 2.0, 1)); // cavity, depth 1
+        m.append(&icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1)); // island, depth 2
+        assert!(m.orient_by_nesting(), "the cavity shell must be flipped");
+        let depths = m.component_nesting_depths();
+        let vols: Vec<f64> = m
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
+        for (c, &d) in depths.iter().enumerate() {
+            let want = if d % 2 == 0 { 1.0 } else { -1.0 };
+            assert_eq!(
+                vols[c].signum(),
+                want,
+                "component {c} depth {d}: sign {}",
+                vols[c]
+            );
+        }
+        // Idempotent: a second pass flips nothing.
+        assert!(!m.orient_by_nesting(), "already correctly oriented");
+    }
+
+    #[test]
+    fn per_component_orient_outward_fixes_mixed_orientation() {
+        // One outward sphere + one INWARD sphere. Aggregate signed_volume can mask the
+        // inward one; per-component orientation must flip only the inward body and leave
+        // the outward one alone.
+        let outward = icosphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 1);
+        let mut inward = icosphere(Vec3::new(5.0, 0.0, 0.0), 1.0, 1);
+        inward.flip(); // now inside-out
+        let mut mixed = outward.clone();
+        mixed.append(&inward);
+
+        let vols: Vec<f64> = mixed
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
+        assert_eq!(vols.len(), 2);
+        assert!(
+            vols.iter().any(|&v| v > 0.0) && vols.iter().any(|&v| v < 0.0),
+            "mixed orientation: {vols:?}"
+        );
+
+        assert!(
+            mixed.orient_outward(),
+            "the inward component must be flipped"
+        );
+        let fixed: Vec<f64> = mixed
+            .component_volumes_areas()
+            .iter()
+            .map(|&(v, _)| v)
+            .collect();
+        assert!(
+            fixed.iter().all(|&v| v > 0.0),
+            "both components outward now: {fixed:?}"
+        );
+        // The already-outward component is untouched (same volume).
+        assert!(
+            (fixed.iter().copied().fold(f64::INFINITY, f64::min)
+                - vols
+                    .iter()
+                    .copied()
+                    .fold(f64::INFINITY, |a, b| a.min(b.abs())))
+            .abs()
+                < 1e-9
+        );
     }
 
     #[test]

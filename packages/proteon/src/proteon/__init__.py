@@ -145,6 +145,15 @@ from .sasa import (
     residue_sasa,
     total_sasa,
 )
+from .electrostatics import (
+    born_energy,
+    read_hmo,
+    read_msms,
+    read_off,
+    read_pqr,
+    surface_potential,
+    write_off,
+)
 from .select import select
 from .search import (
     SearchDB,
@@ -641,6 +650,13 @@ __all__ = (
     *_DSSP_API,
     *_GEOMETRY_API,
     *_SASA_API,
+    "born_energy",
+    "surface_potential",
+    "read_off",
+    "read_pqr",
+    "read_hmo",
+    "read_msms",
+    "write_off",
     *_SELECT_API,
     *_SEARCH_API,
     *_MSA_API,
