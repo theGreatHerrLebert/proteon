@@ -1345,23 +1345,73 @@ fn harmonic_improper_energy_and_forces(
     energy_accum: &mut f64,
     forces: &mut [[f64; 3]],
 ) {
-    for torsion in torsion_list {
+    // `torsion_list` is always `topo.improper_torsions` (see callers); resolve
+    // the harmonic specs against it and delegate to the shared evaluator so the
+    // CPU and GPU paths compute bit-identical energy + forces.
+    debug_assert!(std::ptr::eq(
+        torsion_list.as_ptr(),
+        topo.improper_torsions.as_ptr()
+    ));
+    let specs = build_harmonic_improper_specs(topo, params);
+    *energy_accum += eval_harmonic_improper_specs(&specs, coords, Some(forces));
+}
+
+/// A CHARMM harmonic improper resolved against a force field: the four atom
+/// indices (central first) and the harmonic `(k, phi0)` terms. Independent of
+/// coordinates, so it can be resolved once (e.g. at GPU upload) and evaluated
+/// per coordinate set — the GPU nonbonded/bonded kernels don't cover harmonic
+/// impropers, so the host evaluates them via [`eval_harmonic_improper_specs`].
+#[derive(Clone, Debug)]
+pub(crate) struct HarmonicImproperSpec {
+    /// Central atom (proteon slot K; BALL's slot 1).
+    pub a1: usize,
+    pub a2: usize,
+    pub a3: usize,
+    pub a4: usize,
+    /// Harmonic terms as `(k, phi0)`. CHARMM typically has one.
+    pub terms: Vec<(f64, f64)>,
+}
+
+/// Resolve every CHARMM harmonic improper in `topo` against `params`. Torsions
+/// without a harmonic entry (periodic impropers) are skipped. The convention
+/// matches the inline CPU path: the central atom is at proteon slot K, which is
+/// BALL's slot 1, so the lookup keys on `(tk, ti, tj, tl)`.
+pub(crate) fn build_harmonic_improper_specs(
+    topo: &Topology,
+    params: &impl ForceField,
+) -> Vec<HarmonicImproperSpec> {
+    let mut specs = Vec::new();
+    for torsion in &topo.improper_torsions {
         let ti = &topo.atoms[torsion.i].amber_type;
         let tj = &topo.atoms[torsion.j].amber_type;
         let tk = &topo.atoms[torsion.k].amber_type;
         let tl = &topo.atoms[torsion.l].amber_type;
+        if let Some(terms) = params.get_harmonic_improper(tk, ti, tj, tl) {
+            specs.push(HarmonicImproperSpec {
+                a1: torsion.k,
+                a2: torsion.i,
+                a3: torsion.j,
+                a4: torsion.l,
+                terms: terms.iter().map(|t| (t.k, t.phi0)).collect(),
+            });
+        }
+    }
+    specs
+}
 
-        // CHARMM harmonic table keys central at slot 1; proteon's
-        // Torsion convention stores central at slot K.
-        let terms = match params.get_harmonic_improper(tk, ti, tj, tl) {
-            Some(t) => t,
-            None => continue,
-        };
-
-        // BALL: atom1=central, atoms 2/3/4 are the bonded neighbors.
-        // proteon: torsion.k = central, torsion.i / torsion.j / torsion.l
-        // are the neighbors.
-        let (a1, a2, a3, a4) = (torsion.k, torsion.i, torsion.j, torsion.l);
+/// Evaluate resolved harmonic impropers, returning the summed energy and (when
+/// `forces` is `Some`) accumulating the analytic gradient. The math is BALL's;
+/// see the doc comment on [`harmonic_improper_energy_and_forces`] for the
+/// derivation. Energy is accumulated for every term; the force contribution is
+/// skipped only at the `sin(phi) ≈ 0` removable singularity.
+pub(crate) fn eval_harmonic_improper_specs(
+    specs: &[HarmonicImproperSpec],
+    coords: &[[f64; 3]],
+    mut forces: Option<&mut [[f64; 3]]>,
+) -> f64 {
+    let mut energy = 0.0;
+    for spec in specs {
+        let (a1, a2, a3, a4) = (spec.a1, spec.a2, spec.a3, spec.a4);
         let p1 = &coords[a1];
         let p2 = &coords[a2];
         let p3 = &coords[a3];
@@ -1383,8 +1433,7 @@ fn harmonic_improper_energy_and_forces(
         let inv_len_bcxba = 1.0 / len_bcxba;
         let inv_len_bcxbd = 1.0 / len_bcxbd;
 
-        // cos(phi) is the dot product of the two normalized plane
-        // normals.
+        // cos(phi) is the dot product of the two normalized plane normals.
         let cos_phi = (bcxba[0] * bcxbd[0] + bcxba[1] * bcxbd[1] + bcxba[2] * bcxbd[2])
             * inv_len_bcxba
             * inv_len_bcxbd;
@@ -1394,16 +1443,20 @@ fn harmonic_improper_energy_and_forces(
         // Sum harmonic terms (CHARMM typically has one).
         let mut e_imp = 0.0;
         let mut sum_2k_dphi = 0.0;
-        for term in terms {
-            let dphi = phi - term.phi0;
-            e_imp += term.k * dphi * dphi;
-            sum_2k_dphi += 2.0 * term.k * dphi;
+        for &(k, phi0) in &spec.terms {
+            let dphi = phi - phi0;
+            e_imp += k * dphi * dphi;
+            sum_2k_dphi += 2.0 * k * dphi;
         }
-        *energy_accum += e_imp;
+        energy += e_imp;
 
-        // Force: skip the sin(phi) ≈ 0 singularity (planar at phi=0
-        // or phi=π). In normal protein geometries this is a measure-
-        // zero set; BALL skips the same case.
+        // Energy is well-defined everywhere; only the force needs a coordinate
+        // set, and it skips the sin(phi) ≈ 0 singularity (planar at phi=0 or
+        // phi=π) — a measure-zero set BALL also skips.
+        let forces = match forces.as_deref_mut() {
+            Some(f) => f,
+            None => continue,
+        };
         let sin_phi_sq = 1.0 - cos_phi * cos_phi;
         if sin_phi_sq <= 1e-12 {
             continue;
@@ -1447,6 +1500,7 @@ fn harmonic_improper_energy_and_forces(
             forces[a4][d] += f4d;
         }
     }
+    energy
 }
 
 fn torsion_energy_and_forces(
