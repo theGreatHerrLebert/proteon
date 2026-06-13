@@ -27,7 +27,12 @@ extern "C" __global__ void nonbonded_energy_forces(
     double* __restrict__ pair_vdw,
     double* __restrict__ pair_elec,
     double* __restrict__ pair_solv,
-    double* __restrict__ forces
+    double* __restrict__ forces,
+    const double* __restrict__ lj_r_14,        // n_types: 1-4 Rmin/2 per type (0 if none)
+    const double* __restrict__ lj_eps_14,      // n_types: 1-4 epsilon per type (0 if none)
+    const int*    __restrict__ has_lj_14,      // n_types: 1 if the type has a 1-4 entry
+    const int*    __restrict__ pair_lj_excluded, // M: 1 = zero vdW (keep electrostatics)
+    int rdie                                   // 1 = distance-dependent dielectric (eps = r)
 ) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= n_pairs) return;
@@ -45,7 +50,6 @@ extern "C" __global__ void nonbonded_energy_forces(
         double r = sqrt(r2);
         double inv_r = 1.0 / r;
         int is14 = pair_is_14[tid];
-        double scale_vdw = is14 ? scnb_inv : 1.0;
         double scale_es  = is14 ? scee_inv : 1.0;
 
         // Cubic switching function
@@ -58,11 +62,25 @@ extern "C" __global__ void nonbonded_energy_forces(
             dsw_dr2 = 6.0 * diff_off * (cuton_sq - r2) * inv3;
         }
 
-        // LJ 12-6
+        // LJ 12-6. For 1-4 pairs, use the FF's 1-4 table when both types have
+        // one (CHARMM: separate (R, eps), no scnb scaling), else regular LJ
+        // scaled by 1/scnb (AMBER). Non-1-4 pairs use regular LJ.
         int ti = atom_types[a], tj = atom_types[b];
-        double eps = sqrt(lj_eps[ti] * lj_eps[tj]);
-        double rmin = lj_r[ti] + lj_r[tj];
-        if (eps > 1e-10 && rmin > 1e-10) {
+        double eps, rmin, scale_vdw;
+        if (is14 && has_lj_14[ti] && has_lj_14[tj]) {
+            eps = sqrt(lj_eps_14[ti] * lj_eps_14[tj]);
+            rmin = lj_r_14[ti] + lj_r_14[tj];
+            scale_vdw = 1.0;
+        } else if (is14) {
+            eps = sqrt(lj_eps[ti] * lj_eps[tj]);
+            rmin = lj_r[ti] + lj_r[tj];
+            scale_vdw = scnb_inv;
+        } else {
+            eps = sqrt(lj_eps[ti] * lj_eps[tj]);
+            rmin = lj_r[ti] + lj_r[tj];
+            scale_vdw = 1.0;
+        }
+        if (!pair_lj_excluded[tid] && eps > 1e-10 && rmin > 1e-10) {
             double sr = rmin * inv_r;
             double sr2 = sr * sr;
             double sr6 = sr2 * sr2 * sr2;
@@ -77,13 +95,16 @@ extern "C" __global__ void nonbonded_energy_forces(
             fz += total_de_dr * dz * inv_r;
         }
 
-        // Coulomb
+        // Coulomb, with optional distance-dependent dielectric (eps = r):
+        // qq/r2 instead of qq/r. The force derivative scales accordingly.
         double qi = charges[a], qj = charges[b];
         if (fabs(qi) > 1e-10 && fabs(qj) > 1e-10) {
             double e_es = scale_es * coulomb_factor * qi * qj * inv_r;
+            if (rdie) e_es *= inv_r;
             e_elec = sw * e_es;
 
-            double de_dr = -e_es * inv_r;
+            // d(e_es)/dr = -e_es/r (constant eps) or -2 e_es/r (eps = r).
+            double de_dr = (rdie ? -2.0 : -1.0) * e_es * inv_r;
             double total_de_dr = sw * de_dr + e_es * dsw_dr2 * 2.0 * r;
             fx += total_de_dr * dx * inv_r;
             fy += total_de_dr * dy * inv_r;

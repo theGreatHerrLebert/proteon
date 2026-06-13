@@ -22,7 +22,9 @@ use std::sync::{Arc, OnceLock};
 use cudarc::driver::*;
 use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 
-use super::energy::EnergyResult;
+use super::energy::{
+    build_harmonic_improper_specs, eval_harmonic_improper_specs, EnergyResult, HarmonicImproperSpec,
+};
 use super::neighbor_list::NeighborList;
 use super::params::ForceField;
 use super::topology::Topology;
@@ -152,7 +154,12 @@ struct GpuTopology {
     pair_i: CudaSlice<i32>,
     pair_j: CudaSlice<i32>,
     pair_14: CudaSlice<i32>,
+    pair_lj_excluded: CudaSlice<i32>,
     n_pairs: i32,
+    /// CHARMM aromatic-ring LJ-excluded atom pairs, keyed (min, max). Kept on
+    /// the host so `refresh_nbl` can recompute `pair_lj_excluded` after an NBL
+    /// rebuild reorders the pairs. Empty for force fields without the carve-out.
+    lj_excluded_pairs: std::collections::HashSet<(usize, usize)>,
     // Per-atom
     atom_types: CudaSlice<i32>,
     charges: CudaSlice<f64>,
@@ -160,6 +167,10 @@ struct GpuTopology {
     // Per-type LJ
     lj_r: CudaSlice<f64>,
     lj_eps: CudaSlice<f64>,
+    // Per-type 1-4 LJ table (CHARMM); has_lj_14 = 0 → fall back to regular×1/scnb
+    lj_r_14: CudaSlice<f64>,
+    lj_eps_14: CudaSlice<f64>,
+    has_lj_14: CudaSlice<i32>,
     // EEF1 per-atom
     eef1_dg_free: CudaSlice<f64>,
     eef1_volume: CudaSlice<f64>,
@@ -198,6 +209,7 @@ struct GpuTopology {
     scee_inv: f64,
     scnb_inv: f64,
     pi_sqrt_pi: f64,
+    rdie: i32, // 1 = distance-dependent dielectric (CHARMM19/EEF1)
     // OBC constants (only meaningful when obc_enabled)
     obc_enabled: bool,
     obc_offset: f64,
@@ -212,6 +224,12 @@ struct GpuTopology {
 pub(crate) struct GpuStructState {
     stream: Arc<CudaStream>,
     topo_gpu: GpuTopology,
+    /// CHARMM harmonic impropers, resolved once at upload. The GPU bonded
+    /// kernels only handle periodic impropers (merged into the torsion kernel),
+    /// so harmonic ones are evaluated on the host per coordinate set and folded
+    /// into the energy + forces returned to the caller. Empty for force fields
+    /// (e.g. AMBER96) that carry no harmonic impropers.
+    harmonic_impropers: Vec<HarmonicImproperSpec>,
     // Mutable per-step
     coords: CudaSlice<f64>,
     forces: CudaSlice<f64>,
@@ -249,6 +267,15 @@ impl GpuStructState {
             .iter()
             .map(|p| if p.is_14 { 1 } else { 0 })
             .collect();
+        // Per-pair LJ exclusion (CHARMM aromatic-ring para-diagonal: zero vdW,
+        // keep electrostatics). Keyed by the raw (p.i, p.j) NBL order — the same
+        // lookup the CPU `compute_energy_impl` does — so the two flag the exact
+        // same pairs (the set itself is stored (min, max)).
+        let p_lj_excl: Vec<i32> = nbl
+            .pairs
+            .iter()
+            .map(|p| i32::from(topo.lj_excluded_pairs.contains(&(p.i, p.j))))
+            .collect();
 
         // Atom type index mapping
         let mut type_names: Vec<String> = Vec::new();
@@ -272,6 +299,22 @@ impl GpuStructState {
                 lj_eps[i] = lj.epsilon;
             }
         }
+        // 1-4 LJ table (CHARMM convention: separate (R, eps) for 1-4 pairs,
+        // used with scale 1.0). When a type has no 1-4 entry the kernel falls
+        // back to regular LJ * 1/scnb (AMBER convention).
+        let mut lj_r_14 = vec![0.0f64; n_types];
+        let mut lj_eps_14 = vec![0.0f64; n_types];
+        let mut has_lj_14 = vec![0i32; n_types];
+        for (i, t) in type_names.iter().enumerate() {
+            if let Some(lj) = ff.get_lj_14(t) {
+                lj_r_14[i] = lj.r;
+                lj_eps_14[i] = lj.epsilon;
+                has_lj_14[i] = 1;
+            }
+        }
+        // Distance-dependent dielectric (eps = r) — CHARMM19/EEF1 uses it,
+        // AMBER does not. The kernel applies an extra 1/r when set.
+        let rdie: i32 = i32::from(ff.uses_distance_dependent_dielectric());
 
         let charges: Vec<f64> = topo.atoms.iter().map(|a| a.charge).collect();
         let is_h: Vec<i32> = topo
@@ -406,12 +449,17 @@ impl GpuStructState {
             pair_i: stream.clone_htod(&pi)?,
             pair_j: stream.clone_htod(&pj)?,
             pair_14: stream.clone_htod(&p14)?,
+            pair_lj_excluded: stream.clone_htod(&p_lj_excl)?,
+            lj_excluded_pairs: topo.lj_excluded_pairs.clone(),
             n_pairs: n_pairs as i32,
             atom_types: stream.clone_htod(&type_idx)?,
             charges: stream.clone_htod(&charges)?,
             is_h: stream.clone_htod(&is_h)?,
             lj_r: stream.clone_htod(&lj_r)?,
             lj_eps: stream.clone_htod(&lj_eps)?,
+            lj_r_14: stream.clone_htod(&lj_r_14)?,
+            lj_eps_14: stream.clone_htod(&lj_eps_14)?,
+            has_lj_14: stream.clone_htod(&has_lj_14)?,
             eef1_dg_free: stream.clone_htod(&eef1_dg_free)?,
             eef1_volume: stream.clone_htod(&eef1_volume)?,
             eef1_sigma: stream.clone_htod(&eef1_sigma)?,
@@ -445,6 +493,7 @@ impl GpuStructState {
             coulomb_factor: 332.0,
             scee_inv: 1.0 / ff.scee(),
             scnb_inv: 1.0 / ff.scnb(),
+            rdie,
             pi_sqrt_pi: 5.568_327_996_831_708,
             obc_enabled,
             obc_offset: obc_params.offset,
@@ -479,6 +528,7 @@ impl GpuStructState {
             obc_chain: stream.alloc_zeros::<f64>(obc_alloc)?,
             obc_born_forces: stream.alloc_zeros::<f64>(obc_alloc)?,
             obc_per_atom_energy: stream.alloc_zeros::<f64>(obc_alloc)?,
+            harmonic_impropers: build_harmonic_improper_specs(topo, ff),
             stream,
             topo_gpu,
         })
@@ -493,11 +543,18 @@ impl GpuStructState {
             .iter()
             .map(|p| if p.is_14 { 1 } else { 0 })
             .collect();
+        // Rebuild the per-pair LJ-exclusion flags for the new pair order.
+        let p_lj_excl: Vec<i32> = nbl
+            .pairs
+            .iter()
+            .map(|p| i32::from(self.topo_gpu.lj_excluded_pairs.contains(&(p.i, p.j))))
+            .collect();
         let np = pi.len();
 
         self.topo_gpu.pair_i = self.stream.clone_htod(&pi)?;
         self.topo_gpu.pair_j = self.stream.clone_htod(&pj)?;
         self.topo_gpu.pair_14 = self.stream.clone_htod(&p14)?;
+        self.topo_gpu.pair_lj_excluded = self.stream.clone_htod(&p_lj_excl)?;
         self.topo_gpu.n_pairs = np as i32;
 
         // Reallocate energy output buffers if pair count changed
@@ -518,7 +575,9 @@ impl GpuStructState {
     ) -> Result<EnergyResult, Box<dyn std::error::Error>> {
         self.launch_kernels(gpu, coords_flat)?;
         self.stream.synchronize()?;
-        self.read_energy_only()
+        let mut energy = self.read_energy_only()?;
+        self.add_harmonic_impropers(coords_flat, &mut energy, None);
+        Ok(energy)
     }
 
     /// Launch all kernels, sync, return energy + forces.
@@ -530,10 +589,31 @@ impl GpuStructState {
     ) -> Result<(EnergyResult, Vec<[f64; 3]>), Box<dyn std::error::Error>> {
         self.launch_kernels(gpu, coords_flat)?;
         self.stream.synchronize()?;
-        self.read_energy_and_forces()
+        let (mut energy, mut forces) = self.read_energy_and_forces()?;
+        self.add_harmonic_impropers(coords_flat, &mut energy, Some(&mut forces));
+        Ok((energy, forces))
     }
 
     // --- Internal helpers ---
+
+    /// Fold the host-evaluated CHARMM harmonic impropers into the GPU result.
+    /// The GPU bonded kernels don't cover them, so they're computed on the CPU
+    /// from the same `coords_flat` that was uploaded — guaranteeing parity with
+    /// the CPU energy path via the shared `eval_harmonic_improper_specs`.
+    fn add_harmonic_impropers(
+        &self,
+        coords_flat: &[f64],
+        energy: &mut EnergyResult,
+        forces: Option<&mut [[f64; 3]]>,
+    ) {
+        if self.harmonic_impropers.is_empty() {
+            return;
+        }
+        let coords: Vec<[f64; 3]> = coords_flat.chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let e = eval_harmonic_improper_specs(&self.harmonic_impropers, &coords, forces);
+        energy.improper_torsion += e;
+        energy.total += e;
+    }
 
     fn launch_kernels(
         &mut self,
@@ -574,6 +654,11 @@ impl GpuStructState {
             a.arg(&mut self.pair_elec);
             a.arg(&mut self.pair_solv);
             a.arg(&mut self.forces);
+            a.arg(&t.lj_r_14);
+            a.arg(&t.lj_eps_14);
+            a.arg(&t.has_lj_14);
+            a.arg(&t.pair_lj_excluded);
+            a.arg(&t.rdie);
             unsafe {
                 a.launch(LaunchConfig::for_num_elems(t.n_pairs as u32))?;
             }
