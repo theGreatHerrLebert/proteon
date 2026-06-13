@@ -274,7 +274,29 @@ impl Grid {
         // the band straddling f = 0); beyond it the sign alone is correct.
         let reach = (probe / self.spacing).ceil() as usize + 4;
         lap("seed", &mut t);
-        jump_flood(&mut feat, self.dims, reach, &|i, j, k| self.pos(i, j, k));
+
+        // GPU jump-flood when available (same JFA+1 schedule); else CPU. The GPU
+        // path returns the flooded grid; on None we run the CPU transform.
+        #[cfg(feature = "cuda")]
+        let flooded_on_gpu = match super::seed_gpu::jump_flood_gpu(
+            &feat,
+            self.dims,
+            reach,
+            self.origin,
+            self.spacing,
+        ) {
+            Some(f) => {
+                feat = f;
+                true
+            }
+            None => false,
+        };
+        #[cfg(not(feature = "cuda"))]
+        let flooded_on_gpu = false;
+
+        if !flooded_on_gpu {
+            jump_flood(&mut feat, self.dims, reach, &|i, j, k| self.pos(i, j, k));
+        }
         lap("jump_flood", &mut t);
 
         // signed distance to the SAS, then erode by the probe.
@@ -1163,6 +1185,72 @@ mod tests {
         assert_eq!(
             point_mismatches, 0,
             "unexpected feature-point disagreements"
+        );
+    }
+
+    /// The GPU jump-flood must reproduce the CPU transform: same reached/unreached
+    /// status and the same flooded *distance* at every node (the field input).
+    /// Equidistant ties can pick a different but equally-near feature, so we
+    /// compare distance, not the feature point. Cuda + device only; else skips.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gpu_jump_flood_matches_cpu() {
+        let dims = [24usize, 22, 20];
+        let spacing = 0.4;
+        let origin = Vec3::new(-1.0, 2.0, 0.5);
+        let grid = Grid {
+            origin,
+            spacing,
+            dims,
+        };
+        let [nx, ny, nz] = dims;
+        let n = nx * ny * nz;
+
+        // Scatter a handful of seeds (feature = the node's own world position),
+        // the rest NaN — a clean input to flood.
+        let mut seeded = vec![[f64::NAN; 3]; n];
+        for &(i, j, k) in &[
+            (2, 3, 4),
+            (20, 5, 2),
+            (7, 18, 15),
+            (12, 12, 10),
+            (0, 0, 0),
+            (23, 21, 19),
+            (5, 9, 3),
+        ] {
+            let p = grid.pos(i, j, k);
+            seeded[i + nx * (j + ny * k)] = [p.x, p.y, p.z];
+        }
+        let reach = 12usize;
+
+        let mut cpu = seeded.clone();
+        jump_flood(&mut cpu, dims, reach, &|i, j, k| grid.pos(i, j, k));
+        let Some(gpu) =
+            crate::surface::seed_gpu::jump_flood_gpu(&seeded, dims, reach, origin, spacing)
+        else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
+        assert_eq!(cpu.len(), gpu.len());
+
+        let mut max_dist_err = 0.0_f64;
+        let mut nan_mismatch = 0usize;
+        for idx in 0..n {
+            let (i, j, k) = (idx % nx, (idx / nx) % ny, idx / (nx * ny));
+            let here = grid.pos(i, j, k);
+            let dist = |f: &[f64; 3]| (here - Vec3::new(f[0], f[1], f[2])).norm();
+            if cpu[idx][0].is_nan() != gpu[idx][0].is_nan() {
+                nan_mismatch += 1;
+                continue;
+            }
+            if !cpu[idx][0].is_nan() {
+                max_dist_err = max_dist_err.max((dist(&cpu[idx]) - dist(&gpu[idx])).abs());
+            }
+        }
+        assert_eq!(nan_mismatch, 0, "reached/unreached status differs");
+        assert!(
+            max_dist_err < 1e-9,
+            "GPU vs CPU flooded distance differs by {max_dist_err}"
         );
     }
 
