@@ -100,7 +100,7 @@ fn every_pose_matches_upstream() {
         let precalc = Precalculate::vina();
 
         for (i, file) in poses.iter().enumerate() {
-            let ligand = Molecule::from_pdbqt_file(file);
+            let ligand = Molecule::from_pdbqt_file(file).unwrap();
             let c = score_only(&receptor, &ligand, &file.rotatable_bonds, &precalc, 1000.0);
             for name in [
                 "total",
@@ -140,7 +140,7 @@ fn poses_are_distinct_in_score_per_case() {
         let totals: Vec<f64> = poses
             .iter()
             .map(|p| {
-                let lig = Molecule::from_pdbqt_file(p);
+                let lig = Molecule::from_pdbqt_file(p).unwrap();
                 score_only(&receptor, &lig, &p.rotatable_bonds, &precalc, 1000.0).total
             })
             .collect();

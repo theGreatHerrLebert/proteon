@@ -59,7 +59,7 @@ impl Molecule {
     /// index space.
     pub fn from_pdbqt_str(text: &str) -> Result<Self, PdbqtError> {
         let file = parse_pdbqt(text)?;
-        Ok(Self::from_pdbqt_file(&file))
+        Self::from_pdbqt_file(&file)
     }
 
     /// Build a `Molecule` from an already-parsed `PdbqtFile`. Prefer
@@ -67,8 +67,12 @@ impl Molecule {
     /// constructor is meant for multi-pose workflows that call
     /// [`crate::pdbqt::parse_pdbqt_models`] once and then iterate
     /// the resulting pose slices.
-    #[must_use]
-    pub fn from_pdbqt_file(file: &PdbqtFile) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`PdbqtError::TooManyFragments`] if the ligand has more than
+    /// [`Molecule::MAX_FRAGMENTS`] torsion fragments (the `u64` fragment mask
+    /// limit).
+    pub fn from_pdbqt_file(file: &PdbqtFile) -> Result<Self, PdbqtError> {
         let raw = &file.atoms;
         // Bond inference is filtered by fragment-mask mobility
         // (upstream `model::assign_bonds` skips DISTANCE_VARIABLE
@@ -76,7 +80,7 @@ impl Molecule {
         // macrocycle ligands introduce "ghost bonds" between
         // co-located G0/CG0 pseudo-atoms that pollute the 1-2/1-3/1-4
         // exclusion sets.
-        let raw_mask = raw_fragment_mask(file);
+        let raw_mask = raw_fragment_mask(file)?;
         let raw_graph = infer_bonds_masked(raw, Some(&raw_mask));
         let xs = assign_xs_types(raw, &raw_graph);
 
@@ -134,7 +138,7 @@ impl Molecule {
             debug_assert!(bonds[mi].windows(2).all(|w| w[0] < w[1]));
         }
 
-        Self {
+        Ok(Self {
             coords,
             xs_types,
             ad_types,
@@ -143,7 +147,7 @@ impl Molecule {
             fragment_ids,
             bonds,
             fragment_mask,
-        }
+        })
     }
 
     /// Number of typed atoms.
@@ -166,13 +170,14 @@ impl Molecule {
 /// * `a == fragment_axis_end[C]` for some direct child C of F
 ///   (the "immobile" atoms upstream inserts into the parent's
 ///   `b.node` range).
-fn raw_fragment_mask(file: &PdbqtFile) -> Vec<u64> {
+fn raw_fragment_mask(file: &PdbqtFile) -> Result<Vec<u64>, PdbqtError> {
     let n_frags = file.fragment_parents.len();
-    assert!(
-        n_frags <= Molecule::MAX_FRAGMENTS,
-        "proteon-vina v0 supports up to {} torsion fragments",
-        Molecule::MAX_FRAGMENTS
-    );
+    if n_frags > Molecule::MAX_FRAGMENTS {
+        return Err(PdbqtError::TooManyFragments {
+            got: n_frags,
+            max: Molecule::MAX_FRAGMENTS,
+        });
+    }
     let mut mask = vec![0_u64; file.atoms.len()];
     // Bit for own fragment.
     for (i, &fid) in file.fragment_ids.iter().enumerate() {
@@ -199,7 +204,7 @@ fn raw_fragment_mask(file: &PdbqtFile) -> Vec<u64> {
             }
         }
     }
-    mask
+    Ok(mask)
 }
 
 impl Molecule {
@@ -332,5 +337,29 @@ mod tests {
                 assert!(j < m.len(), "bond index {j} out of Molecule range");
             }
         }
+    }
+
+    #[test]
+    fn too_many_fragments_errors_instead_of_panicking() {
+        // A torsion tree with more than MAX_FRAGMENTS (64) fragments exceeds
+        // the u64 fragment mask. It must return a clean error, not assert.
+        let n = Molecule::MAX_FRAGMENTS + 1;
+        let file = crate::pdbqt::PdbqtFile {
+            atoms: Vec::new(),
+            fragment_ids: Vec::new(),
+            rotatable_bonds: Vec::new(),
+            fragment_parents: vec![None; n],
+            fragment_axis_begin: vec![None; n],
+            fragment_axis_end: vec![None; n],
+        };
+        let err = Molecule::from_pdbqt_file(&file).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::pdbqt::PdbqtError::TooManyFragments { got, max }
+                    if got == n && max == Molecule::MAX_FRAGMENTS
+            ),
+            "unexpected error: {err:?}"
+        );
     }
 }
