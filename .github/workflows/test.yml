@@ -224,6 +224,13 @@ jobs:
           test -s "$RUNNER_TEMP/1crn_h.pdb"
           ./target/release/proteon prepare test-pdbs/1crn.pdb -o "$RUNNER_TEMP/1crn_prep.pdb" --minimize-steps 2
           test -s "$RUNNER_TEMP/1crn_prep.pdb"
+      - name: proteon vina-score / dock
+        run: |
+          REC=proteon-vina/tests/fixtures/pairs/1iep/receptor.pdbqt
+          LIG=proteon-vina/tests/fixtures/pairs/1iep/ligand.pdbqt
+          ./target/release/proteon vina-score "$REC" "$LIG"
+          ./target/release/proteon dock "$REC" "$LIG" \
+            --exhaustiveness 2 --num-modes 3 --global-steps 40 --seed 0 --use-grid
       - name: proteon no libpython dependency
         run: |
           if ldd ./target/release/proteon | grep -qi python; then
