@@ -28,9 +28,13 @@ struct SurfaceGpu {
     /// but only read by the kernel-level parity test via `seed_boundary_gpu`.
     #[cfg_attr(not(test), allow(dead_code))]
     seed: CudaFunction,
-    /// Scatter variant of `seed`: writes into a full-grid buffer at each node's
-    /// grid index (the fused seed->flood path; see [`seed_and_flood_gpu`]).
+    /// Brute scatter variant of `seed`: writes into a full-grid buffer at each
+    /// node's grid index. The fallback when the spatial-hash grid can't be built
+    /// (huge bounding box); also the parity reference for `seed_hashed`.
     seed_scatter: CudaFunction,
+    /// Spatial-hash scatter seed — the production path. Same result as
+    /// `seed_scatter` but prunes the O(atoms²) exposure with a uniform cell grid.
+    seed_hashed: CudaFunction,
     /// Fills a flat device buffer with NaN ("no feature yet").
     fill_nan: CudaFunction,
     jfa: CudaFunction,
@@ -54,6 +58,7 @@ impl SurfaceGpu {
         let seed_mod = ctx.load_module(compile_ptx_with_opts(SEED_KERNEL_SRC, opts.clone())?)?;
         let seed = seed_mod.load_function("seed_brute")?;
         let seed_scatter = seed_mod.load_function("seed_scatter")?;
+        let seed_hashed = seed_mod.load_function("seed_hashed_scatter")?;
         let fill_nan = seed_mod.load_function("fill_nan")?;
         let jfa = ctx
             .load_module(compile_ptx_with_opts(JFA_KERNEL_SRC, opts)?)?
@@ -62,9 +67,24 @@ impl SurfaceGpu {
             ctx,
             seed,
             seed_scatter,
+            seed_hashed,
             fill_nan,
             jfa,
         })
+    }
+}
+
+/// Launch config for the register-heavy `seed_hashed_scatter` kernel: explicit
+/// 64-thread blocks. Its nested expanding-ring + exposure loops carry many live
+/// f64/int locals per thread, so the default 1024-thread blocks from
+/// `for_num_elems` exceed the 65536-registers-per-block budget on CC 7.5
+/// (`CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES`). Same trick the forcefield OBC/torsion
+/// kernels use for the same reason.
+fn hashed_seed_cfg(nb: u32) -> LaunchConfig {
+    LaunchConfig {
+        grid_dim: (nb.div_ceil(64), 1, 1),
+        block_dim: (64, 1, 1),
+        shared_mem_bytes: 0,
     }
 }
 
@@ -130,6 +150,82 @@ fn launch(
     stream.synchronize()?;
 
     Ok((0..n)
+        .map(|i| [flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]])
+        .collect())
+}
+
+/// The spatial-hash seed alone (no flood), in compact form, for the kernel-level
+/// parity tests `gpu_hashed_seed_matches_brute`/`_cpu`. Runs the production
+/// `seed_hashed_scatter` over `positions` with identity output indices into a
+/// NaN-filled compact buffer, so it returns one feature per node in input order
+/// — directly comparable to `seed_boundary_gpu` and `nearest_surface_point`.
+/// `None` if there's no GPU or the cell grid can't be built (the brute fallback
+/// regime, which this test path doesn't exercise).
+#[cfg(test)]
+pub(super) fn seed_hashed_boundary(
+    positions: &[Vec3],
+    spheres: &[Sphere],
+) -> Option<Vec<[f64; 3]>> {
+    if positions.is_empty() {
+        return Some(Vec::new());
+    }
+    let g = SurfaceGpu::try_global()?;
+    let grid = CellGrid::build(spheres)?;
+    launch_hashed_compact(g, &grid, positions).ok()
+}
+
+#[cfg(test)]
+fn launch_hashed_compact(
+    g: &SurfaceGpu,
+    grid: &CellGrid,
+    positions: &[Vec3],
+) -> Result<Vec<[f64; 3]>, Box<dyn std::error::Error>> {
+    let stream = g.ctx.default_stream();
+    let nb = positions.len();
+    let n3 = nb.checked_mul(3).ok_or("hashed seed buffer overflow")?;
+    let nb_i32 = i32::try_from(nb)?;
+    let nb_u32 = u32::try_from(nb)?;
+    let n3_u32 = u32::try_from(n3)?;
+    let n3_i64 = i64::try_from(n3)?;
+
+    let nodes_flat: Vec<f64> = positions.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
+    let out_idx: Vec<i32> = (0..nb_i32).collect(); // identity → compact output
+
+    let d_nodes = stream.clone_htod(&nodes_flat)?;
+    let d_idx = stream.clone_htod(&out_idx)?;
+    let d_atoms = stream.clone_htod(&grid.atoms_sorted)?;
+    let d_cell_start = stream.clone_htod(&grid.cell_start)?;
+    let mut d_feat = stream.alloc_zeros::<f64>(n3)?;
+    {
+        let mut a = stream.launch_builder(&g.fill_nan);
+        a.arg(&mut d_feat);
+        a.arg(&n3_i64);
+        unsafe {
+            a.launch(LaunchConfig::for_num_elems(n3_u32))?;
+        }
+    }
+    {
+        let mut a = stream.launch_builder(&g.seed_hashed);
+        a.arg(&d_nodes);
+        a.arg(&d_idx);
+        a.arg(&nb_i32);
+        a.arg(&d_atoms);
+        a.arg(&d_cell_start);
+        a.arg(&grid.kxmin);
+        a.arg(&grid.kymin);
+        a.arg(&grid.kzmin);
+        a.arg(&grid.dimx);
+        a.arg(&grid.dimy);
+        a.arg(&grid.dimz);
+        a.arg(&grid.cell);
+        a.arg(&mut d_feat);
+        unsafe {
+            a.launch(hashed_seed_cfg(nb_u32))?;
+        }
+    }
+    let flat = stream.clone_dtoh(&d_feat)?;
+    stream.synchronize()?;
+    Ok((0..nb)
         .map(|i| [flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]])
         .collect())
 }
@@ -224,6 +320,106 @@ fn launch_jfa(
         .collect())
 }
 
+/// A uniform cell grid over the inflated spheres, counting-sorted into cell
+/// order for the `seed_hashed_scatter` kernel. Mirrors `volume::AtomGrid`:
+/// `cell` = the largest inflated radius, key = `floor(coord / cell)`, dense cell
+/// index `c = (kz·dimy + ky)·dimx + kx` in `(key − kmin)` coordinates, and
+/// `cell_start[c]..cell_start[c+1]` is cell `c`'s atom range in `atoms_sorted`.
+struct CellGrid {
+    /// `natoms·4` — (cx, cy, cz, inflated_radius) in cell order.
+    atoms_sorted: Vec<f64>,
+    /// `ncells + 1` prefix sum (counting-sort offsets).
+    cell_start: Vec<i32>,
+    kxmin: i32,
+    kymin: i32,
+    kzmin: i32,
+    dimx: i32,
+    dimy: i32,
+    dimz: i32,
+    cell: f64,
+}
+
+impl CellGrid {
+    /// Cap on the dense cell count (`64 M` → 256 MB of `i32` offsets). Beyond it
+    /// the grid is not worth building (a huge bounding box is usually a sparse,
+    /// low-atom-count structure where the brute kernel is fine).
+    const MAX_CELLS: i128 = 64 * 1024 * 1024;
+
+    /// Build the grid from the inflated `spheres`. Returns `None` if empty, if
+    /// the dense grid would exceed [`Self::MAX_CELLS`], or if any key/dimension
+    /// overflows `i32` — in all of which the caller uses the brute kernel.
+    fn build(spheres: &[Sphere]) -> Option<CellGrid> {
+        if spheres.is_empty() {
+            return None;
+        }
+        let cell = spheres.iter().map(|s| s.radius).fold(1.0_f64, f64::max);
+        let key = |c: f64| (c / cell).floor() as i64;
+        let mut kmin = (i64::MAX, i64::MAX, i64::MAX);
+        let mut kmax = (i64::MIN, i64::MIN, i64::MIN);
+        for s in spheres {
+            let (kx, ky, kz) = (key(s.center.x), key(s.center.y), key(s.center.z));
+            kmin = (kmin.0.min(kx), kmin.1.min(ky), kmin.2.min(kz));
+            kmax = (kmax.0.max(kx), kmax.1.max(ky), kmax.2.max(kz));
+        }
+        let (dx, dy, dz) = (
+            kmax.0 - kmin.0 + 1,
+            kmax.1 - kmin.1 + 1,
+            kmax.2 - kmin.2 + 1,
+        );
+        let ncells = (dx as i128) * (dy as i128) * (dz as i128);
+        if ncells <= 0 || ncells > Self::MAX_CELLS {
+            return None;
+        }
+        let ncells = ncells as usize;
+        // Kernel params + the +1 prefix entry must fit i32.
+        let kxmin = i32::try_from(kmin.0).ok()?;
+        let kymin = i32::try_from(kmin.1).ok()?;
+        let kzmin = i32::try_from(kmin.2).ok()?;
+        let dimx = i32::try_from(dx).ok()?;
+        let dimy = i32::try_from(dy).ok()?;
+        let dimz = i32::try_from(dz).ok()?;
+        i32::try_from(spheres.len()).ok()?;
+
+        let cidx = |s: &Sphere| -> usize {
+            let kx = key(s.center.x) - kmin.0;
+            let ky = key(s.center.y) - kmin.1;
+            let kz = key(s.center.z) - kmin.2;
+            ((kz * dy + ky) * dx + kx) as usize
+        };
+        // Counting sort: count → prefix sum (cell_start) → scatter atoms.
+        let cells: Vec<usize> = spheres.iter().map(cidx).collect();
+        let mut cell_start = vec![0i32; ncells + 1];
+        for &c in &cells {
+            cell_start[c + 1] += 1;
+        }
+        for i in 1..=ncells {
+            cell_start[i] += cell_start[i - 1];
+        }
+        let mut cursor = cell_start.clone();
+        let mut atoms_sorted = vec![0.0f64; spheres.len() * 4];
+        for (i, s) in spheres.iter().enumerate() {
+            let c = cells[i];
+            let pos = cursor[c] as usize;
+            cursor[c] += 1;
+            atoms_sorted[4 * pos] = s.center.x;
+            atoms_sorted[4 * pos + 1] = s.center.y;
+            atoms_sorted[4 * pos + 2] = s.center.z;
+            atoms_sorted[4 * pos + 3] = s.radius;
+        }
+        Some(CellGrid {
+            atoms_sorted,
+            cell_start,
+            kxmin,
+            kymin,
+            kzmin,
+            dimx,
+            dimy,
+            dimz,
+            cell,
+        })
+    }
+}
+
 /// Fused seed + jump-flood, entirely on-device: the production SDF-field path.
 ///
 /// Equivalent to `seed_boundary_gpu` (scattered into a full grid) followed by
@@ -308,22 +504,48 @@ fn launch_seed_and_flood(
     let nb = boundary_pos.len();
     if nb > 0 {
         let nodes_flat: Vec<f64> = boundary_pos.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
-        let atoms_flat: Vec<f64> = spheres
-            .iter()
-            .flat_map(|s| [s.center.x, s.center.y, s.center.z, s.radius])
-            .collect();
         let out_idx: Vec<i32> = boundary_idx
             .iter()
             .map(|&i| i32::try_from(i))
             .collect::<Result<_, _>>()?;
         let nb_i32 = i32::try_from(nb)?;
-        let m_i32 = i32::try_from(spheres.len())?;
         let nb_u32 = u32::try_from(nb)?;
-
         let d_nodes = stream.clone_htod(&nodes_flat)?;
-        let d_atoms = stream.clone_htod(&atoms_flat)?;
         let d_idx = stream.clone_htod(&out_idx)?;
-        {
+
+        // Prefer the spatial-hash seed (prunes the O(atoms²) exposure with a
+        // uniform cell grid built on the host). When the dense grid would be too
+        // large to be worth it (huge bounding box — usually few, sparse atoms),
+        // fall back to the brute scatter, which is fine in that regime. Both
+        // write the same result into `src`.
+        if let Some(grid) = CellGrid::build(spheres) {
+            let d_atoms = stream.clone_htod(&grid.atoms_sorted)?;
+            let d_cell_start = stream.clone_htod(&grid.cell_start)?;
+            let mut a = stream.launch_builder(&g.seed_hashed);
+            a.arg(&d_nodes);
+            a.arg(&d_idx);
+            a.arg(&nb_i32);
+            a.arg(&d_atoms);
+            a.arg(&d_cell_start);
+            a.arg(&grid.kxmin);
+            a.arg(&grid.kymin);
+            a.arg(&grid.kzmin);
+            a.arg(&grid.dimx);
+            a.arg(&grid.dimy);
+            a.arg(&grid.dimz);
+            a.arg(&grid.cell);
+            a.arg(&mut src);
+            unsafe {
+                a.launch(hashed_seed_cfg(nb_u32))?;
+            }
+        } else {
+            // Huge bounding box (usually sparse, low atom count) — brute is fine.
+            let atoms_flat: Vec<f64> = spheres
+                .iter()
+                .flat_map(|s| [s.center.x, s.center.y, s.center.z, s.radius])
+                .collect();
+            let m_i32 = i32::try_from(spheres.len())?;
+            let d_atoms = stream.clone_htod(&atoms_flat)?;
             let mut a = stream.launch_builder(&g.seed_scatter);
             a.arg(&d_nodes);
             a.arg(&d_atoms);
