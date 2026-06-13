@@ -39,6 +39,8 @@ pub mod nonradial;
 pub mod patches;
 pub mod registry;
 pub mod rs;
+#[cfg(feature = "cuda")]
+mod seed_gpu;
 pub mod ses;
 pub mod singular;
 pub mod stitch;
