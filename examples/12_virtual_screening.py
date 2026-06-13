@@ -43,6 +43,8 @@ def pdbqt_box(pdbqt_text: str, padding: float = 5.0):
             xs.append(float(line[30:38]))
             ys.append(float(line[38:46]))
             zs.append(float(line[46:54]))
+    if not xs:
+        raise ValueError("PDBQT has no ATOM/HETATM records — cannot build a box")
     lo = [min(xs), min(ys), min(zs)]
     hi = [max(xs), max(ys), max(zs)]
     center = tuple((l + h) / 2 for l, h in zip(lo, hi))

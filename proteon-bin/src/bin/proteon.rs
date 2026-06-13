@@ -324,10 +324,10 @@ struct DockArgs {
     ligand: PathBuf,
     /// Search-box center in Å as `X,Y,Z`. Give with `--size`; omit both to
     /// autobox around the ligand.
-    #[arg(long, value_delimiter = ',', num_args = 3)]
+    #[arg(long, value_delimiter = ',')]
     center: Option<Vec<f64>>,
     /// Search-box side lengths in Å as `SX,SY,SZ`. Give with `--center`.
-    #[arg(long, value_delimiter = ',', num_args = 3)]
+    #[arg(long, value_delimiter = ',')]
     size: Option<Vec<f64>>,
     /// Autobox padding in Å when `--center`/`--size` are omitted.
     #[arg(long, default_value_t = 6.0)]
@@ -991,6 +991,20 @@ fn run_electrostatics(args: &ElectrostaticsArgs) -> Result<()> {
     emit(args.format, &[(String::new(), row)])
 }
 
+/// Parse a `--center` / `--size` argument into a finite `[x, y, z]`.
+fn parse_triple(v: &[f64], name: &str) -> Result<[f64; 3]> {
+    if v.len() != 3 {
+        return Err(anyhow!(
+            "--{name} must be three comma-separated numbers (e.g. 1.0,2.0,3.0), got {} value(s)",
+            v.len()
+        ));
+    }
+    if !v.iter().all(|x| x.is_finite()) {
+        return Err(anyhow!("--{name} components must all be finite"));
+    }
+    Ok([v[0], v[1], v[2]])
+}
+
 fn load_vina_inputs(
     receptor: &Path,
     ligand: &Path,
@@ -1003,6 +1017,20 @@ fn load_vina_inputs(
         VinaMolecule::from_pdbqt_str(&rec_text).map_err(|e| anyhow!("receptor PDBQT: {e}"))?;
     let lig = VinaMolecule::from_pdbqt_str(&lig_text).map_err(|e| anyhow!("ligand PDBQT: {e}"))?;
     let file = parse_pdbqt(&lig_text).map_err(|e| anyhow!("ligand PDBQT: {e}"))?;
+    // Empty molecules parse cleanly but would later assert inside the library
+    // (autobox on 0 atoms, etc.) — fail with a clear message instead.
+    if rec.coords.is_empty() {
+        return Err(anyhow!(
+            "receptor {} has no atoms (not a valid PDBQT?)",
+            receptor.display()
+        ));
+    }
+    if lig.coords.is_empty() {
+        return Err(anyhow!(
+            "ligand {} has no atoms (not a valid PDBQT?)",
+            ligand.display()
+        ));
+    }
     Ok((rec, lig, file))
 }
 
@@ -1029,9 +1057,25 @@ fn run_dock(args: &DockArgs) -> Result<()> {
     let (rec, lig, file) = load_vina_inputs(&args.receptor, &args.ligand)?;
     let precalc = Precalculate::vina();
 
-    let sbox = match (&args.center, &args.size) {
-        (Some(c), Some(s)) => SearchBox::new([c[0], c[1], c[2]], [s[0], s[1], s[2]]),
-        _ => SearchBox::around_ligand(&lig, args.padding),
+    let sbox = if let (Some(c), Some(s)) = (&args.center, &args.size) {
+        let center = parse_triple(c, "center")?;
+        let size = parse_triple(s, "size")?;
+        for d in size {
+            if !(d.is_finite() && d > 0.0) {
+                return Err(anyhow!(
+                    "--size components must be finite and > 0 (got {d})"
+                ));
+            }
+        }
+        SearchBox::new(center, size)
+    } else {
+        if !(args.padding.is_finite() && args.padding >= 0.0) {
+            return Err(anyhow!(
+                "--padding must be finite and >= 0 (got {})",
+                args.padding
+            ));
+        }
+        SearchBox::around_ligand(&lig, args.padding)
     };
     let params = DockParams {
         exhaustiveness: args.exhaustiveness,
@@ -1059,11 +1103,13 @@ fn run_dock(args: &DockArgs) -> Result<()> {
     if modes.is_empty() {
         return Err(anyhow!("docking produced no poses"));
     }
-    // dock() returns the distinct modes ranked by search energy; present them
-    // ranked by reported affinity (components.total) as Vina does, with RMSD to
-    // the affinity-best mode.
-    let mut modes = modes;
-    modes.sort_by(|a, b| a.components.total.total_cmp(&b.components.total));
+    // Keep dock()'s native order: the distinct modes ranked by search energy
+    // (the quantity the search actually optimised, clustered, and capped on).
+    // We do NOT re-sort by affinity — that would only sort the *retained*
+    // search-ranked set, so "mode 1" could misleadingly claim to be the best
+    // affinity when a better-affinity pose was dropped earlier by the
+    // search-energy clustering / n_poses cap. `rmsd_to_best` is relative to the
+    // top search-ranked mode.
     let best = modes[0].coords.clone();
     let rows: Vec<(String, Row)> = modes
         .iter()
