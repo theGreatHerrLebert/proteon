@@ -17,9 +17,24 @@ test under `--features cuda`. The brute kernel is O(boundary·atoms); a
 spatial-hash kernel (codex correction #2) is the next perf step for very
 large receptors.
 
-**Still open:** K2 (jump-flood distance transform) and K3 (dual contour)
-remain on the CPU — porting them keeps the whole field on-device and
-avoids the host↔device seed round-trip.
+**K2 (jump-flood) — DONE (on-device passes, not yet fused).** `jfa_kernel.cu`
++ `seed_gpu::jump_flood_gpu` reproduce `volume::jump_flood` exactly — same
+JFA+1 halving schedule, same 27-neighbour nearest-by-squared-distance rule
+(strict `<`, same scan order), ping-ponging two device buffers. Gated by
+`gpu_jump_flood_matches_cpu` (equal reached/unreached status + equal flooded
+distance) + the area/volume-vs-BALL test under `--features cuda`. Caveat: on
+its own it's only ~on par with the 16-core CPU JFA for a single mesh
+(memory-bound, plus a full-grid host↔device round-trip each call) — the
+standalone win needs the fusion below.
+
+**Still open:**
+- **Fuse K1→K2 on-device** — have the seed kernel scatter into a full-grid
+  device buffer that K2 reads directly, dropping the host scatter + re-upload
+  between them. Where the seed's 5–6× and the on-device JFA actually compound.
+- **K3 (dual contour)** — still CPU; porting keeps field + contouring on-device.
+- One-time NVRTC compile (~2 s for both kernels) is `OnceLock`-amortised, so the
+  GPU path helps at batch scale (thousands of structures), not single-mesh
+  latency — as the thesis states.
 
 ---
 

@@ -18,18 +18,21 @@ use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 use super::geom::{Sphere, Vec3};
 
 const SEED_KERNEL_SRC: &str = include_str!("seed_kernel.cu");
+const JFA_KERNEL_SRC: &str = include_str!("jfa_kernel.cu");
 
-/// Cached CUDA context + compiled `seed_brute` kernel (compiled once).
-struct SeedGpu {
+/// Cached CUDA context + compiled SDF-field kernels (`seed_brute`, `jfa_pass`),
+/// compiled once via NVRTC and shared across all callers.
+struct SurfaceGpu {
     ctx: Arc<CudaContext>,
     seed: CudaFunction,
+    jfa: CudaFunction,
 }
 
-static SEED_GPU: OnceLock<Option<SeedGpu>> = OnceLock::new();
+static SURFACE_GPU: OnceLock<Option<SurfaceGpu>> = OnceLock::new();
 
-impl SeedGpu {
-    fn try_global() -> Option<&'static SeedGpu> {
-        SEED_GPU.get_or_init(|| Self::init().ok()).as_ref()
+impl SurfaceGpu {
+    fn try_global() -> Option<&'static SurfaceGpu> {
+        SURFACE_GPU.get_or_init(|| Self::init().ok()).as_ref()
     }
 
     fn init() -> Result<Self, Box<dyn std::error::Error>> {
@@ -40,10 +43,13 @@ impl SeedGpu {
             arch: Some(arch),
             ..Default::default()
         };
-        let ptx = compile_ptx_with_opts(SEED_KERNEL_SRC, opts)?;
-        let module = ctx.load_module(ptx)?;
-        let seed = module.load_function("seed_brute")?;
-        Ok(Self { ctx, seed })
+        let seed = ctx
+            .load_module(compile_ptx_with_opts(SEED_KERNEL_SRC, opts.clone())?)?
+            .load_function("seed_brute")?;
+        let jfa = ctx
+            .load_module(compile_ptx_with_opts(JFA_KERNEL_SRC, opts)?)?
+            .load_function("jfa_pass")?;
+        Ok(Self { ctx, seed, jfa })
     }
 }
 
@@ -62,12 +68,12 @@ pub(super) fn seed_boundary_gpu(positions: &[Vec3], spheres: &[Sphere]) -> Optio
     if positions.is_empty() {
         return Some(Vec::new());
     }
-    let g = SeedGpu::try_global()?;
+    let g = SurfaceGpu::try_global()?;
     launch(g, positions, spheres).ok()
 }
 
 fn launch(
-    g: &SeedGpu,
+    g: &SurfaceGpu,
     positions: &[Vec3],
     spheres: &[Sphere],
 ) -> Result<Vec<[f64; 3]>, Box<dyn std::error::Error>> {
@@ -101,5 +107,83 @@ fn launch(
 
     Ok((0..n)
         .map(|i| [flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]])
+        .collect())
+}
+
+/// GPU jump-flooding distance transform — the production port of
+/// `volume::jump_flood`. Takes the seeded feature grid (`feat`, length
+/// `dims[0]·dims[1]·dims[2]`, NaN where unseeded) and floods it with the same
+/// JFA+1 halving schedule (`next_pow2(reach) … 2, 1, 1`) and the same
+/// 27-neighbour nearest-by-squared-distance rule (strict `<`, same scan order),
+/// ping-ponging two device buffers. Node positions are `origin + (i,j,k)·spacing`.
+/// Returns the flooded grid, or `None` if there is no usable GPU.
+pub(super) fn jump_flood_gpu(
+    feat: &[[f64; 3]],
+    dims: [usize; 3],
+    reach: usize,
+    origin: Vec3,
+    spacing: f64,
+) -> Option<Vec<[f64; 3]>> {
+    if dims.iter().product::<usize>() == 0 {
+        return Some(Vec::new());
+    }
+    let g = SurfaceGpu::try_global()?;
+    launch_jfa(g, feat, dims, reach, origin, spacing).ok()
+}
+
+fn launch_jfa(
+    g: &SurfaceGpu,
+    feat: &[[f64; 3]],
+    dims: [usize; 3],
+    reach: usize,
+    origin: Vec3,
+    spacing: f64,
+) -> Result<Vec<[f64; 3]>, Box<dyn std::error::Error>> {
+    let [nx, ny, nz] = dims;
+    let n = nx * ny * nz;
+    let stream = g.ctx.default_stream();
+
+    let flat: Vec<f64> = feat.iter().flat_map(|f| [f[0], f[1], f[2]]).collect();
+    let mut src = stream.clone_htod(&flat)?;
+    let mut dst = stream.alloc_zeros::<f64>(n * 3)?;
+
+    // Identical schedule to the CPU jump_flood: next_pow2(reach) … 2, 1, then a
+    // final unit pass (JFA+1).
+    let mut schedule: Vec<usize> = Vec::new();
+    let mut step = reach.max(1).next_power_of_two();
+    while step >= 1 {
+        schedule.push(step);
+        step /= 2;
+    }
+    schedule.push(1);
+
+    let (nx_i, ny_i, nz_i) = (nx as i32, ny as i32, nz as i32);
+    let (ox, oy, oz) = (origin.x, origin.y, origin.z);
+    for step in schedule {
+        let step_i = step as i32;
+        {
+            let mut a = stream.launch_builder(&g.jfa);
+            a.arg(&src);
+            a.arg(&mut dst);
+            a.arg(&nx_i);
+            a.arg(&ny_i);
+            a.arg(&nz_i);
+            a.arg(&step_i);
+            a.arg(&ox);
+            a.arg(&oy);
+            a.arg(&oz);
+            a.arg(&spacing);
+            unsafe {
+                a.launch(LaunchConfig::for_num_elems(n as u32))?;
+            }
+        }
+        // src ← freshly-flooded dst for the next (smaller-step) pass. Stream
+        // ordering serialises the passes; we synchronise once at the end.
+        std::mem::swap(&mut src, &mut dst);
+    }
+    let out = stream.clone_dtoh(&src)?;
+    stream.synchronize()?;
+    Ok((0..n)
+        .map(|i| [out[3 * i], out[3 * i + 1], out[3 * i + 2]])
         .collect())
 }
