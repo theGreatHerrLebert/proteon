@@ -72,6 +72,9 @@ pub enum PdbqtError {
 
     #[error("line {line}: ENDBRANCH without a matching BRANCH")]
     UnmatchedEndBranch { line: usize },
+
+    #[error("ligand has {got} torsion fragments; proteon-vina supports at most {max} (u64 fragment mask)")]
+    TooManyFragments { got: usize, max: usize },
 }
 
 /// A parsed PDBQT file: the atom records plus the torsion-tree
