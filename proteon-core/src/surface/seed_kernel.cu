@@ -32,7 +32,11 @@ __device__ void nearest_exposed(
         double r = atoms[4 * i + 3];
         double dx = px - cx, dy = py - cy, dz = pz - cz;
         double len = sqrt(dx * dx + dy * dy + dz * dz);
-        if (len == 0.0) continue; // p at the centre — degenerate, skip
+        // Match the CPU's `Vec3::normalized()` guard (geom::EPSILON = 1e-6): a
+        // node within 1e-6 Å of a centre has no well-defined radial direction,
+        // so the CPU rejects that projection — the GPU must too, or seeds (and
+        // thus meshes) can diverge for tiny-radius / precisely-aligned inputs.
+        if (len < 1e-6) continue;
         double inv = r / len;
         double projx = cx + dx * inv;
         double projy = cy + dy * inv;
