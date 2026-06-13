@@ -2,8 +2,11 @@
 // SDF field. One thread per grid node. Reproduces `volume.rs::jump_flood`'s
 // inner pass EXACTLY: each node scans its 27 neighbours at offset `step`
 // (di,dj,dk in {-step, 0, step}, in dk-dj-di order) and keeps the nearest
-// non-empty feature point by SQUARED distance, strict `<` (so equal-distance
-// ties resolve to the same candidate as the CPU). Empty cells carry NaN.
+// non-empty feature point by SQUARED distance, strict `<`. Same scan order and
+// rule as the CPU, so results match exactly except that an exact equal-distance
+// tie may resolve to a different (equally-near) candidate if FMA contraction
+// perturbs the squared distance — the nearest *distance* is unaffected. Empty
+// cells carry NaN.
 //
 // The host ping-pongs `src`/`dst` over the halving schedule
 // (next_pow2(reach) … 2, 1, 1 — the "JFA+1" variant), reading back the final
