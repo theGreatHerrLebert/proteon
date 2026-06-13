@@ -28,7 +28,10 @@ extern "C" __global__ void seed_brute(
         double r = atoms[4 * i + 3];
         double dx = px - cx, dy = py - cy, dz = pz - cz;
         double len = sqrt(dx * dx + dy * dy + dz * dz);
-        if (len == 0.0) continue; // p at the centre — degenerate, skip
+        // Skip degenerate near-centre directions. Matches the CPU seed's
+        // Vec3::normalized() guard (rejects |dir| < EPSILON = 1e-6) so the two
+        // paths reject the same candidates.
+        if (len < 1e-6) continue;
         double inv = r / len;
         double projx = cx + dx * inv;
         double projy = cy + dy * inv;

@@ -3,8 +3,9 @@
 //!
 //! This is the production wiring of the GPU-K1 spike (`seed_kernel.cu`,
 //! benchmarked by [`super::volume::seed_bench`]): one brute-force kernel launch
-//! over the *boundary* nodes (compacted on the CPU), mirroring
-//! `AtomGrid::nearest_surface_point` exactly. The CUDA context + compiled kernel
+//! over the *boundary* nodes (compacted on the CPU), reproducing
+//! `AtomGrid::nearest_surface_point`'s nearest distance (ties aside; see
+//! [`seed_boundary_gpu`]). The CUDA context + compiled kernel
 //! are cached in a `OnceLock` (compiled once via NVRTC), and any GPU failure
 //! returns `None` so the caller silently falls back to the CPU path — the same
 //! auto-dispatch contract as the force-field / SASA / OBC GPU kernels.
@@ -50,8 +51,12 @@ impl SeedGpu {
 /// position in `positions` (the SES boundary nodes), computed on the GPU.
 ///
 /// Returns one `[x, y, z]` per input position (NaN where no exposed point), in
-/// input order — identical to mapping `AtomGrid::nearest_surface_point` over the
-/// same positions. Returns `None` if there is no usable GPU or any launch step
+/// input order. Equivalent to mapping `AtomGrid::nearest_surface_point` over the
+/// same positions: same exposed/none status and same nearest *distance* (the
+/// quantity the distance field uses), with the same degenerate-direction guard
+/// (`|dir| < 1e-6`); when two exposed projections are exactly equidistant the
+/// chosen point may differ (CPU hash order vs GPU array order) but the distance
+/// is identical. Returns `None` if there is no usable GPU or any launch step
 /// fails, so the caller falls back to the CPU seed.
 pub(super) fn seed_boundary_gpu(positions: &[Vec3], spheres: &[Sphere]) -> Option<Vec<[f64; 3]>> {
     if positions.is_empty() {

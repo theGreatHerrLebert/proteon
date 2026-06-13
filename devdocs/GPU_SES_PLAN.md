@@ -8,8 +8,10 @@ NVRTC-compiled `seed_brute` kernel (`OnceLock`); `volume::distance_field`
 compacts the boundary nodes and seeds them on the GPU behind the `cuda`
 feature, with silent CPU fallback — the same auto-dispatch contract as the
 force-field/SASA/OBC kernels. Measured **4.5–6.4× over the 16-core CPU
-seed** on crambin (h=0.4/0.2/0.15) with **exact parity** (0 feature
-mismatches, 0.000 Å) on an RTX 2070; gated by
+seed** on crambin (h=0.4/0.2/0.15), matching the CPU seed's nearest
+*distance* (0 feature mismatches, 0.000 Å on crambin — equidistant ties,
+which can pick a different but equally-near point, don't occur on real
+coordinates) on an RTX 2070; gated by
 `gpu_seed_matches_cpu_seed_on_boundary_nodes` plus the area/volume-vs-BALL
 test under `--features cuda`. The brute kernel is O(boundary·atoms); a
 spatial-hash kernel (codex correction #2) is the next perf step for very

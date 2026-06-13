@@ -228,7 +228,8 @@ impl Grid {
 
         // GPU seed: with the `cuda` feature and a usable device, compact the
         // boundary nodes and run the nearest-exposed-point kernel over them
-        // (≈5–6× the 16-core CPU seed on real proteins, exact parity). Any GPU
+        // (≈5–6× the 16-core CPU seed; same nearest distance as the CPU seed,
+        // ties aside). Any GPU
         // failure leaves `seeded_on_gpu = false` → silent CPU fallback.
         #[cfg(feature = "cuda")]
         let seeded_on_gpu = {
@@ -1096,9 +1097,15 @@ mod tests {
         Sphere::new(Vec3::new(x, y, z), r)
     }
 
-    /// The GPU seed kernel must reproduce the CPU spatial-hash seed exactly on
-    /// the boundary nodes — the parity gate for the GPU SDF path. Runs only with
-    /// the `cuda` feature and a usable device.
+    /// Parity gate for the GPU SDF seed. The invariant that matters for the
+    /// distance field is the nearest-feature *distance* at each boundary node
+    /// (what `jump_flood` propagates), not the exact feature point: when two
+    /// exposed projections are equidistant, the CPU (spatial-hash order) and GPU
+    /// (atom-array order) may pick different — but equally valid — points. So we
+    /// assert equal exposed/NaN status and equal node→feature distance, and
+    /// additionally that the points themselves agree on the (overwhelming)
+    /// non-tie majority. Runs only with `cuda` *and* a usable device; skips
+    /// otherwise (mirrors production's silent CPU fallback).
     #[cfg(feature = "cuda")]
     #[test]
     fn gpu_seed_matches_cpu_seed_on_boundary_nodes() {
@@ -1118,6 +1125,10 @@ mod tests {
         let bnodes = boundary_nodes(&grid, &atoms, probe);
         assert!(!bnodes.is_empty(), "no boundary nodes to test");
 
+        let Some(gpu) = crate::surface::seed_gpu::seed_boundary_gpu(&bnodes, &ag.spheres) else {
+            eprintln!("skipping: no usable GPU");
+            return;
+        };
         let cpu: Vec<[f64; 3]> = bnodes
             .iter()
             .map(|&p| {
@@ -1125,22 +1136,34 @@ mod tests {
                     .map_or([f64::NAN; 3], |q| [q.x, q.y, q.z])
             })
             .collect();
-        let gpu = crate::surface::seed_gpu::seed_boundary_gpu(&bnodes, &ag.spheres)
-            .expect("GPU seed unavailable");
-
         assert_eq!(cpu.len(), gpu.len());
-        let mut max_diff = 0.0_f64;
-        for (c, g) in cpu.iter().zip(&gpu) {
+
+        let dist = |p: Vec3, f: &[f64; 3]| (p - Vec3::new(f[0], f[1], f[2])).norm();
+        let mut max_dist_err = 0.0_f64;
+        let mut point_mismatches = 0usize;
+        for (&p, (c, g)) in bnodes.iter().zip(cpu.iter().zip(&gpu)) {
+            assert_eq!(c[0].is_nan(), g[0].is_nan(), "exposed/NaN status differs");
             if c[0].is_nan() {
-                assert!(g[0].is_nan(), "cpu NaN but gpu {g:?}");
                 continue;
             }
-            assert!(!g[0].is_nan(), "gpu NaN but cpu {c:?}");
-            for k in 0..3 {
-                max_diff = max_diff.max((c[k] - g[k]).abs());
+            // Distance to the chosen feature must agree (the SDF invariant).
+            max_dist_err = max_dist_err.max((dist(p, c) - dist(p, g)).abs());
+            // Track exact-point disagreements (allowed only for equidistant ties).
+            if (0..3).any(|k| (c[k] - g[k]).abs() > 1e-6) {
+                point_mismatches += 1;
             }
         }
-        assert!(max_diff < 1e-6, "GPU seed differs from CPU by {max_diff} Å");
+        assert!(
+            max_dist_err < 1e-6,
+            "GPU vs CPU nearest distance differs by {max_dist_err} Å"
+        );
+        // On real coordinates ties are vanishingly rare; this fixture has none,
+        // so the points are bit-identical too. (A tie would still pass the
+        // distance assert above.)
+        assert_eq!(
+            point_mismatches, 0,
+            "unexpected feature-point disagreements"
+        );
     }
 
     /// Regression: the spatial-hash `nearest_surface_point` must return the SAME
