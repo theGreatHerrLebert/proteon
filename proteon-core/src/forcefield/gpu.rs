@@ -249,7 +249,7 @@ pub(crate) struct GpuStructState {
 
 impl GpuStructState {
     /// Upload a structure's topology to GPU and allocate output buffers.
-    pub fn new<F: ForceField>(
+    pub(crate) fn new<F: ForceField>(
         gpu: &GpuContext,
         topo: &Topology,
         nbl: &NeighborList,
@@ -535,7 +535,10 @@ impl GpuStructState {
     }
 
     /// Re-upload NBL pairs after a neighbor list rebuild.
-    pub fn refresh_nbl(&mut self, nbl: &NeighborList) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn refresh_nbl(
+        &mut self,
+        nbl: &NeighborList,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let pi: Vec<i32> = nbl.pairs.iter().map(|p| p.i as i32).collect();
         let pj: Vec<i32> = nbl.pairs.iter().map(|p| p.j as i32).collect();
         let p14: Vec<i32> = nbl
@@ -568,7 +571,7 @@ impl GpuStructState {
 
     /// Launch all kernels, sync, return energy only (no forces download).
     /// Used for line-search energy evaluations (~20 per LBFGS step).
-    pub fn energy(
+    pub(crate) fn energy(
         &mut self,
         gpu: &GpuContext,
         coords_flat: &[f64],
@@ -582,7 +585,7 @@ impl GpuStructState {
 
     /// Launch all kernels, sync, return energy + forces.
     /// Used for the initial and post-step force evaluations.
-    pub fn energy_and_forces(
+    pub(crate) fn energy_and_forces(
         &mut self,
         gpu: &GpuContext,
         coords_flat: &[f64],
