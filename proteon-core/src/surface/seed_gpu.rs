@@ -24,7 +24,15 @@ const JFA_KERNEL_SRC: &str = include_str!("jfa_kernel.cu");
 /// compiled once via NVRTC and shared across all callers.
 struct SurfaceGpu {
     ctx: Arc<CudaContext>,
+    /// Compacted seed kernel — loaded always (the kernel ships in the same PTX),
+    /// but only read by the kernel-level parity test via `seed_boundary_gpu`.
+    #[cfg_attr(not(test), allow(dead_code))]
     seed: CudaFunction,
+    /// Scatter variant of `seed`: writes into a full-grid buffer at each node's
+    /// grid index (the fused seed->flood path; see [`seed_and_flood_gpu`]).
+    seed_scatter: CudaFunction,
+    /// Fills a flat device buffer with NaN ("no feature yet").
+    fill_nan: CudaFunction,
     jfa: CudaFunction,
 }
 
@@ -43,13 +51,20 @@ impl SurfaceGpu {
             arch: Some(arch),
             ..Default::default()
         };
-        let seed = ctx
-            .load_module(compile_ptx_with_opts(SEED_KERNEL_SRC, opts.clone())?)?
-            .load_function("seed_brute")?;
+        let seed_mod = ctx.load_module(compile_ptx_with_opts(SEED_KERNEL_SRC, opts.clone())?)?;
+        let seed = seed_mod.load_function("seed_brute")?;
+        let seed_scatter = seed_mod.load_function("seed_scatter")?;
+        let fill_nan = seed_mod.load_function("fill_nan")?;
         let jfa = ctx
             .load_module(compile_ptx_with_opts(JFA_KERNEL_SRC, opts)?)?
             .load_function("jfa_pass")?;
-        Ok(Self { ctx, seed, jfa })
+        Ok(Self {
+            ctx,
+            seed,
+            seed_scatter,
+            fill_nan,
+            jfa,
+        })
     }
 }
 
@@ -64,6 +79,10 @@ impl SurfaceGpu {
 /// chosen point may differ (CPU hash order vs GPU array order) but the distance
 /// is identical. Returns `None` if there is no usable GPU or any launch step
 /// fails, so the caller falls back to the CPU seed.
+///
+/// Retained as the kernel-level entry point for `gpu_seed_matches_cpu_seed_on_
+/// boundary_nodes`; the production path uses the fused [`seed_and_flood_gpu`].
+#[cfg(test)]
 pub(super) fn seed_boundary_gpu(positions: &[Vec3], spheres: &[Sphere]) -> Option<Vec<[f64; 3]>> {
     if positions.is_empty() {
         return Some(Vec::new());
@@ -72,6 +91,7 @@ pub(super) fn seed_boundary_gpu(positions: &[Vec3], spheres: &[Sphere]) -> Optio
     launch(g, positions, spheres).ok()
 }
 
+#[cfg(test)]
 fn launch(
     g: &SurfaceGpu,
     positions: &[Vec3],
@@ -121,6 +141,10 @@ fn launch(
 /// 27-neighbour nearest-by-squared-distance rule (strict `<`, same scan order),
 /// ping-ponging two device buffers. Node positions are `origin + (i,j,k)·spacing`.
 /// Returns the flooded grid, or `None` if there is no usable GPU.
+///
+/// Retained as the kernel-level entry point for `gpu_jump_flood_matches_cpu`;
+/// the production path uses the fused [`seed_and_flood_gpu`].
+#[cfg(test)]
 pub(super) fn jump_flood_gpu(
     feat: &[[f64; 3]],
     dims: [usize; 3],
@@ -135,6 +159,7 @@ pub(super) fn jump_flood_gpu(
     launch_jfa(g, feat, dims, reach, origin, spacing).ok()
 }
 
+#[cfg(test)]
 fn launch_jfa(
     g: &SurfaceGpu,
     feat: &[[f64; 3]],
@@ -192,6 +217,159 @@ fn launch_jfa(
         // ordering serialises the passes; we synchronise once at the end.
         std::mem::swap(&mut src, &mut dst);
     }
+    let out = stream.clone_dtoh(&src)?;
+    stream.synchronize()?;
+    Ok((0..n)
+        .map(|i| [out[3 * i], out[3 * i + 1], out[3 * i + 2]])
+        .collect())
+}
+
+/// Fused seed + jump-flood, entirely on-device: the production SDF-field path.
+///
+/// Equivalent to `seed_boundary_gpu` (scattered into a full grid) followed by
+/// `jump_flood_gpu`, but the seeded feature buffer never leaves the GPU between
+/// the two stages — dropping the boundary-feature download, the host scatter,
+/// and the full-grid re-upload that the two separate calls incur. This is where
+/// the seed's speedup and the on-device JFA actually compound.
+///
+/// `boundary_idx[t]` is the flat grid index (`i + nx*(j + ny*k)`) of boundary
+/// node `t`, whose position is `boundary_pos[t]`. Returns the flooded full grid
+/// (`dims` product entries, NaN where JFA never reached), or `None` on any GPU
+/// failure so the caller falls back to the CPU seed + CPU jump-flood.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn seed_and_flood_gpu(
+    boundary_pos: &[Vec3],
+    boundary_idx: &[usize],
+    spheres: &[Sphere],
+    dims: [usize; 3],
+    reach: usize,
+    origin: Vec3,
+    spacing: f64,
+) -> Option<Vec<[f64; 3]>> {
+    if dims.iter().product::<usize>() == 0 {
+        return Some(Vec::new());
+    }
+    let g = SurfaceGpu::try_global()?;
+    launch_seed_and_flood(
+        g,
+        boundary_pos,
+        boundary_idx,
+        spheres,
+        dims,
+        reach,
+        origin,
+        spacing,
+    )
+    .ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_seed_and_flood(
+    g: &SurfaceGpu,
+    boundary_pos: &[Vec3],
+    boundary_idx: &[usize],
+    spheres: &[Sphere],
+    dims: [usize; 3],
+    reach: usize,
+    origin: Vec3,
+    spacing: f64,
+) -> Result<Vec<[f64; 3]>, Box<dyn std::error::Error>> {
+    debug_assert_eq!(boundary_pos.len(), boundary_idx.len());
+    let [nx, ny, nz] = dims;
+    let n = nx * ny * nz;
+    let stream = g.ctx.default_stream();
+
+    // Checked conversions: an out-of-range grid/index returns Err → CPU
+    // fallback, never a silently-wrapped launch size or scatter index.
+    let n3 = n.checked_mul(3).ok_or("seed+flood buffer size overflow")?;
+    let n_u32 = u32::try_from(n)?;
+    let n3_u32 = u32::try_from(n3)?;
+    let n3_i64 = i64::try_from(n3)?;
+    let nx_i = i32::try_from(nx)?;
+    let ny_i = i32::try_from(ny)?;
+    let nz_i = i32::try_from(nz)?;
+    // Grid indices must fit i32 for the scatter kernel; the largest is n-1.
+    i32::try_from(n.saturating_sub(1))?;
+
+    // Full-grid feature buffer, NaN-initialised so non-boundary nodes read as
+    // "no feature" for the jump-flood.
+    let mut src = stream.alloc_zeros::<f64>(n3)?;
+    {
+        let mut a = stream.launch_builder(&g.fill_nan);
+        a.arg(&mut src);
+        a.arg(&n3_i64);
+        unsafe {
+            a.launch(LaunchConfig::for_num_elems(n3_u32))?;
+        }
+    }
+
+    // Seed the boundary nodes directly into the full grid (no compaction round
+    // trip). Empty boundary → all-NaN field, valid (no surface in range).
+    let nb = boundary_pos.len();
+    if nb > 0 {
+        let nodes_flat: Vec<f64> = boundary_pos.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
+        let atoms_flat: Vec<f64> = spheres
+            .iter()
+            .flat_map(|s| [s.center.x, s.center.y, s.center.z, s.radius])
+            .collect();
+        let out_idx: Vec<i32> = boundary_idx
+            .iter()
+            .map(|&i| i32::try_from(i))
+            .collect::<Result<_, _>>()?;
+        let nb_i32 = i32::try_from(nb)?;
+        let m_i32 = i32::try_from(spheres.len())?;
+        let nb_u32 = u32::try_from(nb)?;
+
+        let d_nodes = stream.clone_htod(&nodes_flat)?;
+        let d_atoms = stream.clone_htod(&atoms_flat)?;
+        let d_idx = stream.clone_htod(&out_idx)?;
+        {
+            let mut a = stream.launch_builder(&g.seed_scatter);
+            a.arg(&d_nodes);
+            a.arg(&d_atoms);
+            a.arg(&d_idx);
+            a.arg(&nb_i32);
+            a.arg(&m_i32);
+            a.arg(&mut src);
+            unsafe {
+                a.launch(LaunchConfig::for_num_elems(nb_u32))?;
+            }
+        }
+    }
+
+    // Jump-flood on the seeded full grid — identical schedule/rule to
+    // `launch_jfa`, ping-ponging two device buffers.
+    let mut dst = stream.alloc_zeros::<f64>(n3)?;
+    let mut schedule: Vec<usize> = Vec::new();
+    let mut step = reach.max(1).next_power_of_two();
+    while step >= 1 {
+        schedule.push(step);
+        step /= 2;
+    }
+    schedule.push(1);
+
+    let (ox, oy, oz) = (origin.x, origin.y, origin.z);
+    for step in schedule {
+        let step_i = i32::try_from(step)?;
+        {
+            let mut a = stream.launch_builder(&g.jfa);
+            a.arg(&src);
+            a.arg(&mut dst);
+            a.arg(&nx_i);
+            a.arg(&ny_i);
+            a.arg(&nz_i);
+            a.arg(&step_i);
+            a.arg(&ox);
+            a.arg(&oy);
+            a.arg(&oz);
+            a.arg(&spacing);
+            unsafe {
+                a.launch(LaunchConfig::for_num_elems(n_u32))?;
+            }
+        }
+        std::mem::swap(&mut src, &mut dst);
+    }
+
     let out = stream.clone_dtoh(&src)?;
     stream.synchronize()?;
     Ok((0..n)
