@@ -496,6 +496,58 @@ pub(crate) fn m2l_single(
     l
 }
 
+/// Reduce the double-layer **vector** moments `Ŵ_m` to the **effective scalar**
+/// moments `M̂'_k = (1/R_s) Σ_d k_d (Ŵ_{k−e_d})_d` (degree-0 term is 0). This is
+/// the exact contraction `eval_double_layer` performs: with these scalar moments,
+/// `Σ_k a_k R_s^{|k|} M̂'_k = Σ_k a_k R_s^{|k|−1} Σ_d k_d (Ŵ_{k−e_d})_d`, i.e. the
+/// double-layer far field becomes a single-layer expansion — so M2L/L2P reuse the
+/// scalar path verbatim (codex: `m2l_double` is the missing op; `l2l_double` is not,
+/// the local is scalar after this reduction).
+fn double_layer_effective_moments(w: &[Vec3], r_s: f64, p: usize) -> Vec<f64> {
+    let n = p + 1;
+    let inv_r = 1.0 / r_s.max(MIN_RADIUS);
+    let mut eff = vec![0.0; n * n * n];
+    for i in 0..n {
+        for j in 0..(n - i) {
+            for k in 0..(n - i - j) {
+                if i + j + k == 0 {
+                    continue; // k_d ≥ 1 needed for the degree-lowered moment
+                }
+                let idx = [i, j, k];
+                let mut s = 0.0;
+                for (d, &kd) in idx.iter().enumerate() {
+                    if kd >= 1 {
+                        let mut m = idx;
+                        m[d] -= 1;
+                        let wm = w[cidx(m[0], m[1], m[2], p)];
+                        s += kd as f64 * [wm.x, wm.y, wm.z][d];
+                    }
+                }
+                eff[cidx(i, j, k, p)] = inv_r * s;
+            }
+        }
+    }
+    eff
+}
+
+/// **M2L for the double layer**: translate the source cluster's double-layer vector
+/// moments into a **scalar** local expansion about `c_t`. Reduces to the effective
+/// scalar moments ([`double_layer_effective_moments`]) and reuses [`m2l_single`], so
+/// it is consistent-by-construction with [`eval_double_layer`] and shares the scalar
+/// [`l2l_single`] / [`eval_local_single`] downstream.
+#[must_use]
+pub(crate) fn m2l_double(
+    w_moments: &[Vec3],
+    r_s: f64,
+    c_s: Vec3,
+    r_t: f64,
+    c_t: Vec3,
+    p: usize,
+) -> Vec<f64> {
+    let eff = double_layer_effective_moments(w_moments, r_s, p);
+    m2l_single(&eff, r_s, c_s, r_t, c_t, p)
+}
+
 /// Evaluate a single-layer **local** expansion `Σ_m L_m·((t−c_t)/R_t)^m` at target `t`
 /// (the FMM L2P step — cheap, no per-source work). `pub(crate)`: internal FMM building
 /// block (see [`m2l_single`]).
@@ -763,6 +815,41 @@ mod tests {
                 assert!(
                     rel(via_local, direct) < 1e-9,
                     "M2L+L2P {via_local} vs multipole {direct}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn m2l_double_then_local_eval_matches_direct_double_layer() {
+        // FMM self-consistency for the DOUBLE layer: m2l_double (vector moments →
+        // scalar local) + L2P must reproduce the direct double-layer multipole eval
+        // (eval_double_layer) inside a well-separated target cluster. This pins the
+        // effective-scalar-moment reduction against the M2P contraction.
+        let tri = tilted_tri();
+        let p = 8;
+        let (lo, hi) = tri_bbox(&tri);
+        let c_s = (lo + hi) * 0.5;
+        let r_s = (hi - lo).norm() * 0.5;
+        let w_src = double_layer_moments(c_s, r_s, &[(tri, 1.0)], p);
+
+        for (c_t, r_t) in [
+            (Vec3::new(6.0, 5.0, 7.0), 0.4),
+            (Vec3::new(6.0, 5.0, 7.0), 1.2),
+            (Vec3::new(-5.0, 6.0, -4.0), 0.7),
+        ] {
+            let local = m2l_double(&w_src, r_s, c_s, r_t, c_t, p);
+            for off in [
+                Vec3::new(0.1, -0.05, 0.08),
+                Vec3::new(-0.12, 0.2, -0.07),
+                Vec3::new(0.0, 0.0, 0.0),
+            ] {
+                let t = c_t + off * (r_t / 0.4);
+                let via_local = eval_local_single(&local, r_t, c_t, t, p);
+                let direct = eval_double_layer(c_s, r_s, &w_src, t, p);
+                assert!(
+                    rel(via_local, direct) < 1e-9,
+                    "M2L_double+L2P {via_local} vs double-layer M2P {direct}"
                 );
             }
         }
