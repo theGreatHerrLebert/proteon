@@ -36,16 +36,26 @@ pub const MEM_BUDGET: u128 = 6 * (1 << 30); // 6 GiB
 /// Triangle count past which the dense O(N²) solve earns a "this will be slow" advisory.
 pub const N_WARN: usize = 15_000;
 
-/// Opt-in fast-summation (P8 treecode) settings for the **local** solve. The treecode's
-/// realized win today is O(N) memory — solving meshes too large for the dense O(N²)
-/// matrices — not raw matvec speed (see `devdocs/TO_ELECTROSTATICS_P8.md` §5.1), so it is
-/// **never** auto-enabled; a caller asks for it explicitly with calibrated `(p, θ)`.
+/// Fast-summation (P8 treecode) settings, used by both the local and nonlocal solve.
+/// The treecode's realized win today is O(N) memory — solving meshes too large for the
+/// dense O(N²) matrices — not raw matvec speed (see `devdocs/TO_ELECTROSTATICS_P8.md`
+/// §5.1). A caller usually sets it explicitly with calibrated `(p, θ)`; it is also
+/// auto-enabled with [`FastSummation::OVER_BUDGET_FALLBACK`] when a mesh exceeds the
+/// dense [`MEM_BUDGET`] and neither `fast_summation` nor `allow_large` was chosen, so an
+/// oversized mesh solves (approximately) instead of erroring.
 #[derive(Clone, Copy)]
 pub struct FastSummation {
     /// Cartesian expansion order (accuracy knob; higher = tighter, costlier).
     pub p: usize,
     /// MAC admissibility ratio, in `(0, 1)`.
     pub theta: f64,
+}
+
+impl FastSummation {
+    /// Calibrated preset auto-selected when the dense system is over [`MEM_BUDGET`].
+    /// `p=6, θ=0.5` is the gated operating point (`tests/p8_local_solve.rs`): ≤3e-3
+    /// matvec rel-L2 on the sphere ladder and Born energy within 3%.
+    pub const OVER_BUDGET_FALLBACK: FastSummation = FastSummation { p: 6, theta: 0.5 };
 }
 
 /// Tunables for [`solve_surface`] beyond the mesh + charges themselves.
@@ -275,12 +285,10 @@ fn solve_surface_inner(
     // it bypasses the dense guard. Its near field is the exact FIXED-quadrature
     // collocation, so an adaptive-quadrature request on the nonlocal solve is honoured by
     // staying dense (the treecode would silently drop the near-singular remediation).
-    let use_treecode = opts.fast_summation.is_some()
-        && !(opts.nonlocal && matches!(opts.quadrature, Quadrature::Adaptive(_)));
-    if opts.fast_summation.is_some()
-        && opts.nonlocal
-        && matches!(opts.quadrature, Quadrature::Adaptive(_))
-    {
+    // The treecode is bypassed for the nonlocal adaptive-quadrature path (its near field
+    // is the exact fixed-quadrature collocation; adaptive subdivision would be dropped).
+    let treecode_blocked = opts.nonlocal && matches!(opts.quadrature, Quadrature::Adaptive(_));
+    if opts.fast_summation.is_some() && treecode_blocked {
         warnings.push(
             "fast_summation is ignored with quadrature='adaptive' on the nonlocal solve \
              (the treecode near field is fixed-quadrature); the dense adaptive path is used."
@@ -288,10 +296,36 @@ fn solve_surface_inner(
         );
     }
 
-    // Dense memory guard (before the per-element work, matching the original ordering) +
-    // the size advisory. The treecode path is O(N) memory, so the guard does not apply.
+    // Dense memory estimate (2 local / 4 nonlocal N×N f64 blocks). Drives both the guard
+    // and the over-budget treecode fallback below.
     let blocks: u128 = if opts.nonlocal { 4 } else { 2 };
     let est = (nf as u128).saturating_mul(nf as u128).saturating_mul(8) * blocks;
+
+    // Effective fast summation = the caller's explicit setting, OR — when the dense system
+    // is over budget and the caller chose neither the treecode nor the GPU dense path
+    // (`allow_large`) — an auto-enabled calibrated preset, so an oversized mesh solves
+    // (approximately, O(N) memory) instead of erroring. Not applied where the treecode is
+    // blocked (nonlocal + adaptive quadrature) — that path still errors over budget.
+    let mut effective_fs = opts.fast_summation;
+    if est > MEM_BUDGET && effective_fs.is_none() && !opts.allow_large && !treecode_blocked {
+        let fb = FastSummation::OVER_BUDGET_FALLBACK;
+        effective_fs = Some(fb);
+        warnings.push(format!(
+            "{nf} triangles exceeds the dense BEM memory budget ({} GiB): auto-enabling the \
+             treecode (fast summation, p={}, θ={}) — an O(N)-memory APPROXIMATE solve \
+             (~3e-3 matvec accuracy on the gating ladder). Set fast_summation explicitly to \
+             tune (p, θ), or allow_large=true to force the dense matrix-free path instead.",
+            est >> 30,
+            fb.p,
+            fb.theta,
+        ));
+    }
+
+    let use_treecode = effective_fs.is_some() && !treecode_blocked;
+
+    // Dense memory guard (before the per-element work). The treecode path is O(N) memory,
+    // so it does not apply once `use_treecode` is set (explicitly or via the fallback);
+    // this now only fires when the treecode genuinely can't take over (nonlocal+adaptive).
     if est > MEM_BUDGET && !opts.allow_large && !use_treecode {
         return Err(SurfaceSolveError::OverBudget {
             n_elements: nf,
@@ -410,8 +444,8 @@ fn solve_surface_inner(
 
     // --- linear solve + Γ-trace potential ------------------------------------
     let (cauchy, engy, stats): (Box<dyn CauchyData>, f64, _) = if opts.nonlocal {
-        let (r, s) = match (use_treecode, opts.fast_summation, opts.quadrature) {
-            // Opt-in treecode nonlocal solve (O(N) memory; fixed-quadrature near field).
+        let (r, s) = match (use_treecode, effective_fs, opts.quadrature) {
+            // Treecode nonlocal solve (O(N) memory; fixed-quadrature near field).
             (true, Some(fs), _) => solve_nonlocal_elements_treecode(
                 &elements,
                 charges,
@@ -432,8 +466,8 @@ fn solve_surface_inner(
         .map_err(|e| SurfaceSolveError::Solve(e.to_string()))?;
         let e = rfenergy(&elements, charges, &r);
         (Box::new(r), e, s)
-    } else if let Some(fs) = opts.fast_summation {
-        // Opt-in treecode local solve (O(N) memory; see FastSummation docs).
+    } else if let Some(fs) = effective_fs {
+        // Treecode local solve (O(N) memory; explicit or over-budget fallback).
         let (r, s) = solve_local_elements_treecode(
             &elements,
             charges,
