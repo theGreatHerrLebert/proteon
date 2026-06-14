@@ -1788,6 +1788,24 @@ mod tests {
         }
     }
 
+    #[test]
+    #[cfg(feature = "cuda")]
+    fn gpu_dual_contour_empty_field_is_empty_mesh_not_failure() {
+        // A field with no sign crossings (all same sign) has zero verts/tris. The
+        // GPU path must return the empty mesh, not None — a zero-byte CUDA alloc
+        // would otherwise error and look like a device failure (codex).
+        if !crate::surface::seed_gpu::gpu_present() {
+            eprintln!("skipping: no usable GPU");
+            return;
+        }
+        let dims = [4usize, 4, 4];
+        let f = vec![1.0_f64; dims[0] * dims[1] * dims[2]]; // all positive → no crossings
+        let (verts, tris) =
+            crate::surface::seed_gpu::dual_contour_gpu(dims, Vec3::new(0.0, 0.0, 0.0), 1.0, &f)
+                .expect("empty field must yield an empty mesh, not None");
+        assert!(verts.is_empty() && tris.is_empty());
+    }
+
     /// Regression: the spatial-hash `nearest_surface_point` must return the SAME
     /// nearest *exposed* surface point as an exhaustive (all-atoms) reference, even
     /// in a dense cluster where deep pockets put the nearest exposed point several

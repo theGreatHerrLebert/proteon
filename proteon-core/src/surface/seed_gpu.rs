@@ -928,6 +928,13 @@ pub(crate) fn dual_contour_gpu(
         return None;
     }
 
+    // No sign crossings → no vertices (hence no tris, a tri references verts): the
+    // empty mesh. Return before any zero-byte CUDA alloc, which can error
+    // (CUDA_ERROR_INVALID_VALUE) and spuriously fall back to CPU (codex).
+    if total_verts == 0 {
+        return Some((Vec::new(), Vec::new()));
+    }
+
     let d_voff = stream.clone_htod(&vert_offset).ok()?;
     let d_toff = stream.clone_htod(&tri_offset).ok()?;
 
@@ -951,29 +958,35 @@ pub(crate) fn dual_contour_gpu(
         a.arg(&mut d_es);
         unsafe { a.launch(cfg64(ncells)?).ok()? };
     }
-    // K3c: emit tris + a hole-error flag.
-    let mut d_tris = stream.alloc_zeros::<u32>(total_tris.checked_mul(3)?).ok()?;
-    let mut d_err = stream.alloc_zeros::<i32>(1).ok()?;
-    {
-        let mut a = stream.launch_builder(&dc.k3c_emit_tris);
-        a.arg(&d_f);
-        a.arg(&nx_i);
-        a.arg(&ny_i);
-        a.arg(&nz_i);
-        a.arg(&d_voff);
-        a.arg(&d_es);
-        a.arg(&d_toff);
-        a.arg(&mut d_tris);
-        a.arg(&mut d_err);
-        unsafe { a.launch(cfg64(nnodes)?).ok()? };
-    }
-    stream.synchronize().ok()?;
-    let err = stream.clone_dtoh(&d_err).ok()?;
-    if err[0] != 0 {
-        return None; // a hole was detected → exact CPU contour
-    }
+    // K3c: emit tris + a hole-error flag. Guard the zero-tri case (verts but no
+    // tris — e.g. crossings only on unsupported boundary edges): a zero-byte tri
+    // alloc can error, so skip K3c and return a vertex-only mesh (codex).
+    let tris_flat: Vec<u32> = if total_tris == 0 {
+        Vec::new()
+    } else {
+        let mut d_tris = stream.alloc_zeros::<u32>(total_tris.checked_mul(3)?).ok()?;
+        let mut d_err = stream.alloc_zeros::<i32>(1).ok()?;
+        {
+            let mut a = stream.launch_builder(&dc.k3c_emit_tris);
+            a.arg(&d_f);
+            a.arg(&nx_i);
+            a.arg(&ny_i);
+            a.arg(&nz_i);
+            a.arg(&d_voff);
+            a.arg(&d_es);
+            a.arg(&d_toff);
+            a.arg(&mut d_tris);
+            a.arg(&mut d_err);
+            unsafe { a.launch(cfg64(nnodes)?).ok()? };
+        }
+        stream.synchronize().ok()?;
+        let err = stream.clone_dtoh(&d_err).ok()?;
+        if err[0] != 0 {
+            return None; // a hole was detected → exact CPU contour
+        }
+        stream.clone_dtoh(&d_tris).ok()?
+    };
     let verts_flat = stream.clone_dtoh(&d_verts).ok()?;
-    let tris_flat = stream.clone_dtoh(&d_tris).ok()?;
     stream.synchronize().ok()?;
 
     let verts: Vec<[f64; 3]> = verts_flat
