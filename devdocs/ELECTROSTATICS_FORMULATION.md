@@ -27,6 +27,11 @@ those gates are green.
 >   (§9.3): the §7.1 prefactor chain recovers the base-SI Born energy, reconciling the
 >   literal-constant question.
 >
+> **Live-verified (2026-06-14):** re-running `tools/oracle/nessie/harness.jl` against a
+> live NESSie 1.5.0 (same `nessie_tree_hash`) reproduces **every** committed fixture
+> bit-for-bit (max |Δ| = 0; `julia 1.10` vs the fixtures' `1.11`). So the parity gates
+> stand on a confirmed-reproducible oracle, not just recorded dumps.
+>
 > With these + the analytic Born/Kirkwood/Xie/concentric gates, the energies are
 > validated and no longer carry the "do not ship" asterisk.
 
@@ -309,8 +314,11 @@ Rust `assemble()` is gated entrywise against them.
 
 ## 9. P0.5 acceptance (the gates that close this spec)
 
-1. **Block matrices + RHS written out** — `§5`, `§6` (done above; verify against a
-   running NESSie on a 2–4 element mesh, entrywise).
+1. **Block matrices + RHS written out** — `§5`, `§6` (done above) — ✅ **VERIFIED**.
+   The assembled `M`/`b₁` + `umol`/`qmol` are emitted entrywise (`assembly_kernels_*`
+   dump, 32-element subset) and gated by `local_assembly_parity`/`nonlocal_assembly_parity`;
+   re-running the harness against a live NESSie 1.5.0 reproduces them bit-for-bit (see the
+   status banner). (Stronger than the 2–4 element hand check originally scoped.)
 2. **Hand-computable single fixtures** (checked in; non-NESSie references):
    - `K[i,i] = 0` for every flat element (double-layer Laplace InPlane). Also check
      the **regular Yukawa** `Ky[i,i]` flat-panel self term (confirm whether it is also
