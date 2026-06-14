@@ -38,6 +38,8 @@ from ._artifact_checksum import sha256_file, verify_sha256
 from .sequence_example import SequenceExample
 from .sequence_export import load_sequence_examples
 from .supervision import StructureQualityMetadata, StructureSupervisionExample
+from .templates import TemplateFeatures
+from .template_export import load_template_artifact
 from .supervision_export import (
     SEQUENCE_FIELDS as _SEQUENCE_FIELDS,
     STRUCTURE_FIELDS as _STRUCTURE_FIELDS,
@@ -63,6 +65,10 @@ class TrainingExample:
     weight: float = 1.0
     sequence: SequenceExample | None = None
     structure: StructureSupervisionExample | None = None
+    # Template features, left-joined by `iter_complete_training_examples`.
+    # `None` = no template artifact / not joined; an attached bundle may itself
+    # have `n_templates == 0` (retrieval ran, no hits) — see `template_export`.
+    templates: TemplateFeatures | None = None
 
 
 @dataclass
@@ -85,6 +91,7 @@ class TrainingReleaseManifest:
     config_rev: Optional[str] = None
     sequence_release: str = ""
     structure_release: str = ""
+    template_release: Optional[str] = None
     count_examples: int = 0
     split_counts: Dict[str, int] = field(default_factory=dict)
     examples_file: str = "training_examples.jsonl"
@@ -247,8 +254,15 @@ def join_training_examples(
     split_assignments: Optional[Dict[str, str]] = None,
     crop_metadata: Optional[Dict[str, tuple[int, int]]] = None,
     weights: Optional[Dict[str, float]] = None,
+    templates: Optional[Mapping[str, Optional[TemplateFeatures]]] = None,
 ) -> List[TrainingExample]:
-    """Join sequence and structure artifacts by `record_id`."""
+    """Join sequence and structure artifacts by `record_id`.
+
+    `templates`, when given, left-joins a per-`record_id` `TemplateFeatures`
+    bundle. A bundle's `query_len` MUST equal the example length — a mismatch is
+    a bad record-id join (or an incompatible query definition) and is raised, not
+    silently dropped, since a mis-joined template would contaminate supervision.
+    A record with no entry in `templates` simply gets `templates=None`."""
     seq_by_id = {ex.record_id: ex for ex in sequence_examples}
     struc_by_id = {ex.record_id: ex for ex in structure_examples}
     shared_ids = sorted(set(seq_by_id).intersection(struc_by_id))
@@ -259,6 +273,12 @@ def join_training_examples(
         struc = struc_by_id[record_id]
         split = (split_assignments or {}).get(record_id, "train")
         crop = (crop_metadata or {}).get(record_id)
+        tmpl = (templates or {}).get(record_id)
+        if tmpl is not None and int(tmpl.query_len) != int(struc.length):
+            raise ValueError(
+                f"template bundle for {record_id!r} has query_len {tmpl.query_len}, "
+                f"expected example length {struc.length} (bad record-id join)"
+            )
         out.append(
             TrainingExample(
                 record_id=record_id,
@@ -270,6 +290,7 @@ def join_training_examples(
                 weight=float((weights or {}).get(record_id, 1.0)),
                 sequence=seq,
                 structure=struc,
+                templates=tmpl,
             )
         )
     return out
@@ -290,8 +311,13 @@ def build_training_release(
     export_tensors: bool = True,
     row_group_size: int = 512,
     overwrite: bool = False,
+    template_release: Optional[str | Path] = None,
 ) -> Path:
     """Build a training release by joining sequence and structure releases.
+
+    `template_release`, when given, is recorded in the manifest (not copied) so
+    `iter_complete_training_examples` can left-join the template artifact by
+    `record_id` without the caller re-supplying the path.
 
     With `export_tensors=True` (default), writes a streaming
     `training.parquet` artifact under the release root — one row per
@@ -406,6 +432,7 @@ def build_training_release(
         config_rev=config_rev,
         sequence_release=str(Path(sequence_release_dir)),
         structure_release=str(Path(structure_release_dir)),
+        template_release=None if template_release is None else str(Path(template_release)),
         count_examples=count_examples,
         split_counts=split_counts,
         parquet_file=parquet_file,
@@ -551,6 +578,106 @@ def iter_training_examples(
                     chunk = []
         if chunk:
             yield chunk
+
+
+def iter_complete_training_examples(
+    release_dir: str | Path,
+    *,
+    template_dir: Optional[str | Path] = None,
+    split: Optional[str] = None,
+    verify_checksum: bool = True,
+) -> Iterator[TrainingExample]:
+    """Stream **complete** training examples — MSA *and* templates joined onto the
+    structure labels, ready to convert to an OpenFold-style feature dict in one
+    place.
+
+    Unlike `iter_training_examples` (which reads the inline `training.parquet` and
+    deliberately drops MSA — that schema doesn't carry it), this always re-joins
+    the child **sequence release**, so `ex.sequence.msa` / deletion features are
+    populated. Templates are left-joined from `template_dir` (or the manifest's
+    recorded `template_release`); `query_len` is validated against each example
+    (a mismatch raises — see `join_training_examples`).
+
+    Use this for training/eval where the full feature set is needed; use the
+    `training.parquet` path for a fast structure-only scan.
+
+    The **structure** axis streams (one row group at a time); the sequence and
+    template artifacts are held as `record_id` indexes (the join needs random
+    access to them). When `split` is set, only that split's records are joined
+    and template-validated, so a bad template in another split can't fail this
+    load. `verify_checksum` is forwarded to every child artifact read."""
+    root = Path(release_dir)
+    manifest = json.loads((root / "release_manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("format") != TRAINING_EXPORT_FORMAT:
+        raise ValueError(f"unsupported training export format: {manifest.get('format')!r}")
+
+    # Per-record metadata, restricted to the requested split up front — so a
+    # query_len mismatch in an unrelated split is never reached (codex), and we
+    # skip joining records the caller didn't ask for.
+    meta: Dict[str, dict] = {}
+    for line in (root / manifest["examples_file"]).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if split is None or row.get("split", "train") == split:
+            meta[row["record_id"]] = row
+
+    seq_by_id = {
+        ex.record_id: ex
+        for ex in load_sequence_examples(
+            Path(manifest["sequence_release"]) / "examples", verify_checksum=verify_checksum
+        )
+    }
+    tdir = template_dir if template_dir is not None else manifest.get("template_release")
+    templates: Mapping[str, Optional[TemplateFeatures]] = (
+        load_template_artifact(tdir, verify_checksum=verify_checksum) if tdir is not None else {}
+    )
+
+    # Stream structures so the whole structure corpus isn't materialized; join
+    # each to its sequence (MSA) + template by record_id as it arrives.
+    for struc in iter_structure_supervision_examples(
+        Path(manifest["structure_release"]) / "examples", verify_checksum=verify_checksum
+    ):
+        rid = struc.record_id
+        row = meta.get(rid)
+        seq = seq_by_id.get(rid)
+        if row is None or seq is None:
+            continue
+        tmpl = templates.get(rid)
+        if tmpl is not None and int(tmpl.query_len) != int(struc.length):
+            raise ValueError(
+                f"template bundle for {rid!r} has query_len {tmpl.query_len}, "
+                f"expected example length {struc.length} (bad record-id join)"
+            )
+        crop = row.get("crop_start"), row.get("crop_stop")
+        has_crop = row.get("crop_start") is not None
+        yield TrainingExample(
+            record_id=rid,
+            source_id=seq.source_id or struc.source_id,
+            chain_id=seq.chain_id,
+            split=row.get("split", "train"),
+            crop_start=int(crop[0]) if has_crop else None,
+            crop_stop=int(crop[1]) if has_crop else None,
+            weight=float(row.get("weight", 1.0)),
+            sequence=seq,
+            structure=struc,
+            templates=tmpl,
+        )
+
+
+def load_complete_training_examples(
+    release_dir: str | Path,
+    *,
+    template_dir: Optional[str | Path] = None,
+    split: Optional[str] = None,
+    verify_checksum: bool = True,
+) -> List[TrainingExample]:
+    """Materialize `iter_complete_training_examples` (MSA + templates joined)."""
+    return list(
+        iter_complete_training_examples(
+            release_dir, template_dir=template_dir, split=split, verify_checksum=verify_checksum
+        )
+    )
 
 
 def _parquet_row_to_training_example(cols: Mapping[str, list], i: int) -> TrainingExample:
