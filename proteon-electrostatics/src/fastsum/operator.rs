@@ -132,6 +132,11 @@ impl CollocationTreecode {
         let nodes = &self.tree.nodes;
         let mut m2l = Vec::new();
         let mut p2p = Vec::new();
+        if nodes.is_empty() {
+            // An empty operator (no elements) builds no tree — seeding (0,0) would
+            // index a nonexistent root. Preserve the empty-operator behaviour (codex).
+            return (m2l, p2p);
+        }
         // Explicit stack; deterministic emission order (fixed traversal).
         let mut stack = vec![(0usize, 0usize)];
         while let Some((a, b)) = stack.pop() {
@@ -969,6 +974,16 @@ mod tests {
             assert!(e_l2 < 1e-4, "FMM {kind:?} L2 {e_l2:.3e} off dense");
             assert!(e_row < 1e-3, "FMM {kind:?} worst-row {e_row:.3e} off dense");
         }
+    }
+
+    #[test]
+    fn fmm_empty_operator_does_not_panic() {
+        // An empty mesh builds no tree; with_fmm() must not index a missing root
+        // (codex). Construction succeeds and the (trivial) matvec is a no-op.
+        let tree = CollocationTreecode::new(&[], PotentialKind::Single, 4, 0.5).with_fmm();
+        let mut y: Vec<f64> = Vec::new();
+        tree.matvec(&[], &mut y);
+        assert!(y.is_empty());
     }
 
     #[test]
