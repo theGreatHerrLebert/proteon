@@ -21,6 +21,7 @@ use super::geom::{Sphere, Vec3};
 
 const SEED_KERNEL_SRC: &str = include_str!("seed_kernel.cu");
 const JFA_KERNEL_SRC: &str = include_str!("jfa_kernel.cu");
+const DUAL_CONTOUR_KERNEL_SRC: &str = include_str!("dual_contour_kernel.cu");
 
 /// Cached CUDA context + compiled SDF-field kernels (`seed_brute`, `jfa_pass`),
 /// compiled once via NVRTC and shared across all callers.
@@ -76,6 +77,46 @@ impl SurfaceGpu {
             fill_nan,
             jfa,
             finalize,
+        })
+    }
+}
+
+/// Dual-contour (K3) kernels, compiled + cached **separately** from the seed/JFA
+/// path: lazily, only when `dual_contour_gpu` runs (codex). So the production
+/// distance-field path pays no K3 NVRTC startup, and a K3 compile/symbol failure
+/// disables only dual contouring — never the working seed/JFA GPU path.
+#[cfg_attr(not(test), allow(dead_code))]
+struct DualContourGpu {
+    k3a_sheet_count: CudaFunction,
+    k3_node_tri_count: CudaFunction,
+    k3b_emit_verts: CudaFunction,
+    k3c_emit_tris: CudaFunction,
+}
+
+static DUAL_CONTOUR_GPU: OnceLock<Option<DualContourGpu>> = OnceLock::new();
+
+impl DualContourGpu {
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn try_global(g: &SurfaceGpu) -> Option<&'static DualContourGpu> {
+        DUAL_CONTOUR_GPU.get_or_init(|| Self::init(g).ok()).as_ref()
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn init(g: &SurfaceGpu) -> Result<Self, Box<dyn std::error::Error>> {
+        let (major, minor) = g.ctx.compute_capability()?;
+        let arch: &'static str = Box::leak(format!("sm_{major}{minor}").into_boxed_str());
+        let opts = CompileOptions {
+            arch: Some(arch),
+            ..Default::default()
+        };
+        let dc_mod = g
+            .ctx
+            .load_module(compile_ptx_with_opts(DUAL_CONTOUR_KERNEL_SRC, opts)?)?;
+        Ok(Self {
+            k3a_sheet_count: dc_mod.load_function("k3a_sheet_count")?,
+            k3_node_tri_count: dc_mod.load_function("k3_node_tri_count")?,
+            k3b_emit_verts: dc_mod.load_function("k3b_emit_verts")?,
+            k3c_emit_tris: dc_mod.load_function("k3c_emit_tris")?,
         })
     }
 }
@@ -764,4 +805,176 @@ fn launch_field(
     let out = stream.clone_dtoh(&f)?;
     stream.synchronize()?;
     Ok(out)
+}
+
+/// Launch config with explicit 64-thread blocks — the dual-contour kernels carry
+/// the 12-edge union-find + sheet bookkeeping in registers (like the seed kernel),
+/// so the default 1024-thread blocks risk `LAUNCH_OUT_OF_RESOURCES` on CC 7.5.
+#[cfg_attr(not(test), allow(dead_code))]
+fn cfg64(n: usize) -> Option<LaunchConfig> {
+    let n = u32::try_from(n).ok()?;
+    Some(LaunchConfig {
+        grid_dim: (n.div_ceil(64), 1, 1),
+        block_dim: (64, 1, 1),
+        shared_mem_bytes: 0,
+    })
+}
+
+/// Peak `edge_sheet` table guard (codex): `ncells·12` bytes. Above this, fall
+/// back to the CPU contour rather than risk an OOM on a huge grid. 2 GiB leaves
+/// room for the field + scan + vert/tri buffers on an 8 GB card.
+#[cfg_attr(not(test), allow(dead_code))]
+const DC_EDGE_SHEET_BUDGET: usize = 2 << 30;
+
+/// **GPU manifold dual contouring** (SES-SDF K3). Given the grid geometry and the
+/// signed field `f` (node-major, `i + nx*(j + ny*k)`), runs the K3a/scan/K3b/K3c
+/// pipeline on-device and returns `(verts, tris)` — the same surface the CPU
+/// `manifold_dual_contour` produces (topology + geometry, emission order may
+/// differ). Returns `None` on no device, overflow, over-budget, or a detected
+/// hole (a cell missing its sheet vertex), so the caller falls back to the exact
+/// CPU contour. The host does the two exclusive scans (cheap `u32` count arrays);
+/// the field never has to round-trip for the v1 correctness gate.
+///
+/// Validated by `gpu_dual_contour_matches_cpu` (topology+geometry parity vs the
+/// CPU contour). Not yet the production default: an upload-`f` contour is net
+/// slower than the CPU pass (the plan), so the win needs the field-residency
+/// wiring (keep `f` resident after `finalize`, contour it, return only the mesh)
+/// — a follow-up. Hence the `not(test)` dead-code allow.
+#[cfg_attr(not(test), allow(dead_code))]
+#[must_use]
+pub(crate) fn dual_contour_gpu(
+    dims: [usize; 3],
+    origin: Vec3,
+    spacing: f64,
+    f: &[f64],
+) -> Option<(Vec<[f64; 3]>, Vec<[u32; 3]>)> {
+    let g = SurfaceGpu::try_global()?;
+    let dc = DualContourGpu::try_global(g)?;
+    let [nx, ny, nz] = dims;
+    if nx < 2 || ny < 2 || nz < 2 {
+        return Some((Vec::new(), Vec::new())); // no cells → empty mesh
+    }
+    let (cx, cy, cz) = (nx - 1, ny - 1, nz - 1);
+    let ncells = cx.checked_mul(cy)?.checked_mul(cz)?;
+    let nnodes = nx.checked_mul(ny)?.checked_mul(nz)?;
+    if nnodes != f.len() {
+        return None;
+    }
+    if ncells.checked_mul(12)? > DC_EDGE_SHEET_BUDGET {
+        return None; // over-budget edge_sheet table → CPU fallback
+    }
+    let (nx_i, ny_i, nz_i) = (
+        i32::try_from(nx).ok()?,
+        i32::try_from(ny).ok()?,
+        i32::try_from(nz).ok()?,
+    );
+
+    let stream = g.ctx.default_stream();
+    let d_f = stream.clone_htod(f).ok()?;
+
+    // K3a: per-cell sheet count.
+    let mut d_sheet = stream.alloc_zeros::<u32>(ncells).ok()?;
+    {
+        let mut a = stream.launch_builder(&dc.k3a_sheet_count);
+        a.arg(&d_f);
+        a.arg(&nx_i);
+        a.arg(&ny_i);
+        a.arg(&nz_i);
+        a.arg(&mut d_sheet);
+        unsafe { a.launch(cfg64(ncells)?).ok()? };
+    }
+    // Per-node tri count (0/2/4/6).
+    let mut d_tricount = stream.alloc_zeros::<u32>(nnodes).ok()?;
+    {
+        let mut a = stream.launch_builder(&dc.k3_node_tri_count);
+        a.arg(&d_f);
+        a.arg(&nx_i);
+        a.arg(&ny_i);
+        a.arg(&nz_i);
+        a.arg(&mut d_tricount);
+        unsafe { a.launch(cfg64(nnodes)?).ok()? };
+    }
+    stream.synchronize().ok()?;
+    let sheet = stream.clone_dtoh(&d_sheet).ok()?;
+    let tricount = stream.clone_dtoh(&d_tricount).ok()?;
+
+    // Host exclusive scans (u32 offsets; reject if a running total overflows u32).
+    let mut vert_offset = vec![0u32; ncells];
+    let mut acc: u64 = 0;
+    for (off, &c) in vert_offset.iter_mut().zip(&sheet) {
+        *off = u32::try_from(acc).ok()?;
+        acc += u64::from(c);
+    }
+    let total_verts = usize::try_from(acc).ok()?;
+    if acc > u64::from(u32::MAX) {
+        return None;
+    }
+    let mut tri_offset = vec![0u32; nnodes];
+    let mut tacc: u64 = 0;
+    for (off, &c) in tri_offset.iter_mut().zip(&tricount) {
+        *off = u32::try_from(tacc).ok()?;
+        tacc += u64::from(c);
+    }
+    let total_tris = usize::try_from(tacc).ok()?;
+    if tacc > u64::from(u32::MAX) {
+        return None;
+    }
+
+    let d_voff = stream.clone_htod(&vert_offset).ok()?;
+    let d_toff = stream.clone_htod(&tri_offset).ok()?;
+
+    // K3b: emit each sheet's mean vertex + the u8 edge_sheet routing table.
+    let mut d_verts = stream
+        .alloc_zeros::<f64>(total_verts.checked_mul(3)?)
+        .ok()?;
+    let mut d_es = stream.alloc_zeros::<u8>(ncells.checked_mul(12)?).ok()?;
+    {
+        let mut a = stream.launch_builder(&dc.k3b_emit_verts);
+        a.arg(&d_f);
+        a.arg(&nx_i);
+        a.arg(&ny_i);
+        a.arg(&nz_i);
+        a.arg(&origin.x);
+        a.arg(&origin.y);
+        a.arg(&origin.z);
+        a.arg(&spacing);
+        a.arg(&d_voff);
+        a.arg(&mut d_verts);
+        a.arg(&mut d_es);
+        unsafe { a.launch(cfg64(ncells)?).ok()? };
+    }
+    // K3c: emit tris + a hole-error flag.
+    let mut d_tris = stream.alloc_zeros::<u32>(total_tris.checked_mul(3)?).ok()?;
+    let mut d_err = stream.alloc_zeros::<i32>(1).ok()?;
+    {
+        let mut a = stream.launch_builder(&dc.k3c_emit_tris);
+        a.arg(&d_f);
+        a.arg(&nx_i);
+        a.arg(&ny_i);
+        a.arg(&nz_i);
+        a.arg(&d_voff);
+        a.arg(&d_es);
+        a.arg(&d_toff);
+        a.arg(&mut d_tris);
+        a.arg(&mut d_err);
+        unsafe { a.launch(cfg64(nnodes)?).ok()? };
+    }
+    stream.synchronize().ok()?;
+    let err = stream.clone_dtoh(&d_err).ok()?;
+    if err[0] != 0 {
+        return None; // a hole was detected → exact CPU contour
+    }
+    let verts_flat = stream.clone_dtoh(&d_verts).ok()?;
+    let tris_flat = stream.clone_dtoh(&d_tris).ok()?;
+    stream.synchronize().ok()?;
+
+    let verts: Vec<[f64; 3]> = verts_flat
+        .chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
+    let tris: Vec<[u32; 3]> = tris_flat
+        .chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
+    Some((verts, tris))
 }
