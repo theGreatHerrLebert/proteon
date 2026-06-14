@@ -35,6 +35,7 @@ from .supervision_geometry import (
     compute_chi_angles,
     compute_pseudo_beta,
     compute_rigidgroups,
+    compute_torsion_angles_sin_cos,
     extract_atom14,
     extract_atom37,
 )
@@ -114,6 +115,14 @@ class StructureSupervisionExample:
 
     chi_angles: Optional[NDArray[np.float32]] = None
     chi_mask: Optional[NDArray[np.float32]] = None
+
+    # AlphaFold/OpenFold-format torsions: the 7 torsions
+    # [pre_omega, phi, psi, chi1..chi4] packed as (N, 7, 2) sin/cos, the alt
+    # (180°-symmetric) variant, and the (N, 7) mask. Directly loadable by
+    # OpenFold training (matches `atom37_to_torsion_angles`).
+    torsion_angles_sin_cos: Optional[NDArray[np.float32]] = None
+    alt_torsion_angles_sin_cos: Optional[NDArray[np.float32]] = None
+    torsion_angles_mask: Optional[NDArray[np.float32]] = None
 
     rigidgroups_gt_frames: Optional[NDArray[np.float32]] = None
     rigidgroups_gt_exists: Optional[NDArray[np.float32]] = None
@@ -218,6 +227,12 @@ def build_structure_supervision_example(
             "ambiguous": np.asarray(tensors["rigidgroups_group_is_ambiguous"]),
         }
 
+    # AlphaFold-format torsions, derived from atom37 (same on the Rust + Python
+    # paths, since atom37 is parity-tested). Loadable directly by OpenFold.
+    torsions = compute_torsion_angles_sin_cos(
+        atom37["positions"], atom37["mask"], [r.name for r in residues], residue_index
+    )
+
     return StructureSupervisionExample(
         record_id=record_id or _default_record_id(structure, chain.id),
         source_id=source_id,
@@ -251,6 +266,9 @@ def build_structure_supervision_example(
         omega_mask=backbone["omega_mask"],
         chi_angles=chi["angles"],
         chi_mask=chi["mask"],
+        torsion_angles_sin_cos=torsions["torsion_angles_sin_cos"],
+        alt_torsion_angles_sin_cos=torsions["alt_torsion_angles_sin_cos"],
+        torsion_angles_mask=torsions["torsion_angles_mask"],
         rigidgroups_gt_frames=rigidgroups["frames"],
         rigidgroups_gt_exists=rigidgroups["gt_exists"],
         rigidgroups_group_exists=rigidgroups["group_exists"],
@@ -299,6 +317,12 @@ def batch_build_structure_supervision_examples(
                 raise ValueError("structure_supervision_example currently requires a protein chain")
             sequence = "".join(residue_to_one_letter(r.name) for r in residues)
             length = len(residues)
+            torsions = compute_torsion_angles_sin_cos(
+                np.asarray(batch_tensors["all_atom_positions"])[i, :length],
+                np.asarray(batch_tensors["all_atom_mask"])[i, :length],
+                [r.name for r in residues],
+                np.asarray(batch_tensors["residue_index"])[i, :length],
+            )
             out.append(
                 StructureSupervisionExample(
                     record_id=record_ids[i] or _default_record_id(structure, chain.id),
@@ -332,6 +356,9 @@ def batch_build_structure_supervision_examples(
                     omega_mask=np.asarray(batch_tensors["omega_mask"])[i, :length].astype(np.float32, copy=False),
                     chi_angles=np.asarray(batch_tensors["chi_angles"])[i, :length].astype(np.float32, copy=False),
                     chi_mask=np.asarray(batch_tensors["chi_mask"])[i, :length].astype(np.float32, copy=False),
+                    torsion_angles_sin_cos=torsions["torsion_angles_sin_cos"],
+                    alt_torsion_angles_sin_cos=torsions["alt_torsion_angles_sin_cos"],
+                    torsion_angles_mask=torsions["torsion_angles_mask"],
                     rigidgroups_gt_frames=np.asarray(batch_tensors["rigidgroups_gt_frames"])[i, :length].astype(np.float32, copy=False),
                     rigidgroups_gt_exists=np.asarray(batch_tensors["rigidgroups_gt_exists"])[i, :length].astype(np.float32, copy=False),
                     rigidgroups_group_exists=np.asarray(batch_tensors["rigidgroups_group_exists"])[i, :length].astype(np.float32, copy=False),

@@ -277,12 +277,21 @@ For v0, torsions should be exposed in a simple NumPy format.
   - shape: `(N, 4)`
   - dtype: `float32`
 
-Preferred long-term representation:
+#### AlphaFold-format torsions — **IMPLEMENTED**
 
-- `torsion_angles_sin_cos: np.ndarray`
-  - shape: `(N, 7, 2)` if following AF-style packing later
+Alongside the scalar angles above, the example now carries the OpenFold-loadable
+packed representation (the 7 torsions `[pre_omega, phi, psi, chi1..chi4]`):
 
-But v0 may begin with explicit scalar angles plus masks for clarity.
+- `torsion_angles_sin_cos: np.ndarray` — shape `(N, 7, 2)`, dtype `float32`
+- `alt_torsion_angles_sin_cos: np.ndarray` — `(N, 7, 2)`, the 180°-symmetric
+  variant (ASP/GLU/PHE/TYR final chi mirrored via `chi_pi_periodic`)
+- `torsion_angles_mask: np.ndarray` — `(N, 7)`, dtype `float32`
+
+`compute_torsion_angles_sin_cos` (`supervision_geometry.py`) reproduces OpenFold's
+`atom37_to_torsion_angles` exactly — same frame projection, the `[1,1,-1,1,1,1,1]`
+sign convention (psi from the carbonyl O), and `chi_pi_periodic` — gated by
+`tests/test_supervision_torsion_openfold.py` (mask bit-exact; sin/cos `< 1e-5` on
+1crn + 1ubq). Derived from atom37, so it is identical on the Rust and Python paths.
 
 ### 5.8 Rigid-group frames
 

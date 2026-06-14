@@ -102,6 +102,18 @@ CHI_ANGLES_ATOMS = {
     "UNK": [],
 }
 
+# Which chi angle of each residue is 180°-symmetric (the side chain has a
+# 2-fold axis, so chi and chi+π are physically indistinguishable). Per-residue
+# [chi1..chi4] flags, matching AlphaFold/OpenFold `residue_constants.chi_pi_periodic`.
+# Drives `alt_torsion_angles_sin_cos` (the ground-truth "either-orientation"
+# torsion). Residues not listed have no symmetric chi.
+CHI_PI_PERIODIC = {
+    "ASP": [0.0, 1.0, 0.0, 0.0],
+    "GLU": [0.0, 0.0, 1.0, 0.0],
+    "PHE": [0.0, 1.0, 0.0, 0.0],
+    "TYR": [0.0, 1.0, 0.0, 0.0],
+}
+
 
 def residue_to_one_letter(name: str | None) -> str:
     if not name:
