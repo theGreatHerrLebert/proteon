@@ -317,3 +317,57 @@ fn treecode_accuracy_tightens_with_p() {
         "energy error should fall with p: {e4:.3e} -> {e9:.3e}"
     );
 }
+
+/// Over the dense memory budget, a solve that chose neither `fast_summation` nor
+/// `allow_large` must now **auto-enable the treecode** (O(N) memory) and solve —
+/// emitting the auto-enable warning — instead of returning `OverBudget`. Slow (a
+/// ~20k-triangle treecode solve), so ignored by default; run with `--ignored --nocapture`.
+#[test]
+#[ignore = "20k-triangle treecode solve; run manually with --ignored"]
+fn over_budget_auto_enables_treecode() {
+    // subdiv-5 icosphere = 20480 triangles → over the 6 GiB dense local budget
+    // (2·N²·8 B exceeds it past ~20074 triangles).
+    let mesh = analytic_sphere_mesh(2.0, 5);
+    assert!(
+        mesh.tris.len() > 20_074,
+        "fixture must exceed the dense local budget, got {}",
+        mesh.tris.len()
+    );
+    let charges = [Charge {
+        pos: Vec3::new(0.0, 0.0, 0.0),
+        val: 1.0,
+    }];
+    let params = Params {
+        eps_omega: 1.0,
+        eps_sigma: 78.0,
+        eps_inf: 1.8,
+        lambda: 20.0,
+    };
+    let cfg = SolveConfig {
+        tol: 1e-6,
+        ..Default::default()
+    };
+    // No fast_summation, no allow_large → the dense path would be OverBudget; the
+    // fallback must auto-enable the treecode instead.
+    let opts = SurfaceSolveOptions {
+        params,
+        cfg,
+        ..Default::default()
+    };
+    let out = solve_surface(mesh, &charges, &opts);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("auto-enabling the treecode")),
+        "expected the over-budget auto-enable warning, got {:?}",
+        out.warnings
+    );
+    let sol = out
+        .result
+        .expect("over-budget mesh should solve via the treecode fallback, not OverBudget");
+    assert!(
+        sol.rfenergy.is_finite() && sol.rfenergy < 0.0,
+        "finite negative solvation energy, got {}",
+        sol.rfenergy
+    );
+}
