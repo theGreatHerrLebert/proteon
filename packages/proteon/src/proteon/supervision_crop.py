@@ -140,6 +140,23 @@ def crop_template_features(
     return cropped
 
 
+def crop_training_example(example, start: int, stop: int):
+    """Apply a residue crop `[start, stop)` to a `TrainingExample`'s sequence,
+    structure, **and** template tensors together, so every residue axis stays
+    aligned (the loader's single crop call). Returns a new example with the crop
+    materialized and `crop_start`/`crop_stop` cleared — the crop is now applied,
+    so leaving them set would invite a double crop (codex). Whichever sub-example
+    is `None` is left `None`."""
+    updates = {"crop_start": None, "crop_stop": None}
+    if example.sequence is not None:
+        updates["sequence"] = crop_sequence_example(example.sequence, start, stop)
+    if example.structure is not None:
+        updates["structure"] = crop_structure_supervision_example(example.structure, start, stop)
+    if example.templates is not None:
+        updates["templates"] = crop_template_features(example.templates, start, stop)
+    return dataclasses.replace(example, **updates)
+
+
 def sample_contiguous_crop(
     length: int, crop_size: int, rng: np.random.Generator
 ) -> Tuple[int, int]:
