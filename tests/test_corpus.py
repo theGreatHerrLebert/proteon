@@ -53,6 +53,20 @@ class TestInsertionCodes:
         report = proteon.prepare(s, reconstruct=False, minimize=False)
         assert isinstance(report, proteon.PrepReport)
 
+    def test_supervision_torsions_mask_disconnected_insertion(self):
+        """AlphaFold-format torsion supervision must mask pre_omega/phi across the
+        interleaved insertion boundary (res 3 -> 3A, ~80 A apart). Numbering alone
+        treats 3 -> 3A as bonded (insertion-code-adjacent); the CA-CA geometric
+        veto catches the physical break, matching backbone_dihedrals' NaN-ing."""
+        s = proteon.load(corpus_path("insertion_codes", "icode_interleave.pdb"))
+        ex = proteon.build_structure_supervision_example(s)
+        m = ex.torsion_angles_mask
+        # Residue order [1, 2, 3, 3A, 4]: 3->3A and 3A->4 cross the 80 A break.
+        assert m[3, 0] == 0.0 and m[3, 1] == 0.0  # 3A: disconnected from 3
+        assert m[4, 0] == 0.0 and m[4, 1] == 0.0  # 4: disconnected from 3A
+        # Residues 1->2->3 are genuine ~3 A bonds — must stay unmasked.
+        assert m[1, 0] == 1.0 and m[2, 0] == 1.0
+
 
 # =========================================================================
 # Multi-model
