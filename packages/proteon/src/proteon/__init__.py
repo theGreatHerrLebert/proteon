@@ -213,7 +213,17 @@ from .supervision import (
 from .supervision_crop import (
     crop_sequence_example,
     crop_structure_supervision_example,
+    crop_template_features,
     sample_contiguous_crop,
+)
+from .template_export import (
+    TEMPLATE_EXPORT_FORMAT,
+    TEMPLATE_PARQUET_SCHEMA_VERSION,
+    TemplateParquetWriter,
+    iter_template_artifact,
+    load_template_artifact,
+    validate_template_features,
+    write_template_artifact,
 )
 from .supervision_export import (
     SUPERVISION_EXPORT_FORMAT,
@@ -524,7 +534,15 @@ _SUPERVISION_API = (
     "build_structure_supervision_example",
     "crop_structure_supervision_example",
     "crop_sequence_example",
+    "crop_template_features",
     "sample_contiguous_crop",
+    "TEMPLATE_EXPORT_FORMAT",
+    "TEMPLATE_PARQUET_SCHEMA_VERSION",
+    "TemplateParquetWriter",
+    "iter_template_artifact",
+    "load_template_artifact",
+    "validate_template_features",
+    "write_template_artifact",
 )
 
 # The NumPy + Parquet-first export surface for structure-supervision
