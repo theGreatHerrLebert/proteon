@@ -25,7 +25,7 @@ from typing import List, Optional, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from .align import tm_align
+from .align import tm_align, tm_align_one_to_many
 from .supervision_constants import ATOM_ORDER, AA_TO_INDEX, residue_to_one_letter
 from .supervision_geometry import compute_torsion_angles_sin_cos, extract_atom37
 from .templates import TEMPLATE_GAP_INDEX, TemplateFeatures
@@ -151,6 +151,50 @@ def structural_correspondence(
     )
 
 
+def _batch_align(
+    query_structure,
+    candidate_structures: Sequence,
+    query_chain: Optional[str],
+    chains: Sequence[Optional[str]],
+    fast: bool,
+    n_threads: Optional[int],
+):
+    """Align the query against every candidate, returning one result (or `None`
+    on failure) per candidate in input order.
+
+    `tm_align_one_to_many` parallelizes the pool over a rayon thread budget, but
+    it applies a *single* `chain` to the query **and** every target — so it's only
+    equivalent to the per-pair `tm_align(query, cand, chain1, chain2)` calls when
+    every chain (query + all candidates) is the same value (the dominant case:
+    all `None`). For mixed/explicit per-candidate chains, fall back to serial
+    per-pair alignment so the chain semantics stay exact."""
+    n = len(candidate_structures)
+    uniform = all(cc == query_chain for cc in chains)
+    if uniform:
+        batch = tm_align_one_to_many(
+            query_structure,
+            list(candidate_structures),
+            n_threads=n_threads,
+            chain=query_chain,
+            fast=fast,
+            strict=False,
+        )
+        out: List[Optional[object]] = [None] * n
+        for item in batch:
+            if item.ok:
+                out[item.index] = item.value  # raw AlignResult ptr (duck-typed)
+        return out
+    out = []
+    for cand, cchain in zip(candidate_structures, chains):
+        try:
+            out.append(
+                tm_align(query_structure, cand, chain1=query_chain, chain2=cchain, fast=fast)
+            )
+        except Exception:  # noqa: BLE001 - failed pair becomes a None slot
+            out.append(None)
+    return out
+
+
 def build_structure_template_features(
     query_structure,
     candidate_structures: Sequence,
@@ -159,6 +203,7 @@ def build_structure_template_features(
     candidate_chains: Optional[Sequence[Optional[str]]] = None,
     top_k: int = 4,
     fast: bool = False,
+    n_threads: Optional[int] = None,
 ) -> TemplateFeatures:
     """`TemplateFeatures` for `query_structure` from the structurally-aligned
     `candidate_structures`. Each candidate is TM-aligned to the query; its atom37
@@ -168,7 +213,13 @@ def build_structure_template_features(
     `structural_correspondence` for the field-naming caveat) — not a per-set
     max-normalization (a hit's confidence must not depend on its competitors).
     The top `top_k` by TM-score are kept. A candidate that can't be aligned is
-    skipped."""
+    skipped.
+
+    The pool TM-align runs in parallel (`tm_align_one_to_many`, `n_threads`
+    controlling the rayon budget) whenever the query and all candidate chains
+    coincide; explicit per-candidate chains take a serial path (see
+    `_batch_align`). Results are identical either way — only the wall-clock
+    differs."""
     q_res = _amino_acid_residues(query_structure, query_chain)
     length = len(q_res)
     chains = list(candidate_chains) if candidate_chains is not None else [None] * len(
@@ -177,13 +228,18 @@ def build_structure_template_features(
     if len(chains) != len(candidate_structures):
         raise ValueError("candidate_chains length must match candidate_structures")
 
+    align_results = _batch_align(
+        query_structure, candidate_structures, query_chain, chains, fast, n_threads
+    )
+
     rows = []  # (tm_score, aatype, positions, masks)
-    for cand_pos, (cand, cchain) in enumerate(zip(candidate_structures, chains)):
+    for cand_pos, (cand, cchain, result) in enumerate(
+        zip(candidate_structures, chains, align_results)
+    ):
         try:
+            if result is None:
+                raise ValueError("TM-align produced no alignment for this candidate")
             t_res = _amino_acid_residues(cand, cchain)
-            result = tm_align(
-                query_structure, cand, chain1=query_chain, chain2=cchain, fast=fast
-            )
             corr = structural_correspondence(result, q_res, t_res)
         except Exception as exc:
             # Skip an unusable candidate (failed alignment, or a residue-set

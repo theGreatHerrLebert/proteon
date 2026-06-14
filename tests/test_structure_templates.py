@@ -162,6 +162,39 @@ def test_template_insertion_masks_backbone_torsions():
         assert tmask[row, 0] == 0.0 and tmask[row, 1] == 0.0, row
 
 
+def _assert_features_equal(a, b):
+    assert a.n_templates == b.n_templates
+    np.testing.assert_array_equal(a.template_aatype, b.template_aatype)
+    np.testing.assert_array_equal(
+        a.template_all_atom_positions, b.template_all_atom_positions
+    )
+    np.testing.assert_array_equal(a.template_all_atom_masks, b.template_all_atom_masks)
+    np.testing.assert_array_equal(a.template_sum_probs, b.template_sum_probs)
+
+
+def test_n_threads_is_deterministic():
+    """The parallel pool (`tm_align_one_to_many`) must be order- and
+    thread-count-independent: more threads, identical features."""
+    q = _load("1crn.pdb")
+    u = _load("1ubq.pdb")
+    one = build_structure_template_features(q, [u, q, u], top_k=3, n_threads=1)
+    many = build_structure_template_features(q, [u, q, u], top_k=3, n_threads=4)
+    _assert_features_equal(one, many)
+
+
+def test_parallel_and_serial_paths_agree():
+    """`_batch_align`'s parallel branch (uniform `None` chains) and its serial
+    branch (explicit per-candidate chains) must produce identical features for
+    single-chain fixtures (chain 'A')."""
+    q = _load("1crn.pdb")
+    u = _load("1ubq.pdb")
+    parallel = build_structure_template_features(q, [u, q], top_k=2)
+    serial = build_structure_template_features(
+        q, [u, q], top_k=2, query_chain="A", candidate_chains=["A", "A"]
+    )
+    _assert_features_equal(parallel, serial)
+
+
 class _StubAlign:
     """Minimal AlignResult stand-in for the correspondence-contract tests."""
 
