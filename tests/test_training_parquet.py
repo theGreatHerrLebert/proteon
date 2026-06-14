@@ -74,6 +74,9 @@ def _fake_struc(record_id: str, chain_id: str, L: int, seed: int) -> StructureSu
         omega_mask=rng.random(L, dtype=np.float32),
         chi_angles=rng.standard_normal((L, 4), dtype=np.float32),
         chi_mask=rng.random((L, 4), dtype=np.float32),
+        torsion_angles_sin_cos=rng.standard_normal((L, 7, 2), dtype=np.float32),
+        alt_torsion_angles_sin_cos=rng.standard_normal((L, 7, 2), dtype=np.float32),
+        torsion_angles_mask=rng.random((L, 7), dtype=np.float32),
         rigidgroups_gt_frames=rng.standard_normal((L, 8, 4, 4), dtype=np.float32),
         rigidgroups_gt_exists=rng.random((L, 8), dtype=np.float32),
         rigidgroups_group_exists=rng.random((L, 8), dtype=np.float32),
@@ -222,6 +225,7 @@ def test_schema_has_expected_fields():
         "pseudo_beta", "pseudo_beta_mask",
         "phi", "psi", "omega", "phi_mask", "psi_mask", "omega_mask",
         "chi_angles", "chi_mask",
+        "torsion_angles_sin_cos", "alt_torsion_angles_sin_cos", "torsion_angles_mask",
         "rigidgroups_gt_frames", "rigidgroups_gt_exists",
         "rigidgroups_group_exists", "rigidgroups_group_is_ambiguous",
     }

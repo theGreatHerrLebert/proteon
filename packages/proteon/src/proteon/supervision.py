@@ -230,7 +230,7 @@ def build_structure_supervision_example(
     # AlphaFold-format torsions, derived from atom37 (same on the Rust + Python
     # paths, since atom37 is parity-tested). Loadable directly by OpenFold.
     torsions = compute_torsion_angles_sin_cos(
-        atom37["positions"], atom37["mask"], [r.name for r in residues]
+        atom37["positions"], atom37["mask"], [r.name for r in residues], residue_index
     )
 
     return StructureSupervisionExample(
@@ -321,6 +321,7 @@ def batch_build_structure_supervision_examples(
                 np.asarray(batch_tensors["all_atom_positions"])[i, :length],
                 np.asarray(batch_tensors["all_atom_mask"])[i, :length],
                 [r.name for r in residues],
+                np.asarray(batch_tensors["residue_index"])[i, :length],
             )
             out.append(
                 StructureSupervisionExample(

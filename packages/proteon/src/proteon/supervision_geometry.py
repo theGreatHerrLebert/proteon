@@ -210,7 +210,7 @@ def _torsion_sin_cos(a0, a1, a2, a3) -> NDArray[np.float64]:
 
 
 def compute_torsion_angles_sin_cos(
-    positions: NDArray, mask: NDArray, resnames
+    positions: NDArray, mask: NDArray, resnames, residue_index=None
 ) -> Dict[str, NDArray]:
     """AlphaFold/OpenFold-format torsion supervision from atom37.
 
@@ -220,8 +220,12 @@ def compute_torsion_angles_sin_cos(
     `atom37_to_torsion_angles` (frame projection, the `[1,1,-1,1,1,1,1]` sign
     convention, and `chi_pi_periodic` for the 180°-symmetric alt). `positions`
     `(N, 37, 3)` + `mask` `(N, 37)` are atom37; `resnames` are the 3-letter codes.
-    `pre_omega`/`phi` use residue `i-1` (masked at chain start) — mirror OpenFold;
-    discontinuous chains must be split upstream.
+
+    `pre_omega`/`phi` are computed from residue `i-1`. When `residue_index` is
+    given they are masked at a **chain break** (`residue_index[i] != [i-1]+1`),
+    not just at the array start — OpenFold relies on upstream masking, we do it
+    here. With `residue_index=None` the behaviour is row-adjacency (OpenFold-exact,
+    used by the parity test on gap-free meshes).
     """
     n = len(resnames)
     iN, iCA, iC, iO = ATOM_ORDER["N"], ATOM_ORDER["CA"], ATOM_ORDER["C"], ATOM_ORDER["O"]
@@ -232,7 +236,11 @@ def compute_torsion_angles_sin_cos(
         rn = (resnames[i] or "UNK").strip().upper()
         cur = positions[i]
         cm = mask[i]
-        if i > 0:
+        prev_bonded = i > 0 and (
+            residue_index is None
+            or int(residue_index[i]) == int(residue_index[i - 1]) + 1
+        )
+        if prev_bonded:
             prev, pm = positions[i - 1], mask[i - 1]
             p_ca, p_c, pm_ca, pm_c = prev[iCA], prev[iC], pm[iCA], pm[iC]
         else:
