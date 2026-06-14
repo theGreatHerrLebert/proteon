@@ -55,6 +55,8 @@ MSA_FIELDS: Tuple[Tuple[str, type, str], ...] = (
     ("msa", np.int32, "msa"),
     ("deletion_matrix", np.float32, "deletion_matrix"),
     ("msa_mask", np.float32, "msa_mask"),
+    ("has_deletion", np.float32, "has_deletion"),
+    ("deletion_value", np.float32, "deletion_value"),
 )
 
 

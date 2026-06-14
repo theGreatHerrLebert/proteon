@@ -37,6 +37,14 @@ class SequenceExample:
     deletion_matrix: Optional[NDArray[np.float32]] = None
     msa_mask: Optional[NDArray[np.float32]] = None
     msa_profile: Optional[NDArray[np.float32]] = None
+    # AlphaFold/OpenFold model-ready per-(seq, residue) deletion features, derived
+    # from `deletion_matrix` (the deterministic part of `make_msa_feat`):
+    #   has_deletion   = clip(deletion_matrix, 0, 1)
+    #   deletion_value = atan(deletion_matrix / 3) · 2/π   (∈ [0, 1))
+    # The cluster_profile / extra-MSA features need the stochastic clustering
+    # pipeline and are out of scope here.
+    has_deletion: Optional[NDArray[np.float32]] = None
+    deletion_value: Optional[NDArray[np.float32]] = None
     template_mask: Optional[NDArray[np.float32]] = None
 
 
@@ -69,6 +77,7 @@ def build_sequence_example(
     msa_profile_arr = None
     if msa_arr is not None and msa_mask_arr is not None:
         msa_profile_arr = compute_msa_profile(msa_arr, msa_mask_arr)
+    has_del_arr, del_val_arr = compute_msa_deletion_features(deletion_arr)
     template_mask_arr = None
     if template_mask is not None:
         template_mask_arr = np.asarray(template_mask, dtype=np.float32)
@@ -88,6 +97,8 @@ def build_sequence_example(
         deletion_matrix=deletion_arr,
         msa_mask=msa_mask_arr,
         msa_profile=msa_profile_arr,
+        has_deletion=has_del_arr,
+        deletion_value=del_val_arr,
         template_mask=template_mask_arr,
     )
 
@@ -126,6 +137,27 @@ def batch_build_sequence_examples(
         )
         for i, structure in enumerate(structures)
     ]
+
+
+def compute_msa_deletion_features(
+    deletion_matrix: Optional[NDArray[np.float32]],
+):
+    """AlphaFold/OpenFold per-(seq, residue) deletion features from a raw
+    deletion-count matrix — the deterministic part of `make_msa_feat`:
+
+        has_deletion   = clip(deletion_matrix, 0, 1)
+        deletion_value = arctan(deletion_matrix / 3) · (2/π)   (∈ [0, 1))
+
+    Returns `(has_deletion, deletion_value)` as `(N_seq, L)` float32, or
+    `(None, None)` when there is no MSA. Matches OpenFold exactly (gated by
+    `tests/test_msa_deletion_openfold.py`).
+    """
+    if deletion_matrix is None:
+        return None, None
+    d = np.asarray(deletion_matrix, dtype=np.float32)
+    has_deletion = np.clip(d, 0.0, 1.0).astype(np.float32)
+    deletion_value = (np.arctan(d / 3.0) * (2.0 / np.pi)).astype(np.float32)
+    return has_deletion, deletion_value
 
 
 def compute_msa_profile(
