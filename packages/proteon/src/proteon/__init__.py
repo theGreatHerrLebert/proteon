@@ -179,6 +179,11 @@ from .msa_backend import (
     search_and_build_msa,
 )
 from .templates import TEMPLATE_GAP_INDEX, TemplateFeatures, build_template_features
+from .structure_templates import (
+    StructuralCorrespondence,
+    build_structure_template_features,
+    structural_correspondence,
+)
 from .sequence_example import (
     SequenceExample,
     batch_build_sequence_examples,
@@ -476,6 +481,9 @@ _TEMPLATE_API = (
     "TEMPLATE_GAP_INDEX",
     "TemplateFeatures",
     "build_template_features",
+    "StructuralCorrespondence",
+    "build_structure_template_features",
+    "structural_correspondence",
 )
 
 _SEQUENCE_API = (
