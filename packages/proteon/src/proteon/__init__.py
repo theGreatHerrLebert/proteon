@@ -197,6 +197,16 @@ from .sequence_example import (
     build_sequence_example,
 )
 from .msa_io import load_msas_from_dir, parse_a3m_file, parse_a3m_text
+from .msa_features import (
+    MsaFeatures,
+    build_msa_features,
+    crop_extra_msa,
+    make_masked_msa,
+    make_msa_feat,
+    nearest_neighbor_clusters,
+    sample_msa,
+    summarize_clusters,
+)
 from .io import (
     LoadRescueResult,
     batch_load,
@@ -518,6 +528,14 @@ _SEQUENCE_API = (
     "load_msas_from_dir",
     "parse_a3m_file",
     "parse_a3m_text",
+    "MsaFeatures",
+    "build_msa_features",
+    "crop_extra_msa",
+    "make_masked_msa",
+    "make_msa_feat",
+    "nearest_neighbor_clusters",
+    "sample_msa",
+    "summarize_clusters",
 )
 
 _IO_API = (
