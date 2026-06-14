@@ -184,6 +184,13 @@ from .structure_templates import (
     build_structure_template_features,
     structural_correspondence,
 )
+from .template_retrieval import (
+    RetrievalDiagnostics,
+    TemplateCandidate,
+    build_structure_template_features_from_db,
+    retrieve_template_candidate_hits,
+    retrieve_template_candidates,
+)
 from .sequence_example import (
     SequenceExample,
     batch_build_sequence_examples,
@@ -507,6 +514,11 @@ _TEMPLATE_API = (
     "StructuralCorrespondence",
     "build_structure_template_features",
     "structural_correspondence",
+    "RetrievalDiagnostics",
+    "TemplateCandidate",
+    "build_structure_template_features_from_db",
+    "retrieve_template_candidate_hits",
+    "retrieve_template_candidates",
 )
 
 _SEQUENCE_API = (
