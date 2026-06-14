@@ -73,6 +73,22 @@ def test_cross_template_sorts_and_keeps_raw_tm_score():
     assert 0 < n_aligned < tf.query_len
 
 
+def test_confidence_is_query_normalized_not_template_normalized():
+    """`template_sum_probs` must be the *query*-length-normalized TM-score.
+    proteon's `tm_score_chain1` is normalized by chain2 (the template) and
+    `tm_score_chain2` by chain1 (the query) — inverted names (core/types.rs).
+    For an asymmetric pair (query 1crn=46 vs template 1ubq=76) the two diverge,
+    so this pins the right one (codex catch)."""
+    q = _load("1crn.pdb")
+    u = _load("1ubq.pdb")
+    res = proteon.tm_align(q, u)  # query=chain1, template=chain2
+    # Sanity: the two normalizations genuinely differ for this pair.
+    assert abs(res.tm_score_chain1 - res.tm_score_chain2) > 0.05
+    tf = build_structure_template_features(q, [u], top_k=1)
+    assert tf.template_sum_probs[0] == pytest.approx(res.tm_score_chain2, abs=1e-4)
+    assert tf.template_sum_probs[0] != pytest.approx(res.tm_score_chain1, abs=1e-4)
+
+
 def test_unaligned_rows_are_zero_masked_gap():
     q = _load("1crn.pdb")
     u = _load("1ubq.pdb")
@@ -105,7 +121,10 @@ class _StubAlign:
     def __init__(self, ax, ay, tm=0.5, n=0):
         self.aligned_seq_x = ax
         self.aligned_seq_y = ay
-        self.tm_score_chain1 = tm
+        # Confidence reads tm_score_chain2 (query-length-normalized); chain1 is a
+        # decoy so a regression back to chain1 fails the contract test.
+        self.tm_score_chain2 = tm
+        self.tm_score_chain1 = -1.0
         self.n_aligned = n
 
 

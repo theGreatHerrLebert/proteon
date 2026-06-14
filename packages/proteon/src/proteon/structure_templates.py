@@ -118,10 +118,17 @@ def structural_correspondence(
     ta = np.asarray(ti, dtype=np.int32)
     if qa.size and not (np.all(np.diff(qa) > 0) and np.all(np.diff(ta) > 0)):
         raise ValueError("correspondence indices are not strictly increasing")
+    # Confidence is the *query*-length-normalized TM-score. proteon's field
+    # naming is inverted vs. what it measures (core/types.rs:165-168):
+    # `tm_score_chain1` is normalized by chain2's length, `tm_score_chain2` by
+    # chain1's. The query is TM-align chain1 (`tm_align(query, cand)`), so the
+    # query-normalized score is `tm_score_chain2` — they diverge whenever query
+    # and template lengths differ, and ranking by the wrong one can pick the
+    # wrong top-K (codex catch).
     return StructuralCorrespondence(
         query_idx=qa,
         template_idx=ta,
-        tm_score=float(align_result.tm_score_chain1),
+        tm_score=float(align_result.tm_score_chain2),
         n_aligned=int(qa.size),
         query_len=len(query_residues),
         template_len=len(template_residues),
@@ -141,7 +148,8 @@ def build_structure_template_features(
     `candidate_structures`. Each candidate is TM-aligned to the query; its atom37
     is gathered onto the aligned query rows (template-native frame), unaligned rows
     stay zero/mask-0/`TEMPLATE_GAP_INDEX`. `template_sum_probs` is the **raw,
-    query-length-normalized TM-score** (`tm_score_chain1`) — not a per-set
+    query-length-normalized TM-score** (`tm_score_chain2`; see
+    `structural_correspondence` for the field-naming caveat) — not a per-set
     max-normalization (a hit's confidence must not depend on its competitors).
     The top `top_k` by TM-score are kept. A candidate that can't be aligned is
     skipped."""
