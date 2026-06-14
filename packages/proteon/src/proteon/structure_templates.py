@@ -25,12 +25,28 @@ from typing import List, Optional, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from .align import tm_align
-from .supervision_constants import AA_TO_INDEX, residue_to_one_letter
-from .supervision_geometry import extract_atom37
+from .align import tm_align, tm_align_one_to_many
+from .supervision_constants import ATOM_ORDER, AA_TO_INDEX, residue_to_one_letter
+from .supervision_geometry import compute_torsion_angles_sin_cos, extract_atom37
 from .templates import TEMPLATE_GAP_INDEX, TemplateFeatures
 
 _X_INDEX = AA_TO_INDEX["X"]
+_CA_IDX = ATOM_ORDER["CA"]
+_CB_IDX = ATOM_ORDER["CB"]
+
+
+def _pseudo_beta_from_atom37(positions, mask, resnames):
+    """Per-residue pseudo-β (CB, or CA for glycine) from gathered atom37 — mirrors
+    `supervision_geometry.compute_pseudo_beta` on `(L, 37)` arrays + resnames."""
+    n = len(resnames)
+    coords = np.zeros((n, 3), dtype=np.float32)
+    pb_mask = np.zeros((n,), dtype=np.float32)
+    for i in range(n):
+        idx = _CA_IDX if resnames[i] == "GLY" else _CB_IDX
+        if mask[i, idx] > 0:
+            coords[i] = positions[i, idx]
+            pb_mask[i] = 1.0
+    return coords, pb_mask
 
 
 @dataclass
@@ -135,6 +151,57 @@ def structural_correspondence(
     )
 
 
+def _batch_align(
+    query_structure,
+    candidate_structures: Sequence,
+    query_chain: Optional[str],
+    chains: Sequence[Optional[str]],
+    fast: bool,
+    n_threads: Optional[int],
+):
+    """Align the query against every candidate, returning one result (or `None`
+    on failure) per candidate in input order.
+
+    `tm_align_one_to_many` parallelizes the pool over a rayon thread budget, but
+    it applies a *single* `chain` to the query **and** every target — so it's only
+    equivalent to the per-pair `tm_align(query, cand, chain1, chain2)` calls when
+    every chain (query + all candidates) is the same value (the dominant case:
+    all `None`). For mixed/explicit per-candidate chains, fall back to serial
+    per-pair alignment so the chain semantics stay exact.
+
+    Each slot is a `(result, error)` pair: on success `(AlignResult, None)`, on
+    failure `(None, message)`. The failure message (the `BatchItem.error` from
+    the parallel path or the serial exception text) is retained so the caller's
+    skip warning can say *why* a candidate dropped — not just that it did."""
+    n = len(candidate_structures)
+    uniform = all(cc == query_chain for cc in chains)
+    if uniform:
+        batch = tm_align_one_to_many(
+            query_structure,
+            list(candidate_structures),
+            n_threads=n_threads,
+            chain=query_chain,
+            fast=fast,
+            strict=False,
+        )
+        out: List[tuple] = [(None, "no result returned")] * n
+        for item in batch:
+            if item.ok:
+                out[item.index] = (item.value, None)  # raw AlignResult ptr (duck-typed)
+            else:
+                out[item.index] = (None, str(item.error))
+        return out
+    out = []
+    for cand, cchain in zip(candidate_structures, chains):
+        try:
+            out.append(
+                (tm_align(query_structure, cand, chain1=query_chain, chain2=cchain, fast=fast), None)
+            )
+        except Exception as exc:  # noqa: BLE001 - failed pair keeps its message
+            out.append((None, str(exc)))
+    return out
+
+
 def build_structure_template_features(
     query_structure,
     candidate_structures: Sequence,
@@ -143,6 +210,7 @@ def build_structure_template_features(
     candidate_chains: Optional[Sequence[Optional[str]]] = None,
     top_k: int = 4,
     fast: bool = False,
+    n_threads: Optional[int] = None,
 ) -> TemplateFeatures:
     """`TemplateFeatures` for `query_structure` from the structurally-aligned
     `candidate_structures`. Each candidate is TM-aligned to the query; its atom37
@@ -152,7 +220,13 @@ def build_structure_template_features(
     `structural_correspondence` for the field-naming caveat) — not a per-set
     max-normalization (a hit's confidence must not depend on its competitors).
     The top `top_k` by TM-score are kept. A candidate that can't be aligned is
-    skipped."""
+    skipped.
+
+    The pool TM-align runs in parallel (`tm_align_one_to_many`, `n_threads`
+    controlling the rayon budget) whenever the query and all candidate chains
+    coincide; explicit per-candidate chains take a serial path (see
+    `_batch_align`). Results are identical either way — only the wall-clock
+    differs."""
     q_res = _amino_acid_residues(query_structure, query_chain)
     length = len(q_res)
     chains = list(candidate_chains) if candidate_chains is not None else [None] * len(
@@ -161,13 +235,18 @@ def build_structure_template_features(
     if len(chains) != len(candidate_structures):
         raise ValueError("candidate_chains length must match candidate_structures")
 
+    align_results = _batch_align(
+        query_structure, candidate_structures, query_chain, chains, fast, n_threads
+    )
+
     rows = []  # (tm_score, aatype, positions, masks)
-    for cand_pos, (cand, cchain) in enumerate(zip(candidate_structures, chains)):
+    for cand_pos, (cand, cchain, (result, align_err)) in enumerate(
+        zip(candidate_structures, chains, align_results)
+    ):
         try:
+            if result is None:
+                raise ValueError(f"TM-align failed: {align_err}")
             t_res = _amino_acid_residues(cand, cchain)
-            result = tm_align(
-                query_structure, cand, chain1=query_chain, chain2=cchain, fast=fast
-            )
             corr = structural_correspondence(result, q_res, t_res)
         except Exception as exc:
             # Skip an unusable candidate (failed alignment, or a residue-set
@@ -182,11 +261,29 @@ def build_structure_template_features(
         aatype = np.full(length, TEMPLATE_GAP_INDEX, dtype=np.int32)
         positions = np.zeros((length, 37, 3), dtype=np.float32)
         masks = np.zeros((length, 37), dtype=np.float32)
+        resnames = ["UNK"] * length
+        # Per-query-row template residue *numbering* (serial_number), for the
+        # torsion continuity check — matching what `build_structure_supervision_
+        # example` uses, so a template residue-number gap / chain break correctly
+        # masks pre_omega/phi (positional indices would stay consecutive across the
+        # break and forge a bond — codex catch). Unaligned rows get strictly-
+        # decreasing negative sentinels so they never read as peptide-bonded.
+        tmpl_idx_row = -1 - 2 * np.arange(length, dtype=np.int64)
         for qi, ti in zip(corr.query_idx, corr.template_idx):
             positions[qi] = t37["positions"][ti]
             masks[qi] = t37["mask"][ti]
-            aatype[qi] = AA_TO_INDEX.get(residue_to_one_letter(t_res[ti].name), _X_INDEX)
-        rows.append((corr.tm_score, aatype, positions, masks))
+            rn = (t_res[ti].name or "UNK").strip().upper()
+            resnames[qi] = rn
+            aatype[qi] = AA_TO_INDEX.get(residue_to_one_letter(rn), _X_INDEX)
+            tmpl_idx_row[qi] = int(t_res[ti].serial_number)
+
+        # Derived geometry from the gathered template atom37. The torsion continuity
+        # uses the *template* residue indices: query-adjacent rows mapping to
+        # nonconsecutive template residues (a template insertion) must NOT form a
+        # peptide bond, so pre_omega/phi mask there (codex catch).
+        pb, pb_mask = _pseudo_beta_from_atom37(positions, masks, resnames)
+        tors = compute_torsion_angles_sin_cos(positions, masks, resnames, tmpl_idx_row)
+        rows.append((corr.tm_score, aatype, positions, masks, pb, pb_mask, tors))
 
     rows.sort(key=lambda r: -r[0])
     rows = rows[:top_k]
@@ -204,4 +301,15 @@ def build_structure_template_features(
         template_sum_probs=np.asarray([r[0] for r in rows], dtype=np.float32),
         n_templates=n,
         query_len=length,
+        template_pseudo_beta=_stack([r[4] for r in rows], (length, 3), np.float32),
+        template_pseudo_beta_mask=_stack([r[5] for r in rows], (length,), np.float32),
+        template_torsion_angles_sin_cos=_stack(
+            [r[6]["torsion_angles_sin_cos"] for r in rows], (length, 7, 2), np.float32
+        ),
+        template_alt_torsion_angles_sin_cos=_stack(
+            [r[6]["alt_torsion_angles_sin_cos"] for r in rows], (length, 7, 2), np.float32
+        ),
+        template_torsion_angles_mask=_stack(
+            [r[6]["torsion_angles_mask"] for r in rows], (length, 7), np.float32
+        ),
     )

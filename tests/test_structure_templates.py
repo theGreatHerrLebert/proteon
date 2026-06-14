@@ -115,6 +115,86 @@ def test_no_candidates_is_empty():
     assert tf.template_sum_probs.shape == (0,)
 
 
+def test_self_template_geometry_matches_supervision():
+    from proteon.supervision import build_structure_supervision_example
+
+    q = _load("1crn.pdb")
+    tf = build_structure_template_features(q, [q])
+    ex = build_structure_supervision_example(q)
+    # The self-template's derived geometry must equal the query's own supervision
+    # geometry (same atom37, identity correspondence).
+    np.testing.assert_allclose(tf.template_pseudo_beta[0], ex.pseudo_beta)
+    np.testing.assert_array_equal(tf.template_pseudo_beta_mask[0], ex.pseudo_beta_mask)
+    np.testing.assert_allclose(
+        tf.template_torsion_angles_sin_cos[0], ex.torsion_angles_sin_cos, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        tf.template_alt_torsion_angles_sin_cos[0],
+        ex.alt_torsion_angles_sin_cos,
+        atol=1e-6,
+    )
+    np.testing.assert_array_equal(
+        tf.template_torsion_angles_mask[0], ex.torsion_angles_mask
+    )
+
+
+def test_template_insertion_masks_backbone_torsions():
+    """Query-adjacent rows mapping to nonconsecutive *template* residues (a template
+    insertion) must NOT form a peptide bond — pre_omega/phi mask there, even with
+    atoms present. The continuity reuse (codex catch)."""
+    q = _load("1crn.pdb")
+    u = _load("1ubq.pdb")
+    qres = _amino_acid_residues(q, None)
+    ures = _amino_acid_residues(u, None)
+    corr = structural_correspondence(proteon.tm_align(q, u), qres, ures)
+    qi, ti = corr.query_idx, corr.template_idx
+    insertions = [
+        int(qi[k])
+        for k in range(1, len(qi))
+        if qi[k] == qi[k - 1] + 1 and ti[k] != ti[k - 1] + 1
+    ]
+    assert insertions, "expected at least one template insertion in 1crn vs 1ubq"
+
+    tf = build_structure_template_features(q, [u], top_k=1)
+    tmask = tf.template_torsion_angles_mask[0]
+    for row in insertions:
+        # pre_omega (0) and phi (1) depend on the previous residue → masked at a break.
+        assert tmask[row, 0] == 0.0 and tmask[row, 1] == 0.0, row
+
+
+def _assert_features_equal(a, b):
+    assert a.n_templates == b.n_templates
+    np.testing.assert_array_equal(a.template_aatype, b.template_aatype)
+    np.testing.assert_array_equal(
+        a.template_all_atom_positions, b.template_all_atom_positions
+    )
+    np.testing.assert_array_equal(a.template_all_atom_masks, b.template_all_atom_masks)
+    np.testing.assert_array_equal(a.template_sum_probs, b.template_sum_probs)
+
+
+def test_n_threads_is_deterministic():
+    """The parallel pool (`tm_align_one_to_many`) must be order- and
+    thread-count-independent: more threads, identical features."""
+    q = _load("1crn.pdb")
+    u = _load("1ubq.pdb")
+    one = build_structure_template_features(q, [u, q, u], top_k=3, n_threads=1)
+    many = build_structure_template_features(q, [u, q, u], top_k=3, n_threads=4)
+    _assert_features_equal(one, many)
+
+
+def test_parallel_and_serial_paths_agree():
+    """`_batch_align`'s parallel branch (uniform `None` chains) and its serial
+    branch (explicit per-candidate chains) must produce identical features for
+    single-chain fixtures (chain 'A')."""
+    q = _load("1crn.pdb")
+    u = _load("1ubq.pdb")
+    parallel = build_structure_template_features(q, [u, q], top_k=2)
+    serial = build_structure_template_features(
+        q, [u, q], top_k=2, query_chain="A", candidate_chains=["A", "A"]
+    )
+    _assert_features_equal(parallel, serial)
+
+
 class _StubAlign:
     """Minimal AlignResult stand-in for the correspondence-contract tests."""
 
@@ -145,9 +225,12 @@ def test_skipped_candidate_warns_not_silent():
     q = _load("1crn.pdb")
     # A candidate with a non-existent chain can't be extracted → skipped, but the
     # skip must be visible (codex: silent drops are undiagnosable).
-    with pytest.warns(UserWarning, match="skipped"):
+    with pytest.warns(UserWarning, match="skipped") as record:
         tf = build_structure_template_features(q, [q], candidate_chains=["ZZ"])
     assert tf.n_templates == 0
+    # The skip warning must carry the underlying reason, not just "skipped"
+    # (codex: collapsing the failure to a generic message loses diagnostics).
+    assert "ZZ" in str(record[0].message)
 
 
 def test_multichain_query_requires_explicit_chain():
