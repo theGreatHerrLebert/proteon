@@ -199,9 +199,12 @@ def build_structure_template_features(
         positions = np.zeros((length, 37, 3), dtype=np.float32)
         masks = np.zeros((length, 37), dtype=np.float32)
         resnames = ["UNK"] * length
-        # Per-query-row template residue index, for the torsion continuity check.
-        # Unaligned rows get strictly-decreasing sentinels so they never read as
-        # peptide-bonded to a neighbour (their atom masks zero them anyway).
+        # Per-query-row template residue *numbering* (serial_number), for the
+        # torsion continuity check — matching what `build_structure_supervision_
+        # example` uses, so a template residue-number gap / chain break correctly
+        # masks pre_omega/phi (positional indices would stay consecutive across the
+        # break and forge a bond — codex catch). Unaligned rows get strictly-
+        # decreasing negative sentinels so they never read as peptide-bonded.
         tmpl_idx_row = -1 - 2 * np.arange(length, dtype=np.int64)
         for qi, ti in zip(corr.query_idx, corr.template_idx):
             positions[qi] = t37["positions"][ti]
@@ -209,7 +212,7 @@ def build_structure_template_features(
             rn = (t_res[ti].name or "UNK").strip().upper()
             resnames[qi] = rn
             aatype[qi] = AA_TO_INDEX.get(residue_to_one_letter(rn), _X_INDEX)
-            tmpl_idx_row[qi] = ti
+            tmpl_idx_row[qi] = int(t_res[ti].serial_number)
 
         # Derived geometry from the gathered template atom37. The torsion continuity
         # uses the *template* residue indices: query-adjacent rows mapping to
