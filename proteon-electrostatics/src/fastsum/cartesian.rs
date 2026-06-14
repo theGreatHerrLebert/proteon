@@ -433,6 +433,39 @@ pub(crate) fn m2l_single(
     c_t: Vec3,
     p: usize,
 ) -> Vec<f64> {
+    m2l_single_with(src_moments, r_s, c_s, r_t, c_t, p, &pascal_table(2 * p + 1))
+}
+
+/// Pascal's triangle `C(i, j)` (`i, j < cap`) flattened row-major, `cap × cap`. The
+/// binomial table the M2L contraction needs is **geometry- and `x`-independent**, so the
+/// FMM precomputes it **once per operator** ([`super::operator`]) and threads it into
+/// every per-pair [`m2l_single_with`] call, instead of [`m2l_single`] rebuilding it on
+/// each of the (tens of thousands of) M2L pairs per matvec.
+#[must_use]
+pub(crate) fn pascal_table(cap: usize) -> Vec<f64> {
+    let mut binom = vec![0.0; cap * cap];
+    for i in 0..cap {
+        binom[i * cap] = 1.0;
+        for j in 1..=i {
+            binom[i * cap + j] = binom[(i - 1) * cap + j - 1] + binom[(i - 1) * cap + j];
+        }
+    }
+    binom
+}
+
+/// [`m2l_single`] with a caller-supplied Pascal table (`(2p+1)²`, row-major — see
+/// [`pascal_table`]). The hot-loop body; `m2l_single` is the standalone convenience
+/// wrapper that builds the table itself.
+#[must_use]
+pub(crate) fn m2l_single_with(
+    src_moments: &[f64],
+    r_s: f64,
+    c_s: Vec3,
+    r_t: f64,
+    c_t: Vec3,
+    p: usize,
+    binom: &[f64],
+) -> Vec<f64> {
     let n = p + 1;
     debug_assert_eq!(src_moments.len(), n * n * n, "moment slice must be (p+1)³");
     debug_assert!(
@@ -452,14 +485,7 @@ pub(crate) fn m2l_single(
     );
     let a = coulomb_taylor_coeffs(d_vec, 2 * p); // (2p+1)³ Taylor cube
     let bcap = 2 * p + 1;
-    // Pascal triangle C(i,j) up to 2p.
-    let mut binom = vec![0.0; bcap * bcap];
-    for i in 0..bcap {
-        binom[i * bcap] = 1.0;
-        for j in 1..=i {
-            binom[i * bcap + j] = binom[(i - 1) * bcap + j - 1] + binom[(i - 1) * bcap + j];
-        }
-    }
+    debug_assert_eq!(binom.len(), bcap * bcap, "binom table must be (2p+1)²");
     let pow = |base: f64, up: usize| {
         let mut v = vec![1.0; up + 1];
         for t in 1..=up {
@@ -544,8 +570,22 @@ pub(crate) fn m2l_double(
     c_t: Vec3,
     p: usize,
 ) -> Vec<f64> {
+    m2l_double_with(w_moments, r_s, c_s, r_t, c_t, p, &pascal_table(2 * p + 1))
+}
+
+/// [`m2l_double`] with a caller-supplied Pascal table (see [`m2l_single_with`]).
+#[must_use]
+pub(crate) fn m2l_double_with(
+    w_moments: &[Vec3],
+    r_s: f64,
+    c_s: Vec3,
+    r_t: f64,
+    c_t: Vec3,
+    p: usize,
+    binom: &[f64],
+) -> Vec<f64> {
     let eff = double_layer_effective_moments(w_moments, r_s, p);
-    m2l_single(&eff, r_s, c_s, r_t, c_t, p)
+    m2l_single_with(&eff, r_s, c_s, r_t, c_t, p, binom)
 }
 
 /// Evaluate a single-layer **local** expansion `Σ_m L_m·((t−c_t)/R_t)^m` at target `t`

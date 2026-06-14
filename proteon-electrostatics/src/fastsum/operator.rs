@@ -53,13 +53,36 @@ pub struct CollocationTreecode {
     p: usize,
     theta: f64,
     tree: Octree,
-    /// Geometry-only FMM interaction lists, present iff the **FMM downward-pass**
-    /// path is enabled (`with_fmm`). `Some((m2l_pairs, p2p_pairs))`: well-separated
-    /// `(target_node, source_node)` pairs handled by M2L, and inadmissible
-    /// leaf-leaf pairs handled by exact P2P. `None` ⇒ the default Barnes–Hut M2P
-    /// per-target traversal. The FMM path completes the algorithm (gated vs dense)
-    /// but, with the dense O(p⁶) M2L, is NOT a speed win — see the plan.
-    interactions: Option<(Vec<(usize, usize)>, Vec<(usize, usize)>)>,
+    /// Geometry-only FMM plan, present iff the **FMM downward-pass** path is enabled
+    /// (`with_fmm`). `None` ⇒ the default Barnes–Hut M2P per-target traversal. See
+    /// [`FmmPlan`]; built once, reused (and parallelized) per matvec.
+    fmm: Option<FmmPlan>,
+}
+
+/// Precomputed, geometry-only FMM downward-pass plan (built once by [`build_fmm_plan`],
+/// reused every matvec). All lists are derived from the **dual-tree** interaction
+/// recursion; the derived forms below are arranged so each phase of `fmm_matvec` writes
+/// only its own outputs and reads finalized inputs — making the whole pass rayon-parallel
+/// while staying **bit-identical across thread counts** (each accumulation runs on one
+/// thread in a fixed list order).
+struct FmmPlan {
+    /// `m2l_sources[t]` = source nodes whose multipole is translated into target node
+    /// `t`'s local (M2L), in fixed emission order. Grouped **by target** so the M2L
+    /// phase parallelizes over targets with no write contention on `local[t]`.
+    m2l_sources: Vec<Vec<usize>>,
+    /// Tree nodes grouped by depth (root level first) — drives the top-down L2L sweep
+    /// one level at a time (a parent's local is finalized before its children read it).
+    levels: Vec<Vec<usize>>,
+    /// `parent[c]` = `c`'s parent node index (root maps to itself; unused for the root).
+    parent: Vec<usize>,
+    /// `panel_leaf[j]` = the leaf node that owns panel `j` (its L2P / near-field source).
+    panel_leaf: Vec<usize>,
+    /// `near_sources[leaf]` = source nodes contributing **exact P2P** near field to that
+    /// leaf's panels, in fixed order. Empty for internal nodes.
+    near_sources: Vec<Vec<usize>>,
+    /// Pascal table `C(i,j)`, `(2p+1)²` — hoisted out of the per-pair M2L hot loop
+    /// ([`cartesian::pascal_table`]); shared read-only across all M2L calls.
+    binom: Vec<f64>,
 }
 
 impl CollocationTreecode {
@@ -107,17 +130,17 @@ impl CollocationTreecode {
             p,
             theta,
             tree,
-            interactions: None,
+            fmm: None,
         }
     }
 
     /// Enable the **FMM downward pass** (M2L + L2L + L2P), precomputing the
-    /// geometry-only interaction lists once. Without this the operator uses the
-    /// default Barnes–Hut M2P traversal. The FMM matvec is gated bit-parity vs the
-    /// dense matrix; with the dense M2L it is not faster (see the plan).
+    /// geometry-only [`FmmPlan`] once. Without this the operator uses the default
+    /// Barnes–Hut M2P traversal. The FMM matvec is gated bit-parity vs the dense
+    /// matrix and rayon-parallel (deterministic across thread counts).
     #[must_use]
     pub fn with_fmm(mut self) -> Self {
-        self.interactions = Some(self.build_interactions());
+        self.fmm = Some(self.build_fmm_plan());
         self
     }
 
@@ -128,7 +151,7 @@ impl CollocationTreecode {
     /// every (target-leaf, source-leaf) pair exactly once — no drop / double-count.
     /// Admissibility is the box-pair MAC `(r_A + r_B) ≤ θ·|c_A − c_B|` (the same
     /// `θ`, convergence-safe). Geometry-only ⇒ computed once, reused per matvec.
-    fn build_interactions(&self) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+    fn build_interaction_pairs(&self) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
         let nodes = &self.tree.nodes;
         let mut m2l = Vec::new();
         let mut p2p = Vec::new();
@@ -168,6 +191,63 @@ impl CollocationTreecode {
             }
         }
         (m2l, p2p)
+    }
+
+    /// Assemble the [`FmmPlan`]: the dual-tree interaction pairs
+    /// ([`build_interaction_pairs`]) re-grouped into the per-phase forms the parallel
+    /// `fmm_matvec` consumes (M2L by target, P2P by leaf), plus the tree topology
+    /// (levels + parent) the L2L sweep needs and the hoisted Pascal table. All
+    /// geometry/`x`-independent ⇒ built once, reused (and parallelized) per matvec.
+    fn build_fmm_plan(&self) -> FmmPlan {
+        let nodes = &self.tree.nodes;
+        let nn = nodes.len();
+        let (m2l_pairs, p2p_pairs) = self.build_interaction_pairs();
+
+        // M2L grouped by target; P2P grouped by (leaf) target — fixed emission order
+        // preserved, so each per-output accumulation is a deterministic single-thread sum.
+        let mut m2l_sources: Vec<Vec<usize>> = vec![Vec::new(); nn];
+        for (t, s) in m2l_pairs {
+            m2l_sources[t].push(s);
+        }
+        let mut near_sources: Vec<Vec<usize>> = vec![Vec::new(); nn];
+        for (t, s) in p2p_pairs {
+            near_sources[t].push(s);
+        }
+
+        // Parent map + depth (child index > parent ⇒ a forward pass has the parent's
+        // depth ready); group node indices by depth for the top-down L2L sweep.
+        let mut parent = vec![0usize; nn];
+        let mut depth = vec![0usize; nn];
+        for i in 0..nn {
+            for &c in &nodes[i].children {
+                parent[c] = i;
+                depth[c] = depth[i] + 1;
+            }
+        }
+        let max_depth = depth.iter().copied().max().unwrap_or(0);
+        let mut levels: Vec<Vec<usize>> = vec![Vec::new(); max_depth + 1];
+        for (i, &d) in depth.iter().enumerate() {
+            levels[d].push(i);
+        }
+
+        // Leaf owning each panel (for L2P + its near field).
+        let mut panel_leaf = vec![0usize; self.elements.len()];
+        for (i, node) in nodes.iter().enumerate() {
+            if node.children.is_empty() {
+                for &j in &node.panels {
+                    panel_leaf[j] = i;
+                }
+            }
+        }
+
+        FmmPlan {
+            m2l_sources,
+            levels,
+            parent,
+            panel_leaf,
+            near_sources,
+            binom: cartesian::pascal_table(2 * self.p + 1),
+        }
     }
 
     /// Per-node single-layer moments via the **M2M upward pass**: leaf moments are built
@@ -312,86 +392,91 @@ impl CollocationTreecode {
     }
 
     /// The **FMM downward-pass** matvec: upward M2M (per-node moments) → M2L into
-    /// per-node local expansions over the precomputed interaction list → top-down
-    /// L2L sweep → L2P at each leaf centroid (far field) + exact P2P over the near
-    /// leaf-leaf list. Serial + deterministic (correctness path; not a speed win
-    /// with dense M2L). Each layer's local is scalar, so one `l2l_single` serves
-    /// both single and double layer.
-    fn fmm_matvec(
-        &self,
-        x: &[f64],
-        y: &mut [f64],
-        m2l_pairs: &[(usize, usize)],
-        p2p_pairs: &[(usize, usize)],
-    ) {
+    /// per-node local expansions → top-down L2L sweep → L2P at each leaf centroid (far
+    /// field) + exact P2P near field. **Rayon-parallel and bit-identical across thread
+    /// counts**: each phase is arranged so a thread writes only its own output, summing
+    /// its (fixed-order) inputs — M2L parallel over targets, L2L parallel within each
+    /// tree level, the combined L2P+P2P parallel over panels. Each layer's local is
+    /// scalar, so one `l2l_single` serves both single and double layer.
+    fn fmm_matvec(&self, x: &[f64], y: &mut [f64], plan: &FmmPlan) {
         let nodes = &self.tree.nodes;
         let nn = nodes.len();
         let sz = (self.p + 1).pow(3);
+        let p = self.p;
         let (sl, dl) = match self.kind {
             PotentialKind::Single => (self.single_moments(x), Vec::new()),
             PotentialKind::Double => (Vec::new(), self.double_moments(x)),
         };
-        // M2L: accumulate each well-separated source's local contribution into the
-        // target node's local expansion (fixed list order ⇒ deterministic sum).
+        // M2L → per-target local. Parallel over targets: each `local[t]` is summed by
+        // one thread over `m2l_sources[t]` in fixed order ⇒ contention-free, deterministic.
         let mut local: Vec<Vec<f64>> = vec![vec![0.0; sz]; nn];
-        for &(t, s) in m2l_pairs {
-            let (nt, ns) = (&nodes[t], &nodes[s]);
-            let contrib = match self.kind {
-                PotentialKind::Single => cartesian::m2l_single(
-                    &sl[s], ns.radius, ns.center, nt.radius, nt.center, self.p,
-                ),
-                PotentialKind::Double => cartesian::m2l_double(
-                    &dl[s], ns.radius, ns.center, nt.radius, nt.center, self.p,
-                ),
-            };
-            for (a, b) in local[t].iter_mut().zip(&contrib) {
-                *a += *b;
+        local.par_iter_mut().enumerate().for_each(|(t, lt)| {
+            let nt = &nodes[t];
+            for &s in &plan.m2l_sources[t] {
+                let ns = &nodes[s];
+                let contrib = match self.kind {
+                    PotentialKind::Single => cartesian::m2l_single_with(
+                        &sl[s],
+                        ns.radius,
+                        ns.center,
+                        nt.radius,
+                        nt.center,
+                        p,
+                        &plan.binom,
+                    ),
+                    PotentialKind::Double => cartesian::m2l_double_with(
+                        &dl[s],
+                        ns.radius,
+                        ns.center,
+                        nt.radius,
+                        nt.center,
+                        p,
+                        &plan.binom,
+                    ),
+                };
+                for (a, b) in lt.iter_mut().zip(&contrib) {
+                    *a += *b;
+                }
             }
-        }
-        // Downward L2L sweep: parent index < child by construction, so a forward
-        // pass has each node's local complete before pushing it to its children.
-        for i in 0..nn {
-            if nodes[i].children.is_empty() {
-                continue;
-            }
-            let parent_local = local[i].clone();
-            let inv_r = 1.0 / cartesian::eff_radius(nodes[i].radius);
-            for &c in &nodes[i].children {
-                let s = cartesian::eff_radius(nodes[c].radius) * inv_r;
-                let t0 = (nodes[c].center - nodes[i].center) * inv_r;
-                let contrib = cartesian::l2l_single(&parent_local, s, t0, self.p);
-                for (a, b) in local[c].iter_mut().zip(&contrib) {
+        });
+        // Top-down L2L sweep, one level at a time: each node at level L gathers from its
+        // (now-finalized, level L−1) parent. Two phases per level — parallel compute of
+        // each child's contribution reading `local` immutably, then a serial apply — so
+        // the read/write of `local` never alias. Each child has one parent ⇒ no contention.
+        for level in plan.levels.iter().skip(1) {
+            let contribs: Vec<Vec<f64>> = level
+                .par_iter()
+                .map(|&c| {
+                    let par = plan.parent[c];
+                    let inv_r = 1.0 / cartesian::eff_radius(nodes[par].radius);
+                    let s = cartesian::eff_radius(nodes[c].radius) * inv_r;
+                    let t0 = (nodes[c].center - nodes[par].center) * inv_r;
+                    cartesian::l2l_single(&local[par], s, t0, p)
+                })
+                .collect();
+            for (&c, contrib) in level.iter().zip(&contribs) {
+                for (a, b) in local[c].iter_mut().zip(contrib) {
                     *a += *b;
                 }
             }
         }
-        // Leaf L2P: far field at each target centroid (one leaf per panel).
-        for (i, node) in nodes.iter().enumerate() {
-            if !node.children.is_empty() {
-                continue;
-            }
-            for &j in &node.panels {
-                y[j] = cartesian::eval_local_single(
-                    &local[i],
-                    node.radius,
-                    node.center,
-                    self.centroids[j],
-                    self.p,
-                );
-            }
-        }
-        // Near field: exact analytic collocation over the inadmissible leaf pairs.
-        for &(tl, src) in p2p_pairs {
-            for &ti in &nodes[tl].panels {
-                let ci = self.centroids[ti];
-                let acc: f64 = nodes[src]
+        // Combined far (L2P) + near (P2P), parallel over panels: each `y[j]` is fully
+        // computed by one thread (its leaf's local eval + exact collocation over that
+        // leaf's near-source panels, in fixed order) ⇒ deterministic, no scatter.
+        y.par_iter_mut().enumerate().for_each(|(j, yj)| {
+            let leaf = plan.panel_leaf[j];
+            let node = &nodes[leaf];
+            let cj = self.centroids[j];
+            let mut v = cartesian::eval_local_single(&local[leaf], node.radius, node.center, cj, p);
+            for &src in &plan.near_sources[leaf] {
+                v += nodes[src]
                     .panels
                     .iter()
-                    .map(|&sj| laplace_collocation(self.kind, ci, &self.elements[sj]) * x[sj])
-                    .sum();
-                y[ti] += acc;
+                    .map(|&sk| laplace_collocation(self.kind, cj, &self.elements[sk]) * x[sk])
+                    .sum::<f64>();
             }
-        }
+            *yj = v;
+        });
     }
 }
 
@@ -530,8 +615,8 @@ impl LinearOperator for CollocationTreecode {
 
     fn matvec(&self, x: &[f64], y: &mut [f64]) {
         // FMM downward pass when enabled; otherwise the Barnes–Hut M2P traversal.
-        if let Some((m2l_pairs, p2p_pairs)) = &self.interactions {
-            self.fmm_matvec(x, y, m2l_pairs, p2p_pairs);
+        if let Some(plan) = &self.fmm {
+            self.fmm_matvec(x, y, plan);
             return;
         }
         // Rebuild moments from x (once per matvec), then evaluate each target.
@@ -901,6 +986,33 @@ mod tests {
     }
 
     #[test]
+    fn fmm_matvec_reproducible_across_thread_counts() {
+        // The parallel FMM downward pass (M2L by target, L2L per level, L2P+P2P by
+        // panel) must stay bit-identical across thread counts: every per-output
+        // accumulation runs on a single thread in a fixed list order.
+        let els = sphere_elements(3);
+        let n = els.len();
+        let x: Vec<f64> = (0..n).map(|i| ((i % 7) as f64) - 3.0).collect();
+        for kind in [PotentialKind::Single, PotentialKind::Double] {
+            let tree = CollocationTreecode::new(&els, kind, 7, 0.5).with_fmm();
+            let run = |threads: usize| {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap();
+                let mut y = vec![0.0; n];
+                pool.install(|| tree.matvec(&x, &mut y));
+                y
+            };
+            assert_eq!(
+                run(1),
+                run(8),
+                "FMM {kind:?} matvec must be bit-identical across thread counts"
+            );
+        }
+    }
+
+    #[test]
     #[should_panic(expected = "theta must be in (0, 1)")]
     fn invalid_theta_rejected() {
         let els = sphere_elements(2);
@@ -941,6 +1053,37 @@ mod tests {
             for (a, b) in td.iter().zip(&dd) {
                 assert!((a - b).abs() < 1e-12, "Yukawa {kind:?} diagonal {a} vs {b}");
             }
+        }
+    }
+
+    #[test]
+    #[ignore = "perf probe — run with --ignored --nocapture to print the BH/FMM crossover"]
+    fn fmm_bh_crossover_probe() {
+        use std::time::Instant;
+        let p = 8;
+        let theta = 0.5;
+        eprintln!("threads={}", rayon::current_num_threads());
+        for subdiv in [3u32, 4, 5, 6] {
+            let els = sphere_elements(subdiv);
+            let n = els.len();
+            let x: Vec<f64> = (0..n).map(|i| ((i * 7) % 13) as f64 - 6.0).collect();
+            let bh = CollocationTreecode::new(&els, PotentialKind::Single, p, theta);
+            let fmm = CollocationTreecode::new(&els, PotentialKind::Single, p, theta).with_fmm();
+            let time = |op: &CollocationTreecode| {
+                let mut y = vec![0.0; n];
+                op.matvec(&x, &mut y); // warm
+                let t = Instant::now();
+                for _ in 0..3 {
+                    op.matvec(&x, &mut y);
+                }
+                t.elapsed().as_secs_f64() * 1000.0 / 3.0
+            };
+            let bh_ms = time(&bh);
+            let fmm_ms = time(&fmm);
+            eprintln!(
+                "subdiv={subdiv} n={n:>6} | BH={bh_ms:8.2}ms  FMM={fmm_ms:8.2}ms  FMM/BH={:.2}x",
+                fmm_ms / bh_ms,
+            );
         }
     }
 
@@ -1015,21 +1158,26 @@ mod tests {
         let els = sphere_elements(2);
         let n = els.len();
         let tree = CollocationTreecode::new(&els, PotentialKind::Single, 6, 0.5).with_fmm();
-        let (m2l, p2p) = tree.interactions.as_ref().unwrap();
+        let plan = tree.fmm.as_ref().unwrap();
         let nodes = &tree.tree.nodes;
-        // subtree panel sets per node.
+        // Cover every (target panel, source panel) via the grouped plan: P2P near
+        // sources by leaf, then M2L sources by target node.
         let mut cover = vec![0u32; n * n];
-        for &(t, s) in p2p {
-            for &ti in &nodes[t].panels {
-                for &sj in &nodes[s].panels {
-                    cover[ti * n + sj] += 1;
+        for (t, sources) in plan.near_sources.iter().enumerate() {
+            for &s in sources {
+                for &ti in &nodes[t].panels {
+                    for &sj in &nodes[s].panels {
+                        cover[ti * n + sj] += 1;
+                    }
                 }
             }
         }
-        for &(t, s) in m2l {
-            for &ti in &nodes[t].panels {
-                for &sj in &nodes[s].panels {
-                    cover[ti * n + sj] += 1;
+        for (t, sources) in plan.m2l_sources.iter().enumerate() {
+            for &s in sources {
+                for &ti in &nodes[t].panels {
+                    for &sj in &nodes[s].panels {
+                        cover[ti * n + sj] += 1;
+                    }
                 }
             }
         }
