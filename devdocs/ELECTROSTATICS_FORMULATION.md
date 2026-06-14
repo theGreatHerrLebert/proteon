@@ -12,14 +12,28 @@ NESSie checkout (`../NESSie.jl/`). Where a number is given it is copied from sou
 not re-derived. **`§9` is the P0.5 acceptance checklist** — the spec is "done" when
 those gates are green.
 
-> Status: DRAFT. Independently reviewed by Codex (2026-06-09,
+> Status: GATED. Independently reviewed by Codex (2026-06-09,
 > `archive/ELECTROSTATICS_FORMULATION.codex-review.md`) — two critical transcription fixes
 > applied (the nonlocal matrix-diagonal vs preconditioner-vector split in `§6`; the
 > implicit-RHS dimensional caveat), the `§10` local-limit claim corrected, the unit
-> chain resolved, and the nonlocal `:Σ` potential written out. **Still owed: an
-> entrywise check against a running NESSie** on a 2–4 element mesh + the unit-chain
-> test (`§9`). Until then, treat `assembly_kernels_dump` as kernel-block parity only,
-> and do not ship energies.
+> chain resolved, and the nonlocal `:Σ` potential written out.
+>
+> **§9 acceptance closed.** The two items previously owed are now gated:
+> - the **entrywise** check against NESSie is the `local_assembly_parity` /
+>   `nonlocal_assembly_parity` tests (the assembled `M`/`b₁`, `umol`/`qmol` vs NESSie's
+>   `assembly_kernels_*` dump on a 32-element subset — stronger than the 2–4 element hand
+>   check), plus `post_parity`/`nonlocal_post_parity` (rfenergy + potentials vs `post_dump`);
+> - the **unit-chain** test is `post::tests::rfenergy_unit_chain_recovers_born_from_si`
+>   (§9.3): the §7.1 prefactor chain recovers the base-SI Born energy, reconciling the
+>   literal-constant question.
+>
+> **Live-verified (2026-06-14):** re-running `tools/oracle/nessie/harness.jl` against a
+> live NESSie 1.5.0 (same `nessie_tree_hash`) reproduces **every** committed fixture
+> bit-for-bit (max |Δ| = 0; `julia 1.10` vs the fixtures' `1.11`). So the parity gates
+> stand on a confirmed-reproducible oracle, not just recorded dumps.
+>
+> With these + the analytic Born/Kirkwood/Xie/concentric gates, the energies are
+> validated and no longer carry the "do not ship" asterisk.
 
 ---
 
@@ -300,8 +314,11 @@ Rust `assemble()` is gated entrywise against them.
 
 ## 9. P0.5 acceptance (the gates that close this spec)
 
-1. **Block matrices + RHS written out** — `§5`, `§6` (done above; verify against a
-   running NESSie on a 2–4 element mesh, entrywise).
+1. **Block matrices + RHS written out** — `§5`, `§6` (done above) — ✅ **VERIFIED**.
+   The assembled `M`/`b₁` + `umol`/`qmol` are emitted entrywise (`assembly_kernels_*`
+   dump, 32-element subset) and gated by `local_assembly_parity`/`nonlocal_assembly_parity`;
+   re-running the harness against a live NESSie 1.5.0 reproduces them bit-for-bit (see the
+   status banner). (Stronger than the 2–4 element hand check originally scoped.)
 2. **Hand-computable single fixtures** (checked in; non-NESSie references):
    - `K[i,i] = 0` for every flat element (double-layer Laplace InPlane). Also check
      the **regular Yukawa** `Ky[i,i]` flat-panel self term (confirm whether it is also
@@ -314,11 +331,13 @@ Rust `assemble()` is gated entrywise against them.
      its centroid, from the Rjasanow InPlane closed form
      `Σ_edges h·log((1+sinφ₂)(1−sinφ₁)/((1−sinφ₂)(1+sinφ₁)))/2` — derive by hand, pin.
    - One-charge / one-panel **`qmol` sign** fixture (the leading minus + `(ξ−q)·n`).
-3. **Unit-chain test (no kernels/assembly/solve)** — inject an analytic reaction
-   potential `φ_rf`, run it through the `rfenergy` prefactor chain (`§7.1`), and
-   recover the closed-form Born energy. This validates `§7`'s constant arithmetic in
-   isolation and reconciles the literal-constant question. (The real Born **BEM**
-   end-to-end test is P5, not here.)
+3. **Unit-chain test (no kernels/assembly/solve)** — ✅ **DONE**
+   (`post::tests::rfenergy_unit_chain_recovers_born_from_si`). Injects the analytic Born
+   reaction-potential trace `wstar = 4π·q(1/εΣ−1/εΩ)/R` into the `rfenergy_from_traces`
+   prefactor chain (`§7.1`) and recovers the Born energy computed independently from base
+   SI constants (to <1e-12) — validating `undo 4π · potprefactor · energy_factor` (incl.
+   the `½`) by composition, reconciling the literal-constant question. (The real Born
+   **BEM** end-to-end test is P5, not here.)
 4. **Dimensional analysis** of `§7.1`/`§7.2` written down (V = C/F; W* = kJ/mol).
 
 ---

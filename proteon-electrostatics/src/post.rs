@@ -105,6 +105,26 @@ fn closest_element(xi: Vec3, elements: &[Tri]) -> usize {
     best.0
 }
 
+/// The §7.1 reaction-field-energy **unit chain** in isolation: from the per-charge
+/// operator traces `wstar_c = (−[K·u] + [V·q])(q_pos_c)` (each carrying NESSie's ×4π
+/// operator premultiplier) and the charge values, produce `W*` in kJ/mol —
+/// `W* = (Σ_c wstar_c·qval_c)/4π · potprefactor · energy_factor` (the `½` for
+/// double-counted pairwise interactions lives in [`ENERGY_FACTOR`]). Factored out of
+/// [`rfenergy`] so the constant arithmetic is gated against first principles in isolation
+/// (the §9.3 unit-chain test), independent of any kernel/assembly/solve.
+#[must_use]
+pub fn rfenergy_from_traces(wstar: &[f64], qvals: &[f64]) -> f64 {
+    // One trace per charge — a length mismatch would silently truncate the `zip` and
+    // return a plausible-but-wrong energy.
+    debug_assert_eq!(
+        wstar.len(),
+        qvals.len(),
+        "rfenergy_from_traces: one trace per charge"
+    );
+    let dot: f64 = wstar.iter().zip(qvals).map(|(w, q)| w * q).sum();
+    dot / FOUR_PI * POTPREFACTOR * ENERGY_FACTOR
+}
+
 /// Reaction-field energy `W*` (kJ/mol). NESSie `rfenergy(bem)`:
 /// `W*_c = −[K(q_pos)·u]_c + [V(q_pos)·q]_c`, `W* = (W*·qval)/4π · potprefactor · energy_factor`.
 #[must_use]
@@ -113,12 +133,9 @@ pub fn rfenergy(elements: &[Tri], charges: &[Charge], cauchy: &dyn CauchyData) -
     // wstar = −K·u + V·q, both collocated at the charge positions.
     let kd = collocate_contract(PotentialKind::Double, &qpos, elements, cauchy.u());
     let vq = collocate_contract(PotentialKind::Single, &qpos, elements, cauchy.q());
-    let dot: f64 = charges
-        .iter()
-        .enumerate()
-        .map(|(c, ch)| (-kd[c] + vq[c]) * ch.val)
-        .sum();
-    dot / FOUR_PI * POTPREFACTOR * ENERGY_FACTOR
+    let wstar: Vec<f64> = (0..charges.len()).map(|c| -kd[c] + vq[c]).collect();
+    let qvals: Vec<f64> = charges.iter().map(|c| c.val).collect();
+    rfenergy_from_traces(&wstar, &qvals)
 }
 
 /// Electrostatic potential at ξ in `domain` (volts). NESSie `espotential(:Ω/:Σ/:Γ, ξ, bem)`
@@ -210,5 +227,57 @@ mod tests {
         // energy_factor ≈ ½·Faraday in kJ/mol·V⁻¹).
         assert!((POTPREFACTOR - 14.3997).abs() < 1e-3, "{POTPREFACTOR}");
         assert!((ENERGY_FACTOR - 48.2426).abs() < 1e-3, "{ENERGY_FACTOR}");
+    }
+
+    /// §9.3 unit-chain gate (`devdocs/ELECTROSTATICS_FORMULATION.md`): inject the
+    /// **analytic** Born reaction-potential trace into the `rfenergy` prefactor chain
+    /// (`rfenergy_from_traces`, §7.1) — no kernels / assembly / solve — and recover the
+    /// Born energy computed **independently from base SI constants**. This pins the whole
+    /// chain by composition (undo 4π · potprefactor · energy_factor incl. the ½) against
+    /// first principles, not just the two constants in isolation, and reconciles the
+    /// literal-constant question the spec flagged before energies are shipped.
+    #[test]
+    fn rfenergy_unit_chain_recovers_born_from_si() {
+        let (q, r) = (1.0_f64, 2.0_f64); // 1 e at the centre of a 2 Å sphere
+        let (eps_omega, eps_sigma) = (1.0_f64, 78.0_f64);
+
+        // The Born reaction potential at the ion centre is φ = q·(1/εΣ − 1/εΩ)/R; NESSie's
+        // operators carry the ×4π premultiplier, so the trace wstar = −[K·u]+[V·q] is 4π·φ.
+        let pi = std::f64::consts::PI;
+        let wstar = 4.0 * pi * q * (1.0 / eps_sigma - 1.0 / eps_omega) / r;
+        let got = rfenergy_from_traces(&[wstar], &[q]);
+
+        // Independent base-SI Born energy (kJ/mol):
+        //   W = ½ · q²·e²·Nₐ·1e10 / (4π·ε0·1000·R) · (1/εΣ − 1/εΩ).
+        let e = 1.602_176e-19; // C
+        let na = 6.022_140_857e23; // 1/mol
+        let c = 299_792_458.0; // m/s
+        let eps0 = 1.0 / (4.0 * pi * 1e-7 * c * c); // F/m
+        let w_si = 0.5 * q * q * e * e * na * 1e10 / (4.0 * pi * eps0 * 1000.0 * r)
+            * (1.0 / eps_sigma - 1.0 / eps_omega);
+
+        let rel = (got - w_si).abs() / w_si.abs();
+        assert!(
+            rel < 1e-12,
+            "rfenergy unit chain {got} vs base-SI Born {w_si} (rel {rel:.2e})"
+        );
+        assert!(got < 0.0, "solvation energy is negative");
+
+        // And it agrees with the crate's own closed-form Born (εΩ = 1 ⇒ (1/εΣ − 1)).
+        let born = crate::born_rfenergy(
+            q,
+            r,
+            &Params {
+                eps_omega,
+                eps_sigma,
+                eps_inf: 1.8,
+                lambda: 20.0,
+            },
+            crate::Locality::Local,
+        );
+        assert!(
+            (got - born).abs() / born.abs() < 1e-12,
+            "unit chain {got} vs born_rfenergy {born}"
+        );
     }
 }
