@@ -72,6 +72,34 @@ def test_sample_msa_row_order_injection_is_deterministic():
     np.testing.assert_array_equal(extra["extra_msa"], msa[[4, 2]])
 
 
+def test_sample_msa_rejects_non_permutation_row_order():
+    msa = np.arange(5 * 3).reshape(5, 3)
+    dm = msa.astype(np.float32)
+    mask = np.ones((5, 3), np.float32)
+    with pytest.raises(ValueError, match="permutation"):
+        sample_msa(msa, dm, mask, max_seq=3, row_order=np.array([1, 2, 3, 4, 0]))  # row 0 not first
+    with pytest.raises(ValueError, match="permutation"):
+        sample_msa(msa, dm, mask, max_seq=3, row_order=np.array([0, 1, 1]))  # short + dup
+
+
+def test_crop_extra_rejects_injection_over_cap():
+    extra = {
+        "extra_msa": np.arange(6 * 2).reshape(6, 2),
+        "extra_deletion_matrix": np.zeros((6, 2), np.float32),
+        "extra_msa_mask": np.ones((6, 2), np.float32),
+    }
+    with pytest.raises(ValueError, match="exceeds max_extra_msa"):
+        crop_extra_msa(extra, 2, extra_indices=np.array([0, 1, 2]))  # 3 > cap 2
+
+
+def test_build_rejects_broadcastable_msa_mask():
+    rng = np.random.default_rng(0)
+    msa = rng.integers(0, 20, (6, 4)).astype(np.int32)
+    with pytest.raises(ValueError, match="msa_mask shape"):
+        build_msa_features(msa, np.zeros((6, 4), np.float32), msa[0],
+                           msa_mask=np.ones((6, 1), np.float32), seed=0)
+
+
 def test_sample_msa_max_seq_geq_n_gives_empty_extra():
     msa = np.arange(3 * 2).reshape(3, 2)
     clustered, extra = sample_msa(msa, msa.astype(np.float32), np.ones((3, 2), np.float32),
