@@ -205,6 +205,11 @@ from .supervision import (
     batch_build_structure_supervision_examples,
     build_structure_supervision_example,
 )
+from .supervision_crop import (
+    crop_sequence_example,
+    crop_structure_supervision_example,
+    sample_contiguous_crop,
+)
 from .supervision_export import (
     SUPERVISION_EXPORT_FORMAT,
     SUPERVISION_PARQUET_SCHEMA_VERSION,
@@ -509,6 +514,9 @@ _SUPERVISION_API = (
     "StructureSupervisionExample",
     "batch_build_structure_supervision_examples",
     "build_structure_supervision_example",
+    "crop_structure_supervision_example",
+    "crop_sequence_example",
+    "sample_contiguous_crop",
 )
 
 # The NumPy + Parquet-first export surface for structure-supervision
