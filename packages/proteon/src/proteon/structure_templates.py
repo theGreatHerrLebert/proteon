@@ -26,11 +26,27 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .align import tm_align
-from .supervision_constants import AA_TO_INDEX, residue_to_one_letter
-from .supervision_geometry import extract_atom37
+from .supervision_constants import ATOM_ORDER, AA_TO_INDEX, residue_to_one_letter
+from .supervision_geometry import compute_torsion_angles_sin_cos, extract_atom37
 from .templates import TEMPLATE_GAP_INDEX, TemplateFeatures
 
 _X_INDEX = AA_TO_INDEX["X"]
+_CA_IDX = ATOM_ORDER["CA"]
+_CB_IDX = ATOM_ORDER["CB"]
+
+
+def _pseudo_beta_from_atom37(positions, mask, resnames):
+    """Per-residue pseudo-β (CB, or CA for glycine) from gathered atom37 — mirrors
+    `supervision_geometry.compute_pseudo_beta` on `(L, 37)` arrays + resnames."""
+    n = len(resnames)
+    coords = np.zeros((n, 3), dtype=np.float32)
+    pb_mask = np.zeros((n,), dtype=np.float32)
+    for i in range(n):
+        idx = _CA_IDX if resnames[i] == "GLY" else _CB_IDX
+        if mask[i, idx] > 0:
+            coords[i] = positions[i, idx]
+            pb_mask[i] = 1.0
+    return coords, pb_mask
 
 
 @dataclass
@@ -182,11 +198,26 @@ def build_structure_template_features(
         aatype = np.full(length, TEMPLATE_GAP_INDEX, dtype=np.int32)
         positions = np.zeros((length, 37, 3), dtype=np.float32)
         masks = np.zeros((length, 37), dtype=np.float32)
+        resnames = ["UNK"] * length
+        # Per-query-row template residue index, for the torsion continuity check.
+        # Unaligned rows get strictly-decreasing sentinels so they never read as
+        # peptide-bonded to a neighbour (their atom masks zero them anyway).
+        tmpl_idx_row = -1 - 2 * np.arange(length, dtype=np.int64)
         for qi, ti in zip(corr.query_idx, corr.template_idx):
             positions[qi] = t37["positions"][ti]
             masks[qi] = t37["mask"][ti]
-            aatype[qi] = AA_TO_INDEX.get(residue_to_one_letter(t_res[ti].name), _X_INDEX)
-        rows.append((corr.tm_score, aatype, positions, masks))
+            rn = (t_res[ti].name or "UNK").strip().upper()
+            resnames[qi] = rn
+            aatype[qi] = AA_TO_INDEX.get(residue_to_one_letter(rn), _X_INDEX)
+            tmpl_idx_row[qi] = ti
+
+        # Derived geometry from the gathered template atom37. The torsion continuity
+        # uses the *template* residue indices: query-adjacent rows mapping to
+        # nonconsecutive template residues (a template insertion) must NOT form a
+        # peptide bond, so pre_omega/phi mask there (codex catch).
+        pb, pb_mask = _pseudo_beta_from_atom37(positions, masks, resnames)
+        tors = compute_torsion_angles_sin_cos(positions, masks, resnames, tmpl_idx_row)
+        rows.append((corr.tm_score, aatype, positions, masks, pb, pb_mask, tors))
 
     rows.sort(key=lambda r: -r[0])
     rows = rows[:top_k]
@@ -204,4 +235,15 @@ def build_structure_template_features(
         template_sum_probs=np.asarray([r[0] for r in rows], dtype=np.float32),
         n_templates=n,
         query_len=length,
+        template_pseudo_beta=_stack([r[4] for r in rows], (length, 3), np.float32),
+        template_pseudo_beta_mask=_stack([r[5] for r in rows], (length,), np.float32),
+        template_torsion_angles_sin_cos=_stack(
+            [r[6]["torsion_angles_sin_cos"] for r in rows], (length, 7, 2), np.float32
+        ),
+        template_alt_torsion_angles_sin_cos=_stack(
+            [r[6]["alt_torsion_angles_sin_cos"] for r in rows], (length, 7, 2), np.float32
+        ),
+        template_torsion_angles_mask=_stack(
+            [r[6]["torsion_angles_mask"] for r in rows], (length, 7), np.float32
+        ),
     )

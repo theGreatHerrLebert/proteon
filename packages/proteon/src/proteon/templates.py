@@ -63,6 +63,19 @@ class TemplateFeatures:
     n_templates: int
     query_len: int
 
+    # Derived geometry (AF computes these from template atom37 at load). Populated
+    # by the structure-based featurizer; `None` for the sequence-based path.
+    #   template_pseudo_beta:               (N_templates, L, 3) float32
+    #   template_pseudo_beta_mask:          (N_templates, L) float32
+    #   template_torsion_angles_sin_cos:    (N_templates, L, 7, 2) float32
+    #   template_alt_torsion_angles_sin_cos:(N_templates, L, 7, 2) float32
+    #   template_torsion_angles_mask:       (N_templates, L, 7) float32
+    template_pseudo_beta: Optional[NDArray[np.float32]] = None
+    template_pseudo_beta_mask: Optional[NDArray[np.float32]] = None
+    template_torsion_angles_sin_cos: Optional[NDArray[np.float32]] = None
+    template_alt_torsion_angles_sin_cos: Optional[NDArray[np.float32]] = None
+    template_torsion_angles_mask: Optional[NDArray[np.float32]] = None
+
 
 def build_template_features(
     query_length: int,
