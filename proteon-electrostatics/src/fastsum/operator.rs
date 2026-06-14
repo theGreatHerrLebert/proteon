@@ -53,6 +53,13 @@ pub struct CollocationTreecode {
     p: usize,
     theta: f64,
     tree: Octree,
+    /// Geometry-only FMM interaction lists, present iff the **FMM downward-pass**
+    /// path is enabled (`with_fmm`). `Some((m2l_pairs, p2p_pairs))`: well-separated
+    /// `(target_node, source_node)` pairs handled by M2L, and inadmissible
+    /// leaf-leaf pairs handled by exact P2P. `None` ⇒ the default Barnes–Hut M2P
+    /// per-target traversal. The FMM path completes the algorithm (gated vs dense)
+    /// but, with the dense O(p⁶) M2L, is NOT a speed win — see the plan.
+    interactions: Option<(Vec<(usize, usize)>, Vec<(usize, usize)>)>,
 }
 
 impl CollocationTreecode {
@@ -100,7 +107,62 @@ impl CollocationTreecode {
             p,
             theta,
             tree,
+            interactions: None,
         }
+    }
+
+    /// Enable the **FMM downward pass** (M2L + L2L + L2P), precomputing the
+    /// geometry-only interaction lists once. Without this the operator uses the
+    /// default Barnes–Hut M2P traversal. The FMM matvec is gated bit-parity vs the
+    /// dense matrix; with the dense M2L it is not faster (see the plan).
+    #[must_use]
+    pub fn with_fmm(mut self) -> Self {
+        self.interactions = Some(self.build_interactions());
+        self
+    }
+
+    /// Build the FMM interaction lists by a **dual-tree recursion** over the single
+    /// shared tree (adaptive-FMM, not a uniform-tree V-list): from `(root, root)`,
+    /// admissible `(A,B)` → one M2L pair; both-leaf inadmissible → one P2P pair;
+    /// otherwise split the **larger** (by radius) side and recurse. This partitions
+    /// every (target-leaf, source-leaf) pair exactly once — no drop / double-count.
+    /// Admissibility is the box-pair MAC `(r_A + r_B) ≤ θ·|c_A − c_B|` (the same
+    /// `θ`, convergence-safe). Geometry-only ⇒ computed once, reused per matvec.
+    fn build_interactions(&self) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+        let nodes = &self.tree.nodes;
+        let mut m2l = Vec::new();
+        let mut p2p = Vec::new();
+        // Explicit stack; deterministic emission order (fixed traversal).
+        let mut stack = vec![(0usize, 0usize)];
+        while let Some((a, b)) = stack.pop() {
+            let na = &nodes[a];
+            let nb = &nodes[b];
+            let d = (na.center - nb.center).norm();
+            if d > 0.0 && (na.radius + nb.radius) <= self.theta * d {
+                m2l.push((a, b)); // well separated → multipole-to-local
+            } else if na.children.is_empty() && nb.children.is_empty() {
+                p2p.push((a, b)); // both leaves, not separated → exact near field
+            } else {
+                // Split the larger side; if one is a leaf, split the other.
+                let split_a = if nb.children.is_empty() {
+                    true
+                } else if na.children.is_empty() {
+                    false
+                } else {
+                    na.radius >= nb.radius
+                };
+                if split_a {
+                    for &c in &na.children {
+                        stack.push((c, b));
+                    }
+                } else {
+                    for &c in &nb.children {
+                        stack.push((a, c));
+                    }
+                }
+            }
+        }
+        (m2l, p2p)
     }
 
     /// Per-node single-layer moments via the **M2M upward pass**: leaf moments are built
@@ -243,6 +305,89 @@ impl CollocationTreecode {
             .map(|&c| self.eval_target(xi, x, sl, dl, c))
             .sum()
     }
+
+    /// The **FMM downward-pass** matvec: upward M2M (per-node moments) → M2L into
+    /// per-node local expansions over the precomputed interaction list → top-down
+    /// L2L sweep → L2P at each leaf centroid (far field) + exact P2P over the near
+    /// leaf-leaf list. Serial + deterministic (correctness path; not a speed win
+    /// with dense M2L). Each layer's local is scalar, so one `l2l_single` serves
+    /// both single and double layer.
+    fn fmm_matvec(
+        &self,
+        x: &[f64],
+        y: &mut [f64],
+        m2l_pairs: &[(usize, usize)],
+        p2p_pairs: &[(usize, usize)],
+    ) {
+        let nodes = &self.tree.nodes;
+        let nn = nodes.len();
+        let sz = (self.p + 1).pow(3);
+        let (sl, dl) = match self.kind {
+            PotentialKind::Single => (self.single_moments(x), Vec::new()),
+            PotentialKind::Double => (Vec::new(), self.double_moments(x)),
+        };
+        // M2L: accumulate each well-separated source's local contribution into the
+        // target node's local expansion (fixed list order ⇒ deterministic sum).
+        let mut local: Vec<Vec<f64>> = vec![vec![0.0; sz]; nn];
+        for &(t, s) in m2l_pairs {
+            let (nt, ns) = (&nodes[t], &nodes[s]);
+            let contrib = match self.kind {
+                PotentialKind::Single => {
+                    cartesian::m2l_single(&sl[s], ns.radius, ns.center, nt.radius, nt.center, self.p)
+                }
+                PotentialKind::Double => {
+                    cartesian::m2l_double(&dl[s], ns.radius, ns.center, nt.radius, nt.center, self.p)
+                }
+            };
+            for (a, b) in local[t].iter_mut().zip(&contrib) {
+                *a += *b;
+            }
+        }
+        // Downward L2L sweep: parent index < child by construction, so a forward
+        // pass has each node's local complete before pushing it to its children.
+        for i in 0..nn {
+            if nodes[i].children.is_empty() {
+                continue;
+            }
+            let parent_local = local[i].clone();
+            let inv_r = 1.0 / cartesian::eff_radius(nodes[i].radius);
+            for &c in &nodes[i].children {
+                let s = cartesian::eff_radius(nodes[c].radius) * inv_r;
+                let t0 = (nodes[c].center - nodes[i].center) * inv_r;
+                let contrib = cartesian::l2l_single(&parent_local, s, t0, self.p);
+                for (a, b) in local[c].iter_mut().zip(&contrib) {
+                    *a += *b;
+                }
+            }
+        }
+        // Leaf L2P: far field at each target centroid (one leaf per panel).
+        for (i, node) in nodes.iter().enumerate() {
+            if !node.children.is_empty() {
+                continue;
+            }
+            for &j in &node.panels {
+                y[j] = cartesian::eval_local_single(
+                    &local[i],
+                    node.radius,
+                    node.center,
+                    self.centroids[j],
+                    self.p,
+                );
+            }
+        }
+        // Near field: exact analytic collocation over the inadmissible leaf pairs.
+        for &(tl, src) in p2p_pairs {
+            for &ti in &nodes[tl].panels {
+                let ci = self.centroids[ti];
+                let acc: f64 = nodes[src]
+                    .panels
+                    .iter()
+                    .map(|&sj| laplace_collocation(self.kind, ci, &self.elements[sj]) * x[sj])
+                    .sum();
+                y[ti] += acc;
+            }
+        }
+    }
 }
 
 impl CollocationTreecode {
@@ -379,6 +524,11 @@ impl LinearOperator for CollocationTreecode {
     }
 
     fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        // FMM downward pass when enabled; otherwise the Barnes–Hut M2P traversal.
+        if let Some((m2l_pairs, p2p_pairs)) = &self.interactions {
+            self.fmm_matvec(x, y, m2l_pairs, p2p_pairs);
+            return;
+        }
         // Rebuild moments from x (once per matvec), then evaluate each target.
         let (sl, dl) = match self.kind {
             PotentialKind::Single => (self.single_moments(x), Vec::new()),
@@ -787,6 +937,89 @@ mod tests {
                 assert!((a - b).abs() < 1e-12, "Yukawa {kind:?} diagonal {a} vs {b}");
             }
         }
+    }
+
+    #[test]
+    fn fmm_matvec_matches_dense() {
+        // Absolute correctness contract (codex): the FMM downward pass must
+        // reproduce the dense matrix for BOTH layers — L2 *and* worst-row — not
+        // merely beat Barnes–Hut. Uses the box-pair MAC (stricter than the BH
+        // point MAC), so the same (p, θ) is at least as accurate.
+        let els = sphere_elements(3);
+        let n = els.len();
+        let (v_dense, k_dense) = laplace_matrices(&els);
+        let x: Vec<f64> = (0..n).map(|i| ((i * 7) % 13) as f64 - 6.0).collect();
+
+        for (kind, dense) in [
+            (PotentialKind::Single, &v_dense),
+            (PotentialKind::Double, &k_dense),
+        ] {
+            let (p, theta) = match kind {
+                PotentialKind::Single => (7, 0.5),
+                PotentialKind::Double => (9, 0.45),
+            };
+            let tree = CollocationTreecode::new(&els, kind, p, theta).with_fmm();
+            let mut yd = vec![0.0; n];
+            let mut yf = vec![0.0; n];
+            dense.matvec(&x, &mut yd);
+            tree.matvec(&x, &mut yf);
+            let e_l2 = rel_l2(&yf, &yd);
+            let e_row = rowwise_max(&yf, &yd);
+            eprintln!("FMM {kind:?}: L2 {e_l2:.3e}, rowwise-max {e_row:.3e}");
+            assert!(e_l2 < 1e-4, "FMM {kind:?} L2 {e_l2:.3e} off dense");
+            assert!(e_row < 1e-3, "FMM {kind:?} worst-row {e_row:.3e} off dense");
+        }
+    }
+
+    #[test]
+    fn fmm_basis_vector_recovers_dense_column() {
+        // x = e_j isolates column j: the FMM must reproduce M[i][j] for every
+        // target i — exercises one source's far field delivered to all targets via
+        // M2L→L2L→L2P, catching a dropped or double-counted interaction.
+        let els = sphere_elements(3);
+        let n = els.len();
+        let (v_dense, _k) = laplace_matrices(&els);
+        let tree = CollocationTreecode::new(&els, PotentialKind::Single, 7, 0.5).with_fmm();
+        for &j in &[0usize, n / 3, n / 2, n - 1] {
+            let mut x = vec![0.0; n];
+            x[j] = 1.0;
+            let mut y = vec![0.0; n];
+            tree.matvec(&x, &mut y);
+            let col: Vec<f64> = (0..n).map(|i| v_dense.get(i, j)).collect();
+            let e = rowwise_max(&y, &col);
+            assert!(e < 1e-3, "FMM column {j} off dense by {e:.3e}");
+        }
+    }
+
+    #[test]
+    fn fmm_interaction_lists_partition_all_panel_pairs() {
+        // Structural guard against drop/double-count: every (target panel, source
+        // panel) pair must be covered EXACTLY ONCE — by a P2P leaf pair, or by an
+        // M2L pair (some target-ancestor × source-ancestor that contains it). Check
+        // it directly on the small tree.
+        let els = sphere_elements(2);
+        let n = els.len();
+        let tree = CollocationTreecode::new(&els, PotentialKind::Single, 6, 0.5).with_fmm();
+        let (m2l, p2p) = tree.interactions.as_ref().unwrap();
+        let nodes = &tree.tree.nodes;
+        // subtree panel sets per node.
+        let mut cover = vec![0u32; n * n];
+        for &(t, s) in p2p {
+            for &ti in &nodes[t].panels {
+                for &sj in &nodes[s].panels {
+                    cover[ti * n + sj] += 1;
+                }
+            }
+        }
+        for &(t, s) in m2l {
+            for &ti in &nodes[t].panels {
+                for &sj in &nodes[s].panels {
+                    cover[ti * n + sj] += 1;
+                }
+            }
+        }
+        let bad = cover.iter().filter(|&&c| c != 1).count();
+        assert_eq!(bad, 0, "{bad} (target,source) panel pairs not covered exactly once");
     }
 
     #[test]
