@@ -36,6 +36,11 @@ def _load_chain(pdb: str):
     return st
 
 
+# Fields the crop corrects at the boundary (a torsion that referenced a dropped
+# neighbour) — excluded from the blanket exact-slice check, asserted separately.
+_BOUNDARY_CORRECTED = {"torsion_angles_mask", "phi_mask", "omega_mask", "psi_mask"}
+
+
 def test_crop_structure_slices_every_residue_tensor_consistently():
     ex = build_structure_supervision_example(_load_chain("1crn.pdb"))
     start, stop = 5, 25
@@ -45,12 +50,54 @@ def test_crop_structure_slices_every_residue_tensor_consistently():
     assert cropped.sequence == ex.sequence[start:stop]
     for field in dataclasses.fields(ex):
         v = getattr(ex, field.name)
-        if isinstance(v, np.ndarray):
+        if isinstance(v, np.ndarray) and field.name not in _BOUNDARY_CORRECTED:
             cv = getattr(cropped, field.name)
             assert cv.shape[0] == stop - start, field.name
             np.testing.assert_array_equal(cv, v[start:stop], err_msg=field.name)
+    # Boundary-corrected fields are a faithful slice in the interior (only the
+    # corrected boundary entries differ).
+    np.testing.assert_array_equal(
+        cropped.torsion_angles_mask[1:], ex.torsion_angles_mask[start + 1 : stop]
+    )
     # Scalar metadata is preserved.
     assert cropped.record_id == ex.record_id and cropped.chain_id == ex.chain_id
+
+
+def test_crop_clears_boundary_torsions_that_referenced_dropped_neighbours():
+    """A mid-structure crop drops the residues just outside the window, so the
+    first kept residue's pre_omega/phi (computed from start-1) and the last kept
+    residue's classic psi (computed from stop) are stale. They must be masked,
+    not blanket-sliced through (the crop-boundary bug)."""
+    ex = build_structure_supervision_example(_load_chain("1crn.pdb"))
+    start, stop = 5, 25
+    # Precondition: in the full example these boundary torsions ARE bonded
+    # (interior residues, real peptide bonds) — so the crop has something to fix.
+    assert ex.torsion_angles_mask[start, 0] == 1.0 and ex.torsion_angles_mask[start, 1] == 1.0
+    assert ex.psi_mask[stop - 1] == 1.0
+
+    cropped = crop_structure_supervision_example(ex, start, stop)
+    # First kept residue: pre_omega (0) and phi (1) cleared; AF psi (2) untouched.
+    assert cropped.torsion_angles_mask[0, 0] == 0.0
+    assert cropped.torsion_angles_mask[0, 1] == 0.0
+    assert cropped.torsion_angles_mask[0, 2] == ex.torsion_angles_mask[start, 2]
+    assert cropped.phi_mask[0] == 0.0 and cropped.omega_mask[0] == 0.0
+    # Last kept residue: classic psi (uses next residue) cleared.
+    assert cropped.psi_mask[-1] == 0.0
+    # The input example must be untouched (slices are views — copy-on-write).
+    assert ex.torsion_angles_mask[start, 0] == 1.0 and ex.psi_mask[stop - 1] == 1.0
+
+
+def test_crop_from_start_and_to_end_leaves_unbroken_boundaries():
+    """Cropping that does NOT drop a neighbour (start=0 / stop=length) must not
+    spuriously mask: those boundaries have no discarded neighbour."""
+    ex = build_structure_supervision_example(_load_chain("1crn.pdb"))
+    # start=0: no residue before the window → nothing to clear at the front.
+    head = crop_structure_supervision_example(ex, 0, 20)
+    np.testing.assert_array_equal(head.torsion_angles_mask[0], ex.torsion_angles_mask[0])
+    np.testing.assert_array_equal(head.phi_mask[:1], ex.phi_mask[:1])
+    # stop=length: no residue after the window → last residue's psi unchanged.
+    tail = crop_structure_supervision_example(ex, 20, ex.length)
+    assert tail.psi_mask[-1] == ex.psi_mask[-1]
 
 
 def test_crop_structure_full_window_is_identity():
