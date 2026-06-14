@@ -329,6 +329,73 @@ pub fn m2m_double(child: &[Vec3], s: f64, t: Vec3, p: usize) -> Vec<Vec3> {
     (0..len).map(|i| Vec3::new(px[i], py[i], pz[i])).collect()
 }
 
+/// **L2L** (local→local, the FMM *downward* translation): re-expand a parent
+/// cluster's normalized local (Taylor) expansion `L^p` (about `c_p`, radius `R_p`)
+/// as a child-frame local `L^c` (about `c_c`, radius `R_c`). With normalized
+/// coords `v_p = (t−c_p)/R_p = t0 + s·v_c` (per axis), `s = R_c/R_p`,
+/// `t0 = (c_c−c_p)/R_p`, expanding `v_p^m` gives
+///
+/// ```text
+/// L^c_n = Σ_{m ≥ n} L^p_m · Π_axis C(m_a, n_a) t0_a^{m_a−n_a} s^{n_a}
+/// ```
+///
+/// the **transpose** of the M2M structure (M2M sums lower child → higher parent;
+/// L2L sums higher parent → lower child) — a pure polynomial recentering, so NO
+/// extra sign (unlike M2L's kernel differentiation). Separable per axis ⇒ O(p⁴);
+/// reuses [`trans_matrix_1d`]`(s, t0)` accessed transposed (`tm[m][n] = C(m,n)
+/// s^n t0^{m−n}`). Total degree is preserved (`|n| ≤ |m| ≤ p`), so a degree-`p`
+/// local maps to a degree-`p` local. Both layers' locals are **scalar** after
+/// M2L, so this one operator serves single and double layer alike.
+#[must_use]
+pub(crate) fn l2l_single(parent: &[f64], s: f64, t0: Vec3, p: usize) -> Vec<f64> {
+    let n = p + 1;
+    debug_assert_eq!(parent.len(), n * n * n, "local slice must be (p+1)³");
+    let tx = trans_matrix_1d(s, t0.x, p);
+    let ty = trans_matrix_1d(s, t0.y, p);
+    let tz = trans_matrix_1d(s, t0.z, p);
+    // Step z: B[mx][my][nz] = Σ_{mz≥nz} tz[mz][nz] · parent[mx][my][mz].
+    let mut b = vec![0.0; n * n * n];
+    for mx in 0..n {
+        for my in 0..n {
+            let base = (mx * n + my) * n;
+            for nz in 0..n {
+                let mut acc = 0.0;
+                for mz in nz..n {
+                    acc += tz[mz * n + nz] * parent[base + mz];
+                }
+                b[base + nz] = acc;
+            }
+        }
+    }
+    // Step y: C[mx][ny][nz] = Σ_{my≥ny} ty[my][ny] · B[mx][my][nz].
+    let mut c = vec![0.0; n * n * n];
+    for mx in 0..n {
+        for ny in 0..n {
+            for nz in 0..n {
+                let mut acc = 0.0;
+                for my in ny..n {
+                    acc += ty[my * n + ny] * b[(mx * n + my) * n + nz];
+                }
+                c[(mx * n + ny) * n + nz] = acc;
+            }
+        }
+    }
+    // Step x: out[nx][ny][nz] = Σ_{mx≥nx} tx[mx][nx] · C[mx][ny][nz].
+    let mut out = vec![0.0; n * n * n];
+    for nx in 0..n {
+        for ny in 0..n {
+            for nz in 0..n {
+                let mut acc = 0.0;
+                for mx in nx..n {
+                    acc += tx[mx * n + nx] * c[(mx * n + ny) * n + nz];
+                }
+                out[(nx * n + ny) * n + nz] = acc;
+            }
+        }
+    }
+    out
+}
+
 /// **M2L** (multipole→local): translate a source cluster's normalized multipole moments
 /// `M̂_k` (about `c_s`, radius `R_s`) into a **local expansion** `L_m` about the target
 /// center `c_t` (radius `R_t`), valid for targets near `c_t` and well separated from the
@@ -696,6 +763,46 @@ mod tests {
                 assert!(
                     rel(via_local, direct) < 1e-9,
                     "M2L+L2P {via_local} vs multipole {direct}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn l2l_recenters_local_field_exactly() {
+        // L2L (parent local → child local) is an exact polynomial recentering: the
+        // re-expanded child local must evaluate identically to the parent local
+        // inside the child box (machine precision — isolates sign/index/transpose
+        // errors). Sourced from a real M2L so the local is meaningful.
+        let tri = tilted_tri();
+        let p = 8;
+        let (lo, hi) = tri_bbox(&tri);
+        let c_s = (lo + hi) * 0.5;
+        let r_s = (hi - lo).norm() * 0.5;
+        let m_src = single_layer_moments(c_s, r_s, &[(tri, 1.0)], p);
+        let c_p = Vec3::new(6.0, 5.0, 7.0);
+        let r_p = 1.0;
+        let parent_local = m2l_single(&m_src, r_s, c_s, r_p, c_p, p);
+
+        for (c_c, r_c) in [
+            (c_p + Vec3::new(0.3, -0.2, 0.1), 0.4),  // off-center child
+            (c_p + Vec3::new(-0.5, 0.1, 0.2), 0.3),  // different offset/radius
+            (c_p, 0.5),                              // concentric, just rescaled
+        ] {
+            let s = r_c / r_p;
+            let t0 = (c_c - c_p) * (1.0 / r_p);
+            let child_local = l2l_single(&parent_local, s, t0, p);
+            for off in [
+                Vec3::new(0.1, -0.05, 0.08),
+                Vec3::new(-0.2, 0.15, -0.1),
+                Vec3::new(0.0, 0.0, 0.0),
+            ] {
+                let t = c_c + off * r_c; // inside the child ball (|off| ≤ 0.25)
+                let via_child = eval_local_single(&child_local, r_c, c_c, t, p);
+                let via_parent = eval_local_single(&parent_local, r_p, c_p, t, p);
+                assert!(
+                    rel(via_child, via_parent) < 1e-9,
+                    "L2L recenter {via_child} vs {via_parent}"
                 );
             }
         }
