@@ -1698,6 +1698,96 @@ mod tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "cuda")]
+    fn gpu_dual_contour_matches_cpu() {
+        // GPU dual contour vs the exact CPU manifold_dual_contour, PRE-orientation
+        // (so winding is tested directly, not hidden by orient_consistently). The
+        // bar is topology + geometry, order-independent: identical vertex SET,
+        // tri count, area, volume, watertightness, Euler χ.
+        let cases: &[(Vec<Sphere>, f64, f64)] = &[
+            (vec![s(0.0, 0.0, 0.0, 1.7)], 1.4, 0.35), // single atom (vdW sphere)
+            (
+                vec![s(0.0, 0.0, 0.0, 1.7), s(2.4, 0.0, 0.0, 1.7)],
+                1.4,
+                0.35,
+            ), // toric neck
+            (
+                vec![
+                    s(0.0, 0.0, 0.0, 1.7),
+                    s(1.6, 0.0, 0.0, 1.6),
+                    s(0.0, 1.6, 0.0, 1.5),
+                    s(0.7, 0.7, 1.5, 1.5),
+                    s(-1.5, 0.4, 0.2, 1.6),
+                ],
+                1.4,
+                0.4,
+            ), // saddle-rich cluster (exercises the 4-crossing decider)
+        ];
+        if !crate::surface::seed_gpu::gpu_present() {
+            eprintln!("skipping gpu_dual_contour: no usable GPU");
+            return;
+        }
+        for (atoms, probe, spacing) in cases {
+            let grid = Grid::enclosing(atoms, *probe, *spacing);
+            let f = grid.distance_field(atoms, *probe);
+            let cpu = manifold_dual_contour(&grid, &f);
+
+            // A device IS present, so None here is an execution failure
+            // (compile/launch/alloc/hole), not unavailability — fail, don't skip.
+            let (gverts, gtris) = crate::surface::seed_gpu::dual_contour_gpu(
+                grid.dims,
+                grid.origin,
+                grid.spacing,
+                &f,
+            )
+            .expect("GPU present but dual_contour_gpu failed (compile/launch/hole)");
+            let gpu = Mesh {
+                verts: gverts.iter().map(|v| Vec3::new(v[0], v[1], v[2])).collect(),
+                normals: Vec::new(),
+                tris: gtris,
+            };
+
+            assert_eq!(gpu.verts.len(), cpu.verts.len(), "vertex count");
+            assert_eq!(gpu.tris.len(), cpu.tris.len(), "tri count");
+
+            // Vertex SET match (emission order differs): each GPU vertex coincides
+            // with a CPU vertex (the same sheet's mean of crossings) — symmetric
+            // Hausdorff ≈ 0.
+            let haus = |a: &[Vec3], b: &[Vec3]| {
+                a.iter()
+                    .map(|p| {
+                        b.iter()
+                            .map(|q| p.distance(*q))
+                            .fold(f64::INFINITY, f64::min)
+                    })
+                    .fold(0.0_f64, f64::max)
+            };
+            let d = haus(&gpu.verts, &cpu.verts).max(haus(&cpu.verts, &gpu.verts));
+            assert!(d < 1e-9, "vertex-set Hausdorff {d:.3e}");
+
+            // Geometry + topology invariants agree and are well-formed.
+            assert!(
+                (gpu.surface_area() - cpu.surface_area()).abs() < 1e-6,
+                "area {} vs {}",
+                gpu.surface_area(),
+                cpu.surface_area()
+            );
+            assert!(
+                (gpu.signed_volume() - cpu.signed_volume()).abs() < 1e-6,
+                "volume {} vs {}",
+                gpu.signed_volume(),
+                cpu.signed_volume()
+            );
+            assert!(gpu.is_watertight(), "GPU mesh not watertight");
+            assert_eq!(
+                gpu.euler_characteristic(),
+                cpu.euler_characteristic(),
+                "Euler χ"
+            );
+        }
+    }
+
     /// Regression: the spatial-hash `nearest_surface_point` must return the SAME
     /// nearest *exposed* surface point as an exhaustive (all-atoms) reference, even
     /// in a dense cluster where deep pockets put the nearest exposed point several
