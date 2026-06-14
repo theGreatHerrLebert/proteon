@@ -114,6 +114,13 @@ fn closest_element(xi: Vec3, elements: &[Tri]) -> usize {
 /// (the §9.3 unit-chain test), independent of any kernel/assembly/solve.
 #[must_use]
 pub fn rfenergy_from_traces(wstar: &[f64], qvals: &[f64]) -> f64 {
+    // One trace per charge — a length mismatch would silently truncate the `zip` and
+    // return a plausible-but-wrong energy.
+    debug_assert_eq!(
+        wstar.len(),
+        qvals.len(),
+        "rfenergy_from_traces: one trace per charge"
+    );
     let dot: f64 = wstar.iter().zip(qvals).map(|(w, q)| w * q).sum();
     dot / FOUR_PI * POTPREFACTOR * ENERGY_FACTOR
 }
