@@ -18,6 +18,7 @@ refinement / iterative product, with a leakage caveat).
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
@@ -66,8 +67,17 @@ def _amino_acid_residues(structure, chain_id: Optional[str]):
 
 
 def _ca_index_map(residues):
-    """`(supervision_index, one_letter)` of each CA-bearing residue, in order — the
-    exact set TM-align aligns (it drops residues without a CA)."""
+    """`(supervision_index, one_letter)` of each CA-bearing residue, in order — an
+    approximation of the set TM-align aligns.
+
+    **Known T1 limitation (codex review):** TM-align's Rust extractor takes any
+    non-nucleotide residue with a *non-hetero* CA, whereas this reconstructs from
+    the supervision `is_amino_acid` residues. The two coincide for standard protein
+    structures (all test fixtures), but a structure with ATOM `UNK` / modified /
+    HETATM amino acids can diverge — `structural_correspondence`'s sequence assert
+    then *rejects* the candidate (safe: never a wrong index map) and
+    `build_structure_template_features` skips it **with a warning**. The proper fix
+    is the aligner exposing its own residue-index map; deferred (plan §5)."""
     idx: List[int] = []
     seq: List[str] = []
     for i, r in enumerate(residues):
@@ -144,15 +154,22 @@ def build_structure_template_features(
         raise ValueError("candidate_chains length must match candidate_structures")
 
     rows = []  # (tm_score, aatype, positions, masks)
-    for cand, cchain in zip(candidate_structures, chains):
+    for cand_pos, (cand, cchain) in enumerate(zip(candidate_structures, chains)):
         try:
             t_res = _amino_acid_residues(cand, cchain)
             result = tm_align(
                 query_structure, cand, chain1=query_chain, chain2=cchain, fast=fast
             )
             corr = structural_correspondence(result, q_res, t_res)
-        except Exception:
-            continue  # unusable candidate — diagnostic skip, not a hard error
+        except Exception as exc:
+            # Skip an unusable candidate (failed alignment, or a residue-set
+            # divergence that makes the index map unsafe — see `_ca_index_map`).
+            # Visible, not silent, so a dropped template can be diagnosed.
+            warnings.warn(
+                f"structure template candidate {cand_pos} skipped: {exc}",
+                stacklevel=2,
+            )
+            continue
         t37 = extract_atom37(t_res)
         aatype = np.full(length, TEMPLATE_GAP_INDEX, dtype=np.int32)
         positions = np.zeros((length, 37, 3), dtype=np.float32)

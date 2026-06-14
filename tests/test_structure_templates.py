@@ -122,6 +122,15 @@ def test_correspondence_rejects_unsafe_index_map():
         structural_correspondence(_StubAlign("AAAA", "AAA"), qres, qres)
 
 
+def test_skipped_candidate_warns_not_silent():
+    q = _load("1crn.pdb")
+    # A candidate with a non-existent chain can't be extracted → skipped, but the
+    # skip must be visible (codex: silent drops are undiagnosable).
+    with pytest.warns(UserWarning, match="skipped"):
+        tf = build_structure_template_features(q, [q], candidate_chains=["ZZ"])
+    assert tf.n_templates == 0
+
+
 def test_multichain_query_requires_explicit_chain():
     class _FakeChain:
         id = "A"
