@@ -234,6 +234,14 @@ class TemplateParquetWriter:
         self._buf: List[Tuple[str, Optional[TemplateFeatures]]] = []
         self._writer: Optional["pq.ParquetWriter"] = None
         self._path = self.out_dir / "templates.parquet"
+        self._manifest_path = self.out_dir / "manifest.json"
+        # Invalidate any prior manifest up front: from now until a clean __exit__
+        # the directory has no manifest, so a re-run that truncates the parquet
+        # and then fails leaves the artifact detectably incomplete rather than
+        # described by a stale manifest (whose checksum no longer matches, or —
+        # with verify_checksum=False — would read a partial parquet as complete).
+        if self._manifest_path.exists():
+            self._manifest_path.unlink()
         self.count = 0
         self.count_with_templates = 0
         self.count_zero_templates = 0
@@ -288,7 +296,7 @@ class TemplateParquetWriter:
             manifest.tensor_sha256 = sha256_file(self._path)
         elif self._path.exists():  # nothing written but a stale file existed
             self._path.unlink()
-        (self.out_dir / "manifest.json").write_text(json.dumps(manifest.__dict__, indent=2))
+        self._manifest_path.write_text(json.dumps(manifest.__dict__, indent=2))
         return False
 
 
