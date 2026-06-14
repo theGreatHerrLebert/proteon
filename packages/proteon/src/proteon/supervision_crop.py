@@ -23,12 +23,26 @@ import numpy as np
 
 from .sequence_example import SequenceExample
 from .supervision import StructureSupervisionExample
+from .templates import TemplateFeatures
 
 # Sequence-side residue-axis-0 fields (one row per residue) vs MSA fields whose
 # residue axis is axis 1 (`(N_seq, L)`). `template_mask` is per-template, not
 # per-residue, so it is left untouched.
 _SEQ_RESIDUE_AXIS0 = ("aatype", "residue_index", "seq_mask", "msa_profile")
 _SEQ_MSA_AXIS1 = ("msa", "deletion_matrix", "msa_mask", "has_deletion", "deletion_value")
+
+# Template tensors whose residue axis is axis 1 (`(N_templates, L, *)`). The
+# per-template `template_sum_probs` and `n_templates` are residue-independent.
+_TEMPLATE_AXIS1 = (
+    "template_aatype",
+    "template_all_atom_positions",
+    "template_all_atom_masks",
+    "template_pseudo_beta",
+    "template_pseudo_beta_mask",
+    "template_torsion_angles_sin_cos",
+    "template_alt_torsion_angles_sin_cos",
+    "template_torsion_angles_mask",
+)
 
 
 def _validate(start: int, stop: int, length: int) -> None:
@@ -99,6 +113,31 @@ def crop_sequence_example(
         if value is not None:
             updates[name] = value[:, start:stop]
     return dataclasses.replace(example, **updates)
+
+
+def crop_template_features(
+    features: TemplateFeatures, start: int, stop: int
+) -> TemplateFeatures:
+    """Slice a template bundle's residue (query) axis to `[start, stop)`. Each
+    `(N_templates, L, *)` tensor slices on **axis 1**; `template_sum_probs` and
+    `n_templates` are residue-independent and untouched; `query_len` is updated.
+
+    Crop-boundary torsion correction (mirrors the structure path): the first kept
+    residue's `pre_omega`/`phi` were projected from residue `start-1`, now
+    discarded, so `template_torsion_angles_mask[:, 0, 0:2]` is cleared when a
+    preceding residue was dropped. The AF-format `psi` is within-residue."""
+    _validate(start, stop, int(features.query_len))
+    updates = {"query_len": stop - start}
+    for name in _TEMPLATE_AXIS1:
+        value = getattr(features, name)
+        if value is not None:
+            updates[name] = value[:, start:stop]
+    cropped = dataclasses.replace(features, **updates)
+    if stop > start and start > 0 and cropped.template_torsion_angles_mask is not None:
+        tmask = np.array(cropped.template_torsion_angles_mask, copy=True)
+        tmask[:, 0, 0:2] = 0.0  # pre_omega, phi of every template's first kept residue
+        cropped = dataclasses.replace(cropped, template_torsion_angles_mask=tmask)
+    return cropped
 
 
 def sample_contiguous_crop(
