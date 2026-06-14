@@ -9,7 +9,7 @@ Rust-side batch implementation has a clean semantic target.
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -26,6 +26,12 @@ from .supervision_constants import (
 # [pre_omega, phi, psi, chi1, chi2, chi3, chi4]. psi is negated because it is
 # computed from the carbonyl O (not the next residue's N) — matching OpenFold.
 _TORSION_SIGN = np.array([1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0])
+
+# CA–CA above this (Å) is a backbone break, not a peptide bond — the same
+# threshold proteon.backbone_dihedrals uses for chain-break NaN-ing. Used to veto
+# a *numbering*-adjacent residue pair whose CAs are physically disconnected
+# (e.g. an interleaved insertion code 80 Å away — corpus icode_interleave).
+_CA_BOND_MAX = 4.5
 
 
 def extract_atom37(residues) -> Dict[str, NDArray]:
@@ -209,6 +215,102 @@ def _torsion_sin_cos(a0, a1, a2, a3) -> NDArray[np.float64]:
     return np.array([sin / norm, cos / norm], dtype=np.float64)
 
 
+# A residue's primary-structure identity for peptide-bond adjacency:
+# (chain_id, sequence_number, insertion_code). `None` marks a gap row (e.g. an
+# unaligned query position in the template path) — never bonded to anything.
+ResidueKey = Tuple[str, int, Optional[str]]
+
+
+def _icode_rank(icode: Optional[str]) -> Optional[int]:
+    """Ordinal of a PDB insertion code: blank/`None` → 0, `A` → 1, … `Z` → 26.
+    An unrecognized code returns `None` → treated as a chain break (conservative:
+    never forge a bond we can't order)."""
+    if icode is None:
+        return 0
+    s = icode.strip().upper()
+    if s == "":
+        return 0
+    if len(s) == 1 and "A" <= s <= "Z":
+        return ord(s) - ord("A") + 1
+    return None
+
+
+def _peptide_adjacent(prev: ResidueKey, cur: ResidueKey) -> bool:
+    """Whether `cur` directly follows `prev` in primary structure (a peptide bond
+    is expected). Same chain, and either the next insertion code within the same
+    sequence number (10 → 10A, 10A → 10B) or the next sequence number with no
+    insertion code (… → 11). Insertion-code-aware, so antibody-style numbering
+    (100, 100A, 100B, 101) stays bonded instead of breaking at every inserted
+    residue — which raw `serial_number` does, since 100 and 100A share it."""
+    pc, ps, pi = prev
+    cc, cs, ci = cur
+    if pc != cc:
+        return False
+    pr, cr = _icode_rank(pi), _icode_rank(ci)
+    if cs == ps and pr is not None and cr is not None and cr == pr + 1:
+        return True
+    if cs == ps + 1 and cr == 0:
+        return True
+    return False
+
+
+def residue_key(residue) -> ResidueKey:
+    """`(chain_id, serial_number, insertion_code)` for a structure residue.
+    `chain_id`/`insertion_code` are read defensively (default `""`/`None`) so
+    minimal residue-like objects without them fall back to serial-number-only
+    continuity — the pre-insertion-code behaviour."""
+    return (
+        getattr(residue, "chain_id", ""),
+        int(residue.serial_number),
+        getattr(residue, "insertion_code", None),
+    )
+
+
+def continuity_index_from_keys(keys: Sequence[Optional[ResidueKey]]) -> NDArray:
+    """Monotonic per-residue index where a step of exactly `+1` marks a peptide
+    bond to the previous row and any larger jump marks a chain break — the form
+    `compute_torsion_angles_sin_cos` consumes as `residue_index` to mask
+    `pre_omega`/`phi` at breaks. `keys[i] is None` (a gap/unaligned row) always
+    breaks. Insertion-code-aware via `_peptide_adjacent`.
+
+    Caveat: this is numbering-based. A residue physically missing between two
+    rows whose numbers are still consecutive (e.g. 10 and 11 with 10A absent)
+    cannot be detected here — only backbone geometry could. Documented, deferred.
+    """
+    out = np.empty(len(keys), dtype=np.int64)
+    counter = 0
+    prev: Optional[ResidueKey] = None
+    for i, k in enumerate(keys):
+        if i:
+            if prev is not None and k is not None and _peptide_adjacent(prev, k):
+                counter += 1
+            else:
+                counter += 2  # any non-bond: jump >1 so the +1 adjacency test fails
+        out[i] = counter
+        prev = k
+    return out
+
+
+def continuity_index(residues) -> NDArray:
+    """`continuity_index_from_keys` over a residue list — the supervision-path
+    continuity signal. Use instead of raw `serial_number`, which collapses
+    insertion codes and so spuriously breaks `pre_omega`/`phi` at 10/10A."""
+    return continuity_index_from_keys([residue_key(r) for r in residues])
+
+
+def _ca_break_state(prev_pos, prev_mask, cur_pos, cur_mask, ica):
+    """Tri-state CA–CA continuity between two residues: `True` (bonded), `False`
+    (CAs too far → backbone break), or `None` (a CA missing → unmeasurable, defer
+    to numbering). Lets a numbering-adjacent pair be vetoed when its CAs are
+    physically disconnected, without over-masking when geometry can't be read."""
+    if prev_mask[ica] <= 0 or cur_mask[ica] <= 0:
+        return None
+    d = prev_pos[ica] - cur_pos[ica]
+    # Inclusive: only CA-CA strictly > _CA_BOND_MAX is a break, matching
+    # proteon.backbone_dihedrals (so exactly 4.5 A stays bonded).
+    return bool(float(d @ d) <= _CA_BOND_MAX * _CA_BOND_MAX)
+
+
 def compute_torsion_angles_sin_cos(
     positions: NDArray, mask: NDArray, resnames, residue_index=None
 ) -> Dict[str, NDArray]:
@@ -222,10 +324,14 @@ def compute_torsion_angles_sin_cos(
     `(N, 37, 3)` + `mask` `(N, 37)` are atom37; `resnames` are the 3-letter codes.
 
     `pre_omega`/`phi` are computed from residue `i-1`. When `residue_index` is
-    given they are masked at a **chain break** (`residue_index[i] != [i-1]+1`),
-    not just at the array start — OpenFold relies on upstream masking, we do it
-    here. With `residue_index=None` the behaviour is row-adjacency (OpenFold-exact,
-    used by the parity test on gap-free meshes).
+    given they are masked at a **chain break**: a break is either a numbering
+    discontinuity (`residue_index[i] != [i-1]+1`) **or** a geometric one (CA–CA >
+    `_CA_BOND_MAX`), so a pair that is numbering-adjacent but physically
+    disconnected — e.g. an interleaved insertion code 80 Å away — is still masked.
+    Pass a `continuity_index` (insertion-code-aware), *not* raw `serial_number`,
+    so a genuinely bonded 10/10A doesn't read as a break. With `residue_index=None`
+    the behaviour is row-adjacency with no masking (OpenFold-exact, used by the
+    parity test on gap-free meshes).
     """
     n = len(resnames)
     iN, iCA, iC, iO = ATOM_ORDER["N"], ATOM_ORDER["CA"], ATOM_ORDER["C"], ATOM_ORDER["O"]
@@ -236,9 +342,15 @@ def compute_torsion_angles_sin_cos(
         rn = (resnames[i] or "UNK").strip().upper()
         cur = positions[i]
         cm = mask[i]
+        # Bonded to the previous row iff numbering says adjacent AND geometry
+        # doesn't veto it (CAs not physically disconnected). residue_index=None is
+        # OpenFold-exact row-adjacency with no masking at all (the parity path).
         prev_bonded = i > 0 and (
             residue_index is None
-            or int(residue_index[i]) == int(residue_index[i - 1]) + 1
+            or (
+                int(residue_index[i]) == int(residue_index[i - 1]) + 1
+                and _ca_break_state(positions[i - 1], mask[i - 1], cur, cm, iCA) is not False
+            )
         )
         if prev_bonded:
             prev, pm = positions[i - 1], mask[i - 1]
