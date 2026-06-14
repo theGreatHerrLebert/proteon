@@ -225,9 +225,12 @@ def test_skipped_candidate_warns_not_silent():
     q = _load("1crn.pdb")
     # A candidate with a non-existent chain can't be extracted → skipped, but the
     # skip must be visible (codex: silent drops are undiagnosable).
-    with pytest.warns(UserWarning, match="skipped"):
+    with pytest.warns(UserWarning, match="skipped") as record:
         tf = build_structure_template_features(q, [q], candidate_chains=["ZZ"])
     assert tf.n_templates == 0
+    # The skip warning must carry the underlying reason, not just "skipped"
+    # (codex: collapsing the failure to a generic message loses diagnostics).
+    assert "ZZ" in str(record[0].message)
 
 
 def test_multichain_query_requires_explicit_chain():

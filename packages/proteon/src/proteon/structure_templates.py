@@ -167,7 +167,12 @@ def _batch_align(
     equivalent to the per-pair `tm_align(query, cand, chain1, chain2)` calls when
     every chain (query + all candidates) is the same value (the dominant case:
     all `None`). For mixed/explicit per-candidate chains, fall back to serial
-    per-pair alignment so the chain semantics stay exact."""
+    per-pair alignment so the chain semantics stay exact.
+
+    Each slot is a `(result, error)` pair: on success `(AlignResult, None)`, on
+    failure `(None, message)`. The failure message (the `BatchItem.error` from
+    the parallel path or the serial exception text) is retained so the caller's
+    skip warning can say *why* a candidate dropped — not just that it did."""
     n = len(candidate_structures)
     uniform = all(cc == query_chain for cc in chains)
     if uniform:
@@ -179,19 +184,21 @@ def _batch_align(
             fast=fast,
             strict=False,
         )
-        out: List[Optional[object]] = [None] * n
+        out: List[tuple] = [(None, "no result returned")] * n
         for item in batch:
             if item.ok:
-                out[item.index] = item.value  # raw AlignResult ptr (duck-typed)
+                out[item.index] = (item.value, None)  # raw AlignResult ptr (duck-typed)
+            else:
+                out[item.index] = (None, str(item.error))
         return out
     out = []
     for cand, cchain in zip(candidate_structures, chains):
         try:
             out.append(
-                tm_align(query_structure, cand, chain1=query_chain, chain2=cchain, fast=fast)
+                (tm_align(query_structure, cand, chain1=query_chain, chain2=cchain, fast=fast), None)
             )
-        except Exception:  # noqa: BLE001 - failed pair becomes a None slot
-            out.append(None)
+        except Exception as exc:  # noqa: BLE001 - failed pair keeps its message
+            out.append((None, str(exc)))
     return out
 
 
@@ -233,12 +240,12 @@ def build_structure_template_features(
     )
 
     rows = []  # (tm_score, aatype, positions, masks)
-    for cand_pos, (cand, cchain, result) in enumerate(
+    for cand_pos, (cand, cchain, (result, align_err)) in enumerate(
         zip(candidate_structures, chains, align_results)
     ):
         try:
             if result is None:
-                raise ValueError("TM-align produced no alignment for this candidate")
+                raise ValueError(f"TM-align failed: {align_err}")
             t_res = _amino_acid_residues(cand, cchain)
             corr = structural_correspondence(result, q_res, t_res)
         except Exception as exc:
