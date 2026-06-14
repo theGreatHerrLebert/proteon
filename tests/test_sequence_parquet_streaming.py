@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("pyarrow")
 
-from proteon.sequence_example import SequenceExample
+from proteon.sequence_example import SequenceExample, compute_msa_deletion_features
 from proteon.sequence_export import (
     SEQUENCE_EXPORT_FORMAT,
     SequenceParquetWriter,
@@ -33,10 +33,13 @@ def _fake_sequence(
     msa = None
     deletion = None
     msa_mask = None
+    has_deletion = None
+    deletion_value = None
     if depth > 0:
         msa = rng.integers(0, 22, size=(depth, L), dtype=np.int32)
-        deletion = rng.random(size=(depth, L), dtype=np.float32)
+        deletion = rng.integers(0, 6, size=(depth, L)).astype(np.float32)
         msa_mask = np.ones((depth, L), dtype=np.float32)
+        has_deletion, deletion_value = compute_msa_deletion_features(deletion)
     template = None
     if with_template:
         template = rng.random(size=(3,), dtype=np.float32)
@@ -54,6 +57,8 @@ def _fake_sequence(
         msa=msa,
         deletion_matrix=deletion,
         msa_mask=msa_mask,
+        has_deletion=has_deletion,
+        deletion_value=deletion_value,
         template_mask=template,
     )
 
@@ -65,7 +70,14 @@ def _assert_examples_equal(a: SequenceExample, b: SequenceExample) -> None:
     assert a.length == b.length
     for attr in ("aatype", "residue_index", "seq_mask"):
         np.testing.assert_array_equal(getattr(a, attr), getattr(b, attr))
-    for attr in ("msa", "deletion_matrix", "msa_mask", "template_mask"):
+    for attr in (
+        "msa",
+        "deletion_matrix",
+        "msa_mask",
+        "has_deletion",
+        "deletion_value",
+        "template_mask",
+    ):
         av, bv = getattr(a, attr), getattr(b, attr)
         if av is None:
             assert bv is None, f"{attr}: expected None, got {bv!r}"
@@ -90,6 +102,29 @@ def test_sequence_parquet_roundtrip_with_and_without_msa(tmp_path: Path):
     assert len(loaded) == 3
     for src, dst in zip(examples, loaded):
         _assert_examples_equal(src, dst)
+
+
+def test_sequence_parquet_reads_artifact_missing_new_msa_columns(tmp_path: Path):
+    """Backward compatibility: an artifact written before `has_deletion` /
+    `deletion_value` existed lacks those columns entirely; loading must read them
+    as `None`, not raise `KeyError` (the reader iterates MSA_FIELDS)."""
+    import pyarrow.parquet as pq
+
+    examples = [_fake_sequence("a", L=5, seed=0, depth=4)]
+    out = export_sequence_examples(examples, tmp_path / "seq", row_group_size=2)
+    pqpath = out / "tensors.parquet"
+
+    # Simulate the older schema by dropping the new columns from the tensor file.
+    table = pq.read_table(pqpath)
+    drop = [c for c in ("has_deletion", "deletion_value") if c in table.column_names]
+    pq.write_table(table.drop(drop), pqpath)
+
+    loaded = load_sequence_examples(out, verify_checksum=False)
+    assert len(loaded) == 1
+    assert loaded[0].has_deletion is None
+    assert loaded[0].deletion_value is None
+    # The pre-existing MSA columns still load.
+    np.testing.assert_array_equal(loaded[0].msa, examples[0].msa)
 
 
 def test_sequence_parquet_iter_streams_rowgroup_at_a_time(tmp_path: Path):
