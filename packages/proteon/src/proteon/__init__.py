@@ -214,6 +214,7 @@ from .supervision_crop import (
     crop_sequence_example,
     crop_structure_supervision_example,
     crop_template_features,
+    crop_training_example,
     sample_contiguous_crop,
 )
 from .template_export import (
@@ -317,8 +318,10 @@ from .training_example import (
     TrainingExample,
     TrainingReleaseManifest,
     build_training_release,
+    iter_complete_training_examples,
     iter_training_examples,
     join_training_examples,
+    load_complete_training_examples,
     load_training_examples,
 )
 from .failure_taxonomy import (
@@ -535,6 +538,7 @@ _SUPERVISION_API = (
     "crop_structure_supervision_example",
     "crop_sequence_example",
     "crop_template_features",
+    "crop_training_example",
     "sample_contiguous_crop",
     "TEMPLATE_EXPORT_FORMAT",
     "TEMPLATE_PARQUET_SCHEMA_VERSION",
@@ -606,8 +610,10 @@ _TRAINING_API = (
     "TrainingExample",
     "TrainingReleaseManifest",
     "build_training_release",
+    "iter_complete_training_examples",
     "iter_training_examples",
     "join_training_examples",
+    "load_complete_training_examples",
     "load_training_examples",
 )
 
