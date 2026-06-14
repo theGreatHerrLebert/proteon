@@ -430,7 +430,11 @@ This is the current working assessment, not a final audit.
 - deletion-aware MSA transform outputs — **DONE** (`has_deletion`, `deletion_value`
   on `SequenceExample`, OpenFold `make_msa_feat`-gated)
 - extra-MSA branch features (needs the stochastic clustering pipeline)
-- crop logic for training examples
+- crop logic for training examples — **DONE** (`supervision_crop`:
+  `crop_structure_supervision_example` / `crop_sequence_example` apply a
+  contiguous window across every per-residue axis — incl. the MSA's axis-1
+  residue axis — and `sample_contiguous_crop` is the AF-style seedable region;
+  invariant-gated)
 - split/leakage metadata at the release level
 - stable training-example schema
 
