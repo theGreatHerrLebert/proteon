@@ -218,6 +218,29 @@ def test_no_manifest_published_on_failed_write(tmp_path: Path):
         load_template_artifact(out)
 
 
+def test_failed_overwrite_leaves_no_stale_manifest(tmp_path: Path):
+    """Re-writing an existing artifact that then fails mid-stream must not leave
+    the *previous* run's manifest describing the now-truncated parquet (codex).
+    The artifact must be detectably incomplete (no manifest), not falsely
+    complete or checksum-mismatched."""
+    from proteon.template_export import TemplateParquetWriter
+
+    out = tmp_path / "t"
+    # First run: a complete, valid artifact.
+    write_template_artifact([("a", _features(1, 4, seed=1))], out)
+    assert (out / "manifest.json").exists()
+
+    # Second run over the same dir truncates templates.parquet, then fails.
+    with pytest.raises(RuntimeError):
+        with TemplateParquetWriter(out, row_group_size=1) as w:
+            w.append("a", _features(2, 6, seed=2))
+            raise RuntimeError("boom on overwrite")
+    # No stale manifest survives → load reports the artifact as incomplete.
+    assert not (out / "manifest.json").exists()
+    with pytest.raises(FileNotFoundError):
+        load_template_artifact(out, verify_checksum=False)
+
+
 def test_load_rejects_foreign_format_and_future_schema(tmp_path: Path):
     import json
 
