@@ -95,6 +95,14 @@ struct DualContourGpu {
 
 static DUAL_CONTOUR_GPU: OnceLock<Option<DualContourGpu>> = OnceLock::new();
 
+/// Whether a usable CUDA device initialized — lets a parity test distinguish
+/// "no device" (skip) from `dual_contour_gpu` returning `None` for an *execution*
+/// failure (compile/launch/alloc/hole), which must fail the test (codex).
+#[cfg(test)]
+pub(super) fn gpu_present() -> bool {
+    SurfaceGpu::try_global().is_some()
+}
+
 impl DualContourGpu {
     #[cfg_attr(not(test), allow(dead_code))]
     fn try_global(g: &SurfaceGpu) -> Option<&'static DualContourGpu> {

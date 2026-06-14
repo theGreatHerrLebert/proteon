@@ -1724,20 +1724,24 @@ mod tests {
                 0.4,
             ), // saddle-rich cluster (exercises the 4-crossing decider)
         ];
+        if !crate::surface::seed_gpu::gpu_present() {
+            eprintln!("skipping gpu_dual_contour: no usable GPU");
+            return;
+        }
         for (atoms, probe, spacing) in cases {
             let grid = Grid::enclosing(atoms, *probe, *spacing);
             let f = grid.distance_field(atoms, *probe);
             let cpu = manifold_dual_contour(&grid, &f);
 
-            let Some((gverts, gtris)) = crate::surface::seed_gpu::dual_contour_gpu(
+            // A device IS present, so None here is an execution failure
+            // (compile/launch/alloc/hole), not unavailability — fail, don't skip.
+            let (gverts, gtris) = crate::surface::seed_gpu::dual_contour_gpu(
                 grid.dims,
                 grid.origin,
                 grid.spacing,
                 &f,
-            ) else {
-                eprintln!("skipping gpu_dual_contour: no usable GPU");
-                return;
-            };
+            )
+            .expect("GPU present but dual_contour_gpu failed (compile/launch/hole)");
             let gpu = Mesh {
                 verts: gverts.iter().map(|v| Vec3::new(v[0], v[1], v[2])).collect(),
                 normals: Vec::new(),
