@@ -422,13 +422,14 @@ This is the current working assessment, not a final audit.
 ### Likely still missing or incomplete
 
 - stable atom37 canonical export contract
-- atom14 conversion and ambiguity bookkeeping
-- pseudo-beta generation as a stable artifact
-- torsion-angle supervision tensors
-- rigid-group frame supervision tensors
-- template feature generation pipeline
-- deletion-aware MSA transform outputs
-- extra-MSA branch features
+- atom14 conversion and ambiguity bookkeeping — **DONE**
+- pseudo-beta generation as a stable artifact — **DONE**
+- torsion-angle supervision tensors — **DONE** (incl. OpenFold `torsion_angles_sin_cos`)
+- rigid-group frame supervision tensors — **DONE**
+- template feature generation pipeline (sequence-based; structure-based open)
+- deletion-aware MSA transform outputs — **DONE** (`has_deletion`, `deletion_value`
+  on `SequenceExample`, OpenFold `make_msa_feat`-gated)
+- extra-MSA branch features (needs the stochastic clustering pipeline)
 - crop logic for training examples
 - split/leakage metadata at the release level
 - stable training-example schema

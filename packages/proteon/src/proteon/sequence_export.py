@@ -55,6 +55,8 @@ MSA_FIELDS: Tuple[Tuple[str, type, str], ...] = (
     ("msa", np.int32, "msa"),
     ("deletion_matrix", np.float32, "deletion_matrix"),
     ("msa_mask", np.float32, "msa_mask"),
+    ("has_deletion", np.float32, "has_deletion"),
+    ("deletion_value", np.float32, "deletion_value"),
 )
 
 
@@ -357,6 +359,12 @@ def _parquet_row_to_sequence_example(
     for name, dtype, attr in RESIDUE_FIELDS:
         kwargs[attr] = np.asarray(cols[name][i], dtype=dtype)
     for name, dtype, attr in MSA_FIELDS:
+        # Backward compatibility: an artifact written before a column was added
+        # (e.g. has_deletion / deletion_value) simply lacks it — read as None
+        # rather than KeyError, so older v1 releases stay loadable.
+        if name not in cols:
+            kwargs[attr] = None
+            continue
         raw = cols[name][i]
         if raw is None:
             kwargs[attr] = None
