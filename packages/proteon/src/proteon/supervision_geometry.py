@@ -17,9 +17,15 @@ from numpy.typing import NDArray
 from .supervision_constants import (
     ATOM_ORDER,
     CHI_ANGLES_ATOMS,
+    CHI_PI_PERIODIC,
     RESIDUE_ATOM_RENAMING_SWAPS,
     atom14_names_or_unk,
 )
+
+# Per-torsion sign convention for the 7 AlphaFold torsions
+# [pre_omega, phi, psi, chi1, chi2, chi3, chi4]. psi is negated because it is
+# computed from the carbonyl O (not the next residue's N) — matching OpenFold.
+_TORSION_SIGN = np.array([1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0])
 
 
 def extract_atom37(residues) -> Dict[str, NDArray]:
@@ -183,6 +189,86 @@ def compute_chi_angles(residues):
                 )
                 mask[i, chi_i] = 1.0
     return {"angles": angles, "mask": mask}
+
+
+def _torsion_sin_cos(a0, a1, a2, a3) -> NDArray[np.float64]:
+    """`(sin, cos)` of the dihedral about the `a1`–`a2` axis defined by `a0`,`a3`,
+    via the AlphaFold/OpenFold frame projection (`Rigid.from_3_points` + invert +
+    apply, taking the 4th atom's local `(z, y)`). Equivalent to the standard
+    dihedral but returned as a normalized `(sin, cos)` pair without `atan2`."""
+    a0, a1, a2, a3 = (np.asarray(p, dtype=np.float64) for p in (a0, a1, a2, a3))
+    e0 = a2 - a1
+    e0 = e0 / np.sqrt((e0 * e0).sum() + 1e-8)
+    e1 = a0 - a2
+    e1 = e1 - e0 * float(e1 @ e0)
+    e1 = e1 / np.sqrt((e1 * e1).sum() + 1e-8)
+    e2 = np.cross(e0, e1)
+    d = a3 - a2
+    sin, cos = float(e2 @ d), float(e1 @ d)
+    norm = np.sqrt(sin * sin + cos * cos + 1e-8)
+    return np.array([sin / norm, cos / norm], dtype=np.float64)
+
+
+def compute_torsion_angles_sin_cos(
+    positions: NDArray, mask: NDArray, resnames
+) -> Dict[str, NDArray]:
+    """AlphaFold/OpenFold-format torsion supervision from atom37.
+
+    Returns `torsion_angles_sin_cos` / `alt_torsion_angles_sin_cos` `(N, 7, 2)`
+    and `torsion_angles_mask` `(N, 7)` for the 7 torsions
+    `[pre_omega, phi, psi, chi1, chi2, chi3, chi4]`, reproducing OpenFold's
+    `atom37_to_torsion_angles` (frame projection, the `[1,1,-1,1,1,1,1]` sign
+    convention, and `chi_pi_periodic` for the 180°-symmetric alt). `positions`
+    `(N, 37, 3)` + `mask` `(N, 37)` are atom37; `resnames` are the 3-letter codes.
+    `pre_omega`/`phi` use residue `i-1` (masked at chain start) — mirror OpenFold;
+    discontinuous chains must be split upstream.
+    """
+    n = len(resnames)
+    iN, iCA, iC, iO = ATOM_ORDER["N"], ATOM_ORDER["CA"], ATOM_ORDER["C"], ATOM_ORDER["O"]
+    sin_cos = np.zeros((n, 7, 2), dtype=np.float64)
+    tmask = np.zeros((n, 7), dtype=np.float64)
+
+    for i in range(n):
+        rn = (resnames[i] or "UNK").strip().upper()
+        cur = positions[i]
+        cm = mask[i]
+        if i > 0:
+            prev, pm = positions[i - 1], mask[i - 1]
+            p_ca, p_c, pm_ca, pm_c = prev[iCA], prev[iC], pm[iCA], pm[iC]
+        else:
+            p_ca = p_c = np.zeros(3)
+            pm_ca = pm_c = 0.0
+
+        # pre_omega [prev_CA, prev_C, N, CA]; phi [prev_C, N, CA, C]; psi [N, CA, C, O].
+        sin_cos[i, 0] = _torsion_sin_cos(p_ca, p_c, cur[iN], cur[iCA])
+        tmask[i, 0] = pm_ca * pm_c * cm[iN] * cm[iCA]
+        sin_cos[i, 1] = _torsion_sin_cos(p_c, cur[iN], cur[iCA], cur[iC])
+        tmask[i, 1] = pm_c * cm[iN] * cm[iCA] * cm[iC]
+        sin_cos[i, 2] = _torsion_sin_cos(cur[iN], cur[iCA], cur[iC], cur[iO])
+        tmask[i, 2] = cm[iN] * cm[iCA] * cm[iC] * cm[iO]
+
+        for ci, atom_names in enumerate(CHI_ANGLES_ATOMS.get(rn, ())[:4]):
+            idx = [ATOM_ORDER[a] for a in atom_names]
+            sin_cos[i, 3 + ci] = _torsion_sin_cos(*(cur[k] for k in idx))
+            tmask[i, 3 + ci] = float(np.prod([cm[k] for k in idx]))
+
+    sin_cos *= _TORSION_SIGN[None, :, None]
+
+    # Alt torsions: mirror (chi → chi+π, i.e. negate sin & cos) the 180°-symmetric
+    # chi of ASP/GLU/PHE/TYR; backbone + non-symmetric chi are unchanged.
+    pi_periodic = np.zeros((n, 7), dtype=np.float64)
+    for i in range(n):
+        per = CHI_PI_PERIODIC.get((resnames[i] or "UNK").strip().upper())
+        if per is not None:
+            pi_periodic[i, 3:7] = per
+    mirror = 1.0 - 2.0 * pi_periodic
+    alt = sin_cos * mirror[:, :, None]
+
+    return {
+        "torsion_angles_sin_cos": sin_cos.astype(np.float32),
+        "alt_torsion_angles_sin_cos": alt.astype(np.float32),
+        "torsion_angles_mask": tmask.astype(np.float32),
+    }
 
 
 def compute_rigidgroups(residues):
