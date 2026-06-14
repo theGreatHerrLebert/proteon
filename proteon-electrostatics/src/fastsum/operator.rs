@@ -337,12 +337,12 @@ impl CollocationTreecode {
         for &(t, s) in m2l_pairs {
             let (nt, ns) = (&nodes[t], &nodes[s]);
             let contrib = match self.kind {
-                PotentialKind::Single => {
-                    cartesian::m2l_single(&sl[s], ns.radius, ns.center, nt.radius, nt.center, self.p)
-                }
-                PotentialKind::Double => {
-                    cartesian::m2l_double(&dl[s], ns.radius, ns.center, nt.radius, nt.center, self.p)
-                }
+                PotentialKind::Single => cartesian::m2l_single(
+                    &sl[s], ns.radius, ns.center, nt.radius, nt.center, self.p,
+                ),
+                PotentialKind::Double => cartesian::m2l_double(
+                    &dl[s], ns.radius, ns.center, nt.radius, nt.center, self.p,
+                ),
             };
             for (a, b) in local[t].iter_mut().zip(&contrib) {
                 *a += *b;
@@ -1034,7 +1034,10 @@ mod tests {
             }
         }
         let bad = cover.iter().filter(|&&c| c != 1).count();
-        assert_eq!(bad, 0, "{bad} (target,source) panel pairs not covered exactly once");
+        assert_eq!(
+            bad, 0,
+            "{bad} (target,source) panel pairs not covered exactly once"
+        );
     }
 
     #[test]

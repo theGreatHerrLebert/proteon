@@ -872,9 +872,9 @@ mod tests {
         let parent_local = m2l_single(&m_src, r_s, c_s, r_p, c_p, p);
 
         for (c_c, r_c) in [
-            (c_p + Vec3::new(0.3, -0.2, 0.1), 0.4),  // off-center child
-            (c_p + Vec3::new(-0.5, 0.1, 0.2), 0.3),  // different offset/radius
-            (c_p, 0.5),                              // concentric, just rescaled
+            (c_p + Vec3::new(0.3, -0.2, 0.1), 0.4), // off-center child
+            (c_p + Vec3::new(-0.5, 0.1, 0.2), 0.3), // different offset/radius
+            (c_p, 0.5),                             // concentric, just rescaled
         ] {
             let s = r_c / r_p;
             let t0 = (c_c - c_p) * (1.0 / r_p);
