@@ -27,7 +27,13 @@ from numpy.typing import NDArray
 
 from .align import tm_align, tm_align_one_to_many
 from .supervision_constants import ATOM_ORDER, AA_TO_INDEX, residue_to_one_letter
-from .supervision_geometry import compute_torsion_angles_sin_cos, extract_atom37
+from .supervision_geometry import (
+    ResidueKey,
+    compute_torsion_angles_sin_cos,
+    continuity_index_from_keys,
+    extract_atom37,
+    residue_key,
+)
 from .templates import TEMPLATE_GAP_INDEX, TemplateFeatures
 
 _X_INDEX = AA_TO_INDEX["X"]
@@ -262,27 +268,28 @@ def build_structure_template_features(
         positions = np.zeros((length, 37, 3), dtype=np.float32)
         masks = np.zeros((length, 37), dtype=np.float32)
         resnames = ["UNK"] * length
-        # Per-query-row template residue *numbering* (serial_number), for the
-        # torsion continuity check — matching what `build_structure_supervision_
-        # example` uses, so a template residue-number gap / chain break correctly
-        # masks pre_omega/phi (positional indices would stay consecutive across the
-        # break and forge a bond — codex catch). Unaligned rows get strictly-
-        # decreasing negative sentinels so they never read as peptide-bonded.
-        tmpl_idx_row = -1 - 2 * np.arange(length, dtype=np.int64)
+        # Per-query-row template residue *key* for the torsion continuity check —
+        # the same `(chain, serial_number, insertion_code)` identity the
+        # supervision path uses, so a template residue-number gap / chain break /
+        # insertion correctly masks pre_omega/phi (a query-adjacent pair mapping
+        # to nonconsecutive template residues must NOT forge a bond — codex catch).
+        # Unaligned rows stay `None` → always a break, never peptide-bonded.
+        tmpl_keys: List[Optional[ResidueKey]] = [None] * length
         for qi, ti in zip(corr.query_idx, corr.template_idx):
             positions[qi] = t37["positions"][ti]
             masks[qi] = t37["mask"][ti]
             rn = (t_res[ti].name or "UNK").strip().upper()
             resnames[qi] = rn
             aatype[qi] = AA_TO_INDEX.get(residue_to_one_letter(rn), _X_INDEX)
-            tmpl_idx_row[qi] = int(t_res[ti].serial_number)
+            tmpl_keys[qi] = residue_key(t_res[ti])
 
-        # Derived geometry from the gathered template atom37. The torsion continuity
-        # uses the *template* residue indices: query-adjacent rows mapping to
-        # nonconsecutive template residues (a template insertion) must NOT form a
-        # peptide bond, so pre_omega/phi mask there (codex catch).
+        # Derived geometry from the gathered template atom37. The continuity index
+        # is insertion-code-aware (so antibody-style template numbering doesn't
+        # spuriously break), built from the template residue keys above.
         pb, pb_mask = _pseudo_beta_from_atom37(positions, masks, resnames)
-        tors = compute_torsion_angles_sin_cos(positions, masks, resnames, tmpl_idx_row)
+        tors = compute_torsion_angles_sin_cos(
+            positions, masks, resnames, continuity_index_from_keys(tmpl_keys)
+        )
         rows.append((corr.tm_score, aatype, positions, masks, pb, pb_mask, tors))
 
     rows.sort(key=lambda r: -r[0])

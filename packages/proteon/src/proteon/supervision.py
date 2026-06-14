@@ -36,6 +36,7 @@ from .supervision_geometry import (
     compute_pseudo_beta,
     compute_rigidgroups,
     compute_torsion_angles_sin_cos,
+    continuity_index,
     extract_atom14,
     extract_atom37,
 )
@@ -229,8 +230,11 @@ def build_structure_supervision_example(
 
     # AlphaFold-format torsions, derived from atom37 (same on the Rust + Python
     # paths, since atom37 is parity-tested). Loadable directly by OpenFold.
+    # Continuity for pre_omega/phi masking uses an insertion-code-aware index,
+    # not the stored serial_number residue_index (which collapses 10/10A).
     torsions = compute_torsion_angles_sin_cos(
-        atom37["positions"], atom37["mask"], [r.name for r in residues], residue_index
+        atom37["positions"], atom37["mask"], [r.name for r in residues],
+        continuity_index(residues),
     )
 
     return StructureSupervisionExample(
@@ -321,7 +325,7 @@ def batch_build_structure_supervision_examples(
                 np.asarray(batch_tensors["all_atom_positions"])[i, :length],
                 np.asarray(batch_tensors["all_atom_mask"])[i, :length],
                 [r.name for r in residues],
-                np.asarray(batch_tensors["residue_index"])[i, :length],
+                continuity_index(residues),
             )
             out.append(
                 StructureSupervisionExample(
