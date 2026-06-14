@@ -38,18 +38,47 @@ def _validate(start: int, stop: int, length: int) -> None:
         )
 
 
+def _copy_and_zero(updates: dict, name: str, indexer) -> None:
+    """Zero `updates[name][indexer]` on a *copy* — the sliced arrays in `updates`
+    are views into the input example, so an in-place write would corrupt the
+    original. No-op if the field is absent (Optional tensors)."""
+    arr = updates.get(name)
+    if arr is None:
+        return
+    arr = np.array(arr, copy=True)
+    arr[indexer] = 0.0
+    updates[name] = arr
+
+
 def crop_structure_supervision_example(
     example: StructureSupervisionExample, start: int, stop: int
 ) -> StructureSupervisionExample:
     """Slice a structure example to the residue window `[start, stop)`. Every
     per-residue tensor (all have the residue count as axis 0) and the sequence
-    are sliced; `length` is updated; scalar/quality metadata is preserved."""
+    are sliced; `length` is updated; scalar/quality metadata is preserved.
+
+    Crop-boundary torsion correction: `pre_omega`/`phi` (AF-format and classic)
+    at the first kept residue were computed from residue `start-1`, now discarded;
+    the classic `psi` at the last kept residue used residue `stop`, also
+    discarded. A blanket slice would keep those masks at 1, asserting a peptide
+    bond to a residue no longer in the crop. So we clear them at the boundaries
+    (only when a neighbour was actually dropped). The AF-format `psi` is
+    within-residue (carbonyl O), so it needs no correction."""
     _validate(start, stop, example.length)
     updates = {"sequence": example.sequence[start:stop], "length": stop - start}
     for field in dataclasses.fields(example):
         value = getattr(example, field.name)
         if isinstance(value, np.ndarray):
             updates[field.name] = value[start:stop]
+
+    if stop > start:
+        if start > 0:  # a preceding residue was dropped → first row's pre_omega/phi stale
+            _copy_and_zero(updates, "torsion_angles_mask", (0, slice(0, 2)))
+            _copy_and_zero(updates, "phi_mask", 0)
+            _copy_and_zero(updates, "omega_mask", 0)
+        if stop < example.length:  # a following residue was dropped → last row's classic psi stale
+            _copy_and_zero(updates, "psi_mask", -1)
+
     return dataclasses.replace(example, **updates)
 
 
