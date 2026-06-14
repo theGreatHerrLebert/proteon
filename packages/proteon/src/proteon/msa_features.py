@@ -105,6 +105,11 @@ def sample_msa(
         raise ValueError(f"max_seq must be >= 1, got {max_seq}")
     if row_order is not None:
         index_order = np.asarray(row_order, dtype=np.int64)
+        # Must be a full permutation with the query (row 0) first — else rows are
+        # silently dropped/duplicated rather than partitioned (codex).
+        if index_order.shape != (num_seq,) or index_order[0] != 0 or \
+                not np.array_equal(np.sort(index_order), np.arange(num_seq)):
+            raise ValueError("row_order must be a length-num_seq permutation with row 0 first")
     else:
         if rng is None:
             raise ValueError("sample_msa needs an rng or an explicit row_order")
@@ -254,6 +259,12 @@ def crop_extra_msa(
     num_sel = min(max_extra_msa, num)
     if extra_indices is not None:
         sel = np.asarray(extra_indices, dtype=np.int64)
+        # Honour the cap even for injected indices — else max_extra_msa is
+        # bypassed and the model gets oversized inputs (codex).
+        if sel.shape[0] > num_sel:
+            raise ValueError(
+                f"extra_indices has {sel.shape[0]} entries, exceeds max_extra_msa cap {num_sel}"
+            )
     elif num == 0:
         sel = np.zeros((0,), dtype=np.int64)
     else:
@@ -373,6 +384,11 @@ def build_msa_features(
         msa_mask = np.ones((n_seq, length), dtype=np.float32)
     else:
         msa_mask = np.asarray(msa_mask, dtype=np.float32)
+        if msa_mask.shape != (n_seq, length):
+            raise ValueError(
+                f"msa_mask shape {msa_mask.shape} must match msa {(n_seq, length)} "
+                "(broadcastable shapes silently corrupt clustering summaries)"
+            )
 
     # Always have a usable Generator (seed=None → OS entropy, stochastic but
     # valid) so the default invocation works; injected draws still take
