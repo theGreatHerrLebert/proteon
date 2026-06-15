@@ -218,7 +218,10 @@ pub fn prepare_structure<P: ForceField>(
         out.steps = result.steps;
         out.converged = result.converged;
         out.minimizer_status = result.status.as_str().to_string();
-        out.minimized = true;
+        // Honest even when this branch was entered but the optimizer did no work
+        // (e.g. minimize_steps=0 or every atom constrained -> NotRun): `minimized`
+        // must reflect that the optimizer actually ran, not just that we tried.
+        out.minimized = result.status != minimize::MinimizeStatus::NotRun;
     }
 
     out
