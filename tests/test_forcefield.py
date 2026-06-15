@@ -79,6 +79,81 @@ class TestComputeEnergy:
 
 
 # ===========================================================================
+# CutoffNonPeriodic OBC GB method (opt-in; OpenMM parity in
+# validation/amber96_obc_cutoff_oracle.py)
+# ===========================================================================
+
+
+class TestCutoffGB:
+    """Wiring tests for ff='amber96_obc_cutoff' — no OpenMM needed (parity is
+    in the standalone oracle). NoCutoff GB stays the default and is unchanged."""
+
+    def test_cutoff_gb_is_finite_and_negative(self):
+        s = load_crambin()
+        e = proteon.compute_energy(
+            s, ff="amber96_obc_cutoff", nonbonded_cutoff=12.0, nbl_threshold=10**9
+        )
+        assert np.isfinite(e["solvation"])
+        # GB solvation is favorable (negative) on a folded protein.
+        assert e["solvation"] < 0.0
+
+    def test_cutoff_differs_from_nocutoff(self):
+        # The cutoff method truncates the long-range GB pair term + adds the
+        # reaction-field shift, so it must NOT equal the exact NoCutoff GB.
+        s = load_crambin()
+        nc = proteon.compute_energy(
+            s, ff="amber96_obc", nonbonded_cutoff=1e6, nbl_threshold=10**9
+        )
+        co = proteon.compute_energy(
+            s, ff="amber96_obc_cutoff", nonbonded_cutoff=12.0, nbl_threshold=10**9
+        )
+        assert abs(co["solvation"] - nc["solvation"]) > 1.0
+
+    def test_cutoff_gb_deterministic(self):
+        s = load_crambin()
+        a = proteon.compute_energy(s, ff="amber96_obc_cutoff", nonbonded_cutoff=12.0)
+        b = proteon.compute_energy(s, ff="amber96_obc_cutoff", nonbonded_cutoff=12.0)
+        assert a["total"] == b["total"]
+
+    def test_nbl_path_matches_all_pairs(self):
+        # Below the size gate (nbl_threshold huge) GB uses the all-pairs cutoff
+        # path; a small threshold routes it through the O(N) neighbor-list path.
+        # Same method ⇒ same energy to tight tolerance (Rust proves 1e-9; the
+        # Python layer adds a kJ/mol unit conversion, so allow a hair more).
+        s = load_crambin()
+        all_pairs = proteon.compute_energy(
+            s, ff="amber96_obc_cutoff", nonbonded_cutoff=12.0, nbl_threshold=10**9
+        )
+        nbl = proteon.compute_energy(
+            s, ff="amber96_obc_cutoff", nonbonded_cutoff=12.0, nbl_threshold=1
+        )
+        assert abs(all_pairs["solvation"] - nbl["solvation"]) < 1e-4
+
+    def test_batch_cutoff_gb_matches_serial(self):
+        structures = [load_crambin(), load_ubiquitin()]
+        batch = proteon.batch_compute_energy(
+            structures, ff="amber96_obc_cutoff", nonbonded_cutoff=12.0, n_threads=1
+        )
+        serial = [
+            proteon.compute_energy(s, ff="amber96_obc_cutoff", nonbonded_cutoff=12.0)
+            for s in structures
+        ]
+        for b, sgl in zip(batch, serial):
+            assert b["solvation"] == sgl["solvation"]
+
+    def test_minimize_accepts_cutoff_gb(self):
+        # The cutoff GB method must be selectable through minimize_structure
+        # (its main use case is repeated force evals on larger systems). A few
+        # steps suffice to prove it runs and doesn't increase energy.
+        s = load_crambin()
+        r = proteon.minimize_structure(
+            s, ff="amber96_obc_cutoff", max_steps=5, method="sd"
+        )
+        assert np.isfinite(r["final_energy"])
+        assert r["final_energy"] <= r["initial_energy"] + 1.0
+
+
+# ===========================================================================
 # batch_compute_energy
 # ===========================================================================
 

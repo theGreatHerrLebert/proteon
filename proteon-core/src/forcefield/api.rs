@@ -41,6 +41,8 @@ pub const KNOWN_FORCE_FIELDS: &[&str] = &[
     "amber96_obc",
     "amber96+obc",
     "amber96_obc2",
+    "amber96_obc_cutoff",
+    "amber96+obc_cutoff",
 ];
 
 /// Whether `ff` names a force field [`energy_from_pdb`] can evaluate.
@@ -101,9 +103,18 @@ pub fn energy_from_pdb(
                 p.cutoff_override = nonbonded_cutoff.or(p.cutoff_override);
                 Ok(run(pdb, &p, nbl_threshold))
             }
+            "amber96_obc_cutoff" | "amber96+obc_cutoff" => {
+                // CutoffNonPeriodic GB (truncated + reaction-field shift; matches
+                // OpenMM GBSAOBCForce with a cutoff). GB cutoff follows the
+                // nonbonded cutoff override.
+                let mut p = params::amber96_obc_cutoff();
+                p.cutoff_override = nonbonded_cutoff.or(p.cutoff_override);
+                Ok(run(pdb, &p, nbl_threshold))
+            }
             _ => Err(format!(
-                "Unknown force field '{ff}'. Use 'charmm19_eef1', 'amber96', or \
-                 'amber96_obc' (aliases: 'amber96+obc', 'amber96_obc2')."
+                "Unknown force field '{ff}'. Use 'charmm19_eef1', 'amber96', \
+                 'amber96_obc' (aliases: 'amber96+obc', 'amber96_obc2'), or \
+                 'amber96_obc_cutoff'."
             )),
         }
     }));

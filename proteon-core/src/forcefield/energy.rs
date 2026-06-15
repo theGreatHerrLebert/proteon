@@ -332,7 +332,7 @@ fn compute_energy_impl(
     // always use OBC2 here. OBC1 is kept on `ObcGbParams` as a
     // programmatic option but is NOT the AMBER default.
     if params.has_obc_gb() {
-        let obc = super::gb_obc::ObcGbParams::obc2();
+        let obc = super::gb_obc::ObcGbParams::obc2().with_cutoff(params.gb_cutoff());
         super::gb_obc::gb_obc_energy(coords, topo, params, &obc, &mut result.solvation);
     }
 
@@ -638,8 +638,10 @@ fn compute_energy_and_forces_impl(
     }
 
     // --- OBC GB implicit solvent (if enabled) ---
+    // All-pairs path: NoCutoff (exact) or CutoffNonPeriodic (O(N²) reference for
+    // the neighbor-list path) per the force-field's `gb_cutoff()`.
     if params.has_obc_gb() {
-        let obc = super::gb_obc::ObcGbParams::obc2();
+        let obc = super::gb_obc::ObcGbParams::obc2().with_cutoff(params.gb_cutoff());
         super::gb_obc::gb_obc_energy_and_forces(
             coords,
             topo,
@@ -854,20 +856,44 @@ pub fn compute_energy_and_forces_nbl(
     }
 
     // --- OBC GB implicit solvent (if enabled) ---
-    // NBL path uses the all-pair GB for now (the only real performance
-    // concern is on systems >>2000 atoms; a neighbor-list GB path is a
-    // Phase C follow-up). The math is identical, so cross-path parity is
-    // automatic for this step.
     if params.has_obc_gb() {
-        let obc = super::gb_obc::ObcGbParams::obc2();
-        super::gb_obc::gb_obc_energy_and_forces(
-            coords,
-            topo,
-            params,
-            &obc,
-            &mut result.solvation,
-            &mut forces,
-        );
+        let obc = super::gb_obc::ObcGbParams::obc2().with_cutoff(params.gb_cutoff());
+        match obc.cutoff {
+            // CutoffNonPeriodic: the O(N) win. GB has NO bonded exclusions, so
+            // the LJ `nbl` (which drops 1-2/1-3) cannot be reused — build an
+            // exclusion-free GB list at the GB cutoff. (NbCache bundle-caching
+            // for repeated MD/minimize evals is a follow-up; single-point and
+            // large-system energy already get O(N) here.)
+            Some(rc) => {
+                let gb_pairs = NeighborList::build(
+                    coords,
+                    rc,
+                    &std::collections::HashSet::new(),
+                    &std::collections::HashSet::new(),
+                )
+                .pairs;
+                super::gb_obc::gb_obc_energy_and_forces_nbl(
+                    coords,
+                    topo,
+                    params,
+                    &obc,
+                    &mut result.solvation,
+                    &mut forces,
+                    &gb_pairs,
+                );
+            }
+            // NoCutoff GB is inherently all-pairs O(N²) (OpenMM's is too).
+            None => {
+                super::gb_obc::gb_obc_energy_and_forces(
+                    coords,
+                    topo,
+                    params,
+                    &obc,
+                    &mut result.solvation,
+                    &mut forces,
+                );
+            }
+        }
     }
 
     result.total = result.bond_stretch

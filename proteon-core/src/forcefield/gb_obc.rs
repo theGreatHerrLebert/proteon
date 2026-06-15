@@ -87,6 +87,15 @@ pub struct ObcGbParams {
     /// Whether to include the self-term in the total energy. Kept optional
     /// so the pair-vs-total decomposition can be unit-tested separately.
     pub include_self_term: bool,
+    /// Nonbonded cutoff (Å) for the `CutoffNonPeriodic` GB method, matching
+    /// OpenMM's `GBSAOBCForce` with a cutoff. `None` (default) = `NoCutoff`:
+    /// the exact all-pairs path, byte-for-byte unchanged. `Some(rc)` truncates
+    /// the Born-radius integral and the GB pair sum at `rc` and applies the
+    /// reaction-field energy shift `−preFactor·q_i·q_j/rc` to each distinct
+    /// in-cutoff pair (forceless — distance-independent), per
+    /// `ReferenceObc::computeBornEnergyForces`. The cutoff-vs-NoCutoff choice
+    /// is a force-field method setting, NOT a size gate (see GB_CUTOFF_PLAN).
+    pub cutoff: Option<f64>,
 }
 
 impl ObcGbParams {
@@ -101,6 +110,7 @@ impl ObcGbParams {
             beta: 0.0,
             gamma: 2.909125,
             include_self_term: true,
+            cutoff: None,
         }
     }
 
@@ -115,6 +125,7 @@ impl ObcGbParams {
             beta: 0.8,
             gamma: 4.85,
             include_self_term: true,
+            cutoff: None,
         }
     }
 
@@ -122,6 +133,87 @@ impl ObcGbParams {
     pub fn tau(&self) -> f64 {
         1.0 / self.dielectric_in - 1.0 / self.dielectric_out
     }
+
+    /// Return a copy with the `CutoffNonPeriodic` GB method enabled at `rc` Å
+    /// (`None` leaves the exact NoCutoff path). Builder so call sites stay terse.
+    pub fn with_cutoff(mut self, rc: Option<f64>) -> Self {
+        self.cutoff = rc;
+        self
+    }
+}
+
+/// HCT descreening integrand for atom `j`'s contribution to atom `i`'s Born-
+/// radius integral. Returns `None` when `j`'s scaled sphere doesn't reach `i`'s
+/// offset sphere (no contribution). Caller guards `r > 0` (the `r²<0.01` skip).
+///
+/// Extracted verbatim from the original `compute_born_radii` inner loop so the
+/// all-pairs and neighbor-list paths share one definition (identical IEEE ops —
+/// the NoCutoff path is unchanged bit-for-bit).
+#[inline]
+fn hct_integral_term(
+    offset_radius_i: f64,
+    radius_i_inverse: f64,
+    scaled_radius_j: f64,
+    r: f64,
+) -> Option<f64> {
+    let r_scaled_radius_j = r + scaled_radius_j;
+    // Atom j's scaled sphere doesn't reach i's offset sphere.
+    if offset_radius_i >= r_scaled_radius_j {
+        return None;
+    }
+    let r_inverse = 1.0 / r;
+    let diff = (r - scaled_radius_j).abs();
+    let l_ij_denom = if offset_radius_i > diff {
+        offset_radius_i
+    } else {
+        diff
+    };
+    let l_ij = 1.0 / l_ij_denom;
+    let u_ij = 1.0 / r_scaled_radius_j;
+
+    let l_ij2 = l_ij * l_ij;
+    let u_ij2 = u_ij * u_ij;
+    let ratio = (u_ij / l_ij).ln();
+    let mut term = l_ij - u_ij
+        + 0.25 * r * (u_ij2 - l_ij2)
+        + 0.5 * r_inverse * ratio
+        + 0.25 * scaled_radius_j * scaled_radius_j * r_inverse * (l_ij2 - u_ij2);
+
+    // Atom i lies entirely inside atom j's scaled sphere.
+    if offset_radius_i < (scaled_radius_j - r) {
+        term += 2.0 * (radius_i_inverse - l_ij);
+    }
+    Some(term)
+}
+
+/// Derivative factor `t3` of atom `i`'s HCT integral w.r.t. `r_ij`, used to
+/// spread `born_forces[i]` onto the pair force. Returns `None` when the pair
+/// contributes nothing. Caller guards `r > 0`. Extracted from the original
+/// second force loop so all-pairs and NBL paths share one definition.
+#[inline]
+fn hct_spread_t3(offset_radius_i: f64, scaled_radius_j: f64, r: f64) -> Option<f64> {
+    let r_scaled_radius_j = r + scaled_radius_j;
+    if offset_radius_i >= r_scaled_radius_j {
+        return None;
+    }
+    let diff = (r - scaled_radius_j).abs();
+    let l_ij_denom = if offset_radius_i > diff {
+        offset_radius_i
+    } else {
+        diff
+    };
+    let l_ij = 1.0 / l_ij_denom;
+    let u_ij = 1.0 / r_scaled_radius_j;
+    let l_ij2 = l_ij * l_ij;
+    let u_ij2 = u_ij * u_ij;
+
+    let r_inverse = 1.0 / r;
+    let r2_inverse = r_inverse * r_inverse;
+    let scaled_radius_j2 = scaled_radius_j * scaled_radius_j;
+
+    let t3 = 0.125 * (1.0 + scaled_radius_j2 * r2_inverse) * (l_ij2 - u_ij2)
+        + 0.25 * (u_ij / l_ij).ln() * r2_inverse;
+    Some(t3)
 }
 
 /// Compute effective Born radii for every atom.
@@ -203,6 +295,10 @@ pub(crate) fn compute_born_radii_with_chain(
     let mut born_radii = vec![0.0_f64; n];
     let mut obc_chain = vec![0.0_f64; n];
 
+    // CutoffNonPeriodic: truncate the descreening integral at `cutoff` (matches
+    // `ReferenceObc::computeBornRadii`). `None` ⇒ NoCutoff (no skip, exact).
+    let cutoff_sq = obc.cutoff.map(|c| c * c);
+
     for i in 0..n {
         let (radius_i, _) = per_atom[i];
         let offset_radius_i = radius_i - obc.offset;
@@ -231,38 +327,19 @@ pub(crate) fn compute_born_radii_with_chain(
             if r2 < 0.01 {
                 continue;
             }
+            // CutoffNonPeriodic truncation (hard, no correction here — the RF
+            // shift lives in the pair-energy pass).
+            if let Some(rc2) = cutoff_sq {
+                if r2 > rc2 {
+                    continue;
+                }
+            }
             let r = r2.sqrt();
-            let r_scaled_radius_j = r + scaled_radius_j;
-
-            // Atom j's scaled sphere doesn't reach i's offset sphere.
-            if offset_radius_i >= r_scaled_radius_j {
-                continue;
+            if let Some(term) =
+                hct_integral_term(offset_radius_i, radius_i_inverse, scaled_radius_j, r)
+            {
+                sum += term;
             }
-
-            let r_inverse = 1.0 / r;
-            let diff = (r - scaled_radius_j).abs();
-            let l_ij_denom = if offset_radius_i > diff {
-                offset_radius_i
-            } else {
-                diff
-            };
-            let l_ij = 1.0 / l_ij_denom;
-            let u_ij = 1.0 / r_scaled_radius_j;
-
-            let l_ij2 = l_ij * l_ij;
-            let u_ij2 = u_ij * u_ij;
-            let ratio = (u_ij / l_ij).ln();
-            let mut term = l_ij - u_ij
-                + 0.25 * r * (u_ij2 - l_ij2)
-                + 0.5 * r_inverse * ratio
-                + 0.25 * scaled_radius_j * scaled_radius_j * r_inverse * (l_ij2 - u_ij2);
-
-            // Atom i lies entirely inside atom j's scaled sphere.
-            if offset_radius_i < (scaled_radius_j - r) {
-                term += 2.0 * (radius_i_inverse - l_ij);
-            }
-
-            sum += term;
         }
 
         sum *= 0.5 * offset_radius_i;
@@ -346,6 +423,10 @@ pub(crate) fn gb_obc_energy(
         }
     }
 
+    // CutoffNonPeriodic: same cutoff as the Born integral (already applied in
+    // `compute_born_radii`). `None` ⇒ NoCutoff (exact).
+    let cutoff_sq = obc.cutoff.map(|c| c * c);
+
     // Off-diagonal terms (i < j), multiplied by 2 to cover both (i,j) and (j,i).
     let mut sum_pair = 0.0_f64;
     for i in 0..n {
@@ -354,6 +435,11 @@ pub(crate) fn gb_obc_energy(
             let dy = coords[i][1] - coords[j][1];
             let dz = coords[i][2] - coords[j][2];
             let r2 = dx * dx + dy * dy + dz * dz;
+            if let Some(rc2) = cutoff_sq {
+                if r2 > rc2 {
+                    continue;
+                }
+            }
             let alpha2 = born[i] * born[j];
             if alpha2 <= 0.0 {
                 continue;
@@ -361,6 +447,12 @@ pub(crate) fn gb_obc_energy(
             let d_ij = r2 / (4.0 * alpha2);
             let f_gb = (r2 + alpha2 * (-d_ij).exp()).sqrt();
             sum_pair += 2.0 * charges[i] * charges[j] / f_gb;
+            // Reaction-field shift `2·q_i·q_j·(1/f_gb − 1/cutoff)` — distinct
+            // in-cutoff pairs only; folds the same `−0.5·τ·k_C` prefactor as the
+            // Gpol term, matching the force path's `−pqi·q_j/cutoff` shift.
+            if let Some(rc) = obc.cutoff {
+                sum_pair -= 2.0 * charges[i] * charges[j] / rc;
+            }
         }
     }
 
@@ -469,6 +561,10 @@ pub(crate) fn gb_obc_energy_and_forces(
 
     let charges: Vec<f64> = topo.atoms.iter().map(|a| a.charge).collect();
 
+    // CutoffNonPeriodic: same cutoff for the pair sum and (above) the Born
+    // integral. `None` ⇒ NoCutoff (exact, byte-for-byte unchanged).
+    let cutoff_sq = obc.cutoff.map(|c| c * c);
+
     let mut obc_energy = 0.0_f64;
     let mut born_forces = vec![0.0_f64; n];
 
@@ -489,6 +585,13 @@ pub(crate) fn gb_obc_energy_and_forces(
             let dy = coords[j][1] - coords[i][1];
             let dz = coords[j][2] - coords[i][2];
             let r2 = dx * dx + dy * dy + dz * dz;
+            // CutoffNonPeriodic truncation. The diagonal (i==j, r2=0) is never
+            // truncated; only distinct pairs beyond `cutoff` drop out.
+            if let Some(rc2) = cutoff_sq {
+                if r2 > rc2 {
+                    continue;
+                }
+            }
 
             let alpha2 = born[i] * born[j];
             // If ever zero, the pair contributes nothing (guard against
@@ -527,6 +630,14 @@ pub(crate) fn gb_obc_energy_and_forces(
                 forces[j][1] -= fy;
                 forces[j][2] -= fz;
                 born_forces[j] += d_gpol_dalpha2 * born[i];
+                // CutoffNonPeriodic reaction-field shift on distinct in-cutoff
+                // pairs: `energy -= preFactor·q_i·q_j/cutoff` (here `pqi`
+                // carries proteon's preFactor, so the scale is self-consistent
+                // with `gpol`). Distance-independent ⇒ contributes ZERO force.
+                // Matches `ReferenceObc::computeBornEnergyForces`.
+                if let Some(rc) = obc.cutoff {
+                    energy -= pqi * charges[j] / rc;
+                }
             } else {
                 energy *= 0.5;
             }
@@ -554,7 +665,6 @@ pub(crate) fn gb_obc_energy_and_forces(
             let (radius_j, scale_j) = per_atom[j];
             let offset_radius_j = radius_j - obc.offset;
             let scaled_radius_j = scale_j * offset_radius_j;
-            let scaled_radius_j2 = scaled_radius_j * scaled_radius_j;
 
             let dx = coords[j][0] - coords[i][0];
             let dy = coords[j][1] - coords[i][1];
@@ -566,29 +676,21 @@ pub(crate) fn gb_obc_energy_and_forces(
             if r2 < 0.01 {
                 continue;
             }
-            let r = r2.sqrt();
-            let r_scaled_radius_j = r + scaled_radius_j;
-
-            if offset_radius_i >= r_scaled_radius_j {
-                continue;
+            // CutoffNonPeriodic: spread bornForces over EXACTLY the pairs that
+            // entered the Born integral above — same `r2 > cutoff²` predicate —
+            // or forces stop being the gradient of the truncated energy.
+            if let Some(rc2) = cutoff_sq {
+                if r2 > rc2 {
+                    continue;
+                }
             }
+            let r = r2.sqrt();
 
-            let diff = (r - scaled_radius_j).abs();
-            let l_ij_denom = if offset_radius_i > diff {
-                offset_radius_i
-            } else {
-                diff
+            let t3 = match hct_spread_t3(offset_radius_i, scaled_radius_j, r) {
+                Some(t3) => t3,
+                None => continue,
             };
-            let l_ij = 1.0 / l_ij_denom;
-            let u_ij = 1.0 / r_scaled_radius_j;
-            let l_ij2 = l_ij * l_ij;
-            let u_ij2 = u_ij * u_ij;
-
             let r_inverse = 1.0 / r;
-            let r2_inverse = r_inverse * r_inverse;
-
-            let t3 = 0.125 * (1.0 + scaled_radius_j2 * r2_inverse) * (l_ij2 - u_ij2)
-                + 0.25 * (u_ij / l_ij).ln() * r2_inverse;
             let de = born_forces[i] * t3 * r_inverse;
 
             let fx = dx * de;
@@ -609,13 +711,103 @@ pub(crate) fn gb_obc_energy_and_forces(
     *solvation += obc_energy;
 }
 
-/// OBC GB solvation energy + forces (neighbor-list).
+/// Load per-atom (intrinsic radius, HCT scale) for the OBC loops. Missing AMBER
+/// classes are a hard invariant violation (same policy as `compute_born_radii`).
+fn obc_per_atom(topo: &Topology, params: &impl ForceField) -> Vec<(f64, f64)> {
+    topo.atoms
+        .iter()
+        .enumerate()
+        .map(|(atom_index, a)| {
+            let p = params.get_obc_gb(&a.amber_type).unwrap_or_else(|| {
+                panic!(
+                    "OBC GB: no params for AMBER class '{}' (atom index {})",
+                    a.amber_type, atom_index
+                )
+            });
+            (p.radius, p.scale)
+        })
+        .collect()
+}
+
+/// Born radii + obcChain for the `CutoffNonPeriodic` method using a prebuilt,
+/// exclusion-free pair list (each unordered `i<j` within `cutoff+buffer`).
 ///
-/// Phase A stub just delegates to the all-pair path so that the NBL
-/// code path can be exercised end-to-end without duplicating placeholder
-/// math. Phase B / the cross-path parity test will make this a real
-/// cutoff-aware implementation.
-#[allow(dead_code)]
+/// Mirrors [`compute_born_radii_with_chain`] but iterates the list and expands
+/// every pair into BOTH directed descreening contributions (`j→i` and `i→j` use
+/// different radii/scales). The explicit `r² ≤ cutoff²` predicate re-applies the
+/// physical cutoff because the list carries the Verlet buffer. Requires
+/// `obc.cutoff = Some(_)` (the NBL path only exists for the cutoff method).
+pub(crate) fn compute_born_radii_with_chain_nbl(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &impl ForceField,
+    obc: &ObcGbParams,
+    gb_pairs: &[crate::forcefield::neighbor_list::NBPair],
+) -> (Vec<f64>, Vec<f64>) {
+    let n = coords.len();
+    let per_atom = obc_per_atom(topo, params);
+    let cutoff_sq = obc
+        .cutoff
+        .map(|c| c * c)
+        .expect("compute_born_radii_with_chain_nbl requires a cutoff");
+
+    let mut sum = vec![0.0_f64; n];
+    for pair in gb_pairs {
+        let (i, j) = (pair.i, pair.j);
+        let dx = coords[i][0] - coords[j][0];
+        let dy = coords[i][1] - coords[j][1];
+        let dz = coords[i][2] - coords[j][2];
+        let r2 = dx * dx + dy * dy + dz * dz;
+        if r2 < 0.01 || r2 > cutoff_sq {
+            continue;
+        }
+        let r = r2.sqrt();
+
+        let (radius_i, scale_i) = per_atom[i];
+        let (radius_j, scale_j) = per_atom[j];
+        let offset_radius_i = radius_i - obc.offset;
+        let offset_radius_j = radius_j - obc.offset;
+        let scaled_radius_i = scale_i * offset_radius_i;
+        let scaled_radius_j = scale_j * offset_radius_j;
+
+        // j descreens i.
+        if let Some(t) =
+            hct_integral_term(offset_radius_i, 1.0 / offset_radius_i, scaled_radius_j, r)
+        {
+            sum[i] += t;
+        }
+        // i descreens j (asymmetric: different offset radius + scaled radius).
+        if let Some(t) =
+            hct_integral_term(offset_radius_j, 1.0 / offset_radius_j, scaled_radius_i, r)
+        {
+            sum[j] += t;
+        }
+    }
+
+    let mut born_radii = vec![0.0_f64; n];
+    let mut obc_chain = vec![0.0_f64; n];
+    for i in 0..n {
+        let (radius_i, _) = per_atom[i];
+        let offset_radius_i = radius_i - obc.offset;
+        let s = sum[i] * 0.5 * offset_radius_i;
+        let s2 = s * s;
+        let s3 = s * s2;
+        let tanh_arg = obc.alpha * s - obc.beta * s2 + obc.gamma * s3;
+        let tanh_sum = tanh_arg.tanh();
+        born_radii[i] = 1.0 / (1.0 / offset_radius_i - tanh_sum / radius_i);
+        let chain = offset_radius_i * (obc.alpha - 2.0 * obc.beta * s + 3.0 * obc.gamma * s2);
+        obc_chain[i] = (1.0 - tanh_sum * tanh_sum) * chain / radius_i;
+    }
+    (born_radii, obc_chain)
+}
+
+/// `CutoffNonPeriodic` OBC GB energy + forces over an exclusion-free pair list —
+/// the O(N) implementation of the same method as the all-pairs cutoff path in
+/// [`gb_obc_energy_and_forces`] (validated equal to it at tight tolerance).
+///
+/// Requires `obc.cutoff = Some(_)`. The self (i==j) term is handled in a
+/// per-atom loop; distinct pairs come from `gb_pairs`, each carrying both the
+/// direct force and (via the spread) both atoms' Born-radius back-propagation.
 pub(crate) fn gb_obc_energy_and_forces_nbl(
     coords: &[[f64; 3]],
     topo: &Topology,
@@ -623,8 +815,133 @@ pub(crate) fn gb_obc_energy_and_forces_nbl(
     obc: &ObcGbParams,
     solvation: &mut f64,
     forces: &mut [[f64; 3]],
+    gb_pairs: &[crate::forcefield::neighbor_list::NBPair],
 ) {
-    gb_obc_energy_and_forces(coords, topo, params, obc, solvation, forces);
+    let n = coords.len();
+    if n == 0 {
+        return;
+    }
+    assert_eq!(forces.len(), n, "forces buffer length != atoms");
+    let rc = obc
+        .cutoff
+        .expect("gb_obc_energy_and_forces_nbl requires a cutoff");
+    let cutoff_sq = rc * rc;
+
+    let (born, obc_chain) = compute_born_radii_with_chain_nbl(coords, topo, params, obc, gb_pairs);
+    let per_atom = obc_per_atom(topo, params);
+    const K_COULOMB_KCAL: f64 = 332.0;
+    let pre_factor = -K_COULOMB_KCAL * obc.tau();
+    let charges: Vec<f64> = topo.atoms.iter().map(|a| a.charge).collect();
+
+    let mut obc_energy = 0.0_f64;
+    let mut born_forces = vec![0.0_f64; n];
+
+    // --- Self terms (i==j): f_GB(0,R,R)=R; mirrors the all-pairs diagonal
+    //     (energy halved, no direct force, bornForces self-accumulation).
+    if obc.include_self_term {
+        for i in 0..n {
+            let alpha2 = born[i] * born[i];
+            if alpha2 <= 0.0 {
+                continue;
+            }
+            let pqi = pre_factor * charges[i];
+            // r=0: d_ij=0, exp_term=1, denom2=alpha2, denom=born[i].
+            let gpol = pqi * charges[i] / born[i];
+            let d_gpol_dalpha2 = -0.5 * gpol / alpha2;
+            obc_energy += 0.5 * gpol;
+            born_forces[i] += d_gpol_dalpha2 * born[i];
+        }
+    }
+
+    // --- Distinct pairs (i<j) from the exclusion-free list.
+    for pair in gb_pairs {
+        let (i, j) = (pair.i, pair.j);
+        let dx = coords[j][0] - coords[i][0];
+        let dy = coords[j][1] - coords[i][1];
+        let dz = coords[j][2] - coords[i][2];
+        let r2 = dx * dx + dy * dy + dz * dz;
+        if r2 > cutoff_sq {
+            continue;
+        }
+        let alpha2 = born[i] * born[j];
+        if alpha2 <= 0.0 {
+            continue;
+        }
+        let pqi = pre_factor * charges[i];
+        let d_ij = r2 / (4.0 * alpha2);
+        let exp_term = (-d_ij).exp();
+        let denom2 = r2 + alpha2 * exp_term;
+        let denom = denom2.sqrt();
+        let gpol = pqi * charges[j] / denom;
+        let d_gpol_dr = -gpol * (1.0 - 0.25 * exp_term) / denom2;
+        let d_gpol_dalpha2 = -0.5 * gpol * exp_term * (1.0 + d_ij) / denom2;
+
+        let fx = dx * d_gpol_dr;
+        let fy = dy * d_gpol_dr;
+        let fz = dz * d_gpol_dr;
+        forces[i][0] += fx;
+        forces[i][1] += fy;
+        forces[i][2] += fz;
+        forces[j][0] -= fx;
+        forces[j][1] -= fy;
+        forces[j][2] -= fz;
+        born_forces[i] += d_gpol_dalpha2 * born[j];
+        born_forces[j] += d_gpol_dalpha2 * born[i];
+
+        // Energy + reaction-field shift (forceless), matching the all-pairs path.
+        obc_energy += gpol - pqi * charges[j] / rc;
+    }
+
+    // --- Transform bornForces through the dR_eff/dI chain factor.
+    for i in 0..n {
+        born_forces[i] *= born[i] * born[i] * obc_chain[i];
+    }
+
+    // --- Spread bornForces through the HCT integrand derivative, BOTH directed
+    //     directions per unordered pair (the all-pairs second loop visits every
+    //     ordered (i,j); the list stores each once).
+    for pair in gb_pairs {
+        let (i, j) = (pair.i, pair.j);
+        let dx = coords[j][0] - coords[i][0];
+        let dy = coords[j][1] - coords[i][1];
+        let dz = coords[j][2] - coords[i][2];
+        let r2 = dx * dx + dy * dy + dz * dz;
+        if r2 < 0.01 || r2 > cutoff_sq {
+            continue;
+        }
+        let r = r2.sqrt();
+        let r_inverse = 1.0 / r;
+        let (radius_i, scale_i) = per_atom[i];
+        let (radius_j, scale_j) = per_atom[j];
+        let offset_radius_i = radius_i - obc.offset;
+        let offset_radius_j = radius_j - obc.offset;
+        let scaled_radius_i = scale_i * offset_radius_i;
+        let scaled_radius_j = scale_j * offset_radius_j;
+
+        // Direction i: spread born_forces[i], j as descreener (deltaR = r_j−r_i).
+        if let Some(t3) = hct_spread_t3(offset_radius_i, scaled_radius_j, r) {
+            let de = born_forces[i] * t3 * r_inverse;
+            forces[i][0] -= dx * de;
+            forces[i][1] -= dy * de;
+            forces[i][2] -= dz * de;
+            forces[j][0] += dx * de;
+            forces[j][1] += dy * de;
+            forces[j][2] += dz * de;
+        }
+        // Direction j: spread born_forces[j], i as descreener (deltaR = r_i−r_j
+        // = −(dx,dy,dz); the all-pairs ordered (j,i) iteration uses that sign).
+        if let Some(t3) = hct_spread_t3(offset_radius_j, scaled_radius_i, r) {
+            let de = born_forces[j] * t3 * r_inverse;
+            forces[j][0] -= -dx * de;
+            forces[j][1] -= -dy * de;
+            forces[j][2] -= -dz * de;
+            forces[i][0] += -dx * de;
+            forces[i][1] += -dy * de;
+            forces[i][2] += -dz * de;
+        }
+    }
+
+    *solvation += obc_energy;
 }
 
 #[cfg(test)]
@@ -1077,5 +1394,223 @@ mod tests {
         let p = ObcGbParams::obc1();
         let expected = 1.0 / 1.0 - 1.0 / 78.5;
         assert!((p.tau() - expected).abs() < 1e-12);
+    }
+
+    // --- CutoffNonPeriodic GB method (opt-in cutoff + O(N) neighbor-list path) ---
+
+    use crate::forcefield::neighbor_list::NeighborList;
+
+    /// Exclusion-free GB pair list (all spatial pairs within `rc`+buffer): GB has
+    /// no bonded exclusions, unlike LJ/Coulomb.
+    fn gb_list(coords: &[[f64; 3]], rc: f64) -> Vec<crate::forcefield::neighbor_list::NBPair> {
+        NeighborList::build(coords, rc, &HashSet::new(), &HashSet::new()).pairs
+    }
+
+    /// The non-symmetric 6-atom mixed system reused across cutoff tests.
+    fn six_atom_system() -> (Vec<[f64; 3]>, Topology) {
+        let coords = vec![
+            [0.0, 0.0, 0.0],
+            [1.55, 0.2, 0.1],
+            [2.8, 1.3, -0.4],
+            [0.1, 2.0, 1.1],
+            [3.5, 0.0, 0.5],
+            [1.2, -1.5, 0.7],
+        ];
+        let topo = topo_of(vec![
+            ff_atom_q("CT", "C", coords[0], 0.3),
+            ff_atom_q("N", "N", coords[1], -0.4),
+            ff_atom_q("CT", "C", coords[2], 0.1),
+            ff_atom_q("O", "O", coords[3], -0.5),
+            ff_atom_q("H", "H", coords[4], 0.25),
+            ff_atom_q("HC", "H", coords[5], 0.15),
+        ]);
+        (coords, topo)
+    }
+
+    #[test]
+    fn cutoff_forces_match_finite_difference() {
+        // Cutoff truncates some pairs (max pair distance ~4.5 Å); 3.0 Å sits
+        // between pair distances so no pair is within an FD step of the cutoff
+        // (the potential is discontinuous only AT the cutoff). FD then validates
+        // the truncated-pair forces AND that the reaction-field shift is
+        // force-free (FD would otherwise see a spurious force from it).
+        let params = amber96_obc();
+        let obc = ObcGbParams::obc1().with_cutoff(Some(3.0));
+        let (coords, topo) = six_atom_system();
+
+        let mut e = 0.0;
+        let mut f = vec![[0.0; 3]; 6];
+        gb_obc_energy_and_forces(&coords, &topo, &params, &obc, &mut e, &mut f);
+
+        let fd = fd_forces(&coords, &topo, &params, &obc, 1e-5);
+        let err = max_force_err(&f, &fd);
+        assert!(err < 1e-3, "cutoff FD force error {err:.3e} exceeds 1e-3");
+    }
+
+    #[test]
+    fn nbl_matches_all_pairs_cutoff() {
+        // The O(N) neighbor-list path must reproduce the all-pairs cutoff path
+        // (same method, different enumeration) on energy AND forces.
+        let params = amber96_obc();
+        let rc = 3.0;
+        let obc = ObcGbParams::obc1().with_cutoff(Some(rc));
+        let (coords, topo) = six_atom_system();
+
+        let mut e_ap = 0.0;
+        let mut f_ap = vec![[0.0; 3]; 6];
+        gb_obc_energy_and_forces(&coords, &topo, &params, &obc, &mut e_ap, &mut f_ap);
+
+        let pairs = gb_list(&coords, rc);
+        let mut e_nbl = 0.0;
+        let mut f_nbl = vec![[0.0; 3]; 6];
+        gb_obc_energy_and_forces_nbl(
+            &coords, &topo, &params, &obc, &mut e_nbl, &mut f_nbl, &pairs,
+        );
+
+        assert!(
+            (e_ap - e_nbl).abs() < 1e-9,
+            "energy: all-pairs {e_ap} vs nbl {e_nbl}"
+        );
+        assert!(
+            max_force_err(&f_ap, &f_nbl) < 1e-9,
+            "force mismatch nbl vs all-pairs cutoff: {:.3e}",
+            max_force_err(&f_ap, &f_nbl)
+        );
+    }
+
+    #[test]
+    fn large_cutoff_reduces_to_all_pairs() {
+        // At a cutoff larger than the box, the cutoff path keeps every pair, so
+        // FORCES (shift is forceless) must match the NoCutoff all-pairs path; the
+        // ENERGY differs by exactly the analytic reaction-field shift sum.
+        let params = amber96_obc();
+        let (coords, topo) = six_atom_system();
+        let rc = 1000.0;
+        let obc_nc = ObcGbParams::obc1();
+        let obc_co = ObcGbParams::obc1().with_cutoff(Some(rc));
+
+        let mut e_nc = 0.0;
+        let mut f_nc = vec![[0.0; 3]; 6];
+        gb_obc_energy_and_forces(&coords, &topo, &params, &obc_nc, &mut e_nc, &mut f_nc);
+
+        let pairs = gb_list(&coords, rc);
+        let mut e_nbl = 0.0;
+        let mut f_nbl = vec![[0.0; 3]; 6];
+        gb_obc_energy_and_forces_nbl(
+            &coords, &topo, &params, &obc_co, &mut e_nbl, &mut f_nbl, &pairs,
+        );
+
+        assert!(
+            max_force_err(&f_nc, &f_nbl) < 1e-9,
+            "large-cutoff forces must match NoCutoff: {:.3e}",
+            max_force_err(&f_nc, &f_nbl)
+        );
+
+        // Analytic shift: obc_energy gains -pqi·q_j/rc per distinct pair, with
+        // pqi = -K_C·τ·q_i ⇒ +K_C·τ·q_i·q_j/rc.
+        const K_COULOMB_KCAL: f64 = 332.0;
+        let tau = obc_nc.tau();
+        let charges: Vec<f64> = topo.atoms.iter().map(|a| a.charge).collect();
+        let mut shift = 0.0;
+        for i in 0..coords.len() {
+            for j in (i + 1)..coords.len() {
+                shift += K_COULOMB_KCAL * tau * charges[i] * charges[j] / rc;
+            }
+        }
+        assert!(
+            (e_nbl - (e_nc + shift)).abs() < 1e-7,
+            "energy: nbl {e_nbl} vs NoCutoff+shift {}",
+            e_nc + shift
+        );
+    }
+
+    #[test]
+    fn buffer_pairs_contribute_zero() {
+        // A pair between cutoff and cutoff+buffer is in the list but outside the
+        // physical cutoff: the explicit r²≤cutoff² predicate must drop it, so the
+        // nbl result equals the (pairless) all-pairs cutoff result.
+        let params = amber96_obc();
+        let rc = 3.0; // buffer is 2.0 Å, so the list reaches 5.0 Å
+        let obc = ObcGbParams::obc1().with_cutoff(Some(rc));
+        let coords = vec![[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]]; // 4.0 ∈ (rc, rc+buffer)
+        let topo = topo_of(vec![
+            ff_atom_q("CT", "C", coords[0], 1.0),
+            ff_atom_q("CT", "C", coords[1], -1.0),
+        ]);
+
+        let pairs = gb_list(&coords, rc);
+        assert!(
+            pairs.iter().any(|p| p.i == 0 && p.j == 1),
+            "fixture must put the buffer pair in the list"
+        );
+
+        let mut e_nbl = 0.0;
+        let mut f_nbl = vec![[0.0; 3]; 2];
+        gb_obc_energy_and_forces_nbl(
+            &coords, &topo, &params, &obc, &mut e_nbl, &mut f_nbl, &pairs,
+        );
+
+        let mut e_ap = 0.0;
+        let mut f_ap = vec![[0.0; 3]; 2];
+        gb_obc_energy_and_forces(&coords, &topo, &params, &obc, &mut e_ap, &mut f_ap);
+
+        assert!(
+            (e_nbl - e_ap).abs() < 1e-12,
+            "buffer pair leaked: {e_nbl} vs {e_ap}"
+        );
+        assert!(
+            max_force_err(&f_nbl, &f_ap) < 1e-12,
+            "buffer pair force leaked"
+        );
+    }
+
+    #[test]
+    fn cutoff_nbl_obeys_newtons_third_law() {
+        let params = amber96_obc();
+        let rc = 3.0;
+        let obc = ObcGbParams::obc1().with_cutoff(Some(rc));
+        let (coords, topo) = six_atom_system();
+        let pairs = gb_list(&coords, rc);
+
+        let mut e = 0.0;
+        let mut f = vec![[0.0; 3]; 6];
+        gb_obc_energy_and_forces_nbl(&coords, &topo, &params, &obc, &mut e, &mut f, &pairs);
+
+        let mut net = [0.0; 3];
+        for force in &f {
+            for k in 0..3 {
+                net[k] += force[k];
+            }
+        }
+        for k in 0..3 {
+            assert!(
+                net[k].abs() < 1e-9,
+                "net force component {k} = {} != 0",
+                net[k]
+            );
+        }
+    }
+
+    #[test]
+    fn nbl_energy_matches_energy_only_path() {
+        // The cutoff energy from the force kernel must equal the energy-only
+        // kernel under the same cutoff (consistency of the two APIs).
+        let params = amber96_obc();
+        let rc = 3.0;
+        let obc = ObcGbParams::obc1().with_cutoff(Some(rc));
+        let (coords, topo) = six_atom_system();
+
+        let mut e_only = 0.0;
+        gb_obc_energy(&coords, &topo, &params, &obc, &mut e_only);
+
+        let pairs = gb_list(&coords, rc);
+        let mut e_force = 0.0;
+        let mut f = vec![[0.0; 3]; 6];
+        gb_obc_energy_and_forces_nbl(&coords, &topo, &params, &obc, &mut e_force, &mut f, &pairs);
+
+        assert!(
+            (e_only - e_force).abs() < 1e-9,
+            "energy-only {e_only} vs force-kernel {e_force}"
+        );
     }
 }
