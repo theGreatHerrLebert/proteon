@@ -51,6 +51,30 @@ pub fn generate_similar_kmers(
     scores: ScoreMatrix<'_>,
     threshold: i32,
 ) -> Vec<(u64, i32)> {
+    // Thin collecting wrapper over the streaming core — same set and DFS order.
+    let mut out: Vec<(u64, i32)> = Vec::new();
+    for_each_similar_kmer(encoder, query_kmer, scores, threshold, |h, s| {
+        out.push((h, s));
+    });
+    out
+}
+
+/// Streaming variant of [`generate_similar_kmers`]: invoke `f(hash, score)` for
+/// every k-mer scoring `>= threshold`, in the same DFS order, WITHOUT
+/// materialising the full neighbour set. Lets a caller filter on the fly (e.g.
+/// drop hashes absent from an index) so a permissive threshold can't allocate
+/// `alphabet^k` entries per call. `generate_similar_kmers` is a collecting
+/// wrapper over this, so the two are bit-identical.
+///
+/// # Panics
+/// Same caller-contract panics as [`generate_similar_kmers`].
+pub fn for_each_similar_kmer<F: FnMut(u64, i32)>(
+    encoder: &KmerEncoder,
+    query_kmer: &[u8],
+    scores: ScoreMatrix<'_>,
+    threshold: i32,
+    mut f: F,
+) {
     let k = encoder.kmer_size();
     let a = encoder.alphabet_size() as usize;
     assert_eq!(
@@ -86,10 +110,9 @@ pub fn generate_similar_kmers(
 
     // Early-out: even the best-case full k-mer can't reach threshold.
     if max_remaining[0] < threshold {
-        return Vec::new();
+        return;
     }
 
-    let mut out: Vec<(u64, i32)> = Vec::new();
     let mut prefix = Vec::with_capacity(k);
     dfs(
         0,
@@ -102,13 +125,12 @@ pub fn generate_similar_kmers(
         &mut prefix,
         0,
         encoder,
-        &mut out,
+        &mut f,
     );
-    out
 }
 
 #[allow(clippy::too_many_arguments)]
-fn dfs(
+fn dfs<F: FnMut(u64, i32)>(
     pos: usize,
     k: usize,
     a: usize,
@@ -119,14 +141,14 @@ fn dfs(
     prefix: &mut Vec<u8>,
     running_score: i32,
     encoder: &KmerEncoder,
-    out: &mut Vec<(u64, i32)>,
+    f: &mut F,
 ) {
     if pos == k {
         // Leaf: the upper-bound pruning above only guarantees that *some*
         // completion could reach `threshold`, not that the completion we
         // actually took did. Score must be re-checked at the leaf.
         if running_score >= threshold {
-            out.push((encoder.encode(prefix), running_score));
+            f(encoder.encode(prefix), running_score);
         }
         return;
     }
@@ -150,7 +172,7 @@ fn dfs(
             prefix,
             running_score + s,
             encoder,
-            out,
+            f,
         );
         prefix.pop();
     }
@@ -190,6 +212,25 @@ mod tests {
         results.sort_by_key(|&(h, _)| h);
         let self_hash = enc.encode(&q);
         assert!(results.iter().any(|&(h, s)| h == self_hash && s == 6));
+    }
+
+    #[test]
+    fn for_each_yields_same_sequence_as_collecting_wrapper() {
+        // The streaming core must produce exactly what `generate_similar_kmers`
+        // collects (same hashes, same scores, same DFS order) — it IS the source
+        // of truth the wrapper collects from.
+        let enc = KmerEncoder::new(4, 3);
+        let scores = identity_matrix(4, 2, -1);
+        let q = vec![0u8, 1, 2];
+        for threshold in [-5, 0, 2, 4, 6, 100] {
+            let mut streamed: Vec<(u64, i32)> = Vec::new();
+            for_each_similar_kmer(&enc, &q, &scores, threshold, |h, s| streamed.push((h, s)));
+            assert_eq!(
+                streamed,
+                generate_similar_kmers(&enc, &q, &scores, threshold),
+                "streaming vs collecting differ at threshold {threshold}"
+            );
+        }
     }
 
     #[test]

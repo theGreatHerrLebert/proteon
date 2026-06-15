@@ -21,7 +21,7 @@ use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 
 use super::GpuContext;
 use crate::kmer::{KmerEncoder, KmerIndex, KmerLookup};
-use crate::kmer_generator::generate_similar_kmers;
+use crate::kmer_generator::for_each_similar_kmer;
 use crate::prefilter::{PrefilterHit, PrefilterOptions, SimilarityConfig};
 
 const KERNEL_SRC: &str = include_str!("prefilter.cu");
@@ -277,17 +277,12 @@ impl GpuPrefilterIndex {
     /// Keeps ONLY in-range hashes whose posting list is **non-empty**: an empty
     /// posting contributes no votes (the CPU `for_each_hit` is a no-op on it), so
     /// dropping it is parity-preserving AND bounds the RETAINED list to neighbours
-    /// actually present in the index — vs the `alphabet^k` hashes one permissive
-    /// window can generate, which would otherwise accumulate across every window
-    /// and exhaust host memory before the size guard runs (codex). A hard cap on
-    /// the retained list is the backstop.
+    /// actually present in the index.
     ///
-    /// Note: `generate_similar_kmers` still materialises one window's full
-    /// neighbour set before we filter — the per-window peak is the same as the
-    /// CPU sensitive path (`diagonal_prefilter_sensitive`), which calls the same
-    /// generator. Realistic (tuned) thresholds keep that set small; a *streaming*
-    /// generator that yields neighbours one at a time (bounding even a pathological
-    /// threshold) is a shared follow-up for both paths, not a GPU-specific gap.
+    /// Uses the STREAMING generator (`for_each_similar_kmer`) so neighbours are
+    /// filtered one at a time and the full `alphabet^k` per-window set is NEVER
+    /// materialised — even a pathological threshold only ever holds the retained
+    /// (in-index) hashes (codex). A hard cap on the retained list is the backstop.
     fn build_sensitive_kmers(
         &self,
         query: &[u8],
@@ -296,29 +291,34 @@ impl GpuPrefilterIndex {
     ) -> Result<Vec<(usize, u64)>> {
         let k = self.encoder.kmer_size();
         let mut kmers: Vec<(usize, u64)> = Vec::new();
+        let mut overflow = false;
         for q_pos in 0..query.len().saturating_sub(k - 1) {
             let window = &query[q_pos..q_pos + k];
             if window.contains(&skip_idx) {
                 continue;
             }
-            for (h, _) in generate_similar_kmers(
+            for_each_similar_kmer(
                 &self.encoder,
                 window,
                 similarity.scores,
                 similarity.threshold,
-            ) {
-                if h >= self.table_size {
-                    continue;
-                }
-                let hu = h as usize;
-                if self.offsets_host[hu + 1] > self.offsets_host[hu] {
-                    kmers.push((q_pos, h));
-                    if kmers.len() > i32::MAX as usize {
-                        return Err(anyhow!(
-                            "GPU sensitive prefilter: expanded k-mer list exceeds the launch-grid width"
-                        ));
+                |h, _| {
+                    if h >= self.table_size || overflow {
+                        return;
                     }
-                }
+                    let hu = h as usize;
+                    if self.offsets_host[hu + 1] > self.offsets_host[hu] {
+                        kmers.push((q_pos, h));
+                        if kmers.len() > i32::MAX as usize {
+                            overflow = true;
+                        }
+                    }
+                },
+            );
+            if overflow {
+                return Err(anyhow!(
+                    "GPU sensitive prefilter: expanded k-mer list exceeds the launch-grid width"
+                ));
             }
         }
         Ok(kmers)
