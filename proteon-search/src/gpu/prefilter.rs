@@ -87,46 +87,113 @@ pub struct GpuPrefilterIndex {
     /// lengths without a device round-trip.
     offsets_host: Vec<u64>,
     table_size: u64,
-    /// `max_seq_id + 1` (guarded so it fits u32 for the kernel arg).
+    /// Number of DISTINCT targets = `best[]` length. The kernel votes into a
+    /// dense `[0, best_len)` space (see `dense_to_orig`), so `best[]` is sized by
+    /// the target COUNT, never the max external `seq_id` (which may be sparse).
     best_len: usize,
+    /// `dense_to_orig[d]` is the original `seq_id` for dense target index `d`.
+    /// The uploaded `entries_seq_id` use dense indices; decode maps back through
+    /// this. Keeps `best[]` bounded by target count, not external id range (codex).
+    dense_to_orig: Vec<u32>,
 }
 
 impl GpuPrefilterIndex {
     /// Upload an in-memory index to the device (one-time HtoD of offsets +
     /// entries). The handle is then reusable across queries.
     pub fn upload(index: &KmerIndex) -> Result<Self> {
-        // best[] is indexed by seq_id (NOT dense). seq_id == u32::MAX would make
-        // best_len 2^32, which truncates to 0 in the kernel arg and would
-        // silently reject every target (codex review) — reject it.
-        let max_seq_id = index.entries.iter().map(|h| h.seq_id).max().unwrap_or(0);
-        if max_seq_id == u32::MAX {
+        let ctx = GpuContext::try_global().ok_or_else(|| anyhow!("GPU context unavailable"))?;
+
+        // Verify the kernels actually compile (NVRTC) BEFORE the (multi-GB)
+        // upload. On an unsupported arch the compile fails permanently; uploading
+        // first would leave a large resident index cached but unusable, with every
+        // query retrying + logging and the wasted device memory starving downstream
+        // GPU alignment (codex). `None` ⇒ Err ⇒ the caller's CPU fallback.
+        if PrefilterKernels::try_global().is_none() {
             return Err(anyhow!(
-                "GPU prefilter: seq_id u32::MAX is unsupported (best[] length would overflow u32)"
+                "GPU prefilter kernels unavailable (NVRTC compile failed); using CPU prefilter"
             ));
         }
 
-        let ctx = GpuContext::try_global().ok_or_else(|| anyhow!("GPU context unavailable"))?;
-        let stream = ctx.cuda_context().new_stream()?;
+        // Resident-only capacity pre-check FIRST — reject an archive-scale index
+        // (offsets 8 B/slot + entries 8 B) BEFORE scanning every posting to build
+        // the dense map, so a too-big index falls back to CPU cheaply (codex).
+        let total_mem = ctx.cuda_context().total_mem().unwrap_or(0) as u64;
+        let resident_bytes = (index.offsets.len() as u64)
+            .saturating_mul(8)
+            .saturating_add((index.entries.len() as u64).saturating_mul(8));
+        if total_mem > 0 && resident_bytes > total_mem / 2 {
+            return Err(anyhow!(
+                "GPU prefilter: resident index ~{resident_bytes} B exceeds half of {total_mem} B \
+                 device memory; using CPU prefilter"
+            ));
+        }
 
-        let entries_seq_id: Vec<u32> = index.entries.iter().map(|h| h.seq_id).collect();
-        let entries_pos: Vec<u32> = index.entries.iter().map(|h| h.pos as u32).collect();
+        // Dense-remap seq_ids → [0, n_targets). `best[]` (per-query, device + host
+        // DTOH copy) is then sized by the DISTINCT-TARGET COUNT, not the max
+        // external id — a sparse huge id no longer blows it up (codex). Every host
+        // allocation (the map AND its key vec) is fallible so a pathological index
+        // falls back to CPU instead of OOM-aborting on infallible growth.
+        let mut dense_to_orig: Vec<u32> = Vec::new();
+        let mut orig_to_dense: std::collections::HashMap<u32, u32> =
+            std::collections::HashMap::new();
+        for h in &index.entries {
+            if orig_to_dense.contains_key(&h.seq_id) {
+                continue;
+            }
+            let d = dense_to_orig.len();
+            if d >= u32::MAX as usize {
+                return Err(anyhow!(
+                    "GPU prefilter: > u32::MAX distinct targets; using CPU prefilter"
+                ));
+            }
+            // Reserve fallibly BEFORE inserting so neither the vec nor the map
+            // grows via an infallible (abort-on-OOM) allocation.
+            dense_to_orig
+                .try_reserve(1)
+                .and_then(|()| orig_to_dense.try_reserve(1))
+                .map_err(|_| anyhow!("GPU prefilter: host OOM building target map; CPU"))?;
+            dense_to_orig.push(h.seq_id);
+            orig_to_dense.insert(h.seq_id, d as u32);
+        }
+        let best_len = dense_to_orig.len().max(1);
+
+        // Full capacity guard now that `best[]`'s (target-bounded) size is known.
+        let needed_bytes = resident_bytes.saturating_add((best_len as u64).saturating_mul(8));
+        if total_mem > 0 && needed_bytes > total_mem / 2 {
+            return Err(anyhow!(
+                "GPU prefilter: index needs ~{needed_bytes} B (resident {resident_bytes} + \
+                 best[] {}), over half of {total_mem} B device memory; using CPU prefilter",
+                best_len * 8
+            ));
+        }
+
+        // Host SoA via FALLIBLE allocation (entries use DENSE seq ids).
+        let n = index.entries.len();
+        let mut entries_seq_id: Vec<u32> = Vec::new();
+        let mut entries_pos: Vec<u32> = Vec::new();
+        let mut offsets_host: Vec<u64> = Vec::new();
+        entries_seq_id
+            .try_reserve(n.max(1))
+            .and_then(|()| entries_pos.try_reserve(n.max(1)))
+            .and_then(|()| offsets_host.try_reserve(index.offsets.len()))
+            .map_err(|_| anyhow!("GPU prefilter: host OOM allocating upload buffers; CPU"))?;
+        for h in &index.entries {
+            entries_seq_id.push(orig_to_dense[&h.seq_id]);
+            entries_pos.push(h.pos as u32);
+        }
+        offsets_host.extend_from_slice(&index.offsets);
         // cudarc rejects zero-byte allocations; an empty index has no entries.
-        // A 1-element stub the kernels never read (every posting list is empty,
-        // so no query hash produces a hit) keeps the handle valid.
-        let seq_for_gpu = if entries_seq_id.is_empty() {
-            vec![0u32]
-        } else {
-            entries_seq_id
-        };
-        let pos_for_gpu = if entries_pos.is_empty() {
-            vec![0u32]
-        } else {
-            entries_pos
-        };
+        // A 1-element stub the kernels never read (every posting list is empty)
+        // keeps the handle valid.
+        if entries_seq_id.is_empty() {
+            entries_seq_id.push(0);
+            entries_pos.push(0);
+        }
 
-        let d_offsets = stream.clone_htod(&index.offsets)?;
-        let d_seq_id = stream.clone_htod(&seq_for_gpu)?;
-        let d_pos = stream.clone_htod(&pos_for_gpu)?;
+        let stream = ctx.cuda_context().new_stream()?;
+        let d_offsets = stream.clone_htod(&offsets_host)?;
+        let d_seq_id = stream.clone_htod(&entries_seq_id)?;
+        let d_pos = stream.clone_htod(&entries_pos)?;
         stream.synchronize()?;
 
         Ok(Self {
@@ -134,9 +201,10 @@ impl GpuPrefilterIndex {
             d_seq_id,
             d_pos,
             encoder: index.encoder().clone(),
-            offsets_host: index.offsets.clone(),
+            offsets_host,
             table_size: index.encoder().table_size(),
-            best_len: max_seq_id as usize + 1,
+            best_len,
+            dense_to_orig,
         })
     }
 
@@ -426,7 +494,9 @@ impl GpuPrefilterIndex {
             let count = (packed >> DIAG_BITS) as u32;
             let diag_b = diag_max - (packed & diag_max);
             let diagonal = diag_b as i64 - diag_bias as i64;
-            let seq_id = seq as u32;
+            // `seq` is the DENSE index the kernel voted into; map back to the
+            // original external seq_id.
+            let seq_id = self.dense_to_orig[seq];
             if count >= opts.score_threshold && opts.exclude_self != Some(seq_id) {
                 hits.push(PrefilterHit {
                     seq_id,
@@ -507,6 +577,33 @@ mod tests {
         }
         let idx = small_index();
         assert_parity(&idx, &[0, 1, 2, 3], 99, &PrefilterOptions::default());
+    }
+
+    #[test]
+    fn sparse_huge_seq_id_handled_via_dense_remap() {
+        if skip() {
+            return;
+        }
+        // A single target with a near-u32::MAX seq_id used to size best[] at
+        // ~34 GB (OOM risk). Dense remapping sizes best[] by the target COUNT
+        // (1 here), so it uploads fine — and the original seq_id is preserved in
+        // the result via dense_to_orig (codex).
+        let enc = KmerEncoder::new(4, 2);
+        let t = vec![0u8, 1]; // k-mer "01"
+        let big_id = u32::MAX - 1;
+        let idx = KmerIndex::build(enc, [(big_id, t.as_slice())], 99).unwrap();
+        let handle =
+            GpuPrefilterIndex::upload(&idx).expect("dense remap should accept a sparse huge id");
+        let q = vec![0u8, 1];
+        let gpu = handle
+            .prefilter(&q, 99, &PrefilterOptions::default())
+            .unwrap();
+        let cpu = diagonal_prefilter(&idx, &q, 99, &PrefilterOptions::default());
+        assert_eq!(gpu, cpu, "dense-remapped result must match CPU");
+        assert!(
+            gpu.iter().any(|h| h.seq_id == big_id),
+            "original seq_id must be preserved through the dense remap"
+        );
     }
 
     #[test]
