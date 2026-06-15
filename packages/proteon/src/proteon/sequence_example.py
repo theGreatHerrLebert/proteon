@@ -9,6 +9,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .supervision_constants import AA_TO_INDEX, residue_to_one_letter
+from .supervision_geometry import insertion_code_ord, positional_residue_index
 
 
 @dataclass
@@ -30,6 +31,8 @@ class SequenceExample:
     config_rev: Optional[str]
 
     aatype: NDArray[np.int32]
+    #: 0-based positional sequence coordinate (gapless), same policy as structure
+    #: supervision. Author identity is in `author_seq_id` / `insertion_code` (end).
     residue_index: NDArray[np.int32]
     seq_mask: NDArray[np.float32]
 
@@ -46,6 +49,13 @@ class SequenceExample:
     has_deletion: Optional[NDArray[np.float32]] = None
     deletion_value: Optional[NDArray[np.float32]] = None
     template_mask: Optional[NDArray[np.float32]] = None
+
+    #: Depositor residue identity (kept separate from positional `residue_index`):
+    #: `author_seq_id` = PDB serial_number; `insertion_code` = ASCII ordinal of the
+    #: icode char (0 = blank). Declared LAST so they don't shift positional
+    #: constructor args. Mirrors the structure-supervision identity fields.
+    author_seq_id: Optional[NDArray[np.int32]] = None
+    insertion_code: Optional[NDArray[np.int32]] = None
 
 
 def build_sequence_example(
@@ -68,7 +78,14 @@ def build_sequence_example(
 
     sequence = "".join(residue_to_one_letter(r.name) for r in residues)
     aatype = np.asarray([AA_TO_INDEX.get(aa, AA_TO_INDEX["X"]) for aa in sequence], dtype=np.int32)
-    residue_index = np.asarray([int(r.serial_number) for r in residues], dtype=np.int32)
+    # Positional sequence coordinate (gapless) — same policy as structure
+    # supervision, so the two artifacts' residue_index agree for the same chain.
+    residue_index = positional_residue_index(len(residues))
+    author_seq_id = np.asarray([int(r.serial_number) for r in residues], dtype=np.int32)
+    insertion_code = np.asarray(
+        [insertion_code_ord(getattr(r, "insertion_code", None)) for r in residues],
+        dtype=np.int32,
+    )
     seq_mask = np.ones((len(residues),), dtype=np.float32)
 
     msa_arr = _encode_msa(msa, len(residues))
@@ -93,6 +110,8 @@ def build_sequence_example(
         aatype=aatype,
         residue_index=residue_index,
         seq_mask=seq_mask,
+        author_seq_id=author_seq_id,
+        insertion_code=insertion_code,
         msa=msa_arr,
         deletion_matrix=deletion_arr,
         msa_mask=msa_mask_arr,

@@ -20,7 +20,6 @@ const ATOM_TYPES: [&str; 37] = [
 #[derive(Clone)]
 struct ResidueRecord {
     name: String,
-    serial_number: i32,
     atoms: Vec<(String, [f32; 3])>,
 }
 
@@ -265,7 +264,6 @@ fn extract_residue_records(chain: &pdbtbx::Chain) -> PyResult<Vec<ResidueRecord>
         }
         out.push(ResidueRecord {
             name: residue.name().unwrap_or("UNK").trim().to_ascii_uppercase(),
-            serial_number: residue.serial_number() as i32,
             atoms,
         });
     }
@@ -432,7 +430,12 @@ fn extract_example_from_pdb(
     for (i, residue) in residues.iter().enumerate() {
         let one_letter = residue_to_one_letter(&residue.name);
         aatype[i] = aa_index(one_letter);
-        residue_index[i] = residue.serial_number;
+        // Positional (gapless) sequence coordinate — NOT author numbering (which
+        // collapses insertion codes and injects depositor gaps). Matches the Python
+        // `positional_residue_index`; author identity is exported Python-side as
+        // `author_seq_id` / `insertion_code`. (One shared policy; see
+        // STRUCTURE_SUPERVISION_SCHEMA.md.)
+        residue_index[i] = i as i32;
 
         for atom_name in atom14_names(&residue.name) {
             if atom_name.is_empty() {

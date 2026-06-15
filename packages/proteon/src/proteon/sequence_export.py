@@ -35,9 +35,23 @@ except ImportError:  # pragma: no cover
 
 from ._artifact_checksum import sha256_file, verify_sha256
 from .sequence_example import SequenceExample
+from .supervision_export import _field_or_zeros
 
 SEQUENCE_EXPORT_FORMAT = "proteon.sequence_example.parquet.v0"
-SEQUENCE_PARQUET_SCHEMA_VERSION = 1
+# v2: residue_index is now a 0-based positional sequence coordinate (was author
+# serial_number); added author_seq_id + insertion_code identity columns.
+SEQUENCE_PARQUET_SCHEMA_VERSION = 2
+
+
+def _require_sequence_schema_version(manifest) -> None:
+    """Reject a sequence-artifact manifest whose `schema_version` predates the v2
+    positional-residue_index + author-identity columns (loud error, not `KeyError`)."""
+    ver = int(manifest.get("schema_version", 1))
+    if ver != SEQUENCE_PARQUET_SCHEMA_VERSION:
+        raise ValueError(
+            f"sequence artifact schema_version {ver} is not supported by this build "
+            f"(expected {SEQUENCE_PARQUET_SCHEMA_VERSION}); regenerate the release."
+        )
 
 
 # Residue-axis fields: (column_name, numpy_dtype, dataclass_attr).
@@ -46,6 +60,10 @@ RESIDUE_FIELDS: Tuple[Tuple[str, type, str], ...] = (
     ("aatype", np.int32, "aatype"),
     ("residue_index", np.int32, "residue_index"),
     ("seq_mask", np.float32, "seq_mask"),
+    # Author (depositor) residue identity, kept separate from the positional
+    # `residue_index`. `insertion_code` is ord-encoded (0 = blank, 1 = 'A', …).
+    ("author_seq_id", np.int32, "author_seq_id"),
+    ("insertion_code", np.int32, "insertion_code"),
 )
 
 # MSA fields: (column_name, numpy_dtype, dataclass_attr).
@@ -163,7 +181,12 @@ def _sequence_examples_to_record_batch(
         pa.array([ex.config_rev for ex in batch], type=pa.string()),
     ]
     for name, dtype, attr in RESIDUE_FIELDS:
-        columns.append(_make_residue_column([getattr(ex, attr) for ex in batch], dtype))
+        # Zero-fill optional identity fields (author_seq_id/insertion_code) to the
+        # residue length when None, so a hand-built / pre-v2 example serializes a
+        # proper (L,) column instead of an empty (0,) one (a required field None
+        # raises). Mirrors the supervision exporter (codex review).
+        per_row = [_field_or_zeros(ex, attr, (), dtype) for ex in batch]
+        columns.append(_make_residue_column(per_row, dtype))
     for name, dtype, attr in MSA_FIELDS:
         columns.append(_make_msa_column([getattr(ex, attr) for ex in batch], dtype))
     template_arrays: List[Optional[np.ndarray]] = [
@@ -313,6 +336,7 @@ def iter_sequence_examples(
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("format") != SEQUENCE_EXPORT_FORMAT:
         raise ValueError(f"unsupported sequence export format: {manifest.get('format')!r}")
+    _require_sequence_schema_version(manifest)
     if int(manifest.get("count", 0)) == 0:
         return
 

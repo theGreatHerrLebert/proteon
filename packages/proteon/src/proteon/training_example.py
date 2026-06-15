@@ -44,12 +44,26 @@ from .supervision_export import (
     SEQUENCE_FIELDS as _SEQUENCE_FIELDS,
     STRUCTURE_FIELDS as _STRUCTURE_FIELDS,
     TENSOR_FIELDS as _TENSOR_FIELDS,
+    _field_or_zeros,
     iter_structure_supervision_examples,
     load_structure_supervision_examples,
 )
 
 TRAINING_EXPORT_FORMAT = "proteon.training_example.parquet.v0"
-TRAINING_PARQUET_SCHEMA_VERSION = 1
+# v2: inherits the supervision v2 change — residue_index is now a positional
+# sequence coordinate, plus author_seq_id + insertion_code identity columns.
+TRAINING_PARQUET_SCHEMA_VERSION = 2
+
+
+def _require_training_schema_version(manifest) -> None:
+    """Reject a training-parquet manifest predating the v2 positional-residue_index +
+    author-identity columns (loud error rather than a `KeyError` on a missing column)."""
+    ver = int(manifest.get("parquet_schema_version", 1))
+    if ver != TRAINING_PARQUET_SCHEMA_VERSION:
+        raise ValueError(
+            f"training artifact parquet_schema_version {ver} is not supported by this "
+            f"build (expected {TRAINING_PARQUET_SCHEMA_VERSION}); regenerate the release."
+        )
 
 
 @dataclass
@@ -238,13 +252,46 @@ def _training_examples_to_record_batch(
         pa.array(prep_run_ids, type=pa.string()),
         pa.array(quality_jsons, type=pa.string()),
     ]
+    # Author identity lives on _SEQUENCE_FIELDS, and the loader assigns it to BOTH the
+    # reconstructed sequence and structure examples. That is only correct because a
+    # training example's sequence and structure are the same chain — assert it so a
+    # mismatch fails loudly at write time instead of silently overwriting the
+    # structure-side identity on round-trip (codex review).
+    for ex in batch:
+        _assert_training_identity_consistent(ex)
     for name, inner_shape, dtype, attr in _SEQUENCE_FIELDS:
-        per_row = [np.ascontiguousarray(getattr(ex.sequence, attr)) for ex in batch]
+        per_row = [_field_or_zeros(ex.sequence, attr, inner_shape, dtype) for ex in batch]
         columns.append(_make_ragged_column(per_row, inner_shape, dtype))
     for name, inner_shape, dtype, attr in _STRUCTURE_FIELDS:
-        per_row = [np.ascontiguousarray(getattr(ex.structure, attr)) for ex in batch]
+        per_row = [_field_or_zeros(ex.structure, attr, inner_shape, dtype) for ex in batch]
         columns.append(_make_ragged_column(per_row, inner_shape, dtype))
     return pa.RecordBatch.from_arrays(columns, schema=schema)
+
+
+def _assert_training_identity_consistent(example) -> None:
+    """The training Parquet stores author identity once (sequence side) and the loader
+    assigns it to both sub-examples; verify the structure side matches so the single
+    stored copy is not a silent overwrite of a different structure identity."""
+    seq, struc = example.sequence, example.structure
+    rid = getattr(struc, "record_id", "?")
+    for attr in ("author_seq_id", "insertion_code"):
+        s_val, t_val = getattr(seq, attr, None), getattr(struc, attr, None)
+        # One-sided identity would be silently lost: only the sequence column is
+        # stored, so a populated structure side with a None sequence side gets
+        # zero-filled and overwrites the real structure identity on load. Require
+        # both set (or neither) — same chain ⇒ both present and equal.
+        if (s_val is None) != (t_val is None):
+            raise ValueError(
+                f"training example {rid!r}: {attr} is set on only one of the "
+                "sequence/structure side; the training Parquet stores it once, so a "
+                "one-sided value would be silently dropped. Populate both (or neither)."
+            )
+        if s_val is not None and not np.array_equal(s_val, t_val):
+            raise ValueError(
+                f"training example {rid!r}: sequence and structure {attr} differ; "
+                "they must be the same chain. Refusing to drop the structure-side "
+                "identity on serialize."
+            )
 
 
 def join_training_examples(
@@ -497,6 +544,7 @@ def iter_training_examples(
     manifest = json.loads((root / "release_manifest.json").read_text(encoding="utf-8"))
     if manifest.get("format") != TRAINING_EXPORT_FORMAT:
         raise ValueError(f"unsupported training export format: {manifest.get('format')!r}")
+    _require_training_schema_version(manifest)
 
     parquet_file = manifest.get("parquet_file")
     if parquet_file is None:

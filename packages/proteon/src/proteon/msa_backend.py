@@ -357,6 +357,8 @@ def build_sequence_example_with_msa(
         aatype=base.aatype,
         residue_index=base.residue_index,
         seq_mask=base.seq_mask,
+        author_seq_id=base.author_seq_id,
+        insertion_code=base.insertion_code,
         msa=msa_arr,
         deletion_matrix=deletion_arr,
         msa_mask=msa_mask_arr,

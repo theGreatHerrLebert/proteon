@@ -57,6 +57,9 @@ def _sequence_example_with_msa(struc, depth: int = 4) -> SequenceExample:
         aatype=struc.aatype,
         residue_index=struc.residue_index,
         seq_mask=struc.seq_mask,
+        # Same chain → same author identity as the structure side.
+        author_seq_id=struc.author_seq_id,
+        insertion_code=struc.insertion_code,
         msa=rng.integers(0, 22, size=(depth, L), dtype=np.int32),
         deletion_matrix=deletion,
         msa_mask=np.ones((depth, L), dtype=np.float32),

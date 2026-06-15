@@ -101,7 +101,10 @@ class TestStructureSupervisionExample:
         assert ex.sequence == "GSF"
         assert ex.length == 3
         assert ex.aatype.shape == (3,)
-        assert ex.residue_index.tolist() == [1, 2, 3]
+        # residue_index is the 0-based positional sequence coordinate (was the
+        # author serial_number [1,2,3]); author numbering is in author_seq_id.
+        assert ex.residue_index.tolist() == [0, 1, 2]
+        assert ex.author_seq_id.tolist() == [1, 2, 3]
         assert np.all(ex.seq_mask == 1.0)
 
     def test_atom37_and_atom14_shapes_are_present(self):
@@ -400,3 +403,92 @@ def test_quality_non_protein_is_not_eligible():
     assert q.protein_eligible is False
     assert q.prep_success is False
     assert q.relax_ok is False
+
+
+# ---------------------------------------------------------------------------
+# residue_index: positional sequence coordinate + author identity
+# (guards the insertion-code collapse: 10/10A no longer share an index)
+# ---------------------------------------------------------------------------
+
+import os as _os
+from proteon.supervision_geometry import positional_residue_index, insertion_code_ord
+
+_ICODE_PDB = _os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+    "tests", "corpus", "insertion_codes", "icode_interleave.pdb",
+)
+
+
+def test_positional_residue_index_is_arange():
+    np.testing.assert_array_equal(positional_residue_index(4), np.array([0, 1, 2, 3]))
+    assert positional_residue_index(0).tolist() == []
+
+
+def test_insertion_code_ord_encoding():
+    # Reversible ASCII-ordinal encoding (0 = blank), so any single-char code
+    # round-trips via chr(n) — including non-A-Z codes.
+    assert insertion_code_ord(None) == 0
+    assert insertion_code_ord("") == 0
+    assert insertion_code_ord("A") == ord("A")
+    assert insertion_code_ord("B") == ord("B")
+    assert insertion_code_ord("1") == ord("1")  # numeric code preserved, not 0
+    assert chr(insertion_code_ord("A")) == "A"
+
+
+def test_residue_index_positional_no_collapse_on_insertion_codes():
+    # The fixture interleaves SER 3 and VAL 3A (both serial_number=3). The old
+    # serial-number residue_index produced a duplicate [1,2,3,3,4]; positional is
+    # strictly increasing and distinct.
+    ex = proteon.build_structure_supervision_example(proteon.load(_ICODE_PDB), record_id="icode:A")
+    ri = ex.residue_index.tolist()
+    assert ri == [0, 1, 2, 3, 4], ri
+    assert len(set(ri)) == len(ri), "residue_index must be distinct (no icode collapse)"
+    # Author identity preserved separately.
+    assert ex.author_seq_id.tolist() == [1, 2, 3, 3, 4]
+    assert ex.insertion_code.tolist() == [0, 0, 0, ord("A"), 0]  # VAL 3A -> ord('A')
+
+
+def test_sequence_and_structure_residue_index_agree():
+    # claudex #3: one shared index policy across both builders.
+    s = proteon.load(_ICODE_PDB)
+    struct = proteon.build_structure_supervision_example(s, record_id="icode:A")
+    seq = proteon.build_sequence_example(proteon.load(_ICODE_PDB), record_id="icode:A")
+    np.testing.assert_array_equal(struct.residue_index, seq.residue_index)
+
+
+def test_author_identity_round_trips_through_parquet(tmp_path):
+    pytest.importorskip("pyarrow")
+    ex = proteon.build_structure_supervision_example(proteon.load(_ICODE_PDB), record_id="icode:A")
+    out = tmp_path / "examples"
+    sup_export.export_structure_supervision_examples([ex], out)
+    (back,) = sup_export.load_structure_supervision_examples(out)
+    np.testing.assert_array_equal(back.residue_index, ex.residue_index)
+    np.testing.assert_array_equal(back.author_seq_id, ex.author_seq_id)
+    np.testing.assert_array_equal(back.insertion_code, ex.insertion_code)
+
+
+def test_field_or_zeros_rejects_missing_required_field_but_fills_identity():
+    # codex P1: the export zero-fill fallback must apply ONLY to the optional
+    # identity fields, never fabricate a required supervision label from None.
+    from types import SimpleNamespace
+    from proteon.supervision_export import _field_or_zeros
+    # A real example always HAS the field (dataclass attr), possibly None.
+    ex = SimpleNamespace(length=3, author_seq_id=None, all_atom_positions=None)
+    # Optional identity field None -> zero-filled, shape (L,).
+    z = _field_or_zeros(ex, "author_seq_id", (), np.int32)
+    assert z.shape == (3,) and not z.any()
+    # Required label field None -> raises (no silent zero label).
+    with pytest.raises(ValueError, match="refusing to fabricate"):
+        _field_or_zeros(ex, "all_atom_positions", (37, 3), np.float32)
+
+
+def test_v1_artifact_is_rejected_with_clear_error():
+    # codex P1: loading a pre-v2 artifact must fail loudly (the columns / residue_index
+    # semantics differ), not KeyError on a missing column.
+    from proteon.supervision_export import require_supervision_schema_version
+    with pytest.raises(ValueError, match="schema_version 1 is not supported"):
+        require_supervision_schema_version({"schema_version": 1})
+    # Current version passes.
+    require_supervision_schema_version(
+        {"schema_version": sup_export.SUPERVISION_PARQUET_SCHEMA_VERSION}
+    )

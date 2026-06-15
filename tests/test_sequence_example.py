@@ -36,7 +36,9 @@ class TestSequenceExample:
         assert ex.sequence == "GSF"
         assert ex.length == 3
         assert ex.aatype.shape == (3,)
-        assert ex.residue_index.tolist() == [1, 2, 3]
+        # residue_index is the 0-based positional sequence coordinate (was the
+        # author serial_number [1,2,3]); see positional_residue_index.
+        assert ex.residue_index.tolist() == [0, 1, 2]
         assert ex.seq_mask.tolist() == [1.0, 1.0, 1.0]
 
     def test_build_sequence_example_with_msa(self):
@@ -67,6 +69,11 @@ class TestSequenceExample:
         assert loaded[0].msa.shape == (1, 3)
         assert loaded[1].msa is None
         np.testing.assert_array_equal(loaded[0].aatype, examples[0].aatype)
+        # Author identity must survive the sequence-release round trip (not reset
+        # to None / zeros) — guards the residue_index/author-identity contract.
+        np.testing.assert_array_equal(loaded[0].residue_index, examples[0].residue_index)
+        np.testing.assert_array_equal(loaded[0].author_seq_id, examples[0].author_seq_id)
+        np.testing.assert_array_equal(loaded[0].insertion_code, examples[0].insertion_code)
 
     def test_sequence_export_writes_tensor_sha256_and_load_verifies(self, tmp_path):
         """Checksum parity with the structure-supervision exporter."""
@@ -123,3 +130,31 @@ class TestSequenceExample:
         assert manifest["count_examples"] == 0
         assert manifest["count_failures"] == 1
         assert seq_export.load_sequence_examples(root / "examples") == []
+
+
+def test_crop_sequence_example_slices_author_identity(tmp_path):
+    # codex P1: crop must slice the author identity arrays in lockstep with the
+    # sequence, or they desync from residue_index after a crop.
+    from proteon.supervision_crop import crop_sequence_example
+    ex = proteon.build_sequence_example(_fake_structure("A"))
+    assert ex.length == 3
+    cropped = crop_sequence_example(ex, 1, 3)
+    assert cropped.length == 2
+    assert cropped.author_seq_id.shape == (2,)
+    assert cropped.insertion_code.shape == (2,)
+    np.testing.assert_array_equal(cropped.author_seq_id, ex.author_seq_id[1:3])
+    # crop slices (no re-base); positional [0,1,2] -> [1,2] (relpos preserved).
+    np.testing.assert_array_equal(cropped.residue_index, np.array([1, 2]))
+
+
+def test_sequence_export_none_identity_zero_fills_to_length(tmp_path):
+    # codex P1: a SequenceExample with None identity must serialize as a (L,) zero
+    # column, not an empty (0,) one that breaks the residue-axis invariant.
+    import dataclasses
+    ex = proteon.build_sequence_example(_fake_structure("A"))
+    ex = dataclasses.replace(ex, author_seq_id=None, insertion_code=None)
+    out = seq_export.export_sequence_examples([ex], tmp_path / "seq")
+    (back,) = seq_export.load_sequence_examples(out)
+    assert back.author_seq_id.shape == (ex.length,)
+    assert back.insertion_code.shape == (ex.length,)
+    assert not back.author_seq_id.any() and not back.insertion_code.any()
