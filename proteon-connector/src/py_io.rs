@@ -25,6 +25,12 @@ fn permissive_options() -> pdbtbx::ReadOptions {
     opts
 }
 
+/// Render pdbtbx's non-fatal parse diagnostics (returned alongside `Ok` at Loose
+/// strictness) into strings retained on `PyPDB::parse_warnings` — previously discarded.
+fn warnings_to_strings<E: std::fmt::Display>(errs: &[E]) -> Vec<String> {
+    errs.iter().map(|e| e.to_string()).collect()
+}
+
 /// Load a structure from a PDB or mmCIF file (auto-detected by extension).
 ///
 /// Args:
@@ -34,7 +40,7 @@ fn permissive_options() -> pdbtbx::ReadOptions {
 ///     PyPDB: The parsed structure.
 #[pyfunction]
 pub(crate) fn load(path: &str) -> PyResult<PyPDB> {
-    let (pdb, _errors) = permissive_options().read(path).map_err(|errs| {
+    let (pdb, warnings) = permissive_options().read(path).map_err(|errs| {
         let msg = errs
             .iter()
             .map(|e| e.to_string())
@@ -42,7 +48,10 @@ pub(crate) fn load(path: &str) -> PyResult<PyPDB> {
             .join("; ");
         pyo3::exceptions::PyIOError::new_err(format!("Failed to read {path}: {msg}"))
     })?;
-    Ok(PyPDB::from_inner(pdb))
+    Ok(PyPDB::from_inner_with_warnings(
+        pdb,
+        warnings_to_strings(&warnings),
+    ))
 }
 
 /// Load a structure, forcing PDB format.
@@ -51,7 +60,7 @@ pub(crate) fn load_pdb(path: &str) -> PyResult<PyPDB> {
     let mut opts = permissive_options();
     opts.set_format(pdbtbx::Format::Pdb);
 
-    let (pdb, _errors) = opts.read(path).map_err(|errs| {
+    let (pdb, warnings) = opts.read(path).map_err(|errs| {
         let msg = errs
             .iter()
             .map(|e| e.to_string())
@@ -59,7 +68,10 @@ pub(crate) fn load_pdb(path: &str) -> PyResult<PyPDB> {
             .join("; ");
         pyo3::exceptions::PyIOError::new_err(format!("Failed to read {path}: {msg}"))
     })?;
-    Ok(PyPDB::from_inner(pdb))
+    Ok(PyPDB::from_inner_with_warnings(
+        pdb,
+        warnings_to_strings(&warnings),
+    ))
 }
 
 /// Load a structure, forcing mmCIF format.
@@ -68,7 +80,7 @@ pub(crate) fn load_mmcif(path: &str) -> PyResult<PyPDB> {
     let mut opts = permissive_options();
     opts.set_format(pdbtbx::Format::Mmcif);
 
-    let (pdb, _errors) = opts.read(path).map_err(|errs| {
+    let (pdb, warnings) = opts.read(path).map_err(|errs| {
         let msg = errs
             .iter()
             .map(|e| e.to_string())
@@ -76,7 +88,10 @@ pub(crate) fn load_mmcif(path: &str) -> PyResult<PyPDB> {
             .join("; ");
         pyo3::exceptions::PyIOError::new_err(format!("Failed to read {path}: {msg}"))
     })?;
-    Ok(PyPDB::from_inner(pdb))
+    Ok(PyPDB::from_inner_with_warnings(
+        pdb,
+        warnings_to_strings(&warnings),
+    ))
 }
 
 /// Save a structure to a PDB or mmCIF file (format auto-detected by extension).
@@ -136,11 +151,12 @@ fn build_pool(n_threads: usize) -> rayon::ThreadPool {
     builder.build().expect("failed to build rayon thread pool")
 }
 
-/// Load a single PDB/mmCIF file permissively. Returns Ok(PDB) or Err(message).
-fn load_one(path: &str) -> Result<pdbtbx::PDB, String> {
+/// Load a single PDB/mmCIF file permissively. Returns `Ok((PDB, parse_warnings))` or
+/// `Err(message)`. Carrying the warnings lets the batch loaders retain them too.
+fn load_one(path: &str) -> Result<(pdbtbx::PDB, Vec<String>), String> {
     permissive_options()
         .read(path)
-        .map(|(pdb, _errors)| pdb)
+        .map(|(pdb, warnings)| (pdb, warnings_to_strings(&warnings)))
         .map_err(|errs| {
             errs.iter()
                 .map(|e| e.to_string())
@@ -174,7 +190,7 @@ pub(crate) fn batch_load(
 
     let n = resolve_threads(n_threads);
 
-    let results: Vec<Result<pdbtbx::PDB, String>> = py.allow_threads(|| {
+    let results: Vec<Result<(pdbtbx::PDB, Vec<String>), String>> = py.allow_threads(|| {
         let pool = build_pool(n);
         pool.install(|| path_strs.par_iter().map(|p| load_one(p)).collect())
     });
@@ -183,12 +199,13 @@ pub(crate) fn batch_load(
         .into_iter()
         .enumerate()
         .map(|(i, r)| {
-            r.map(PyPDB::from_inner).map_err(|e| {
-                pyo3::exceptions::PyIOError::new_err(format!(
-                    "Failed to read {}: {e}",
-                    path_strs[i]
-                ))
-            })
+            r.map(|(pdb, w)| PyPDB::from_inner_with_warnings(pdb, w))
+                .map_err(|e| {
+                    pyo3::exceptions::PyIOError::new_err(format!(
+                        "Failed to read {}: {e}",
+                        path_strs[i]
+                    ))
+                })
         })
         .collect()
 }
@@ -216,7 +233,7 @@ pub(crate) fn batch_load_tolerant(
 
     let n = resolve_threads(n_threads);
 
-    let results: Vec<Result<pdbtbx::PDB, String>> = py.allow_threads(|| {
+    let results: Vec<Result<(pdbtbx::PDB, Vec<String>), String>> = py.allow_threads(|| {
         let pool = build_pool(n);
         pool.install(|| path_strs.par_iter().map(|p| load_one(p)).collect())
     });
@@ -224,7 +241,10 @@ pub(crate) fn batch_load_tolerant(
     Ok(results
         .into_iter()
         .enumerate()
-        .filter_map(|(i, r)| r.ok().map(|pdb| (i, PyPDB::from_inner(pdb))))
+        .filter_map(|(i, r)| {
+            r.ok()
+                .map(|(pdb, w)| (i, PyPDB::from_inner_with_warnings(pdb, w)))
+        })
         .collect())
 }
 
