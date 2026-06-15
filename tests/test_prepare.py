@@ -79,6 +79,25 @@ class TestPrepare:
         )
         assert report.final_energy <= report.initial_energy
 
+    def test_minimized_flag_honest_when_optimizer_does_no_work(self):
+        # minimize=True but a zero step budget -> the optimizer returns NotRun,
+        # so `minimized` must be False (it did not run), not True (codex review).
+        s = proteon.load(CRAMBIN)
+        report = proteon.prepare(
+            s, reconstruct=False, hydrogens="backbone",
+            minimize=True, minimize_steps=0,
+        )
+        assert report.minimized is False
+        assert report.minimizer_status in ("not_run", "")
+
+    def test_minimized_flag_true_when_optimizer_runs(self):
+        s = proteon.load(CRAMBIN)
+        report = proteon.prepare(
+            s, reconstruct=False, hydrogens="backbone",
+            minimize=True, minimize_steps=50,
+        )
+        assert report.minimized is True
+
     def test_all_hydrogens_mode(self):
         s = proteon.load(CRAMBIN)
         report = proteon.prepare(s, reconstruct=False, hydrogens="all", minimize=False)
