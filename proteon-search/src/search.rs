@@ -312,6 +312,13 @@ pub struct SearchEngine {
     /// time. For InMemory-backed engines the field is unused but kept
     /// so the API is storage-agnostic.
     alphabet: Alphabet,
+    /// Lazily-built device-resident k-mer index, cached so the (large) index is
+    /// uploaded ONCE and reused across queries. `None` once initialised means GPU
+    /// prefilter is unavailable for this engine (no device, on-disk index, or an
+    /// upload failure — an engine-lifetime circuit breaker); the prefilter then
+    /// falls back to the CPU path. Built from the in-memory `KmerIndex` only.
+    #[cfg(feature = "cuda")]
+    gpu_prefilter: std::sync::OnceLock<Option<crate::gpu::prefilter::GpuPrefilterIndex>>,
 }
 
 impl SearchEngine {
@@ -359,6 +366,8 @@ impl SearchEngine {
             skip_idx,
             opts,
             alphabet,
+            #[cfg(feature = "cuda")]
+            gpu_prefilter: std::sync::OnceLock::new(),
         })
     }
 
@@ -467,6 +476,8 @@ impl SearchEngine {
             skip_idx,
             opts,
             alphabet,
+            #[cfg(feature = "cuda")]
+            gpu_prefilter: std::sync::OnceLock::new(),
         })
     }
 
@@ -568,6 +579,8 @@ impl SearchEngine {
             skip_idx,
             opts,
             alphabet,
+            #[cfg(feature = "cuda")]
+            gpu_prefilter: std::sync::OnceLock::new(),
         })
     }
 
@@ -584,16 +597,12 @@ impl SearchEngine {
             None => query.data.clone(),
         };
 
-        let prefilter_hits = diagonal_prefilter(
-            &self.index,
-            &query_for_prefilter,
-            self.skip_idx,
-            &PrefilterOptions {
-                score_threshold: self.opts.diagonal_score_threshold,
-                max_hits: self.opts.max_prefilter_hits,
-                exclude_self: None,
-            },
-        );
+        let prefilter_opts = PrefilterOptions {
+            score_threshold: self.opts.diagonal_score_threshold,
+            max_hits: self.opts.max_prefilter_hits,
+            exclude_self: None,
+        };
+        let prefilter_hits = self.run_prefilter(&query_for_prefilter, &prefilter_opts);
 
         #[cfg(feature = "cuda")]
         {
@@ -603,6 +612,50 @@ impl SearchEngine {
         }
 
         self.search_cpu(&query.data, &prefilter_hits)
+    }
+
+    /// Run the exact k-mer prefilter — on GPU when `use_gpu`, a device is
+    /// present, and the index is in-memory; otherwise on CPU. The GPU path is
+    /// **bit-exact** vs the CPU [`diagonal_prefilter`], so the result is the same
+    /// either way; this only changes the prefilter *source*. A GPU error falls
+    /// back to the CPU prefilter (downstream alignment may still run on GPU).
+    fn run_prefilter(
+        &self,
+        query_for_prefilter: &[u8],
+        opts: &PrefilterOptions,
+    ) -> Vec<PrefilterHit> {
+        #[cfg(feature = "cuda")]
+        {
+            if self.opts.use_gpu && crate::gpu::is_available() {
+                // Build the resident handle once (uploaded ONCE, reused across
+                // queries). `None` = unavailable for this engine's life (on-disk
+                // index or an upload failure — a circuit breaker), so we use CPU.
+                let handle = self.gpu_prefilter.get_or_init(|| match &self.index {
+                    KmerIndexStorage::InMemory(idx) => {
+                        match crate::gpu::prefilter::GpuPrefilterIndex::upload(idx) {
+                            Ok(h) => Some(h),
+                            Err(e) => {
+                                eprintln!(
+                                    "[proteon-search-gpu] prefilter index upload failed, \
+                                     using CPU prefilter: {e:#}"
+                                );
+                                None
+                            }
+                        }
+                    }
+                    KmerIndexStorage::OnDisk(_) => None,
+                });
+                if let Some(h) = handle {
+                    match h.prefilter(query_for_prefilter, self.skip_idx, opts) {
+                        Ok(hits) => return hits,
+                        Err(e) => eprintln!(
+                            "[proteon-search-gpu] prefilter failed, using CPU prefilter: {e:#}"
+                        ),
+                    }
+                }
+            }
+        }
+        diagonal_prefilter(&self.index, query_for_prefilter, self.skip_idx, opts)
     }
 
     /// CPU reference path. Also the fallback when GPU dispatch errors
@@ -1442,5 +1495,62 @@ mod tests {
         let engine = SearchEngine::build(targets, &m, alpha.clone(), opts).unwrap();
         let q = Sequence::from_ascii(alpha, b"WWWWWWWWWWWWWWWWWWWW");
         assert!(engine.search(&q).is_empty());
+    }
+
+    /// The wired GPU prefilter must produce exactly the CPU `diagonal_prefilter`
+    /// result through the engine (same index, skip_idx, options) — isolating the
+    /// prefilter SOURCE from the downstream alignment. The cached handle is also
+    /// populated after a GPU prefilter, proving the upload-once reuse.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gpu_prefilter_wiring_matches_cpu_prefilter() {
+        if !crate::gpu::is_available() {
+            eprintln!("SKIP gpu prefilter wiring: no GPU available");
+            return;
+        }
+        let (alpha, m) = alpha_and_matrix();
+        let seqs = [
+            (1u32, b"MNALVVKFGGTSVANAERFLRVADILESNARQGQ".as_slice()),
+            (2u32, b"WVLSAADKTNVKAAWGKVGAHAGEYGAEALERMFLSFP".as_slice()),
+            (3u32, b"MEAFRKQLPCFRSGAQQVKEHFKQVAEKHHGFLEEFCAR".as_slice()),
+        ];
+        let targets: Vec<(u32, Sequence)> = seqs
+            .iter()
+            .map(|(id, s)| (*id, Sequence::from_ascii(alpha.clone(), s)))
+            .collect();
+        let opts = SearchOptions {
+            k: 3,
+            reduce_to: Some(13),
+            use_gpu: true,
+            ..Default::default()
+        };
+        let engine = SearchEngine::build(targets.clone(), &m, alpha.clone(), opts).unwrap();
+
+        for pf_opts in [
+            PrefilterOptions::default(),
+            PrefilterOptions {
+                score_threshold: 2,
+                ..Default::default()
+            },
+            PrefilterOptions {
+                max_hits: Some(1),
+                ..Default::default()
+            },
+        ] {
+            for (_id, seq) in &targets {
+                let q_for_pf = match &engine.reducer {
+                    Some(r) => r.reduce_sequence(&seq.data),
+                    None => seq.data.clone(),
+                };
+                let gpu = engine.run_prefilter(&q_for_pf, &pf_opts);
+                let cpu = diagonal_prefilter(&engine.index, &q_for_pf, engine.skip_idx, &pf_opts);
+                assert_eq!(gpu, cpu, "wired GPU prefilter != CPU prefilter");
+            }
+        }
+        // The resident handle was built and cached (upload-once reuse).
+        assert!(
+            matches!(engine.gpu_prefilter.get(), Some(Some(_))),
+            "GPU prefilter handle should be cached after a GPU prefilter run"
+        );
     }
 }
