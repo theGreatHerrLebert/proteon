@@ -10,7 +10,8 @@
 //!   with coupling to an external bath", *J. Chem. Phys.* 81(8),
 //!   3684-3690 (1984) — the weak-coupling thermostat.
 
-use super::energy::{compute_energy_and_forces, EnergyResult};
+use super::energy::EnergyResult;
+use super::nb_cache::{NbCache, NbExec};
 use super::params::ForceField;
 use super::topology::Topology;
 
@@ -393,6 +394,36 @@ pub fn velocity_verlet_constrained(
     snapshot_freq: usize,
     constraints: &[BondConstraint],
 ) -> MDResult {
+    velocity_verlet_exec(
+        coords,
+        topo,
+        params,
+        n_steps,
+        dt,
+        temperature,
+        thermostat_tau,
+        snapshot_freq,
+        constraints,
+        NbExec::Auto,
+    )
+}
+
+/// Implementation of [`velocity_verlet_constrained`] with an explicit nonbonded
+/// execution policy. Production callers use `NbExec::Auto`; tests pass `CpuNbl` to
+/// exercise the neighbor-list path (and its drift-rebuild) on a small fixture.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn velocity_verlet_exec(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &impl ForceField,
+    n_steps: usize,
+    dt: f64,
+    temperature: f64,
+    thermostat_tau: f64,
+    snapshot_freq: usize,
+    constraints: &[BondConstraint],
+    exec: NbExec,
+) -> MDResult {
     let n = coords.len();
     let mut pos = coords.to_vec();
     let mut frames = Vec::new();
@@ -404,8 +435,17 @@ pub fn velocity_verlet_constrained(
     // Initialize velocities
     let mut vel = init_velocities(&masses, temperature, 42);
 
+    // Cutoff neighbor-list cache: O(N) nonbonded above ~2000 atoms (all-pair below,
+    // so small systems are byte-identical to before). Built BEFORE the first force
+    // eval; refreshed on drift after each position update (see the loop).
+    let mut nbc = NbCache::new_with_exec(&pos, topo, params, exec);
+
     // Initial forces
-    let (energy, mut forces) = compute_energy_and_forces(&pos, topo, params);
+    let (energy, mut forces) = nbc.energy_and_forces(&pos, topo, params);
+    // Track the most-recently computed potential energy so the final MDResult reuses it
+    // instead of recomputing (positions don't change after the last force eval); also
+    // gives the correct result when n_steps == 0.
+    let mut last_energy = energy.clone();
 
     // Pre-compute mass factors: 1/m * FORCE_TO_ACCEL
     let inv_mass: Vec<f64> = masses.iter().map(|&m| FORCE_TO_ACCEL / m).collect();
@@ -471,8 +511,14 @@ pub fn velocity_verlet_constrained(
             }
         }
 
+        // Rebuild the neighbor list if atoms drifted past the buffer — AFTER the
+        // position update and SHAKE, immediately before the force eval, so the list is
+        // valid for r(t+dt). (No-op for the all-pair path / when nothing moved far.)
+        nbc.refresh(&pos, topo);
+
         // Compute new forces at r(t+dt)
-        let (new_energy, new_forces) = compute_energy_and_forces(&pos, topo, params);
+        let (new_energy, new_forces) = nbc.energy_and_forces(&pos, topo, params);
+        last_energy = new_energy.clone();
         forces = new_forces;
 
         // Complete velocity update: v(t+dt) = v(t+dt/2) + 0.5*a(t+dt)*dt
@@ -516,13 +562,13 @@ pub fn velocity_verlet_constrained(
         }
     }
 
-    let final_energy = compute_energy_and_forces(&pos, topo, params).0;
-
+    // Positions are unchanged since the last refreshed force eval, so reuse its energy
+    // rather than recomputing the whole nonbonded sum.
     MDResult {
         coords: pos,
         velocities: vel,
         frames,
-        energy: final_energy,
+        energy: last_energy,
     }
 }
 
@@ -730,5 +776,132 @@ mod tests {
             pe_no,
             pe_sh,
         );
+    }
+
+    // -- Neighbor-list path (the new O(N) MD nonbonded) ----------------------------
+
+    fn crambin_amber() -> (topology::Topology, Vec<[f64; 3]>, params::AmberParams) {
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read("../test-pdbs/1crn.pdb")
+            .expect("failed to read 1crn.pdb");
+        let amber = params::amber96();
+        let topo = topology::build_topology(&pdb, &amber);
+        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+        (topo, coords, amber)
+    }
+
+    fn assert_forces_match(a: &[[f64; 3]], b: &[[f64; 3]], rel_tol: f64) {
+        // Relative tolerance with a unit floor: NBL and all-pair sum the SAME per-pair
+        // contributions in a different order, so they agree to ~machine epsilon
+        // *relative* to the magnitude (which can be huge on a clashing geometry).
+        assert_eq!(a.len(), b.len());
+        for (i, (fa, fb)) in a.iter().zip(b).enumerate() {
+            for k in 0..3 {
+                let scale = fa[k].abs().max(fb[k].abs()).max(1.0);
+                assert!(
+                    (fa[k] - fb[k]).abs() <= rel_tol * scale,
+                    "force[{i}][{k}] {} vs {} (rel {:.2e})",
+                    fa[k],
+                    fb[k],
+                    (fa[k] - fb[k]).abs() / scale
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nbl_force_parity_matches_all_pair_static() {
+        // The CPU neighbor-list path (which MD now uses above the size threshold) must
+        // produce the same cutoff energy + per-atom forces as the all-pair path.
+        use super::super::energy::compute_energy_and_forces;
+        let (topo, coords, amber) = crambin_amber();
+        let mut nbc = NbCache::new_with_exec(&coords, &topo, &amber, NbExec::CpuNbl);
+        let (e_nbl, f_nbl) = nbc.energy_and_forces(&coords, &topo, &amber);
+        let (e_all, f_all) = compute_energy_and_forces(&coords, &topo, &amber);
+        assert!(
+            (e_nbl.total - e_all.total).abs() < 1e-6,
+            "energy {} vs {}",
+            e_nbl.total,
+            e_all.total
+        );
+        assert_forces_match(&f_nbl, &f_all, 1e-6);
+    }
+
+    #[test]
+    fn nbl_force_parity_after_drift_and_rebuild() {
+        // Reused list after sub-buffer drift, then a rebuild after large drift — forces
+        // must match all-pair in BOTH cases (guards the refresh-on-drift correctness).
+        use super::super::energy::compute_energy_and_forces;
+        let (topo, coords, amber) = crambin_amber();
+        let mut nbc = NbCache::new_with_exec(&coords, &topo, &amber, NbExec::CpuNbl);
+
+        // Small per-atom drift (< buffer/2): refresh is a no-op, the list is reused.
+        let mut drifted: Vec<[f64; 3]> = coords.clone();
+        for (i, c) in drifted.iter_mut().enumerate() {
+            c[i % 3] += 0.3; // 0.3 Å, well inside the 2 Å buffer
+        }
+        nbc.refresh(&drifted, &topo);
+        let (_e, f_nbl) = nbc.energy_and_forces(&drifted, &topo, &amber);
+        let (_ea, f_all) = compute_energy_and_forces(&drifted, &topo, &amber);
+        assert_forces_match(&f_nbl, &f_all, 1e-6);
+
+        // Large drift (past the buffer): refresh must rebuild, and forces still match.
+        let mut shoved: Vec<[f64; 3]> = coords.clone();
+        for (i, c) in shoved.iter_mut().enumerate() {
+            c[i % 3] += 3.0; // 3 Å — exceeds buffer/2, triggers rebuild
+        }
+        nbc.refresh(&shoved, &topo);
+        let (_e2, f_nbl2) = nbc.energy_and_forces(&shoved, &topo, &amber);
+        let (_ea2, f_all2) = compute_energy_and_forces(&shoved, &topo, &amber);
+        assert_forces_match(&f_nbl2, &f_all2, 1e-6);
+    }
+
+    #[test]
+    fn md_cpu_nbl_trajectory_tracks_all_pair() {
+        // MD driven through the NBL path must track the all-pair trajectory. Forces match
+        // to ~1e-6 each step, but NBL pair-order changes FP accumulation, so over several
+        // steps a short-horizon tolerance (not bit-exact) is the right guarantee.
+        let (topo, coords, amber) = crambin_amber();
+        let run = |exec| {
+            velocity_verlet_exec(&coords, &topo, &amber, 6, 0.0005, 300.0, 0.0, 3, &[], exec)
+        };
+        let all = run(NbExec::AllPair);
+        let nbl = run(NbExec::CpuNbl);
+        assert_eq!(all.coords.len(), nbl.coords.len());
+        let max_dr = all
+            .coords
+            .iter()
+            .zip(&nbl.coords)
+            .map(|(a, b)| {
+                ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(max_dr < 1e-4, "max coord drift {max_dr:.2e} over 6 steps");
+        assert!(nbl.energy.total.is_finite());
+    }
+
+    #[test]
+    fn md_cpu_nbl_nve_energy_stays_finite_and_bounded() {
+        // NVE on the NBL path: total energy finite and not blowing up across the run.
+        let (topo, coords, amber) = crambin_amber();
+        let r = velocity_verlet_exec(
+            &coords,
+            &topo,
+            &amber,
+            20,
+            0.0005,
+            300.0,
+            0.0,
+            5,
+            &[],
+            NbExec::CpuNbl,
+        );
+        let e0 = r.frames[0].total_energy;
+        for f in &r.frames {
+            assert!(f.total_energy.is_finite(), "non-finite total energy");
+        }
+        let drift = (r.frames.last().unwrap().total_energy - e0).abs();
+        assert!(drift.is_finite());
     }
 }

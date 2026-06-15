@@ -22,6 +22,7 @@ pub mod gb_obc;
 pub mod gpu;
 pub mod md;
 pub mod minimize;
+pub mod nb_cache;
 pub mod neighbor_list;
 pub mod params;
 pub mod topology;
