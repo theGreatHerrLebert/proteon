@@ -22,11 +22,13 @@
 //! highest score anywhere in `M` is the returned alignment's endpoint,
 //! and traceback stops when the score reaches 0.
 //!
-//! Scope: scalar O(|q|·|t|) in time and memory. Striped SIMD (Farrar SSW)
-//! or a block-aligner dependency are natural optimization paths once
-//! benchmarks show SW is the bottleneck; neither is needed for
-//! correctness. Sized for protein pairs up to ~few-thousand residues
-//! each without memory pressure.
+//! Scope: scalar O(|q|·|t|) time; memory is **O(|q|·|t|) for traceback (one packed
+//! byte per cell) plus O(|t|) score scratch** — the three score matrices are computed
+//! with rolling rows, so only the inherently-O(q·t) traceback grid is materialized.
+//! Striped SIMD (Farrar SSW) or a block-aligner dependency are natural *speed* paths
+//! once benchmarks show SW is the bottleneck; neither is needed for correctness. A
+//! true linear-space traceback (Myers–Miller) would drop the last O(q·t) term but is
+//! out of scope. Comfortable for protein pairs up to ~10k residues each.
 
 use std::fmt;
 
@@ -157,26 +159,31 @@ pub fn smith_waterman(
         return None;
     }
 
-    // Three DP matrices as flat (q_len+1) × (t_len+1) arrays. Row 0 and
-    // column 0 are the boundary (empty prefix) and stay at 0 / NEG_SENT
-    // throughout.
+    // Gotoh affine DP. The three score matrices (`M`, `X`, `Y`) are computed with
+    // only TWO rolling rows each (`prev_*` = row i-1, `cur_*` = row i) — every cell
+    // reads either the previous row or the already-filled left part of the current
+    // row, so the full (q+1)×(t+1) score grids are unnecessary. Only the traceback is
+    // inherently O(q·t); it is stored as ONE packed byte per cell (was three). This
+    // cuts memory from 15 bytes/cell to ~1 + O(t) scratch with byte-identical results.
     let rows = q_len + 1;
     let cols = t_len + 1;
     let neg_sent: i32 = i32::MIN / 4; // big negative, but leaves headroom for arithmetic
 
-    let mut m = vec![0i32; rows * cols];
-    let mut x = vec![neg_sent; rows * cols]; // gap in query
-    let mut y = vec![neg_sent; rows * cols]; // gap in target
+    // Boundary (empty prefix): M = 0, X/Y = neg_sent — matches the full-matrix row 0.
+    let mut prev_m = vec![0i32; cols];
+    let mut prev_x = vec![neg_sent; cols];
+    let mut prev_y = vec![neg_sent; cols];
+    let mut cur_m = vec![0i32; cols];
+    let mut cur_x = vec![neg_sent; cols];
+    let mut cur_y = vec![neg_sent; cols];
 
-    // Traceback: one byte per cell encoding which predecessor wins in M.
-    // 0 = stop (score 0, start a new local alignment),
-    // 1 = diagonal from M,   2 = diagonal from X,   3 = diagonal from Y,
-    // 4 = up from M (for X), 5 = up from X (for X),
-    // 6 = left from M (for Y), 7 = left from Y (for Y).
-    // We store enough to walk back through the three matrices.
-    let mut tb_m = vec![0u8; rows * cols];
-    let mut tb_x = vec![0u8; rows * cols];
-    let mut tb_y = vec![0u8; rows * cols];
+    // Packed traceback, one byte per cell:
+    //   bits 0-1 = M predecessor: 0 stop, 1 diagonal-from-M, 2 from-X, 3 from-Y;
+    //   bit 2    = X predecessor: 0 from M, 1 from X (X is the gap-in-query / current-row
+    //              LEFT dependency → Delete, j-=1);
+    //   bit 3    = Y predecessor: 0 from M, 1 from Y (Y is the gap-in-target / prev-row
+    //              UP dependency → Insert, i-=1).
+    let mut tb = vec![0u8; rows * cols];
 
     let mut best_score: i32 = 0;
     let mut best_i: usize = 0;
@@ -185,55 +192,57 @@ pub fn smith_waterman(
     for i in 1..rows {
         let q_idx = query[i - 1] as usize;
         debug_assert!(q_idx < alphabet_size);
+        // Column-0 boundary for this row (M=0, X/Y=neg_sent), as in the full matrix.
+        cur_m[0] = 0;
+        cur_x[0] = neg_sent;
+        cur_y[0] = neg_sent;
         for j in 1..cols {
             let t_idx = target[j - 1] as usize;
             debug_assert!(t_idx < alphabet_size);
             let sub = scores[q_idx * alphabet_size + t_idx];
 
-            // X[i,j] = gap in query column (consume target letter j-1)
+            // X[i,j] = gap in query (consume target letter j-1), current-row LEFT:
             // = max(M[i, j-1] + gap_open, X[i, j-1] + gap_extend)
-            let x_from_m = m[i * cols + (j - 1)] + gap_open;
-            let x_from_x = x[i * cols + (j - 1)] + gap_extend;
-            let (x_val, x_pred) = if x_from_m >= x_from_x {
-                (x_from_m, 4u8)
+            let x_from_m = cur_m[j - 1] + gap_open;
+            let x_from_x = cur_x[j - 1] + gap_extend;
+            let (x_val, x_is_x) = if x_from_m >= x_from_x {
+                (x_from_m, false)
             } else {
-                (x_from_x, 5u8)
+                (x_from_x, true)
             };
-            x[i * cols + j] = x_val;
-            tb_x[i * cols + j] = x_pred;
+            cur_x[j] = x_val;
 
-            // Y[i,j] = gap in target column (consume query letter i-1)
+            // Y[i,j] = gap in target (consume query letter i-1), prev-row UP:
             // = max(M[i-1, j] + gap_open, Y[i-1, j] + gap_extend)
-            let y_from_m = m[(i - 1) * cols + j] + gap_open;
-            let y_from_y = y[(i - 1) * cols + j] + gap_extend;
-            let (y_val, y_pred) = if y_from_m >= y_from_y {
-                (y_from_m, 6u8)
+            let y_from_m = prev_m[j] + gap_open;
+            let y_from_y = prev_y[j] + gap_extend;
+            let (y_val, y_is_y) = if y_from_m >= y_from_y {
+                (y_from_m, false)
             } else {
-                (y_from_y, 7u8)
+                (y_from_y, true)
             };
-            y[i * cols + j] = y_val;
-            tb_y[i * cols + j] = y_pred;
+            cur_y[j] = y_val;
 
-            // M[i,j] = diagonal step + substitution score.
-            // Coming from M, X, or Y at (i-1, j-1).
-            let m_from_m = m[(i - 1) * cols + (j - 1)];
-            let m_from_x = x[(i - 1) * cols + (j - 1)];
-            let m_from_y = y[(i - 1) * cols + (j - 1)];
+            // M[i,j] = diagonal step + substitution, from M/X/Y at (i-1, j-1) (prev row).
+            let m_from_m = prev_m[j - 1];
+            let m_from_x = prev_x[j - 1];
+            let m_from_y = prev_y[j - 1];
             let mut best = m_from_m;
-            let mut pred = 1u8;
+            let mut m_pred = 1u8;
             if m_from_x > best {
                 best = m_from_x;
-                pred = 2;
+                m_pred = 2;
             }
             if m_from_y > best {
                 best = m_from_y;
-                pred = 3;
+                m_pred = 3;
             }
             let m_val = best + sub;
             // Local alignment: clamp at 0, and mark "stop" traceback.
-            let (m_final, m_pred) = if m_val > 0 { (m_val, pred) } else { (0, 0) };
-            m[i * cols + j] = m_final;
-            tb_m[i * cols + j] = m_pred;
+            let (m_final, m_code) = if m_val > 0 { (m_val, m_pred) } else { (0, 0u8) };
+            cur_m[j] = m_final;
+
+            tb[i * cols + j] = m_code | (u8::from(x_is_x) << 2) | (u8::from(y_is_y) << 3);
 
             if m_final > best_score {
                 best_score = m_final;
@@ -241,22 +250,28 @@ pub fn smith_waterman(
                 best_j = j;
             }
         }
+        // Advance: the row just filled becomes `prev`. Swap all three pairs TOGETHER so
+        // `prev_*` stay mutually consistent; the new `cur_*` interiors are overwritten
+        // for every j>=1 next row (and column 0 is reset above).
+        std::mem::swap(&mut prev_m, &mut cur_m);
+        std::mem::swap(&mut prev_x, &mut cur_x);
+        std::mem::swap(&mut prev_y, &mut cur_y);
     }
 
     if best_score == 0 {
         return None;
     }
 
-    // Traceback from (best_i, best_j) in M until we hit a stop cell.
-    // We walk in matrix M, jumping into X/Y when the predecessor code says so.
+    // Traceback from (best_i, best_j) in M until a stop cell, unpacking one byte per cell.
     let mut cigar_rev: Vec<CigarOp> = Vec::new();
     let mut i = best_i;
     let mut j = best_j;
     let mut current = 'M';
     while i > 0 && j > 0 {
+        let packed = tb[i * cols + j];
         match current {
             'M' => {
-                let pred = tb_m[i * cols + j];
+                let pred = packed & 0b11;
                 if pred == 0 {
                     break;
                 }
@@ -271,24 +286,16 @@ pub fn smith_waterman(
                 };
             }
             'X' => {
-                let pred = tb_x[i * cols + j];
+                // gap in query: consume target letter → Delete.
                 push_op(&mut cigar_rev, CigarOp::Delete(1));
                 j -= 1;
-                current = match pred {
-                    4 => 'M',
-                    5 => 'X',
-                    _ => unreachable!("invalid X predecessor {pred}"),
-                };
+                current = if packed & 0b100 != 0 { 'X' } else { 'M' };
             }
             'Y' => {
-                let pred = tb_y[i * cols + j];
+                // gap in target: consume query letter → Insert.
                 push_op(&mut cigar_rev, CigarOp::Insert(1));
                 i -= 1;
-                current = match pred {
-                    6 => 'M',
-                    7 => 'Y',
-                    _ => unreachable!("invalid Y predecessor {pred}"),
-                };
+                current = if packed & 0b1000 != 0 { 'Y' } else { 'M' };
             }
             _ => unreachable!(),
         }
@@ -514,6 +521,223 @@ mod tests {
             cigar.contains('I'),
             "expected an Insert in CIGAR (q has extra residues), got {cigar}",
         );
+    }
+
+    /// Reference implementation: the ORIGINAL full-matrix (6-array) Gotoh DP, kept
+    /// verbatim so the rolling-row + packed-traceback rewrite can be checked for
+    /// byte-identical output (not just equal score — an equally-optimal alternate path
+    /// would slip past a score-only or brute-force check).
+    fn sw_reference(
+        query: &[u8],
+        target: &[u8],
+        scores: &[i32],
+        alphabet_size: usize,
+        gap_open: i32,
+        gap_extend: i32,
+    ) -> Option<GappedAlignment> {
+        let q_len = query.len();
+        let t_len = target.len();
+        if q_len == 0 || t_len == 0 {
+            return None;
+        }
+        let rows = q_len + 1;
+        let cols = t_len + 1;
+        let neg_sent: i32 = i32::MIN / 4;
+        let mut m = vec![0i32; rows * cols];
+        let mut x = vec![neg_sent; rows * cols];
+        let mut y = vec![neg_sent; rows * cols];
+        let mut tb_m = vec![0u8; rows * cols];
+        let mut tb_x = vec![0u8; rows * cols];
+        let mut tb_y = vec![0u8; rows * cols];
+        let (mut best_score, mut best_i, mut best_j) = (0i32, 0usize, 0usize);
+        for i in 1..rows {
+            let q_idx = query[i - 1] as usize;
+            for j in 1..cols {
+                let t_idx = target[j - 1] as usize;
+                let sub = scores[q_idx * alphabet_size + t_idx];
+                let x_from_m = m[i * cols + (j - 1)] + gap_open;
+                let x_from_x = x[i * cols + (j - 1)] + gap_extend;
+                let (xv, xp) = if x_from_m >= x_from_x {
+                    (x_from_m, 4u8)
+                } else {
+                    (x_from_x, 5u8)
+                };
+                x[i * cols + j] = xv;
+                tb_x[i * cols + j] = xp;
+                let y_from_m = m[(i - 1) * cols + j] + gap_open;
+                let y_from_y = y[(i - 1) * cols + j] + gap_extend;
+                let (yv, yp) = if y_from_m >= y_from_y {
+                    (y_from_m, 6u8)
+                } else {
+                    (y_from_y, 7u8)
+                };
+                y[i * cols + j] = yv;
+                tb_y[i * cols + j] = yp;
+                let mut best = m[(i - 1) * cols + (j - 1)];
+                let mut pred = 1u8;
+                if x[(i - 1) * cols + (j - 1)] > best {
+                    best = x[(i - 1) * cols + (j - 1)];
+                    pred = 2;
+                }
+                if y[(i - 1) * cols + (j - 1)] > best {
+                    best = y[(i - 1) * cols + (j - 1)];
+                    pred = 3;
+                }
+                let m_val = best + sub;
+                let (mf, mp) = if m_val > 0 { (m_val, pred) } else { (0, 0) };
+                m[i * cols + j] = mf;
+                tb_m[i * cols + j] = mp;
+                if mf > best_score {
+                    best_score = mf;
+                    best_i = i;
+                    best_j = j;
+                }
+            }
+        }
+        if best_score == 0 {
+            return None;
+        }
+        let mut cigar_rev: Vec<CigarOp> = Vec::new();
+        let (mut i, mut j, mut current) = (best_i, best_j, 'M');
+        while i > 0 && j > 0 {
+            match current {
+                'M' => {
+                    let pred = tb_m[i * cols + j];
+                    if pred == 0 {
+                        break;
+                    }
+                    push_op(&mut cigar_rev, CigarOp::Match(1));
+                    i -= 1;
+                    j -= 1;
+                    current = match pred {
+                        1 => 'M',
+                        2 => 'X',
+                        3 => 'Y',
+                        _ => unreachable!(),
+                    };
+                }
+                'X' => {
+                    let pred = tb_x[i * cols + j];
+                    push_op(&mut cigar_rev, CigarOp::Delete(1));
+                    j -= 1;
+                    current = match pred {
+                        4 => 'M',
+                        5 => 'X',
+                        _ => unreachable!(),
+                    };
+                }
+                'Y' => {
+                    let pred = tb_y[i * cols + j];
+                    push_op(&mut cigar_rev, CigarOp::Insert(1));
+                    i -= 1;
+                    current = match pred {
+                        6 => 'M',
+                        7 => 'Y',
+                        _ => unreachable!(),
+                    };
+                }
+                _ => unreachable!(),
+            }
+        }
+        cigar_rev.reverse();
+        Some(GappedAlignment {
+            score: best_score,
+            query_start: i,
+            query_end: best_i,
+            target_start: j,
+            target_end: best_j,
+            cigar: cigar_rev,
+        })
+    }
+
+    /// Tiny deterministic LCG (no `rand` dependency) for the differential test.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next_u32(&mut self) -> u32 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (self.0 >> 33) as u32
+        }
+        fn in_range(&mut self, lo: i32, hi: i32) -> i32 {
+            lo + (self.next_u32() % ((hi - lo + 1) as u32)) as i32
+        }
+    }
+
+    #[test]
+    fn differential_matches_reference_random() {
+        // The rolling-row + packed-traceback rewrite must be byte-identical to the
+        // original full-matrix DP across many random (incl. tie-heavy) inputs.
+        let mut rng = Lcg(0x9E3779B97F4A7C15);
+        for _ in 0..4000 {
+            let a = (rng.next_u32() % 5 + 1) as usize; // alphabet size 1..=5
+            let ql = (rng.next_u32() % 9) as usize; // 0..=8 (incl. empty)
+            let tl = (rng.next_u32() % 9) as usize;
+            let q: Vec<u8> = (0..ql)
+                .map(|_| (rng.next_u32() as usize % a) as u8)
+                .collect();
+            let t: Vec<u8> = (0..tl)
+                .map(|_| (rng.next_u32() as usize % a) as u8)
+                .collect();
+            // Random (possibly asymmetric) substitution matrix, small range to force ties.
+            let scores: Vec<i32> = (0..a * a).map(|_| rng.in_range(-3, 3)).collect();
+            // Gap penalties incl. 0 (tie-prone) and open==extend.
+            let gap_open = rng.in_range(-6, 0);
+            let gap_extend = rng.in_range(-3, 0);
+            let got = smith_waterman(&q, &t, &scores, a, gap_open, gap_extend);
+            let want = sw_reference(&q, &t, &scores, a, gap_open, gap_extend);
+            assert_eq!(
+                got, want,
+                "mismatch q={q:?} t={t:?} a={a} scores={scores:?} go={gap_open} ge={gap_extend}"
+            );
+        }
+    }
+
+    #[test]
+    fn differential_matches_reference_exhaustive_small() {
+        // Exhaustive over all q,t up to length 4 on a 2-letter alphabet, with a few
+        // matrices (identity, asymmetric, all-equal → maximal ties) and gap settings.
+        let a = 2;
+        let matrices = [
+            vec![2, -1, -1, 2], // identity-ish
+            vec![1, 0, -2, 1],  // asymmetric
+            vec![1, 1, 1, 1],   // all-equal → every M predecessor ties
+        ];
+        let gaps = [(-1, -1), (0, 0), (-3, -1), (-2, -2)];
+        for len_q in 0..=4usize {
+            for len_t in 0..=4usize {
+                for qbits in 0..(1u32 << len_q) {
+                    let q: Vec<u8> = (0..len_q).map(|k| ((qbits >> k) & 1) as u8).collect();
+                    for tbits in 0..(1u32 << len_t) {
+                        let t: Vec<u8> = (0..len_t).map(|k| ((tbits >> k) & 1) as u8).collect();
+                        for scores in &matrices {
+                            for &(go, ge) in &gaps {
+                                let got = smith_waterman(&q, &t, scores, a, go, ge);
+                                let want = sw_reference(&q, &t, scores, a, go, ge);
+                                assert_eq!(
+                                    got, want,
+                                    "q={q:?} t={t:?} m={scores:?} go={go} ge={ge}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "stress: ~4000x4000 pair; confirms the rolling-row layout no longer needs the full grid"]
+    fn large_pair_does_not_allocate_full_grid() {
+        let scores = identity_matrix(4, 3, -2);
+        let n = 4000;
+        let mut rng = Lcg(7);
+        let q: Vec<u8> = (0..n).map(|_| (rng.next_u32() % 4) as u8).collect();
+        let t: Vec<u8> = (0..n).map(|_| (rng.next_u32() % 4) as u8).collect();
+        // Would have been ~3*4000*4000*4 + 3*4000*4000 ≈ 240 MB of score+tb grids;
+        // now the score grids are gone (rolling rows) and traceback is 1 byte/cell.
+        let _ = smith_waterman(&q, &t, &scores, 4, -5, -1);
     }
 
     #[test]
