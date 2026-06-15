@@ -691,6 +691,24 @@ pub fn compute_energy_and_forces_nbl(
     params: &impl ForceField,
     nbl: &NeighborList,
 ) -> (EnergyResult, Vec<[f64; 3]>) {
+    // Public signature unchanged: builds the exclusion-free GB list internally
+    // when the cutoff GB method is active. `NbCache` calls the `_inner` variant
+    // with its cached list to avoid the per-eval rebuild (kept crate-private so
+    // no public caller can silently pass `None` and lose the cache).
+    compute_energy_and_forces_nbl_inner(coords, topo, params, nbl, None)
+}
+
+/// As [`compute_energy_and_forces_nbl`], but accepts a prebuilt exclusion-free
+/// GB neighbor list (`gb_nbl`). `Some` ⇒ use it (the `NbCache` fast path);
+/// `None` ⇒ build it internally per call (the single-point / `*_auto` path).
+/// Only meaningful when the force field selects the CutoffNonPeriodic GB method.
+pub(crate) fn compute_energy_and_forces_nbl_inner(
+    coords: &[[f64; 3]],
+    topo: &Topology,
+    params: &impl ForceField,
+    nbl: &NeighborList,
+    gb_nbl: Option<&NeighborList>,
+) -> (EnergyResult, Vec<[f64; 3]>) {
     let n = coords.len();
     let mut forces = vec![[0.0f64; 3]; n];
     let mut result = EnergyResult::default();
@@ -859,19 +877,24 @@ pub fn compute_energy_and_forces_nbl(
     if params.has_obc_gb() {
         let obc = super::gb_obc::ObcGbParams::obc2().with_cutoff(params.gb_cutoff());
         match obc.cutoff {
-            // CutoffNonPeriodic: the O(N) win. GB has NO bonded exclusions, so
-            // the LJ `nbl` (which drops 1-2/1-3) cannot be reused — build an
-            // exclusion-free GB list at the GB cutoff. (NbCache bundle-caching
-            // for repeated MD/minimize evals is a follow-up; single-point and
-            // large-system energy already get O(N) here.)
+            // CutoffNonPeriodic: the O(N) path. GB has NO bonded exclusions, so
+            // the LJ `nbl` (which drops 1-2/1-3) cannot be reused — it needs an
+            // exclusion-free GB list. Use the caller-supplied cached list
+            // (`NbCache`) when present, else build one per call (single-point /
+            // `*_auto`, where one build is negligible).
             Some(rc) => {
-                let gb_pairs = NeighborList::build(
-                    coords,
-                    rc,
-                    &std::collections::HashSet::new(),
-                    &std::collections::HashSet::new(),
-                )
-                .pairs;
+                let owned;
+                let gb_pairs: &[super::neighbor_list::NBPair] = if let Some(list) = gb_nbl {
+                    &list.pairs
+                } else {
+                    owned = NeighborList::build(
+                        coords,
+                        rc,
+                        &std::collections::HashSet::new(),
+                        &std::collections::HashSet::new(),
+                    );
+                    &owned.pairs
+                };
                 super::gb_obc::gb_obc_energy_and_forces_nbl(
                     coords,
                     topo,
@@ -879,7 +902,7 @@ pub fn compute_energy_and_forces_nbl(
                     &obc,
                     &mut result.solvation,
                     &mut forces,
-                    &gb_pairs,
+                    gb_pairs,
                 );
             }
             // NoCutoff GB is inherently all-pairs O(N²) (OpenMM's is too).
