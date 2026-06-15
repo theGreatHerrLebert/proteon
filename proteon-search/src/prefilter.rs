@@ -133,10 +133,12 @@ pub fn diagonal_prefilter<L: KmerLookup>(
 pub struct SimilarityConfig<'a> {
     /// Flattened `alphabet_size × alphabet_size` score matrix in row-major
     /// i32, in the SAME alphabet the index/query use, same layout
-    /// [`crate::kmer_generator::generate_similar_kmers`] expects. For a
-    /// full-alphabet index: [`crate::matrix::SubstitutionMatrix::to_integer_matrix`]
-    /// + [`crate::kmer_generator::widen_to_i32`]. For a REDUCED-alphabet index
-    /// (the usual case): the reduced matrix from
+    /// [`crate::kmer_generator::generate_similar_kmers`] expects.
+    ///
+    /// For a full-alphabet index this is
+    /// [`crate::matrix::SubstitutionMatrix::to_integer_matrix`] widened via
+    /// [`crate::kmer_generator::widen_to_i32`]. For a REDUCED-alphabet index
+    /// (the usual case) it is the reduced matrix from
     /// [`crate::reduced_alphabet::ReducedAlphabet::reduce_matrix`] scaled by the
     /// same `bit_factor` (see `SearchEngine`'s `build_prefilter_score_matrix`).
     /// `threshold` is interpreted in this matrix's scale.
