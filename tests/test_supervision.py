@@ -341,3 +341,62 @@ class TestStructureSupervisionExample:
         assert manifest["count_failures"] == 1
         examples = sup_export.load_structure_supervision_examples(release_dir / "examples")
         assert examples == []
+
+
+# ---------------------------------------------------------------------------
+# Quality signal: relax_ok / report_present / no None-quality footgun
+# (guards the two Tier-1 traps — silent minimize no-op + quality=None)
+# ---------------------------------------------------------------------------
+
+from proteon.prepare import PrepReport
+from proteon.supervision import _quality_from_prep_report
+
+
+def test_quality_none_report_is_explicit_unknown_not_attributeerror():
+    # The observed bug: no prep report threaded -> quality was None ->
+    # `.prep_success` raised/returned None. Now it is an explicit "unknown".
+    q = _quality_from_prep_report(None)
+    assert q is not None, "must not return None (AttributeError footgun)"
+    assert q.report_present is False
+    assert q.relax_ok is None  # unknown, NOT a measured failure
+    assert q.protein_eligible is None
+    # Reading any field must not raise.
+    assert q.prep_success is False
+
+
+def test_quality_relax_ok_true_when_minimized_and_converged():
+    rep = PrepReport(
+        skipped_no_protein=False,
+        minimized=True,
+        converged=True,
+        minimizer_status="converged_gradient",
+        minimizer_steps=42,
+    )
+    q = _quality_from_prep_report(rep)
+    assert q.report_present is True
+    assert q.protein_eligible is True
+    assert q.prep_success is True  # legacy alias of protein_eligible
+    assert q.relax_ok is True
+    assert q.minimizer_status == "converged_gradient"
+
+
+def test_quality_relax_ok_false_when_minimizer_stalled():
+    # A stall (line_search_failed) ran but did not converge -> NOT relaxed.
+    rep = PrepReport(
+        skipped_no_protein=False,
+        minimized=True,
+        converged=False,
+        minimizer_status="line_search_failed",
+    )
+    q = _quality_from_prep_report(rep)
+    assert q.protein_eligible is True  # it is a protein
+    assert q.relax_ok is False         # but it was not successfully relaxed
+    assert q.minimizer_status == "line_search_failed"
+
+
+def test_quality_non_protein_is_not_eligible():
+    rep = PrepReport(skipped_no_protein=True, minimized=False, converged=False)
+    q = _quality_from_prep_report(rep)
+    assert q.protein_eligible is False
+    assert q.prep_success is False
+    assert q.relax_ok is False

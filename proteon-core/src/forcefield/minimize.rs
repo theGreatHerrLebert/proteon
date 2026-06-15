@@ -152,6 +152,49 @@ impl NbCache {
     }
 }
 
+/// How a minimization run terminated. Distinguishes genuine convergence from the
+/// failure modes that the old `converged: bool` silently conflated — in particular a
+/// line-search stall (the optimizer could not make progress) is **not** convergence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MinimizeStatus {
+    /// Max gradient fell below `gradient_tolerance`.
+    ConvergedGradient,
+    /// Energy plateaued (relative change below tolerance for `PLATEAU_PATIENCE`
+    /// **accepted** steps) — a legitimate stop, distinct from a stall.
+    ConvergedEnergy,
+    /// Ran out of the step budget with the gradient still above tolerance.
+    MaxSteps,
+    /// The line search could not find an energy-decreasing step (the optimizer is
+    /// stuck / the input is pathological). The caller should treat the result as
+    /// **un-relaxed**, not converged.
+    LineSearchFailed,
+    /// A non-finite energy or force was encountered (NaN/Inf input or blow-up).
+    NumericalFailure,
+    /// Nothing ran (e.g. `max_steps == 0`, or no movable atoms).
+    NotRun,
+}
+
+impl MinimizeStatus {
+    /// Whether this status represents real convergence (gradient or energy).
+    #[must_use]
+    pub fn is_converged(self) -> bool {
+        matches!(self, Self::ConvergedGradient | Self::ConvergedEnergy)
+    }
+
+    /// Stable lowercase tag for serialization across the FFI boundary.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ConvergedGradient => "converged_gradient",
+            Self::ConvergedEnergy => "converged_energy",
+            Self::MaxSteps => "max_steps",
+            Self::LineSearchFailed => "line_search_failed",
+            Self::NumericalFailure => "numerical_failure",
+            Self::NotRun => "not_run",
+        }
+    }
+}
+
 /// Result of energy minimization.
 #[derive(Clone, Debug)]
 pub struct MinimizeResult {
@@ -161,10 +204,38 @@ pub struct MinimizeResult {
     pub energy: EnergyResult,
     /// Initial total energy
     pub initial_energy: f64,
-    /// Number of steps taken
+    /// Number of outer iterations taken
     pub steps: usize,
-    /// Whether minimization converged
+    /// Number of line-search-accepted steps that actually moved the coordinates.
+    /// Zero means the run was a no-op (the trap this field exists to expose).
+    pub accepted_steps: usize,
+    /// How the run terminated. The source of truth; `converged` is derived from it.
+    pub status: MinimizeStatus,
+    /// Whether minimization converged. Derived from [`status`](Self::status)
+    /// (`status.is_converged()`); retained for backward compatibility.
     pub converged: bool,
+}
+
+impl MinimizeResult {
+    /// Build a result, deriving `converged` from `status` so the two never disagree.
+    fn new(
+        coords: Vec<[f64; 3]>,
+        energy: EnergyResult,
+        initial_energy: f64,
+        steps: usize,
+        accepted_steps: usize,
+        status: MinimizeStatus,
+    ) -> Self {
+        Self {
+            coords,
+            energy,
+            initial_energy,
+            steps,
+            accepted_steps,
+            status,
+            converged: status.is_converged(),
+        }
+    }
 }
 
 /// Energy plateau fallback for the convergence check.
@@ -183,6 +254,24 @@ pub struct MinimizeResult {
 /// (though with slightly different parameters).
 const PLATEAU_REL_TOL: f64 = 1.0e-6;
 const PLATEAU_PATIENCE: usize = 5;
+/// An energy plateau only counts as **convergence** if the gradient is also within
+/// this factor of `gradient_tolerance`. The plateau fallback exists for structures
+/// whose largest gradient *hovers around* the tolerance; a plateau with a gradient
+/// far above it is a STALL (negligible progress at a non-minimum), not convergence —
+/// reporting it as converged would recreate the silent no-op trap (codex review).
+const PLATEAU_GRAD_FACTOR: f64 = 10.0;
+
+/// Classify an energy-plateau stop given the current max gradient: real
+/// [`ConvergedEnergy`](MinimizeStatus::ConvergedEnergy) only if the gradient is also
+/// reasonably small; otherwise it is a stall
+/// ([`LineSearchFailed`](MinimizeStatus::LineSearchFailed)).
+fn plateau_status(max_grad: f64, gradient_tolerance: f64) -> MinimizeStatus {
+    if max_grad < PLATEAU_GRAD_FACTOR * gradient_tolerance {
+        MinimizeStatus::ConvergedEnergy
+    } else {
+        MinimizeStatus::LineSearchFailed
+    }
+}
 
 /// Update the consecutive-tiny-change counter and report whether the energy
 /// has plateaued. `prev_energy` is `None` on the first call (no comparison
@@ -225,20 +314,40 @@ pub fn steepest_descent(
     let initial_e = nbc.energy(&pos, topo, params);
     let initial_energy = initial_e.total;
 
-    let mut step_size = 0.01; // initial step size in Å
-    let mut prev_energy = initial_energy;
-    let mut converged = false;
+    // Guard the inputs: a non-finite starting energy (NaN/Inf coords or a blown-up
+    // field) cannot be optimized — report it instead of silently "not converging".
+    if !initial_energy.is_finite() {
+        return MinimizeResult::new(
+            pos,
+            initial_e,
+            initial_energy,
+            0,
+            0,
+            MinimizeStatus::NumericalFailure,
+        );
+    }
+    if max_steps == 0 || constrained.iter().all(|&c| c) {
+        return MinimizeResult::new(pos, initial_e, initial_energy, 0, 0, MinimizeStatus::NotRun);
+    }
+
+    let mut energy = initial_energy;
     let mut steps = 0;
+    let mut accepted_steps = 0usize;
+    let mut status = MinimizeStatus::MaxSteps;
     let mut plateau_counter = 0usize;
+    // Plateau is fed ONLY accepted iterates (energy updates only on an accepted
+    // line-search step), so a non-progressing run can never masquerade as converged.
     let mut plateau_prev: Option<f64> = None;
 
     for step in 0..max_steps {
         steps = step + 1;
 
-        let (energy_res, forces) = nbc.energy_and_forces(&pos, topo, params);
-        let cur_energy = energy_res.total;
+        // True steepest descent: search direction is the raw force (= −gradient),
+        // a single global vector — NOT the old per-atom unit step, which moved every
+        // atom the same distance regardless of its force and was not a descent
+        // direction on heterogeneous structures.
+        let (_e_res, forces) = nbc.energy_and_forces(&pos, topo, params);
 
-        // Compute max force magnitude
         let mut max_force = 0.0f64;
         for i in 0..n {
             if constrained[i] {
@@ -249,71 +358,58 @@ pub fn steepest_descent(
                 + forces[i][2] * forces[i][2];
             max_force = max_force.max(f2.sqrt());
         }
-
-        // Check convergence
         if max_force < gradient_tolerance {
-            converged = true;
+            status = MinimizeStatus::ConvergedGradient;
             break;
         }
 
-        // Plateau fallback
-        let (new_counter, plateaued) =
-            check_energy_plateau(plateau_prev, cur_energy, plateau_counter);
+        // Energy-plateau convergence — only meaningful once we have at least one
+        // accepted step to compare against, and only a real convergence if the
+        // gradient is also small (otherwise a slow-progress run is a stall).
+        let (new_counter, plateaued) = check_energy_plateau(plateau_prev, energy, plateau_counter);
         plateau_counter = new_counter;
         if plateaued {
-            converged = true;
+            status = plateau_status(max_force, gradient_tolerance);
             break;
         }
-        plateau_prev = Some(cur_energy);
+        plateau_prev = Some(energy);
 
-        // Take step along gradient direction
-        let mut new_pos = pos.clone();
-        for i in 0..n {
-            if constrained[i] {
-                continue;
-            }
-            let f_mag = (forces[i][0] * forces[i][0]
-                + forces[i][1] * forces[i][1]
-                + forces[i][2] * forces[i][2])
-                .sqrt();
-            if f_mag < 1e-12 {
-                continue;
-            }
-            // Normalize force direction, step by step_size
-            let scale = step_size / f_mag;
-            new_pos[i][0] += forces[i][0] * scale;
-            new_pos[i][1] += forces[i][1] * scale;
-            new_pos[i][2] += forces[i][2] * scale;
+        // direction = forces; grad·direction = (−forces)·forces = −|forces|² < 0.
+        let grad_dot_dir = -dot3n(&forces, &forces, constrained);
+        let (alpha, new_energy, new_pos) = line_search(
+            &pos,
+            &forces,
+            grad_dot_dir,
+            energy,
+            topo,
+            params,
+            constrained,
+            &mut nbc,
+        );
+
+        if alpha == 0.0 {
+            // No Armijo-acceptable step exists along the steepest-descent direction —
+            // genuinely stuck. Report it as a stall (NOT convergence). `pos` is
+            // unchanged (line_search returns a fresh trial; we never committed it).
+            status = MinimizeStatus::LineSearchFailed;
+            break;
         }
 
-        let new_energy = nbc.energy(&new_pos, topo, params);
-
-        // Adaptive step size
-        if new_energy.total < prev_energy {
-            // Accept step, increase step size
-            pos = new_pos;
-            nbc.refresh(&pos, topo);
-            prev_energy = new_energy.total;
-            step_size *= 1.2;
-            step_size = step_size.min(0.1); // cap at 0.1 Å
-        } else {
-            // Reject step, decrease step size
-            step_size *= 0.5;
-            if step_size < 1e-8 {
-                break; // can't make progress
-            }
-        }
+        pos = new_pos;
+        energy = new_energy;
+        accepted_steps += 1;
+        nbc.refresh(&pos, topo);
     }
 
     let final_energy = nbc.energy(&pos, topo, params);
-
-    MinimizeResult {
-        coords: pos,
-        energy: final_energy,
+    MinimizeResult::new(
+        pos,
+        final_energy,
         initial_energy,
         steps,
-        converged,
-    }
+        accepted_steps,
+        status,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -370,13 +466,13 @@ fn line_search<F: ForceField>(
     let n = pos.len();
     let mut trial = vec![[0.0; 3]; n];
 
-    // Cap the initial alpha so the maximum atom displacement stays inside the
-    // NBL buffer region. Without this, alpha=1.0 with a large direction norm
-    // (first LBFGS step before history accumulates) produces trial positions
-    // many Å away — the cached NBL misses critical close pairs and returns
-    // wrong energies. With the cap, every line search trial lands within the
-    // cached NBL's valid region, so rebuilding mid-trial is unnecessary.
-    let max_disp = 0.8; // Å — well inside the 2 Å NBL buffer
+    // Cap the initial alpha so a single trial displacement is modest. This bounds
+    // the *incremental* move; it does NOT by itself keep the cached NBL valid,
+    // because `pos` may already have drifted ~buffer/2 from the NBL's reference
+    // across accepted steps (codex review). The per-trial `nbc.refresh` below is
+    // what guarantees correctness — it rebuilds the list whenever a trial drifts
+    // past the buffer, so no newly-interacting pair is ever missed.
+    let max_disp = 0.8; // Å
     let mut max_d = 0.0_f64;
     for i in 0..n {
         if constrained[i] {
@@ -403,8 +499,11 @@ fn line_search<F: ForceField>(
             }
         }
 
-        // Thanks to the alpha cap above, trials stay within the cached NBL's
-        // valid region. No refresh needed here.
+        // Validate the cached neighbor list against THIS trial before reading its
+        // energy: `refresh` rebuilds iff the trial drifted past the buffer, so the
+        // energy can never be computed from a stale list that omits a now-close
+        // pair (a no-op for small systems with no NBL). Correctness over caching.
+        nbc.refresh(&trial, topo);
         let e = nbc.energy(&trial, topo, params);
 
         // Armijo sufficient decrease condition
@@ -441,6 +540,19 @@ pub fn conjugate_gradient(
 
     let initial_e = nbc.energy(&pos, topo, params);
     let initial_energy = initial_e.total;
+    if !initial_energy.is_finite() {
+        return MinimizeResult::new(
+            pos,
+            initial_e,
+            initial_energy,
+            0,
+            0,
+            MinimizeStatus::NumericalFailure,
+        );
+    }
+    if max_steps == 0 || constrained.iter().all(|&c| c) {
+        return MinimizeResult::new(pos, initial_e, initial_energy, 0, 0, MinimizeStatus::NotRun);
+    }
 
     // First force evaluation
     let (_, forces) = nbc.energy_and_forces(&pos, topo, params);
@@ -460,8 +572,9 @@ pub fn conjugate_gradient(
 
     let mut old_gtg = dot3n(&old_forces, &old_forces, constrained);
     let mut energy = initial_energy;
-    let mut converged = false;
+    let mut status = MinimizeStatus::MaxSteps;
     let mut steps = 0;
+    let mut accepted_steps = 0usize;
     let restart_frequency = 3 * n;
     let mut plateau_counter = 0usize;
     let mut plateau_prev: Option<f64> = None;
@@ -479,15 +592,15 @@ pub fn conjugate_gradient(
             max_force = max_force.max(f2.sqrt());
         }
         if max_force < gradient_tolerance {
-            converged = true;
+            status = MinimizeStatus::ConvergedGradient;
             break;
         }
 
-        // Plateau fallback
+        // Plateau fallback (accepted iterates only — `energy` updates on accept).
         let (new_counter, plateaued) = check_energy_plateau(plateau_prev, energy, plateau_counter);
         plateau_counter = new_counter;
         if plateaued {
-            converged = true;
+            status = plateau_status(max_force, gradient_tolerance);
             break;
         }
         plateau_prev = Some(energy);
@@ -522,12 +635,15 @@ pub fn conjugate_gradient(
         );
 
         if alpha == 0.0 {
-            // Line search failed — we're at a minimum (or stuck)
+            // Line search failed — at a minimum, or stuck. The latter is a stall,
+            // not convergence; the gradient check above already caught a true minimum.
+            status = MinimizeStatus::LineSearchFailed;
             break;
         }
 
         pos = new_pos;
         energy = new_energy;
+        accepted_steps += 1;
 
         // Refresh the cached neighbor list if atoms drifted past the buffer.
         nbc.refresh(&pos, topo);
@@ -575,14 +691,14 @@ pub fn conjugate_gradient(
     }
 
     let final_energy = nbc.energy(&pos, topo, params);
-
-    MinimizeResult {
-        coords: pos,
-        energy: final_energy,
+    MinimizeResult::new(
+        pos,
+        final_energy,
         initial_energy,
         steps,
-        converged,
-    }
+        accepted_steps,
+        status,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +732,19 @@ pub fn lbfgs(
 
     let initial_e = nbc.energy(&pos, topo, params);
     let initial_energy = initial_e.total;
+    if !initial_energy.is_finite() {
+        return MinimizeResult::new(
+            pos,
+            initial_e,
+            initial_energy,
+            0,
+            0,
+            MinimizeStatus::NumericalFailure,
+        );
+    }
+    if max_steps == 0 || constrained.iter().all(|&c| c) {
+        return MinimizeResult::new(pos, initial_e, initial_energy, 0, 0, MinimizeStatus::NotRun);
+    }
 
     let (_, forces) = nbc.energy_and_forces(&pos, topo, params);
     // Gradient = -force
@@ -627,8 +756,9 @@ pub fn lbfgs(
     let mut rho_hist: Vec<f64> = Vec::with_capacity(m);
 
     let mut energy = initial_energy;
-    let mut converged = false;
+    let mut status = MinimizeStatus::MaxSteps;
     let mut steps = 0;
+    let mut accepted_steps = 0usize;
     let mut plateau_counter = 0usize;
     let mut prev_energy: Option<f64> = None;
 
@@ -645,16 +775,16 @@ pub fn lbfgs(
             max_grad = max_grad.max(g2.sqrt());
         }
         if max_grad < gradient_tolerance {
-            converged = true;
+            status = MinimizeStatus::ConvergedGradient;
             break;
         }
 
-        // Plateau fallback: declare convergence if energy has stopped moving
-        // even though the gradient norm is still hovering above the threshold.
+        // Plateau fallback: a real convergence only if the gradient is also small;
+        // a plateau with a still-large gradient is a stall, not convergence.
         let (new_counter, plateaued) = check_energy_plateau(prev_energy, energy, plateau_counter);
         plateau_counter = new_counter;
         if plateaued {
-            converged = true;
+            status = plateau_status(max_grad, gradient_tolerance);
             break;
         }
         prev_energy = Some(energy);
@@ -679,37 +809,41 @@ pub fn lbfgs(
             (0.0, energy, pos.clone())
         };
 
-        // Either the direction wasn't descent, or the line search couldn't find
-        // an Armijo-acceptable step. In both cases the LBFGS Hessian approximation
-        // has become unreliable. Clear the history and take a small steepest-descent
-        // step to recover. If even that doesn't make progress, we're stuck — stop.
+        // Either the direction wasn't descent, or the line search couldn't find an
+        // Armijo-acceptable step. The LBFGS Hessian approximation has become
+        // unreliable. Clear the history and try a recovery steepest-descent step via
+        // the SAME Armijo line search — computed into a trial so we NEVER commit a
+        // non-improving (or worse) position. If it can't make progress, stop and
+        // leave `pos` at the last accepted iterate (transactional: no silent rollback
+        // to higher energy).
         if alpha == 0.0 {
             s_hist.clear();
             y_hist.clear();
             rho_hist.clear();
-            let sd_step = 0.01;
-            let prev_energy = energy;
-            for i in 0..n {
-                if constrained[i] {
-                    continue;
-                }
-                let g_mag = (grad[i][0].powi(2) + grad[i][1].powi(2) + grad[i][2].powi(2)).sqrt();
-                if g_mag > 1e-12 {
-                    let scale = sd_step / g_mag;
-                    pos[i][0] -= grad[i][0] * scale;
-                    pos[i][1] -= grad[i][1] * scale;
-                    pos[i][2] -= grad[i][2] * scale;
-                }
-            }
-            nbc.refresh(&pos, topo);
-            let (new_e_res, new_forces) = nbc.energy_and_forces(&pos, topo, params);
-            // If the SD recovery couldn't even reduce the energy, we're genuinely
-            // stuck (saddle point / noisy region) — stop.
-            if new_e_res.total >= prev_energy {
+            // Recovery direction = forces (= −grad), the steepest-descent direction.
+            let sd_dir = negate_forces(&grad, constrained); // = forces
+            let sd_gd = -dot3n_raw(&grad, &grad, constrained); // grad·(−grad) ≤ 0
+            let (rec_alpha, rec_energy, rec_pos) = line_search(
+                &pos,
+                &sd_dir,
+                sd_gd,
+                energy,
+                topo,
+                params,
+                constrained,
+                &mut nbc,
+            );
+            if rec_alpha == 0.0 {
+                // Genuinely stuck — pos unchanged (trial was separate), report stall.
+                status = MinimizeStatus::LineSearchFailed;
                 break;
             }
+            pos = rec_pos;
+            energy = rec_energy;
+            accepted_steps += 1;
+            nbc.refresh(&pos, topo);
+            let (_, new_forces) = nbc.energy_and_forces(&pos, topo, params);
             grad = negate_forces(&new_forces, constrained);
-            energy = new_e_res.total;
             continue;
         }
 
@@ -723,6 +857,7 @@ pub fn lbfgs(
 
         pos = new_pos;
         energy = new_energy;
+        accepted_steps += 1;
 
         // Refresh the cached neighbor list if atoms drifted past the buffer.
         nbc.refresh(&pos, topo);
@@ -756,14 +891,14 @@ pub fn lbfgs(
     }
 
     let final_energy = nbc.energy(&pos, topo, params);
-
-    MinimizeResult {
-        coords: pos,
-        energy: final_energy,
+    MinimizeResult::new(
+        pos,
+        final_energy,
         initial_energy,
         steps,
-        converged,
-    }
+        accepted_steps,
+        status,
+    )
 }
 
 /// Two-loop recursion for L-BFGS search direction.
@@ -984,6 +1119,201 @@ mod plateau_tests {
         let (counter, plateaued) = check_energy_plateau(Some(-1000.0), -1000.005, 4);
         assert_eq!(counter, 0);
         assert!(!plateaued);
+    }
+
+    #[test]
+    fn plateau_with_large_gradient_is_a_stall_not_convergence() {
+        // codex P1: a plateau reached while the gradient is still far above tolerance
+        // is a STALL — it must NOT be reported as ConvergedEnergy (that would set
+        // relax_ok=True on a non-minimum and recreate the silent-quality failure).
+        let tol = 0.1;
+        // Gradient comfortably within the plateau gate -> real energy convergence.
+        assert_eq!(
+            plateau_status(0.5, tol),
+            MinimizeStatus::ConvergedEnergy,
+            "small gradient + plateau is genuine convergence"
+        );
+        // Gradient far above tolerance -> stall, reported as LineSearchFailed.
+        assert_eq!(
+            plateau_status(50.0, tol),
+            MinimizeStatus::LineSearchFailed,
+            "large gradient + plateau is a stall, not convergence"
+        );
+        // The status must not be is_converged() in the stall case.
+        assert!(!plateau_status(50.0, tol).is_converged());
+    }
+}
+
+/// Reliability guards for the minimizers (CPU). These are the tests whose absence
+/// let two silent-correctness bugs ship: a steepest-descent no-op on clashing
+/// structures (it returned `final == initial` with no error) and an LBFGS recovery
+/// that could leave higher-energy coordinates in place.
+#[cfg(test)]
+mod reliability_tests {
+    use super::*;
+    use crate::add_hydrogens;
+    use crate::forcefield::params::{amber96, AmberParams};
+    use crate::forcefield::topology::build_topology;
+    use std::path::PathBuf;
+
+    /// Concrete signature shared by the three minimizers, so they collect into one array.
+    type Runner = fn(&[[f64; 3]], &Topology, &AmberParams, usize, f64, &[bool]) -> MinimizeResult;
+    const RUNNERS: [(&str, Runner); 3] = [
+        ("sd", steepest_descent),
+        ("cg", conjugate_gradient),
+        ("lbfgs", lbfgs),
+    ];
+
+    /// Load crambin, add all-atom hydrogens (creates the clashes / high energy that
+    /// triggered the original no-op), and build an AMBER96 topology + coords. Returns
+    /// `None` if the fixture is absent (CI without test-pdbs) — caller skips.
+    fn protonated_amber_system() -> Option<(Topology, Vec<[f64; 3]>)> {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("../test-pdbs/1crn.pdb");
+        if !p.exists() {
+            eprintln!("reliability_tests: 1crn.pdb not found, skipping");
+            return None;
+        }
+        let (mut pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(p.to_str().unwrap())
+            .expect("failed to read 1crn");
+        add_hydrogens::place_all_hydrogens(&mut pdb, false);
+        let ff = amber96();
+        let topo = build_topology(&pdb, &ff);
+        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+        Some((topo, coords))
+    }
+
+    fn max_disp(a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
+        a.iter()
+            .zip(b)
+            .map(|(p, q)| {
+                ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
+            })
+            .fold(0.0_f64, f64::max)
+    }
+
+    /// THE guard: every minimizer must strictly lower the energy of a clashing
+    /// structure, actually move atoms, and report honest progress — never the silent
+    /// `final == initial` no-op the per-atom-unit-step SD used to produce.
+    #[test]
+    fn minimization_lowers_energy_and_reports_progress() {
+        let Some((topo, coords)) = protonated_amber_system() else {
+            return;
+        };
+        let ff = amber96();
+        let constrained = vec![false; coords.len()];
+        // A clashing (protonated) structure sheds most of its energy in the first
+        // handful of steps; 30 keeps the guard fast in debug CI while still proving a
+        // strict decrease for all three optimizers.
+        for (name, run) in RUNNERS {
+            let r = run(&coords, &topo, &ff, 30, 0.1, &constrained);
+            assert!(
+                r.energy.total < r.initial_energy,
+                "{name}: energy did not decrease ({} -> {}); the no-op trap",
+                r.initial_energy,
+                r.energy.total
+            );
+            assert!(r.accepted_steps > 0, "{name}: zero accepted steps (no-op)");
+            assert!(
+                max_disp(&r.coords, &coords) > 1e-6,
+                "{name}: coordinates did not move"
+            );
+            assert!(
+                !matches!(
+                    r.status,
+                    MinimizeStatus::NotRun | MinimizeStatus::NumericalFailure
+                ),
+                "{name}: unexpected status {:?}",
+                r.status
+            );
+            assert_eq!(
+                r.converged,
+                r.status.is_converged(),
+                "{name}: converged/status disagree"
+            );
+        }
+    }
+
+    /// Guards the LBFGS transactional fix: a minimizer must NEVER return a structure
+    /// worse than its input (the old recovery path could commit a higher-energy step).
+    #[test]
+    fn minimizer_never_returns_worse_than_initial() {
+        let Some((topo, coords)) = protonated_amber_system() else {
+            return;
+        };
+        let ff = amber96();
+        let constrained = vec![false; coords.len()];
+        for (_, run) in RUNNERS {
+            // Few steps so the line search / recovery paths are exercised mid-run.
+            let r = run(&coords, &topo, &ff, 5, 0.1, &constrained);
+            assert!(
+                r.energy.total <= r.initial_energy + 1e-9,
+                "minimizer returned a worse structure: {} -> {}",
+                r.initial_energy,
+                r.energy.total
+            );
+        }
+    }
+
+    /// The energy-only path and the energy+forces path must agree on the total, or the
+    /// line-search accept test compares against an inconsistent baseline.
+    #[test]
+    fn energy_only_and_energy_plus_forces_totals_agree() {
+        let Some((topo, coords)) = protonated_amber_system() else {
+            return;
+        };
+        let ff = amber96();
+        let mut nbc = NbCache::new(&coords, &topo, &ff);
+        let e_only = nbc.energy(&coords, &topo, &ff).total;
+        let e_force = nbc.energy_and_forces(&coords, &topo, &ff).0.total;
+        assert!(
+            (e_only - e_force).abs() <= 1e-6 * e_only.abs().max(1.0),
+            "energy paths disagree: {e_only} vs {e_force}"
+        );
+    }
+
+    #[test]
+    fn max_steps_zero_is_not_run_and_unchanged() {
+        let Some((topo, coords)) = protonated_amber_system() else {
+            return;
+        };
+        let ff = amber96();
+        let constrained = vec![false; coords.len()];
+        let r = lbfgs(&coords, &topo, &ff, 0, 0.1, &constrained);
+        assert_eq!(r.status, MinimizeStatus::NotRun);
+        assert_eq!(r.accepted_steps, 0);
+        assert!(!r.converged);
+        assert_eq!(r.coords, coords, "NotRun must leave coordinates untouched");
+        assert_eq!(r.energy.total, r.initial_energy);
+    }
+
+    #[test]
+    fn all_constrained_is_not_run() {
+        let Some((topo, coords)) = protonated_amber_system() else {
+            return;
+        };
+        let ff = amber96();
+        let constrained = vec![true; coords.len()];
+        for (_, run) in RUNNERS {
+            let r = run(&coords, &topo, &ff, 50, 0.1, &constrained);
+            assert_eq!(r.status, MinimizeStatus::NotRun);
+            assert_eq!(r.coords, coords);
+        }
+    }
+
+    #[test]
+    fn non_finite_input_is_numerical_failure_not_panic() {
+        let Some((topo, mut coords)) = protonated_amber_system() else {
+            return;
+        };
+        let ff = amber96();
+        coords[0][0] = f64::NAN;
+        let constrained = vec![false; coords.len()];
+        let r = lbfgs(&coords, &topo, &ff, 100, 0.1, &constrained);
+        assert_eq!(r.status, MinimizeStatus::NumericalFailure);
+        assert!(!r.converged);
     }
 }
 

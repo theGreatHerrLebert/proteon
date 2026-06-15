@@ -316,6 +316,9 @@ pub(crate) fn batch_prepare(
             dict.set_item("final_energy", r.final_e).unwrap();
             dict.set_item("minimizer_steps", r.steps).unwrap();
             dict.set_item("converged", r.converged).unwrap();
+            dict.set_item("minimized", r.minimized).unwrap();
+            dict.set_item("minimizer_status", r.minimizer_status.as_str())
+                .unwrap();
             dict.set_item("n_unassigned_atoms", r.n_unassigned).unwrap();
             dict.set_item("skipped_no_protein", r.skipped_no_protein)
                 .unwrap();

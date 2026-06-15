@@ -275,6 +275,8 @@ pub(crate) fn minimize_hydrogens(
     dict.set_item("final_energy", result.energy.total)?;
     dict.set_item("steps", result.steps)?;
     dict.set_item("converged", result.converged)?;
+    dict.set_item("accepted_steps", result.accepted_steps)?;
+    dict.set_item("status", result.status.as_str())?;
 
     let components = pyo3::types::PyDict::new(py);
     components.set_item("bond_stretch", result.energy.bond_stretch)?;
@@ -295,7 +297,9 @@ pub(crate) fn minimize_hydrogens(
 ///     pdb: Structure to minimize.
 ///     max_steps: Maximum optimization steps (default 1000).
 ///     gradient_tolerance: Convergence criterion in kcal/mol/A (default 0.1).
-///     method: Optimizer ("sd"/"cg"/"lbfgs", default "sd").
+///     method: Optimizer ("sd"/"cg"/"lbfgs", default "lbfgs"). LBFGS has a real
+///         line search and is robust on clashing inputs; the old "sd" default could
+///         silently no-op on a high-energy structure (see MINIMIZE_RELIABILITY_PLAN).
 ///     ff: Force field — "amber96", "amber96_obc", or "charmm19_eef1"
 ///         (default "amber96"). CHARMM19+EEF1 uses united-atom polar-H
 ///         placement; pass a structure prepared with
@@ -303,7 +307,7 @@ pub(crate) fn minimize_hydrogens(
 ///
 /// Returns dict with same format as minimize_hydrogens.
 #[pyfunction]
-#[pyo3(signature = (pdb, max_steps=1000, gradient_tolerance=0.1, method="sd", ff="amber96"))]
+#[pyo3(signature = (pdb, max_steps=1000, gradient_tolerance=0.1, method="lbfgs", ff="amber96"))]
 pub(crate) fn minimize_structure(
     py: Python<'_>,
     pdb: &PyPDB,
@@ -394,6 +398,8 @@ pub(crate) fn minimize_structure(
     dict.set_item("final_energy", result.energy.total)?;
     dict.set_item("steps", result.steps)?;
     dict.set_item("converged", result.converged)?;
+    dict.set_item("accepted_steps", result.accepted_steps)?;
+    dict.set_item("status", result.status.as_str())?;
 
     let components = pyo3::types::PyDict::new(py);
     components.set_item("bond_stretch", result.energy.bond_stretch)?;
@@ -648,6 +654,9 @@ pub(crate) fn batch_minimize_hydrogens<'py>(
             dict.set_item("final_energy", result.energy.total).unwrap();
             dict.set_item("steps", result.steps).unwrap();
             dict.set_item("converged", result.converged).unwrap();
+            dict.set_item("accepted_steps", result.accepted_steps)
+                .unwrap();
+            dict.set_item("status", result.status.as_str()).unwrap();
 
             let components = pyo3::types::PyDict::new(py);
             components
@@ -753,6 +762,10 @@ pub(crate) fn load_and_minimize_hydrogens(
                 dict.set_item("steps", result.steps)
                     .map_err(|e| e.to_string())?;
                 dict.set_item("converged", result.converged)
+                    .map_err(|e| e.to_string())?;
+                dict.set_item("accepted_steps", result.accepted_steps)
+                    .map_err(|e| e.to_string())?;
+                dict.set_item("status", result.status.as_str())
                     .map_err(|e| e.to_string())?;
                 Ok(dict.into_any().unbind())
             }
