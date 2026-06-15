@@ -21,7 +21,8 @@ use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 
 use super::GpuContext;
 use crate::kmer::{KmerEncoder, KmerIndex, KmerLookup};
-use crate::prefilter::{PrefilterHit, PrefilterOptions};
+use crate::kmer_generator::generate_similar_kmers;
+use crate::prefilter::{PrefilterHit, PrefilterOptions, SimilarityConfig};
 
 const KERNEL_SRC: &str = include_str!("prefilter.cu");
 const DIAG_BITS: u32 = 20;
@@ -168,20 +169,100 @@ impl GpuPrefilterIndex {
         Ok(out)
     }
 
-    /// Shared per-query body — the single source of truth so `prefilter` and
-    /// `prefilter_batch` can't diverge from each other (or from Phase-1
-    /// semantics). Allocates its OWN per-query scratch (hash table + best[] +
-    /// error flag, all `alloc_zeros`), so there is no cross-query state; each
-    /// query gets its own stream (the resident index is what's reused).
-    fn run_query(
+    /// Sensitive single-query prefilter: each query k-mer is expanded into every
+    /// similar k-mer scoring `>= similarity.threshold` before voting. Bit-exact
+    /// equal to [`crate::prefilter::diagonal_prefilter_sensitive`].
+    pub fn prefilter_sensitive(
         &self,
         query: &[u8],
         skip_idx: u8,
+        similarity: &SimilarityConfig<'_>,
         opts: &PrefilterOptions,
     ) -> Result<Vec<PrefilterHit>> {
-        let qlen = query.len();
-        // diag in [-(qlen-1), 65535] (target pos is u16). Bias by qlen ⇒
-        // diag_biased in [1, 65535+qlen]: never 0 (EMPTY sentinel), fits DIAG_BITS.
+        let diag_bias = self.validate_diag_bias(query.len())?;
+        let kmers = self.build_sensitive_kmers(query, skip_idx, similarity)?;
+        self.vote_and_reduce(&kmers, diag_bias, opts)
+    }
+
+    /// Many sensitive queries against the resident index (index sent once).
+    pub fn prefilter_sensitive_batch(
+        &self,
+        queries: &[&[u8]],
+        skip_idx: u8,
+        similarity: &SimilarityConfig<'_>,
+        opts: &PrefilterOptions,
+    ) -> Result<Vec<Vec<PrefilterHit>>> {
+        let mut out = Vec::with_capacity(queries.len());
+        for q in queries {
+            let diag_bias = self.validate_diag_bias(q.len())?;
+            let kmers = self.build_sensitive_kmers(q, skip_idx, similarity)?;
+            out.push(self.vote_and_reduce(&kmers, diag_bias, opts)?);
+        }
+        Ok(out)
+    }
+
+    /// Expand a query into its similar-k-mer `(q_pos, hash)` list — the only
+    /// thing the sensitive path does differently from exact (the voting is
+    /// identical). Mirrors `diagonal_prefilter_sensitive`'s window loop: skip
+    /// X-windows; for each window, every neighbor scoring `>= threshold`.
+    ///
+    /// Keeps ONLY in-range hashes whose posting list is **non-empty**: an empty
+    /// posting contributes no votes (the CPU `for_each_hit` is a no-op on it), so
+    /// dropping it is parity-preserving AND bounds the RETAINED list to neighbours
+    /// actually present in the index — vs the `alphabet^k` hashes one permissive
+    /// window can generate, which would otherwise accumulate across every window
+    /// and exhaust host memory before the size guard runs (codex). A hard cap on
+    /// the retained list is the backstop.
+    ///
+    /// Note: `generate_similar_kmers` still materialises one window's full
+    /// neighbour set before we filter — the per-window peak is the same as the
+    /// CPU sensitive path (`diagonal_prefilter_sensitive`), which calls the same
+    /// generator. Realistic (tuned) thresholds keep that set small; a *streaming*
+    /// generator that yields neighbours one at a time (bounding even a pathological
+    /// threshold) is a shared follow-up for both paths, not a GPU-specific gap.
+    fn build_sensitive_kmers(
+        &self,
+        query: &[u8],
+        skip_idx: u8,
+        similarity: &SimilarityConfig<'_>,
+    ) -> Result<Vec<(usize, u64)>> {
+        let k = self.encoder.kmer_size();
+        let mut kmers: Vec<(usize, u64)> = Vec::new();
+        for q_pos in 0..query.len().saturating_sub(k - 1) {
+            let window = &query[q_pos..q_pos + k];
+            if window.contains(&skip_idx) {
+                continue;
+            }
+            for (h, _) in generate_similar_kmers(
+                &self.encoder,
+                window,
+                similarity.scores,
+                similarity.threshold,
+            ) {
+                if h >= self.table_size {
+                    continue;
+                }
+                let hu = h as usize;
+                if self.offsets_host[hu + 1] > self.offsets_host[hu] {
+                    kmers.push((q_pos, h));
+                    if kmers.len() > i32::MAX as usize {
+                        return Err(anyhow!(
+                            "GPU sensitive prefilter: expanded k-mer list exceeds the launch-grid width"
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(kmers)
+    }
+
+    /// Validate the query length against the `DIAG_BITS` diagonal packing and
+    /// return the diagonal bias. Called BEFORE any k-mer build/expansion so an
+    /// oversized query fails fast (claudex) — sensitive expansion is expensive.
+    ///
+    /// diag in [-(qlen-1), 65535] (target pos is u16). Bias by qlen ⇒
+    /// diag_biased in [1, 65535+qlen]: never 0 (EMPTY sentinel), fits DIAG_BITS.
+    fn validate_diag_bias(&self, qlen: usize) -> Result<i32> {
         let diag_max: u64 = (1u64 << DIAG_BITS) - 1;
         if (65535usize + qlen) as u64 > diag_max {
             return Err(anyhow!(
@@ -189,8 +270,18 @@ impl GpuPrefilterIndex {
                  {DIAG_BITS}-bit packing); use the CPU prefilter"
             ));
         }
-        let diag_bias = qlen as i32;
+        Ok(qlen as i32)
+    }
 
+    /// Exact-match per-query body. Builds the exact k-mer list, then votes via
+    /// the shared [`vote_and_reduce`](Self::vote_and_reduce) core.
+    fn run_query(
+        &self,
+        query: &[u8],
+        skip_idx: u8,
+        opts: &PrefilterOptions,
+    ) -> Result<Vec<PrefilterHit>> {
+        let diag_bias = self.validate_diag_bias(query.len())?;
         // Out-of-range hashes have no posting list (mirrors lookup_hash) — drop
         // them so the kernel never indexes `offsets` out of bounds (codex).
         let kmers: Vec<(usize, u64)> = self
@@ -198,14 +289,41 @@ impl GpuPrefilterIndex {
             .iter_kmers(query, skip_idx)
             .filter(|&(_, h)| h < self.table_size)
             .collect();
+        self.vote_and_reduce(&kmers, diag_bias, opts)
+    }
+
+    /// Shared GPU voting core for a prebuilt `(q_pos, hash)` list — exact OR
+    /// similar-k-mer-expanded; the kernels are identical for both. Allocates its
+    /// OWN per-query scratch (hash table + best[] + error flag, all
+    /// `alloc_zeros`), so there is no cross-query state; each call uses its own
+    /// stream (the resident index is what's reused).
+    fn vote_and_reduce(
+        &self,
+        kmers: &[(usize, u64)],
+        diag_bias: i32,
+        opts: &PrefilterOptions,
+    ) -> Result<Vec<PrefilterHit>> {
+        let diag_max: u64 = (1u64 << DIAG_BITS) - 1;
         if kmers.is_empty() {
             return Ok(Vec::new());
         }
+        // The expanded list length is the vote grid dim + an i32 kernel arg, and
+        // is NOT bounded by `total_hits` (most neighbor hashes may miss) — guard
+        // it independently (covers the i32 arg AND the CUDA grid-x limit). claudex.
+        let n_kmers = kmers.len();
+        if n_kmers as u64 > i32::MAX as u64 {
+            return Err(anyhow!(
+                "GPU prefilter: {n_kmers} (expanded) k-mers exceed the launch-grid width"
+            ));
+        }
 
         let mut total_hits: u64 = 0;
-        for &(_, h) in &kmers {
+        for &(_, h) in kmers {
             let h = h as usize;
-            total_hits += self.offsets_host[h + 1] - self.offsets_host[h];
+            let posting = self.offsets_host[h + 1] - self.offsets_host[h];
+            total_hits = total_hits
+                .checked_add(posting)
+                .ok_or_else(|| anyhow!("GPU prefilter: total hit count overflow"))?;
         }
         if total_hits == 0 {
             return Ok(Vec::new());
@@ -219,9 +337,11 @@ impl GpuPrefilterIndex {
             .ok_or_else(|| {
                 anyhow!("GPU prefilter: hash table size overflow ({total_hits} hits)")
             })?;
+        // u32 arithmetic / kernel-width guard (not a memory cap — a table this
+        // large simply fails to allocate, which is correct, not silent).
         if cap_u64 > u32::MAX as u64 {
             return Err(anyhow!(
-                "GPU prefilter: {total_hits} hits exceed the in-memory table cap"
+                "GPU prefilter: {total_hits} hits exceed the addressable table width (u32)"
             ));
         }
         let table_cap = cap_u64 as usize;
@@ -229,7 +349,6 @@ impl GpuPrefilterIndex {
 
         let kmer_qpos: Vec<i32> = kmers.iter().map(|&(p, _)| p as i32).collect();
         let kmer_hash: Vec<u64> = kmers.iter().map(|&(_, h)| h).collect();
-        let n_kmers = kmers.len();
 
         // Acquire kernels + a stream only now (a no-hit query returned above
         // without touching the GPU). Each query uses its own stream; the
@@ -593,5 +712,172 @@ mod tests {
             .prefilter(&q, 99, &PrefilterOptions::default())
             .expect("prefilter");
         assert_eq!(cpu, gpu);
+    }
+
+    // --- Phase 3a: sensitive (similar-k-mer expanded) ---
+
+    use crate::prefilter::{diagonal_prefilter_sensitive, SimilarityConfig};
+
+    fn id_matrix(alphabet: usize, m: i32, mm: i32) -> Vec<i32> {
+        let mut s = vec![mm; alphabet * alphabet];
+        for i in 0..alphabet {
+            s[i * alphabet + i] = m;
+        }
+        s
+    }
+
+    fn assert_sensitive_parity(
+        index: &KmerIndex,
+        query: &[u8],
+        skip_idx: u8,
+        sim: &SimilarityConfig,
+        opts: &PrefilterOptions,
+    ) {
+        let handle = GpuPrefilterIndex::upload(index).expect("upload");
+        let cpu = diagonal_prefilter_sensitive(index, query, skip_idx, sim, opts);
+        let gpu = handle
+            .prefilter_sensitive(query, skip_idx, sim, opts)
+            .expect("sensitive");
+        assert_eq!(cpu, gpu, "sensitive CPU vs GPU disagree (query {query:?})");
+    }
+
+    #[test]
+    fn sensitive_widens_beyond_exact_and_matches_cpu() {
+        if skip() {
+            return;
+        }
+        // Index: seq 0 = "00" (k-mer 00), seq 1 = "01" (k-mer 01). Query "00".
+        // identity +2/-1, threshold 1: window "00" expands to neighbours incl
+        // "01" (score 2-1=1) ⇒ catches seq 1 that the EXACT path misses.
+        let enc = KmerEncoder::new(4, 2);
+        let t0 = vec![0u8, 0];
+        let t1 = vec![0u8, 1];
+        let idx =
+            KmerIndex::build(enc, [(0u32, t0.as_slice()), (1u32, t1.as_slice())], 99).unwrap();
+        let scores = id_matrix(4, 2, -1);
+        let sim = SimilarityConfig {
+            scores: &scores,
+            threshold: 1,
+        };
+        let query = vec![0u8, 0];
+
+        let handle = GpuPrefilterIndex::upload(&idx).expect("upload");
+        let exact = handle
+            .prefilter(&query, 99, &PrefilterOptions::default())
+            .unwrap();
+        let sens = handle
+            .prefilter_sensitive(&query, 99, &sim, &PrefilterOptions::default())
+            .unwrap();
+        assert!(exact.iter().all(|h| h.seq_id != 1), "exact must miss seq 1");
+        assert!(
+            sens.iter().any(|h| h.seq_id == 1),
+            "sensitive must catch seq 1"
+        );
+        assert_sensitive_parity(&idx, &query, 99, &sim, &PrefilterOptions::default());
+    }
+
+    #[test]
+    fn sensitive_self_score_threshold_equals_exact() {
+        if skip() {
+            return;
+        }
+        // threshold = k*m (the self-score) ⇒ only the exact k-mer of each window
+        // expands ⇒ sensitive == exact.
+        let idx = small_index();
+        let scores = id_matrix(4, 2, -1);
+        let sim = SimilarityConfig {
+            scores: &scores,
+            threshold: 4, // k=2 * m=2
+        };
+        let q = vec![0u8, 1, 2, 3];
+        let handle = GpuPrefilterIndex::upload(&idx).expect("upload");
+        let exact = handle
+            .prefilter(&q, 99, &PrefilterOptions::default())
+            .unwrap();
+        let sens = handle
+            .prefilter_sensitive(&q, 99, &sim, &PrefilterOptions::default())
+            .unwrap();
+        assert_eq!(
+            exact, sens,
+            "self-score-threshold sensitive must equal exact"
+        );
+        assert_sensitive_parity(&idx, &q, 99, &sim, &PrefilterOptions::default());
+    }
+
+    #[test]
+    fn sensitive_parity_with_options_and_batch() {
+        if skip() {
+            return;
+        }
+        let idx = small_index();
+        let scores = id_matrix(4, 2, -1);
+        let sim = SimilarityConfig {
+            scores: &scores,
+            threshold: 1,
+        };
+        assert_sensitive_parity(
+            &idx,
+            &[0u8, 1, 2, 3],
+            99,
+            &sim,
+            &PrefilterOptions {
+                score_threshold: 2,
+                exclude_self: Some(20),
+                max_hits: Some(2),
+                ..Default::default()
+            },
+        );
+        // Batch: hit, empty, hit — vs per-query CPU sensitive.
+        let handle = GpuPrefilterIndex::upload(&idx).expect("upload");
+        let queries: Vec<&[u8]> = vec![&[0, 1, 2, 3], &[3, 3, 3, 3], &[0, 1]];
+        let gpu = handle
+            .prefilter_sensitive_batch(&queries, 99, &sim, &PrefilterOptions::default())
+            .expect("batch");
+        for (i, q) in queries.iter().enumerate() {
+            let cpu = diagonal_prefilter_sensitive(&idx, q, 99, &sim, &PrefilterOptions::default());
+            assert_eq!(cpu, gpu[i], "sensitive batch query {i} mismatch");
+        }
+    }
+
+    #[test]
+    fn sensitive_parity_larger_random_index() {
+        if skip() {
+            return;
+        }
+        let alphabet = 6usize;
+        let enc = KmerEncoder::new(alphabet as u32, 3);
+        let mut rng: u32 = 0x9e37_79b9;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            rng
+        };
+        let seqs: Vec<Vec<u8>> = (0..30)
+            .map(|_| {
+                let len = 10 + (next() as usize % 30);
+                (0..len)
+                    .map(|_| (next() as usize % alphabet) as u8)
+                    .collect()
+            })
+            .collect();
+        let corpus: Vec<(u32, &[u8])> = seqs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as u32, s.as_slice()))
+            .collect();
+        let idx = KmerIndex::build(enc, corpus, 99).unwrap();
+        let scores = id_matrix(alphabet, 2, -1);
+        let sim = SimilarityConfig {
+            scores: &scores,
+            threshold: 5, // expands a few neighbours per 3-mer (self-score 6)
+        };
+        for _ in 0..6 {
+            let qlen = 10 + (next() as usize % 30);
+            let query: Vec<u8> = (0..qlen)
+                .map(|_| (next() as usize % alphabet) as u8)
+                .collect();
+            assert_sensitive_parity(&idx, &query, 99, &sim, &PrefilterOptions::default());
+        }
     }
 }
