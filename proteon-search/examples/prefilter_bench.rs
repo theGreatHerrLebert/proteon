@@ -61,9 +61,7 @@ fn main() {
         .map(|_| {
             let span = len_max - len_min + 1;
             let len = len_min + (next() as usize) % span;
-            (0..len)
-                .map(|_| (next() % alphabet_size) as u8)
-                .collect()
+            (0..len).map(|_| (next() % alphabet_size) as u8).collect()
         })
         .collect();
 
@@ -76,7 +74,10 @@ fn main() {
     let t_idx = Instant::now();
     let index = KmerIndex::build(
         encoder,
-        targets.iter().enumerate().map(|(i, s)| (i as u32, s.as_slice())),
+        targets
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as u32, s.as_slice())),
         skip_idx,
     )
     .expect("index build");
@@ -143,7 +144,10 @@ fn main() {
         println!(
             "gpu:           {gpu_elapsed:.3} s   ({gpu_qps:.1} queries/s)   total_hits={gpu_hits}"
         );
-        println!("gpu speedup:   {:.2}x  (steady-state, upload excluded)", cpu_elapsed / gpu_elapsed);
+        println!(
+            "gpu speedup:   {:.2}x  (steady-state, upload excluded)",
+            cpu_elapsed / gpu_elapsed
+        );
         println!(
             "gpu speedup:   {:.2}x  (amortized, upload included)",
             cpu_elapsed / (gpu_elapsed + upload_elapsed)
