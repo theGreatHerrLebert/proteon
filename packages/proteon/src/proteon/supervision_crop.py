@@ -28,7 +28,14 @@ from .templates import TemplateFeatures
 # Sequence-side residue-axis-0 fields (one row per residue) vs MSA fields whose
 # residue axis is axis 1 (`(N_seq, L)`). `template_mask` is per-template, not
 # per-residue, so it is left untouched.
-_SEQ_RESIDUE_AXIS0 = ("aatype", "residue_index", "seq_mask", "msa_profile")
+_SEQ_RESIDUE_AXIS0 = (
+    "aatype",
+    "residue_index",
+    "seq_mask",
+    "author_seq_id",
+    "insertion_code",
+    "msa_profile",
+)
 _SEQ_MSA_AXIS1 = ("msa", "deletion_matrix", "msa_mask", "has_deletion", "deletion_value")
 
 # Template tensors whose residue axis is axis 1 (`(N_templates, L, *)`). The

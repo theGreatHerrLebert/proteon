@@ -181,8 +181,9 @@ class TestPublicAPISurface:
         Pinning them here catches accidental bumps in PRs that aren't
         the dedicated migration PR.
         """
-        assert proteon.SEQUENCE_PARQUET_SCHEMA_VERSION == 1
-        assert proteon.TRAINING_PARQUET_SCHEMA_VERSION == 1
+        # v2: residue_index is now positional + author_seq_id/insertion_code columns.
+        assert proteon.SEQUENCE_PARQUET_SCHEMA_VERSION == 2
+        assert proteon.TRAINING_PARQUET_SCHEMA_VERSION == 2
         assert proteon.SEQUENCE_EXPORT_FORMAT == "proteon.sequence_example.parquet.v0"
         assert proteon.TRAINING_EXPORT_FORMAT == "proteon.training_example.parquet.v0"
 

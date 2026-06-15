@@ -161,7 +161,28 @@ Plain Python scalars / strings / lists.
 - `residue_index: np.ndarray`
   - shape: `(N,)`
   - dtype: `int32`
-  - semantics: residue numbering in the example coordinate order
+  - semantics: **0-based positional index (`0..N-1`)** over the present-residue
+    (gapless) sequence — the AlphaFold/OpenFold sequence coordinate. It is NOT author
+    numbering: the sequence/atom37/atom14 tensors are built from coordinate-present
+    residues only, so the index must match that gapless ordering. (Schema v2: was raw
+    `serial_number`, which collapsed insertion codes — `10` and `10A` shared
+    `serial_number=10` → duplicate indices — and injected depositor-numbering gaps into
+    a gapless representation. Author identity now lives in the two fields below.)
+
+- `author_seq_id: np.ndarray`
+  - shape: `(N,)`
+  - dtype: `int32`
+  - semantics: the depositor residue number (PDB `serial_number` / `auth_seq_id`),
+    preserved for provenance / joining back to the source structure. Identity only —
+    NOT a relative-position coordinate.
+
+- `insertion_code: np.ndarray`
+  - shape: `(N,)`
+  - dtype: `int32`
+  - semantics: PDB insertion code as a code point — `0` = blank, else the ASCII
+    ordinal of the single-character code (`'A'` → 65, `'1'` → 49). `chr(n)` recovers
+    it for any `n > 0`. With `author_seq_id` it recovers the original `(number, icode)`
+    residue identity that `residue_index` no longer encodes.
 
 - `seq_mask: np.ndarray`
   - shape: `(N,)`

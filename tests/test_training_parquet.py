@@ -34,8 +34,12 @@ def _fake_seq(record_id: str, chain_id: str, L: int, seed: int) -> SequenceExamp
         code_rev=None,
         config_rev=None,
         aatype=rng.integers(0, 20, size=L, dtype=np.int32),
-        residue_index=np.arange(1, L + 1, dtype=np.int32),
+        residue_index=np.arange(L, dtype=np.int32),
         seq_mask=np.ones(L, dtype=np.float32),
+        # Deterministic + identical across the seq/struc of one training example,
+        # as they would be for the same chain (the write guard requires this).
+        author_seq_id=np.arange(1, L + 1, dtype=np.int32),
+        insertion_code=np.zeros(L, dtype=np.int32),
     )
 
 
@@ -51,8 +55,12 @@ def _fake_struc(record_id: str, chain_id: str, L: int, seed: int) -> StructureSu
         code_rev=None,
         config_rev=None,
         aatype=rng.integers(0, 20, size=L, dtype=np.int32),
-        residue_index=np.arange(1, L + 1, dtype=np.int32),
+        residue_index=np.arange(L, dtype=np.int32),
         seq_mask=np.ones(L, dtype=np.float32),
+        # Deterministic + identical across the seq/struc of one training example,
+        # as they would be for the same chain (the write guard requires this).
+        author_seq_id=np.arange(1, L + 1, dtype=np.int32),
+        insertion_code=np.zeros(L, dtype=np.int32),
         all_atom_positions=rng.standard_normal((L, 37, 3), dtype=np.float32),
         all_atom_mask=rng.random((L, 37), dtype=np.float32),
         atom37_atom_exists=rng.random((L, 37), dtype=np.float32),
@@ -174,8 +182,12 @@ def test_scalar_fields_round_trip(tmp_path):
         sequence="MKLVV", length=L,
         code_rev="abc123", config_rev="def456",
         aatype=rng.integers(0, 20, size=L, dtype=np.int32),
-        residue_index=np.arange(1, L + 1, dtype=np.int32),
+        residue_index=np.arange(L, dtype=np.int32),
         seq_mask=np.ones(L, dtype=np.float32),
+        # Deterministic + identical across the seq/struc of one training example,
+        # as they would be for the same chain (the write guard requires this).
+        author_seq_id=np.arange(1, L + 1, dtype=np.int32),
+        insertion_code=np.zeros(L, dtype=np.int32),
     )
     struc = _fake_struc("with_revs", "A", L, seed=99)
     # Overwrite the fake with scalars we want to assert on.
@@ -217,6 +229,7 @@ def test_schema_has_expected_fields():
         # Round-trip scalars added 2026-04-17 — previously zeroed on load.
         "sequence", "code_rev", "config_rev", "prep_run_id", "quality_json",
         "aatype", "residue_index", "seq_mask",
+        "author_seq_id", "insertion_code",
         "all_atom_positions", "all_atom_mask", "atom37_atom_exists",
         "atom14_gt_positions", "atom14_gt_exists", "atom14_atom_exists",
         "atom14_atom_is_ambiguous",
@@ -308,7 +321,7 @@ def test_manifest_records_parquet_metadata(tmp_path):
     assert manifest["parquet_sha256"] is not None
     assert manifest["count_examples"] == 1
     assert manifest["split_counts"] == {"train": 1}
-    assert manifest["parquet_schema_version"] == 1
+    assert manifest["parquet_schema_version"] == 2  # v2: positional residue_index + author identity
     assert "aatype" in manifest["parquet_fields"]
 
 
@@ -319,3 +332,22 @@ def test_checksum_verification_detects_tamper(tmp_path):
     parquet_path.write_bytes(parquet_path.read_bytes()[:-10] + b"corrupted1")
     with pytest.raises(Exception):
         load_training_examples(release_dir, verify_checksum=True)
+
+
+def test_training_serialize_rejects_mismatched_author_identity():
+    # codex P2: the training parquet stores author identity once (sequence side); a
+    # structure with a DIFFERENT identity must fail loudly, not be silently dropped.
+    from types import SimpleNamespace
+    from proteon.training_example import _assert_training_identity_consistent
+    seq = SimpleNamespace(author_seq_id=np.array([1, 2, 3], np.int32), insertion_code=np.zeros(3, np.int32))
+    struc_ok = SimpleNamespace(author_seq_id=np.array([1, 2, 3], np.int32), insertion_code=np.zeros(3, np.int32), record_id="r")
+    struc_bad = SimpleNamespace(author_seq_id=np.array([1, 2, 9], np.int32), insertion_code=np.zeros(3, np.int32), record_id="r")
+    _assert_training_identity_consistent(SimpleNamespace(sequence=seq, structure=struc_ok))  # ok
+    with pytest.raises(ValueError, match="must be the same chain"):
+        _assert_training_identity_consistent(SimpleNamespace(sequence=seq, structure=struc_bad))
+    # One-sided identity (None vs populated) must also be rejected, not silently dropped.
+    seq_none = SimpleNamespace(author_seq_id=None, insertion_code=None)
+    with pytest.raises(ValueError, match="only one of"):
+        _assert_training_identity_consistent(SimpleNamespace(sequence=seq_none, structure=struc_ok))
+    # Neither side set -> allowed (both None).
+    _assert_training_identity_consistent(SimpleNamespace(sequence=seq_none, structure=SimpleNamespace(author_seq_id=None, insertion_code=None, record_id="r")))

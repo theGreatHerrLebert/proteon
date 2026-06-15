@@ -235,6 +235,35 @@ def _icode_rank(icode: Optional[str]) -> Optional[int]:
     return None
 
 
+def positional_residue_index(n: int) -> NDArray[np.int32]:
+    """The supervision `residue_index`: a 0-based positional index `0..n-1` over the
+    present-residue (gapless) sequence — the AlphaFold/OpenFold convention.
+
+    The sequence / atom37 / atom14 tensors are built from coordinate-present residues
+    only, so the index must be the matching gapless *sequence coordinate*, NOT author
+    numbering. Using raw `serial_number` (a) collapses insertion codes — residues `10`
+    and `10A` share `serial_number=10` and so got duplicate, non-monotonic indices —
+    and (b) injects depositor-numbering gaps into a gapless representation, making
+    relative-position distances depend on unreliable author metadata. Author identity
+    (`serial_number`, insertion code) is exported separately as `author_seq_id` /
+    `insertion_code`. See `STRUCTURE_SUPERVISION_SCHEMA.md`.
+    """
+    return np.arange(n, dtype=np.int32)
+
+
+def insertion_code_ord(icode) -> int:
+    """Reversible numeric encoding of a PDB insertion code for the `insertion_code`
+    identity tensor: blank/`None` → 0, otherwise the ASCII code point of the
+    single-character code (`'A'` → 65, `'1'` → 49, …). `chr(n)` recovers the code for
+    any `n > 0`, so EVERY valid one-character code (not just `A`–`Z`) round-trips —
+    unlike a 1–26 ranking, which would collapse numeric codes onto blank. (The
+    adjacency ordering used for torsion masking is the separate [`_icode_rank`].)"""
+    if icode is None:
+        return 0
+    s = str(icode).strip()
+    return 0 if s == "" else ord(s[0])
+
+
 def _peptide_adjacent(prev: ResidueKey, cur: ResidueKey) -> bool:
     """Whether `cur` directly follows `prev` in primary structure (a peptide bond
     is expected). Same chain, and either the next insertion code within the same

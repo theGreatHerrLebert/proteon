@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
 
 import numpy as np
+from numpy.typing import NDArray
 
 try:
     import pyarrow as pa
@@ -34,7 +35,25 @@ from ._artifact_checksum import sha256_file, verify_sha256
 from .supervision import StructureQualityMetadata, StructureSupervisionExample
 
 SUPERVISION_EXPORT_FORMAT = "proteon.structure_supervision.parquet.v0"
-SUPERVISION_PARQUET_SCHEMA_VERSION = 1
+# v2: residue_index is now a 0-based positional sequence coordinate (was author
+# serial_number, which collapsed insertion codes); added author_seq_id +
+# insertion_code identity columns. v1 parquet is not forward-compatible.
+SUPERVISION_PARQUET_SCHEMA_VERSION = 2
+
+
+def require_supervision_schema_version(manifest: Mapping[str, object]) -> None:
+    """Reject a supervision-artifact manifest whose `schema_version` this build cannot
+    read. v1 lacks the `author_seq_id`/`insertion_code` columns AND used a different
+    (author-numbering) `residue_index`, so silently loading it would mis-key the data —
+    fail loudly with a regenerate hint instead of `KeyError`-ing on a missing column."""
+    ver = int(manifest.get("schema_version", 1))
+    if ver != SUPERVISION_PARQUET_SCHEMA_VERSION:
+        raise ValueError(
+            f"supervision artifact schema_version {ver} is not supported by this build "
+            f"(expected {SUPERVISION_PARQUET_SCHEMA_VERSION}). v1 used author-numbering "
+            "residue_index and lacks the author_seq_id/insertion_code columns; "
+            "regenerate the release."
+        )
 
 # Field descriptors: (column_name, inner_shape, numpy_dtype, dataclass_attr)
 # inner_shape = () means per-row shape (L,); (37,) means (L, 37); etc.
@@ -42,6 +61,10 @@ SEQUENCE_FIELDS: Tuple[Tuple[str, Tuple[int, ...], type, str], ...] = (
     ("aatype", (), np.int32, "aatype"),
     ("residue_index", (), np.int32, "residue_index"),
     ("seq_mask", (), np.float32, "seq_mask"),
+    # Author (depositor) residue identity, kept separate from the positional
+    # `residue_index`. `insertion_code` is ord-encoded (0 = blank, 1 = 'A', …).
+    ("author_seq_id", (), np.int32, "author_seq_id"),
+    ("insertion_code", (), np.int32, "insertion_code"),
 )
 
 STRUCTURE_FIELDS: Tuple[Tuple[str, Tuple[int, ...], type, str], ...] = (
@@ -165,9 +188,37 @@ def _supervision_examples_to_record_batch(
         ),
     ]
     for name, inner_shape, dtype, attr in TENSOR_FIELDS:
-        arrays = [np.ascontiguousarray(getattr(ex, attr)) for ex in batch]
+        arrays = [_field_or_zeros(ex, attr, inner_shape, dtype) for ex in batch]
         columns.append(_make_ragged_column(arrays, inner_shape, dtype))
     return pa.RecordBatch.from_arrays(columns, schema=schema)
+
+
+# Only these tensor columns may be absent (None) on an example — the depositor
+# identity metadata, optional because hand-built / pre-v2 examples lack them. Every
+# other tensor is a real supervision label: a None there is a malformed example and
+# must NOT be silently fabricated into zeros (codex review).
+_OPTIONAL_ZERO_FILL_FIELDS = frozenset({"author_seq_id", "insertion_code"})
+
+
+def _field_or_zeros(
+    example,
+    attr: str,
+    inner_shape: Tuple[int, ...],
+    dtype: type,
+) -> NDArray:
+    """The example's `attr` tensor as a contiguous array. If it is `None`: zero-fill
+    `(length,) + inner_shape` ONLY for the optional identity fields
+    ([`_OPTIONAL_ZERO_FILL_FIELDS`]); for any other (required) field, raise rather than
+    fabricate an all-zero label."""
+    value = getattr(example, attr)
+    if value is None:
+        if attr not in _OPTIONAL_ZERO_FILL_FIELDS:
+            raise ValueError(
+                f"supervision field {attr!r} is None; refusing to fabricate a zero "
+                "tensor for a required field (malformed example)"
+            )
+        return np.zeros((int(example.length),) + inner_shape, dtype=dtype)
+    return np.ascontiguousarray(value)
 
 
 def _example_metadata(example: StructureSupervisionExample) -> Dict[str, object]:
@@ -325,6 +376,7 @@ def iter_structure_supervision_examples(
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("format") != SUPERVISION_EXPORT_FORMAT:
         raise ValueError(f"unsupported supervision export format: {manifest.get('format')!r}")
+    require_supervision_schema_version(manifest)
     if int(manifest.get("count", 0)) == 0:
         return
 

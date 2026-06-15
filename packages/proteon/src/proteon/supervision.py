@@ -39,6 +39,8 @@ from .supervision_geometry import (
     continuity_index,
     extract_atom14,
     extract_atom37,
+    insertion_code_ord,
+    positional_residue_index,
 )
 
 # Optional Rust fast path lives behind `supervision_backend.py`. The current
@@ -109,6 +111,9 @@ class StructureSupervisionExample:
     config_rev: Optional[str]
 
     aatype: NDArray[np.int32]
+    #: 0-based positional index over the present-residue (gapless) sequence — the
+    #: AF/OpenFold sequence coordinate, NOT author numbering. Author identity is in
+    #: `author_seq_id` / `insertion_code` (declared at the end of this dataclass).
     residue_index: NDArray[np.int32]
     seq_mask: NDArray[np.float32]
 
@@ -153,6 +158,14 @@ class StructureSupervisionExample:
 
     quality: Optional[StructureQualityMetadata] = None
 
+    #: Depositor residue identity, preserved separately from the positional
+    #: `residue_index`. `author_seq_id` = PDB `serial_number`; `insertion_code` is the
+    #: ASCII ordinal of the icode char (0 = blank). Together they recover the original
+    #: (number, icode) identity that `residue_index` no longer encodes. Declared LAST
+    #: so adding them does not shift any existing positional constructor argument.
+    author_seq_id: Optional[NDArray[np.int32]] = None
+    insertion_code: Optional[NDArray[np.int32]] = None
+
     @property
     def is_partial(self) -> bool:
         """Whether optional higher-order tensor groups are still missing."""
@@ -195,7 +208,14 @@ def build_structure_supervision_example(
 
     sequence = "".join(residue_to_one_letter(r.name) for r in residues)
     aatype = np.asarray([AA_TO_INDEX.get(aa, AA_TO_INDEX["X"]) for aa in sequence], dtype=np.int32)
-    residue_index = np.asarray([int(r.serial_number) for r in residues], dtype=np.int32)
+    # Positional sequence coordinate (gapless), NOT author numbering — see
+    # positional_residue_index. Author identity preserved below.
+    residue_index = positional_residue_index(len(residues))
+    author_seq_id = np.asarray([int(r.serial_number) for r in residues], dtype=np.int32)
+    insertion_code = np.asarray(
+        [insertion_code_ord(getattr(r, "insertion_code", None)) for r in residues],
+        dtype=np.int32,
+    )
     seq_mask = np.ones((len(residues),), dtype=np.float32)
     tensors = None
     if rust_supervision_available() and hasattr(structure, "get_py_ptr"):
@@ -270,6 +290,8 @@ def build_structure_supervision_example(
         aatype=aatype,
         residue_index=residue_index,
         seq_mask=seq_mask,
+        author_seq_id=author_seq_id,
+        insertion_code=insertion_code,
         all_atom_positions=atom37["positions"],
         all_atom_mask=atom37["mask"],
         atom37_atom_exists=atom37["exists"],
@@ -342,6 +364,13 @@ def batch_build_structure_supervision_examples(
                 raise ValueError("structure_supervision_example currently requires a protein chain")
             sequence = "".join(residue_to_one_letter(r.name) for r in residues)
             length = len(residues)
+            # Identity computed in Python from the residues (same policy as the
+            # single-example path) so structure/batch/sequence artifacts never drift.
+            author_seq_id = np.asarray([int(r.serial_number) for r in residues], dtype=np.int32)
+            insertion_code = np.asarray(
+                [insertion_code_ord(getattr(r, "insertion_code", None)) for r in residues],
+                dtype=np.int32,
+            )
             torsions = compute_torsion_angles_sin_cos(
                 np.asarray(batch_tensors["all_atom_positions"])[i, :length],
                 np.asarray(batch_tensors["all_atom_mask"])[i, :length],
@@ -359,7 +388,9 @@ def batch_build_structure_supervision_examples(
                     code_rev=code_rev,
                     config_rev=config_rev,
                     aatype=np.asarray(batch_tensors["aatype"])[i, :length].astype(np.int32, copy=False),
-                    residue_index=np.asarray(batch_tensors["residue_index"])[i, :length].astype(np.int32, copy=False),
+                    residue_index=positional_residue_index(length),
+                    author_seq_id=author_seq_id,
+                    insertion_code=insertion_code,
                     seq_mask=np.asarray(batch_tensors["seq_mask"])[i, :length].astype(np.float32, copy=False),
                     all_atom_positions=np.asarray(batch_tensors["all_atom_positions"])[i, :length].astype(np.float32, copy=False),
                     all_atom_mask=np.asarray(batch_tensors["all_atom_mask"])[i, :length].astype(np.float32, copy=False),

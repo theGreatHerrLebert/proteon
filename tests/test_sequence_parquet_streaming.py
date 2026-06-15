@@ -94,7 +94,7 @@ def test_sequence_parquet_roundtrip_with_and_without_msa(tmp_path: Path):
     out = export_sequence_examples(examples, tmp_path / "seq", row_group_size=2)
     manifest = json.loads((out / "manifest.json").read_text())
     assert manifest["format"] == SEQUENCE_EXPORT_FORMAT
-    assert manifest["schema_version"] == 1
+    assert manifest["schema_version"] == 2  # v2: positional residue_index + author identity
     assert manifest["count"] == 3
     assert manifest["tensor_file"] == "tensors.parquet"
 
