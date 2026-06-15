@@ -100,6 +100,15 @@ class PrepReport:
     components: Dict[str, float] = field(default_factory=dict)
     minimizer_steps: int = 0
     converged: bool = False
+    #: Whether the minimization branch actually ran (vs skipped: no hydrogens
+    #: added, ``minimize=False``, or ``skipped_no_protein``). ``relax_ok`` needs
+    #: this to tell "did not relax" from "relaxed and converged".
+    minimized: bool = False
+    #: Optimizer termination status ("converged_gradient", "line_search_failed",
+    #: "max_steps", "numerical_failure", "not_run", …). Empty when minimization
+    #: did not run. Distinguishes a real relax from a stall that the bare
+    #: ``converged`` bool conflates.
+    minimizer_status: str = ""
     n_unassigned_atoms: int = 0
     skipped_no_protein: bool = False
     warnings: List[str] = field(default_factory=list)
@@ -220,6 +229,8 @@ def prepare(
             report.components = dict(r.get("components", {}))
             report.minimizer_steps = r["minimizer_steps"]
             report.converged = r["converged"]
+            report.minimized = r.get("minimized", False)
+            report.minimizer_status = r.get("minimizer_status", "")
             report.n_unassigned_atoms = r["n_unassigned_atoms"]
             report.skipped_no_protein = r["skipped_no_protein"]
             if report.skipped_no_protein:
@@ -272,6 +283,8 @@ def prepare(
             report.components = dict(r.get("components", {}))
             report.minimizer_steps = r["minimizer_steps"]
             report.converged = r["converged"]
+            report.minimized = r.get("minimized", False)
+            report.minimizer_status = r.get("minimizer_status", "")
             report.skipped_no_protein = r["skipped_no_protein"]
 
     # Step 4: Check force field coverage
@@ -369,6 +382,8 @@ def batch_prepare(
             components=dict(r.get("components", {})),
             minimizer_steps=r["minimizer_steps"],
             converged=r["converged"],
+            minimized=r.get("minimized", False),
+            minimizer_status=r.get("minimizer_status", ""),
             n_unassigned_atoms=r["n_unassigned_atoms"],
             skipped_no_protein=r["skipped_no_protein"],
         )

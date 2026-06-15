@@ -78,6 +78,11 @@ pub struct PrepareReport {
     /// Whether the minimization branch actually ran (vs skipped: no H, or
     /// minimize=false, or skipped_no_protein).
     pub minimized: bool,
+    /// Optimizer termination status (`MinimizeStatus::as_str`), e.g.
+    /// `"converged_gradient"` / `"line_search_failed"`. Empty when minimization
+    /// did not run; lets the supervision layer distinguish a real relax from a
+    /// stall instead of trusting a bare `converged` bool.
+    pub minimizer_status: String,
 }
 
 /// Force fields the preparation pipeline supports (`amber96_obc` is not a
@@ -212,6 +217,7 @@ pub fn prepare_structure<P: ForceField>(
         out.solvation = result.energy.solvation;
         out.steps = result.steps;
         out.converged = result.converged;
+        out.minimizer_status = result.status.as_str().to_string();
         out.minimized = true;
     }
 

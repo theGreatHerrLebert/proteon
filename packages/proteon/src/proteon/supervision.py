@@ -47,9 +47,30 @@ from .supervision_geometry import (
 
 @dataclass
 class StructureQualityMetadata:
-    """Prep/QC metadata bundled with a supervision example."""
+    """Prep/QC metadata bundled with a supervision example.
+
+    Reading guide for filtering a corpus:
+
+    * ``report_present`` — whether a prep report was actually threaded through.
+      When ``False``, the prep/relax outcome fields are *unknown* (``None``), not
+      failures. Check this first.
+    * ``relax_ok`` — the field you usually want: ``True`` iff minimization ran and
+      converged, ``False`` if it ran but stalled / didn't converge, ``None`` if
+      unknown. Use this (not ``converged`` alone) to cull un-relaxed examples.
+    * ``protein_eligible`` — whether the structure was a prep-able protein (the
+      real meaning of the legacy ``prep_success``), or ``None`` if unknown.
+    * ``prep_success`` — **legacy / badly named**: historically ``not
+      skipped_no_protein`` (i.e. "is a protein"), NOT "preparation succeeded".
+      Kept for backward compatibility; prefer ``protein_eligible`` + ``relax_ok``.
+      ``False`` when ``report_present`` is ``False`` — disambiguate via that flag.
+    """
 
     prep_success: bool
+    report_present: bool = True
+    protein_eligible: Optional[bool] = None
+    relax_ok: Optional[bool] = None
+    minimized: Optional[bool] = None
+    minimizer_status: Optional[str] = None
     force_field: Optional[str] = None
     minimizer: Optional[str] = None
     minimizer_steps: Optional[int] = None
@@ -389,11 +410,34 @@ def batch_build_structure_supervision_examples(
     return out
 
 
-def _quality_from_prep_report(prep_report: Optional[PrepReport]) -> Optional[StructureQualityMetadata]:
+def _quality_from_prep_report(prep_report: Optional[PrepReport]) -> StructureQualityMetadata:
+    """Build quality metadata from a prep report.
+
+    Always returns an object (never ``None``) so ``example.quality.<field>`` can be
+    read without an ``AttributeError``. When no report was threaded through, the
+    outcome fields are explicit "unknown" (``report_present=False``, tri-state
+    ``None``) rather than a faked measurement.
+    """
     if prep_report is None:
-        return None
+        # Unknown — NOT a measured failure. Don't pretend prep ran.
+        return StructureQualityMetadata(
+            prep_success=False,
+            report_present=False,
+            protein_eligible=None,
+            relax_ok=None,
+        )
+    protein_eligible = not prep_report.skipped_no_protein
+    minimized = bool(getattr(prep_report, "minimized", False))
+    # relax_ok: the structure was actually energy-minimized AND the optimizer
+    # converged. A stall (line_search_failed) or a no-op now reads False, not True.
+    relax_ok = minimized and bool(prep_report.converged)
     return StructureQualityMetadata(
-        prep_success=not prep_report.skipped_no_protein,
+        prep_success=protein_eligible,  # legacy meaning; see field docstring
+        report_present=True,
+        protein_eligible=protein_eligible,
+        relax_ok=relax_ok,
+        minimized=minimized,
+        minimizer_status=(getattr(prep_report, "minimizer_status", "") or None),
         minimizer_steps=prep_report.minimizer_steps,
         converged=prep_report.converged,
         atoms_reconstructed=prep_report.atoms_reconstructed,

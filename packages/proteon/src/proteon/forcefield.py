@@ -319,7 +319,7 @@ def minimize_structure(
     structure,
     max_steps: int = 1000,
     gradient_tolerance: float = 0.1,
-    method: str = "sd",
+    method: str = "lbfgs",
     units: str = "kJ/mol",
     ff: str = "amber96",
 ) -> dict:
@@ -344,7 +344,10 @@ def minimize_structure(
             use ``add_hydrogens`` (all-atom).
         max_steps: Maximum optimization steps (default 1000).
         gradient_tolerance: Convergence criterion (default 0.1).
-        method: "sd", "cg", or "lbfgs".
+        method: "sd", "cg", or "lbfgs" (default "lbfgs" — robust on clashing
+            inputs; the old "sd" default could silently no-op on a high-energy
+            structure). The returned dict carries ``status`` and
+            ``accepted_steps`` so a no-op is detectable, not silent.
         units: Energy units — "kJ/mol" (default) or "kcal/mol".
         ff: Force field — "amber96" (default), "amber96_obc", or
             "charmm19_eef1".
