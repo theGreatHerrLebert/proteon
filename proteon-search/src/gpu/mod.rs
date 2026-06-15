@@ -38,6 +38,7 @@ use std::sync::{Arc, OnceLock};
 use cudarc::driver::*;
 
 pub mod diagonal;
+pub mod prefilter;
 pub mod pssm_diagonal;
 pub mod pssm_sw;
 pub mod pssm_sw_warp;
