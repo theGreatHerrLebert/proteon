@@ -229,15 +229,23 @@ fn is_ambiguous_atom(resname: &str, atom_name: &str) -> bool {
 }
 
 fn select_chain<'a>(pdb: &'a pdbtbx::PDB, chain_id: Option<&str>) -> PyResult<&'a pdbtbx::Chain> {
-    if chain_id.is_none() && pdb.chain_count() != 1 {
+    // Scope to MODEL 1: `pdb.chains()` flattens chains across ALL models, so a bare
+    // `.find()` could silently return a *different model's* chain when model 1 lacks the
+    // requested id. The supervision example is single-state (model 1, the AF convention).
+    let model = pdb
+        .models()
+        .next()
+        .ok_or_else(|| PyValueError::new_err("structure has no models"))?;
+    if chain_id.is_none() && model.chain_count() != 1 {
         return Err(PyValueError::new_err(
             "structure_supervision_example v0 is chain-level; pass chain_id for multi-chain structures",
         ));
     }
-    let wanted = chain_id.unwrap_or_else(|| pdb.chains().next().map(|c| c.id()).unwrap_or(""));
-    pdb.chains()
+    let wanted = chain_id.unwrap_or_else(|| model.chains().next().map(|c| c.id()).unwrap_or(""));
+    model
+        .chains()
         .find(|chain| chain.id() == wanted)
-        .ok_or_else(|| PyValueError::new_err(format!("chain_id {wanted:?} not found in structure")))
+        .ok_or_else(|| PyValueError::new_err(format!("chain_id {wanted:?} not found in model 1")))
 }
 
 fn extract_residue_records(chain: &pdbtbx::Chain) -> PyResult<Vec<ResidueRecord>> {

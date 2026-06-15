@@ -197,6 +197,15 @@ impl PyResidue {
         residue_atom_count_primary(&self.inner)
     }
 
+    /// Number of conformers in this residue (from the same primary-conformer policy).
+    /// `> 1` means the residue has alternate locations and primary-conformer selection
+    /// dropped at least one — the precise "altloc was reduced" signal (use this, not
+    /// the string-y `conformer_names`).
+    #[getter]
+    fn conformer_count(&self) -> usize {
+        self.inner.conformers().count()
+    }
+
     /// Names of alternate conformers present.
     #[getter]
     fn conformer_names(&self) -> Vec<String> {
@@ -414,6 +423,12 @@ impl PyModel {
 #[pyclass]
 pub struct PyPDB {
     pub inner: pdbtbx::PDB,
+    /// Non-fatal pdbtbx diagnostics from the original parse (Loose strictness
+    /// downgrades many errors to warnings). These are **immutable initial-parse
+    /// diagnostics** — `prepare` replaces only `inner`, so they survive unchanged and
+    /// are NOT re-validation of the current structure. Empty for structures not built
+    /// from a file parse (e.g. Arrow reconstruction).
+    pub parse_warnings: Vec<String>,
 }
 
 #[pymethods]
@@ -422,6 +437,13 @@ impl PyPDB {
     #[getter]
     fn identifier(&self) -> Option<&str> {
         self.inner.identifier.as_deref()
+    }
+
+    /// Non-fatal parse diagnostics from the source file (immutable; empty if the
+    /// structure was not built from a file parse). See the struct field doc.
+    #[getter]
+    fn parse_warnings(&self) -> Vec<String> {
+        self.parse_warnings.clone()
     }
 
     // -- counts (first model) -----------------------------------------------
@@ -623,7 +645,18 @@ impl PyPDB {
 
 impl PyPDB {
     pub fn from_inner(pdb: pdbtbx::PDB) -> Self {
-        PyPDB { inner: pdb }
+        PyPDB {
+            inner: pdb,
+            parse_warnings: Vec::new(),
+        }
+    }
+
+    /// Construct carrying the non-fatal parse diagnostics from the source file.
+    pub fn from_inner_with_warnings(pdb: pdbtbx::PDB, parse_warnings: Vec<String>) -> Self {
+        PyPDB {
+            inner: pdb,
+            parse_warnings,
+        }
     }
 }
 

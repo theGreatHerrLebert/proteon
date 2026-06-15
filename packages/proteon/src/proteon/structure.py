@@ -139,6 +139,12 @@ class Residue(RustWrapperObject):
     def conformer_names(self) -> List[str]:
         return self._ptr.conformer_names
 
+    @property
+    def conformer_count(self) -> int:
+        """Number of conformers in this residue. ``> 1`` means it has alternate
+        locations and primary-conformer selection dropped at least one."""
+        return self._ptr.conformer_count
+
     def __len__(self) -> int:
         return len(self._ptr)
 
@@ -265,6 +271,13 @@ class Structure(RustWrapperObject):
     @property
     def model_count(self) -> int:
         return self._ptr.model_count
+
+    @property
+    def parse_warnings(self) -> List[str]:
+        """Non-fatal pdbtbx diagnostics from the original file parse (immutable;
+        empty for structures not built from a file). Surfaces warnings that the
+        permissive loader would otherwise discard."""
+        return self._ptr.parse_warnings
 
     @property
     def chain_count(self) -> int:

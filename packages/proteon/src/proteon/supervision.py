@@ -16,7 +16,7 @@ extraction path can move into Rust without changing downstream consumers.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
@@ -89,6 +89,19 @@ class StructureQualityMetadata:
     prep_warnings: List[str] = field(default_factory=list)
     source_format: Optional[str] = None
     structure_checksum: Optional[str] = None
+
+    # I/O drop provenance — makes the silent supervision reductions filterable. The
+    # SELECTION is unchanged (model 1 / primary conformer); these only RECORD what was
+    # dropped. (Serialized inside quality_json, so no parquet schema bump.)
+    #: Number of models in the source structure (>1 ⇒ models 2..N were dropped).
+    models_present: Optional[int] = None
+    #: 0-based index of the model used for supervision (always 0 — model 1).
+    model_selected_index: Optional[int] = None
+    #: Residues on the selected chain with >1 conformer (primary-conformer selection
+    #: dropped an alternate location for each).
+    conformer_reduced_residue_count: Optional[int] = None
+    #: How an alternate conformer is chosen when present ("primary" = blank→A→first).
+    altloc_policy: Optional[str] = None
 
 
 @dataclass
@@ -320,7 +333,7 @@ def build_structure_supervision_example(
         rigidgroups_gt_exists=rigidgroups["gt_exists"],
         rigidgroups_group_exists=rigidgroups["group_exists"],
         rigidgroups_group_is_ambiguous=rigidgroups["ambiguous"],
-        quality=_quality_from_prep_report(prep_report),
+        quality=_with_io_provenance(_quality_from_prep_report(prep_report), structure, chain),
     )
 
 
@@ -419,7 +432,7 @@ def batch_build_structure_supervision_examples(
                     rigidgroups_gt_exists=np.asarray(batch_tensors["rigidgroups_gt_exists"])[i, :length].astype(np.float32, copy=False),
                     rigidgroups_group_exists=np.asarray(batch_tensors["rigidgroups_group_exists"])[i, :length].astype(np.float32, copy=False),
                     rigidgroups_group_is_ambiguous=np.asarray(batch_tensors["rigidgroups_group_is_ambiguous"])[i, :length].astype(np.float32, copy=False),
-                    quality=_quality_from_prep_report(prep_reports[i]),
+                    quality=_with_io_provenance(_quality_from_prep_report(prep_reports[i]), structure, chain),
                 )
             )
         return out
@@ -484,16 +497,45 @@ def _quality_from_prep_report(prep_report: Optional[PrepReport]) -> StructureQua
 
 
 def _select_chain(structure, chain_id: Optional[str]):
+    # Scope to MODEL 1: `structure.chains` flattens chains across ALL models, so a bare
+    # search could silently pick a *different model's* chain when model 1 lacks the
+    # requested id. The supervision example is single-state (model 1, AF convention).
+    models = getattr(structure, "models", None)
+    chains = models[0].chains if models else structure.chains
     if chain_id is None:
-        if structure.chain_count != 1:
+        if len(chains) != 1:
             raise ValueError(
                 "structure_supervision_example v0 is chain-level; pass chain_id for multi-chain structures"
             )
-        return structure.chains[0]
-    for chain in structure.chains:
+        return chains[0]
+    for chain in chains:
         if chain.id == chain_id:
             return chain
-    raise ValueError(f"chain_id {chain_id!r} not found in structure")
+    raise ValueError(f"chain_id {chain_id!r} not found in model 1")
+
+
+def _io_provenance(structure, chain) -> Dict[str, object]:
+    """I/O drop provenance for the quality metadata: source model count, the selected
+    model index, the count of supervised residues whose alternate conformer was dropped,
+    the altloc policy, and the retained parse warnings. `getattr` fallbacks keep
+    minimal fake/test structures valid."""
+    residues = [
+        r for r in getattr(chain, "residues", []) if getattr(r, "is_amino_acid", True)
+    ]
+    conformer_reduced = sum(1 for r in residues if getattr(r, "conformer_count", 1) > 1)
+    return {
+        "models_present": getattr(structure, "model_count", None),
+        "model_selected_index": 0,
+        "conformer_reduced_residue_count": conformer_reduced,
+        "altloc_policy": "primary",
+        "parse_warnings": list(getattr(structure, "parse_warnings", []) or []),
+    }
+
+
+def _with_io_provenance(quality: StructureQualityMetadata, structure, chain) -> StructureQualityMetadata:
+    """Return a copy of `quality` with the I/O drop provenance set (construction, not
+    mutation) — so the model/altloc/parse-warning drops are recorded on the example."""
+    return replace(quality, **_io_provenance(structure, chain))
 
 
 def _default_record_id(structure, chain_id: str) -> str:
