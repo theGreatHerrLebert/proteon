@@ -132,10 +132,14 @@ pub fn diagonal_prefilter<L: KmerLookup>(
 #[derive(Debug, Clone)]
 pub struct SimilarityConfig<'a> {
     /// Flattened `alphabet_size × alphabet_size` score matrix in row-major
-    /// i32, same layout [`crate::kmer_generator::generate_similar_kmers`]
-    /// expects. Produced via
-    /// [`crate::matrix::SubstitutionMatrix::to_integer_matrix`] +
-    /// [`crate::kmer_generator::widen_to_i32`].
+    /// i32, in the SAME alphabet the index/query use, same layout
+    /// [`crate::kmer_generator::generate_similar_kmers`] expects. For a
+    /// full-alphabet index: [`crate::matrix::SubstitutionMatrix::to_integer_matrix`]
+    /// + [`crate::kmer_generator::widen_to_i32`]. For a REDUCED-alphabet index
+    /// (the usual case): the reduced matrix from
+    /// [`crate::reduced_alphabet::ReducedAlphabet::reduce_matrix`] scaled by the
+    /// same `bit_factor` (see `SearchEngine`'s `build_prefilter_score_matrix`).
+    /// `threshold` is interpreted in this matrix's scale.
     pub scores: ScoreMatrix<'a>,
     /// Minimum per-k-mer substitution score a neighbour must reach to be
     /// expanded into the prefilter. Upstream default ≈ 90 for BLOSUM62 at
