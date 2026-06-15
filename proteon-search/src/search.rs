@@ -30,7 +30,10 @@ use crate::kmer_index_file::{
     write_kmi, KmerIndexFile, KmiReaderError, KmiWriterError, ReducerSnapshot,
 };
 use crate::matrix::SubstitutionMatrix;
-use crate::prefilter::{diagonal_prefilter, PrefilterHit, PrefilterOptions};
+use crate::prefilter::{
+    diagonal_prefilter, diagonal_prefilter_sensitive, PrefilterHit, PrefilterOptions,
+    SimilarityConfig,
+};
 use crate::reduced_alphabet::ReducedAlphabet;
 use crate::sequence::Sequence;
 use crate::ungapped::ungapped_alignment;
@@ -130,6 +133,17 @@ pub struct SearchOptions {
     /// reproducing exact upstream ordering. Ignored when the feature
     /// is not compiled.
     pub use_gpu: bool,
+    /// `Some(t)` runs the SENSITIVE prefilter: each query k-mer is expanded into
+    /// every similar k-mer scoring `>= t` (substitution-matrix neighbours), so
+    /// remote homologs sharing similar — not identical — k-mers are found.
+    /// `None` (default) runs the exact-match prefilter.
+    ///
+    /// **`t` is NOT a final alignment score and is NOT portable.** It lives in
+    /// the active prefilter alphabet's `bit_factor`-scaled (reduced when
+    /// `reduce_to` is set) substitution-matrix space, so the same `t` means
+    /// different things across `reduce_to` / matrix / `k` / `bit_factor`. Tune
+    /// it per configuration (upstream MMseqs2 ≈ 90 for BLOSUM62, k=6, bf=2).
+    pub similar_kmer_threshold: Option<i32>,
 }
 
 impl Default for SearchOptions {
@@ -145,6 +159,7 @@ impl Default for SearchOptions {
             min_score: 0,
             max_results: None,
             use_gpu: true,
+            similar_kmer_threshold: None,
         }
     }
 }
@@ -312,6 +327,11 @@ pub struct SearchEngine {
     /// time. For InMemory-backed engines the field is unused but kept
     /// so the API is storage-agnostic.
     alphabet: Alphabet,
+    /// Score matrix (flat `n²` i32) in the PREFILTER alphabet — the *reduced*
+    /// alphabet when a reducer is set, else the full alphabet. Drives the
+    /// similar-k-mer generator for the sensitive prefilter
+    /// ([`SearchOptions::similar_kmer_threshold`]). Built once at construction.
+    prefilter_score_matrix: Vec<i32>,
     /// Lazily-built device-resident k-mer index, cached so the (large) index is
     /// uploaded ONCE and reused across queries. `None` once initialised means GPU
     /// prefilter is unavailable for this engine (no device, on-disk index, or an
@@ -319,6 +339,31 @@ pub struct SearchEngine {
     /// falls back to the CPU path. Built from the in-memory `KmerIndex` only.
     #[cfg(feature = "cuda")]
     gpu_prefilter: std::sync::OnceLock<Option<crate::gpu::prefilter::GpuPrefilterIndex>>,
+}
+
+/// Build the prefilter-alphabet score matrix for the similar-k-mer generator.
+/// With a reducer: average the full matrix into the reduced alphabet, then apply
+/// the same `bit_factor` scaling the full matrix uses (round-nearest), kept as
+/// **i32** (a k-mer sums `k` cells, so per-cell i8 clamping would distort —
+/// claudex). Without a reducer the prefilter runs in the full alphabet, so reuse
+/// the already-integerized full `matrix_int`.
+fn build_prefilter_score_matrix(
+    reducer: Option<&ReducedAlphabet>,
+    matrix: &SubstitutionMatrix,
+    matrix_int: &[i32],
+    bit_factor: f32,
+) -> Vec<i32> {
+    match reducer {
+        Some(r) => r
+            .reduce_matrix(matrix)
+            .iter()
+            .map(|&v| {
+                debug_assert!(v.is_finite(), "reduced score matrix cell must be finite");
+                (v * bit_factor).round() as i32
+            })
+            .collect(),
+        None => matrix_int.to_vec(),
+    }
 }
 
 impl SearchEngine {
@@ -356,6 +401,8 @@ impl SearchEngine {
         let index = KmerIndex::build(encoder, pairs, skip_idx)?;
 
         let matrix_int = widen_to_i32(&matrix.to_integer_matrix(opts.bit_factor, 0.0));
+        let prefilter_score_matrix =
+            build_prefilter_score_matrix(reducer.as_ref(), matrix, &matrix_int, opts.bit_factor);
 
         Ok(Self {
             targets: TargetSource::InMemory(targets_full),
@@ -366,6 +413,7 @@ impl SearchEngine {
             skip_idx,
             opts,
             alphabet,
+            prefilter_score_matrix,
             #[cfg(feature = "cuda")]
             gpu_prefilter: std::sync::OnceLock::new(),
         })
@@ -466,6 +514,8 @@ impl SearchEngine {
         drop(indexed_targets);
 
         let matrix_int = widen_to_i32(&matrix.to_integer_matrix(opts.bit_factor, 0.0));
+        let prefilter_score_matrix =
+            build_prefilter_score_matrix(reducer.as_ref(), matrix, &matrix_int, opts.bit_factor);
 
         Ok(Self {
             targets: TargetSource::new_db(reader)?,
@@ -476,6 +526,7 @@ impl SearchEngine {
             skip_idx,
             opts,
             alphabet,
+            prefilter_score_matrix,
             #[cfg(feature = "cuda")]
             gpu_prefilter: std::sync::OnceLock::new(),
         })
@@ -569,6 +620,8 @@ impl SearchEngine {
         }
 
         let matrix_int = widen_to_i32(&matrix.to_integer_matrix(opts.bit_factor, 0.0));
+        let prefilter_score_matrix =
+            build_prefilter_score_matrix(reducer.as_ref(), matrix, &matrix_int, opts.bit_factor);
 
         Ok(Self {
             targets: TargetSource::new_db(reader)?,
@@ -579,6 +632,7 @@ impl SearchEngine {
             skip_idx,
             opts,
             alphabet,
+            prefilter_score_matrix,
             #[cfg(feature = "cuda")]
             gpu_prefilter: std::sync::OnceLock::new(),
         })
@@ -614,48 +668,93 @@ impl SearchEngine {
         self.search_cpu(&query.data, &prefilter_hits)
     }
 
-    /// Run the exact k-mer prefilter — on GPU when `use_gpu`, a device is
-    /// present, and the index is in-memory; otherwise on CPU. The GPU path is
-    /// **bit-exact** vs the CPU [`diagonal_prefilter`], so the result is the same
-    /// either way; this only changes the prefilter *source*. A GPU error falls
-    /// back to the CPU prefilter (downstream alignment may still run on GPU).
+    /// The cached resident GPU prefilter handle, or `None` when the GPU prefilter
+    /// is unavailable for this engine (`use_gpu` off, no device, on-disk index,
+    /// or an upload failure — an engine-lifetime circuit breaker). Built once,
+    /// lazily (index uploaded ONCE, reused across queries).
+    #[cfg(feature = "cuda")]
+    fn gpu_handle(&self) -> Option<&crate::gpu::prefilter::GpuPrefilterIndex> {
+        if !(self.opts.use_gpu && crate::gpu::is_available()) {
+            return None;
+        }
+        self.gpu_prefilter
+            .get_or_init(|| match &self.index {
+                KmerIndexStorage::InMemory(idx) => {
+                    match crate::gpu::prefilter::GpuPrefilterIndex::upload(idx) {
+                        Ok(h) => Some(h),
+                        Err(e) => {
+                            eprintln!(
+                                "[proteon-search-gpu] prefilter index upload failed, \
+                                 using CPU prefilter: {e:#}"
+                            );
+                            None
+                        }
+                    }
+                }
+                KmerIndexStorage::OnDisk(_) => None,
+            })
+            .as_ref()
+    }
+
+    /// Run the k-mer prefilter — exact, or SENSITIVE (similar-k-mer-expanded)
+    /// when [`SearchOptions::similar_kmer_threshold`] is set — on GPU when
+    /// available (`use_gpu` + device + in-memory index), else on CPU. The GPU
+    /// path is **bit-exact** vs the matching CPU prefilter, so the result is
+    /// identical; this only changes the SOURCE. A GPU error falls back to the
+    /// CPU prefilter OF THE SAME KIND (exact→exact, sensitive→sensitive);
+    /// downstream alignment may still run on GPU.
     fn run_prefilter(
         &self,
         query_for_prefilter: &[u8],
         opts: &PrefilterOptions,
     ) -> Vec<PrefilterHit> {
-        #[cfg(feature = "cuda")]
-        {
-            if self.opts.use_gpu && crate::gpu::is_available() {
-                // Build the resident handle once (uploaded ONCE, reused across
-                // queries). `None` = unavailable for this engine's life (on-disk
-                // index or an upload failure — a circuit breaker), so we use CPU.
-                let handle = self.gpu_prefilter.get_or_init(|| match &self.index {
-                    KmerIndexStorage::InMemory(idx) => {
-                        match crate::gpu::prefilter::GpuPrefilterIndex::upload(idx) {
-                            Ok(h) => Some(h),
-                            Err(e) => {
-                                eprintln!(
-                                    "[proteon-search-gpu] prefilter index upload failed, \
-                                     using CPU prefilter: {e:#}"
-                                );
-                                None
-                            }
+        match self.opts.similar_kmer_threshold {
+            Some(threshold) => {
+                let n = self.index.encoder().alphabet_size() as usize;
+                debug_assert_eq!(
+                    self.prefilter_score_matrix.len(),
+                    n * n,
+                    "prefilter score matrix must be alphabet_size² in the prefilter alphabet"
+                );
+                let sim = SimilarityConfig {
+                    scores: &self.prefilter_score_matrix,
+                    threshold,
+                };
+                #[cfg(feature = "cuda")]
+                {
+                    if let Some(h) = self.gpu_handle() {
+                        match h.prefilter_sensitive(query_for_prefilter, self.skip_idx, &sim, opts)
+                        {
+                            Ok(hits) => return hits,
+                            Err(e) => eprintln!(
+                                "[proteon-search-gpu] sensitive prefilter failed, using CPU: {e:#}"
+                            ),
                         }
                     }
-                    KmerIndexStorage::OnDisk(_) => None,
-                });
-                if let Some(h) = handle {
-                    match h.prefilter(query_for_prefilter, self.skip_idx, opts) {
-                        Ok(hits) => return hits,
-                        Err(e) => eprintln!(
-                            "[proteon-search-gpu] prefilter failed, using CPU prefilter: {e:#}"
-                        ),
+                }
+                diagonal_prefilter_sensitive(
+                    &self.index,
+                    query_for_prefilter,
+                    self.skip_idx,
+                    &sim,
+                    opts,
+                )
+            }
+            None => {
+                #[cfg(feature = "cuda")]
+                {
+                    if let Some(h) = self.gpu_handle() {
+                        match h.prefilter(query_for_prefilter, self.skip_idx, opts) {
+                            Ok(hits) => return hits,
+                            Err(e) => eprintln!(
+                                "[proteon-search-gpu] prefilter failed, using CPU prefilter: {e:#}"
+                            ),
+                        }
                     }
                 }
+                diagonal_prefilter(&self.index, query_for_prefilter, self.skip_idx, opts)
             }
         }
-        diagonal_prefilter(&self.index, query_for_prefilter, self.skip_idx, opts)
     }
 
     /// CPU reference path. Also the fallback when GPU dispatch errors
@@ -1552,5 +1651,113 @@ mod tests {
             matches!(engine.gpu_prefilter.get(), Some(Some(_))),
             "GPU prefilter handle should be cached after a GPU prefilter run"
         );
+    }
+
+    // --- Phase 3d: sensitive prefilter in search() ---
+
+    fn three_protein_engine(threshold: Option<i32>, reduce_to: Option<usize>) -> SearchEngine {
+        let (alpha, m) = alpha_and_matrix();
+        let seqs = [
+            (1u32, b"MNALVVKFGGTSVANAERFLRVADILESNARQGQ".as_slice()),
+            (2u32, b"WVLSAADKTNVKAAWGKVGAHAGEYGAEALERMFLSFP".as_slice()),
+            (3u32, b"MEAFRKQLPCFRSGAQQVKEHFKQVAEKHHGFLEEFCAR".as_slice()),
+        ];
+        let targets: Vec<(u32, Sequence)> = seqs
+            .iter()
+            .map(|(id, s)| (*id, Sequence::from_ascii(alpha.clone(), s)))
+            .collect();
+        let opts = SearchOptions {
+            k: 3,
+            reduce_to,
+            similar_kmer_threshold: threshold,
+            max_prefilter_hits: None,
+            ..Default::default()
+        };
+        SearchEngine::build(targets, &m, alpha, opts).unwrap()
+    }
+
+    #[test]
+    fn prefilter_score_matrix_has_alphabet_squared_shape() {
+        // Reduced and full-alphabet engines both carry a prefilter-alphabet²
+        // score matrix.
+        let reduced = three_protein_engine(Some(0), Some(13));
+        let n_r = reduced.index.encoder().alphabet_size() as usize;
+        assert_eq!(reduced.prefilter_score_matrix.len(), n_r * n_r);
+
+        let full = three_protein_engine(Some(0), None);
+        let n_f = full.index.encoder().alphabet_size() as usize;
+        assert_eq!(full.prefilter_score_matrix.len(), n_f * n_f);
+    }
+
+    #[test]
+    fn sensitive_prefilter_superset_of_exact_at_low_threshold() {
+        // With a very low threshold (every k-mer is a neighbour) and no
+        // max_hits truncation, the sensitive prefilter candidate set is a
+        // SUPERSET of the exact one (claudex: only guaranteed under these
+        // conditions). Runs on CPU (no GPU needed).
+        let engine = three_protein_engine(Some(-1000), Some(13));
+        let exact_opts = PrefilterOptions {
+            score_threshold: 0,
+            max_hits: None,
+            exclude_self: None,
+        };
+        let (alpha, _) = alpha_and_matrix();
+        let query = Sequence::from_ascii(alpha, b"MNALVVKFGGTSVANAERFLRVADILESNARQGQ");
+        let q_for_pf = match &engine.reducer {
+            Some(r) => r.reduce_sequence(&query.data),
+            None => query.data.clone(),
+        };
+        let sensitive = engine.run_prefilter(&q_for_pf, &exact_opts);
+        let exact = diagonal_prefilter(&engine.index, &q_for_pf, engine.skip_idx, &exact_opts);
+        let sens_ids: std::collections::HashSet<u32> = sensitive.iter().map(|h| h.seq_id).collect();
+        for e in &exact {
+            assert!(
+                sens_ids.contains(&e.seq_id),
+                "sensitive must include exact-hit seq_id {}",
+                e.seq_id
+            );
+        }
+        assert!(!exact.is_empty(), "fixture should produce exact hits");
+    }
+
+    /// GPU sensitive prefilter through the engine must equal the CPU
+    /// `diagonal_prefilter_sensitive` (isolating the prefilter source).
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gpu_sensitive_prefilter_wiring_matches_cpu() {
+        if !crate::gpu::is_available() {
+            eprintln!("SKIP gpu sensitive wiring: no GPU available");
+            return;
+        }
+        for reduce_to in [Some(13usize), None] {
+            let engine = three_protein_engine(Some(2), reduce_to);
+            let sim = SimilarityConfig {
+                scores: &engine.prefilter_score_matrix,
+                threshold: 2,
+            };
+            let (alpha, _) = alpha_and_matrix();
+            let q = Sequence::from_ascii(alpha, b"WVLSAADKTNVKAAWGKVGAHAGEYGAEALERMFLSFP");
+            let q_for_pf = match &engine.reducer {
+                Some(r) => r.reduce_sequence(&q.data),
+                None => q.data.clone(),
+            };
+            let pf_opts = PrefilterOptions {
+                score_threshold: 0,
+                max_hits: None,
+                exclude_self: None,
+            };
+            let gpu = engine.run_prefilter(&q_for_pf, &pf_opts);
+            let cpu = diagonal_prefilter_sensitive(
+                &engine.index,
+                &q_for_pf,
+                engine.skip_idx,
+                &sim,
+                &pf_opts,
+            );
+            assert_eq!(
+                gpu, cpu,
+                "GPU sensitive prefilter != CPU (reduce_to={reduce_to:?})"
+            );
+        }
     }
 }

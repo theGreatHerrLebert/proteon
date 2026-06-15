@@ -96,6 +96,7 @@ fn main() {
         min_score,
         max_results: Some(result_cap),
         use_gpu,
+        similar_kmer_threshold: None,
     };
 
     let t_build = Instant::now();
