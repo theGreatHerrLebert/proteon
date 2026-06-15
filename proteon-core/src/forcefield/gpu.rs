@@ -255,6 +255,16 @@ impl GpuStructState {
         nbl: &NeighborList,
         ff: &F,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        // The GPU OBC kernels implement only the all-pairs NoCutoff method. If
+        // the force field selects CutoffNonPeriodic GB, refuse to build GPU
+        // state so the caller (e.g. NbCache) falls back to the CPU path, which
+        // computes the cutoff GB correctly. Without this, the Hamiltonian would
+        // silently depend on CUDA availability (GB_CUTOFF_PLAN §0; codex #6).
+        if ff.gb_cutoff().is_some() {
+            return Err(
+                "GPU OBC kernels are NoCutoff-only; CutoffNonPeriodic GB runs on CPU".into(),
+            );
+        }
         let stream = gpu.ctx.new_stream()?;
         let n_atoms = topo.atoms.len();
         let n_pairs = nbl.pairs.len();

@@ -638,7 +638,8 @@ fn run_energy(args: &EnergyArgs) -> Result<()> {
     // command cleanly, rather than emitting one identical per-file error.
     if !ff_api::is_known_force_field(&args.ff) {
         return Err(anyhow!(
-            "unknown force field '{}'. Use charmm19_eef1, amber96, or amber96_obc.",
+            "unknown force field '{}'. Use charmm19_eef1, amber96, amber96_obc, \
+             or amber96_obc_cutoff.",
             args.ff
         ));
     }

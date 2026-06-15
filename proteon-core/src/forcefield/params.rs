@@ -130,6 +130,14 @@ pub trait ForceField: Send + Sync {
     fn has_obc_gb(&self) -> bool {
         false
     }
+    /// Cutoff (Å) for the `CutoffNonPeriodic` OBC GB method, or `None` for the
+    /// default exact `NoCutoff` all-pairs GB. When `Some(rc)`, the Born-radius
+    /// integral and GB pair sum truncate at `rc` with OpenMM's reaction-field
+    /// shift. This is a force-field METHOD setting (not a size gate). Defaults
+    /// to `None`; force fields with OBC enable it via their own configuration.
+    fn gb_cutoff(&self) -> Option<f64> {
+        None
+    }
 
     /// Whether to zero the LJ interaction (but keep electrostatics) for
     /// the para-diagonal 1-4 pairs in PHE/TYR aromatic rings —
@@ -267,6 +275,13 @@ pub struct AmberParams {
     /// or [`amber96_obc`]; when empty, `has_obc_gb()` returns false and
     /// the GB solvation term is skipped.
     pub obc_gb: HashMap<String, crate::forcefield::gb_obc::ObcAtomParams>,
+    /// Enable the `CutoffNonPeriodic` OBC GB method (vs the default exact
+    /// `NoCutoff` all-pairs GB). When `true`, GB truncates at
+    /// [`nonbonded_cutoff`](ForceField::nonbonded_cutoff) and applies OpenMM's
+    /// reaction-field shift — matching `GBSAOBCForce` with a cutoff. This is a
+    /// METHOD choice, independent of the neighbor-list size gate (which only
+    /// picks the implementation). No effect unless `obc_gb` is populated.
+    pub gb_use_cutoff: bool,
 }
 
 fn sorted_pair(a: &str, b: &str) -> (String, String) {
@@ -302,6 +317,7 @@ impl AmberParams {
             cutoff_override: None,
             switching_on_override: None,
             obc_gb: HashMap::new(),
+            gb_use_cutoff: false,
         };
 
         let mut section = String::new();
@@ -732,6 +748,12 @@ impl ForceField for AmberParams {
     fn has_obc_gb(&self) -> bool {
         !self.obc_gb.is_empty()
     }
+    fn gb_cutoff(&self) -> Option<f64> {
+        // Cutoff GB uses the same cutoff as LJ/Coulomb (matches OpenMM
+        // CutoffNonPeriodic). Only active when the method flag is set AND OBC
+        // params are present.
+        (self.gb_use_cutoff && !self.obc_gb.is_empty()).then(|| self.nonbonded_cutoff())
+    }
 }
 
 /// Load the embedded AMBER96 parameter set.
@@ -743,6 +765,17 @@ pub fn amber96() -> AmberParams {
 /// equivalent of OpenMM's `ForceField("amber96.xml", "amber96_obc.xml")`.
 pub fn amber96_obc() -> AmberParams {
     amber96().with_obc_ini(include_str!("../../data/amber96_obc.ini"))
+}
+
+/// AMBER96+OBC with the `CutoffNonPeriodic` GB method enabled (GB truncates at
+/// the nonbonded cutoff + reaction-field shift) — matches OpenMM's
+/// `GBSAOBCForce` under `nonbondedMethod=CutoffNonPeriodic`. The default
+/// [`amber96_obc`] stays exact `NoCutoff`. The cutoff distance follows
+/// `nonbonded_cutoff` (overridable via `cutoff_override`).
+pub fn amber96_obc_cutoff() -> AmberParams {
+    let mut p = amber96_obc();
+    p.gb_use_cutoff = true;
+    p
 }
 
 // ---------------------------------------------------------------------------

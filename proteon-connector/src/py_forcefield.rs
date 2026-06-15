@@ -29,13 +29,14 @@ pub(crate) fn dump_topology(py: Python<'_>, pdb: &PyPDB, ff: &str) -> PyResult<P
                 topology::build_topology(&pdb.inner, &params::charmm19_eef1())
             }
             "amber" | "amber96" => topology::build_topology(&pdb.inner, &params::amber96()),
-            "amber96_obc" | "amber96+obc" | "amber96_obc2" => {
-                topology::build_topology(&pdb.inner, &params::amber96_obc())
-            }
+            // OBC variants share AMBER96 topology (GB only affects solvation).
+            "amber96_obc" | "amber96+obc" | "amber96_obc2" | "amber96_obc_cutoff"
+            | "amber96+obc_cutoff" => topology::build_topology(&pdb.inner, &params::amber96_obc()),
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
-                     (aliases: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
+                     (aliases: 'amber96+obc', 'amber96_obc2'), 'amber96_obc_cutoff', \
+                     or 'charmm19_eef1'."
                 )))
             }
         })
@@ -355,6 +356,26 @@ pub(crate) fn minimize_structure(
                         )
                     })
                 }
+                "amber96_obc_cutoff" | "amber96+obc_cutoff" => {
+                    // CutoffNonPeriodic GB runs on the CPU path (the GPU OBC
+                    // kernels are NoCutoff-only and GpuStructState::new refuses
+                    // the cutoff method, so it degrades to CPU automatically).
+                    let amber = params::amber96_obc_cutoff();
+                    let topo = topology::build_topology(&pdb.inner, &amber);
+                    let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+                    let constrained = vec![false; coords.len()];
+                    py.allow_threads(|| {
+                        run_minimize(
+                            &coords,
+                            &topo,
+                            &amber,
+                            max_steps,
+                            gradient_tolerance,
+                            &constrained,
+                            &method,
+                        )
+                    })
+                }
                 "amber" | "amber96" => {
                     let amber = params::amber96();
                     let topo = topology::build_topology(&pdb.inner, &amber);
@@ -375,7 +396,8 @@ pub(crate) fn minimize_structure(
                 _ => {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
                         "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
-                     (aliases: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
+                     (aliases: 'amber96+obc', 'amber96_obc2'), 'amber96_obc_cutoff', \
+                     or 'charmm19_eef1'."
                     )));
                 }
             })
@@ -459,6 +481,7 @@ enum FfKind {
     Charmm19Eef1,
     Amber96,
     Amber96Obc,
+    Amber96ObcCutoff,
 }
 
 fn parse_ff(ff: &str) -> PyResult<FfKind> {
@@ -466,9 +489,11 @@ fn parse_ff(ff: &str) -> PyResult<FfKind> {
         "charmm" | "charmm19" | "charmm19_eef1" => Ok(FfKind::Charmm19Eef1),
         "amber" | "amber96" => Ok(FfKind::Amber96),
         "amber96_obc" | "amber96+obc" | "amber96_obc2" => Ok(FfKind::Amber96Obc),
+        "amber96_obc_cutoff" | "amber96+obc_cutoff" => Ok(FfKind::Amber96ObcCutoff),
         _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
             "Unknown force field '{ff}'. Use 'amber96', 'amber96_obc' \
-             (aliases: 'amber96+obc', 'amber96_obc2'), or 'charmm19_eef1'."
+             (aliases: 'amber96+obc', 'amber96_obc2'), 'amber96_obc_cutoff', \
+             or 'charmm19_eef1'."
         ))),
     }
 }
@@ -498,6 +523,7 @@ fn compute_energy_one(
         FfKind::Charmm19Eef1 => run!(params::charmm19_eef1()),
         FfKind::Amber96 => run!(params::amber96()),
         FfKind::Amber96Obc => run!(params::amber96_obc()),
+        FfKind::Amber96ObcCutoff => run!(params::amber96_obc_cutoff()),
     };
     EnergyOutcome {
         energy: result,
