@@ -31,6 +31,8 @@ extern "C" __global__ void obc_born_radii(
     double beta_obc,
     double gamma_obc,
     int    n_atoms,
+    double cutoff_sq,                        // CutoffNonPeriodic: skip r² > cutoff²
+                                             // (+INFINITY for NoCutoff ⇒ never skips)
     double* __restrict__ born_radii,        // N (out)
     double* __restrict__ obc_chain          // N (out): (1-tanh²)·offset·(α−2βψ+3γψ²)/ρ
 ) {
@@ -56,6 +58,8 @@ extern "C" __global__ void obc_born_radii(
         double r2 = dx*dx + dy*dy + dz*dz;
         // Zero-separation guard (matches CPU policy in gb_obc.rs).
         if (r2 < 0.01) continue;
+        // CutoffNonPeriodic truncation of the descreening integral.
+        if (r2 > cutoff_sq) continue;
         double r = sqrt(r2);
         double r_scaled_radius_j = r + scaled_radius_j;
         if (offset_radius_i >= r_scaled_radius_j) continue;
@@ -109,6 +113,9 @@ extern "C" __global__ void obc_energy_forces_direct(
     double pre_factor,                       // -τ·k_C (already negative)
     int    n_atoms,
     int    include_self_term,                // 1 to include i==j, 0 to skip
+    double cutoff_sq,                        // CutoffNonPeriodic: skip r² > cutoff²
+    double rc,                               // reaction-field shift distance (= cutoff;
+                                             // +INFINITY for NoCutoff ⇒ zero shift)
     double* __restrict__ per_atom_energy,   // N (out)
     double* __restrict__ forces,            // 3N (accumulated)
     double* __restrict__ born_forces        // N (accumulated, untransformed)
@@ -151,6 +158,9 @@ extern "C" __global__ void obc_energy_forces_direct(
         double dy = coords[j*3+1] - yi;
         double dz = coords[j*3+2] - zi;
         double r2 = dx*dx + dy*dy + dz*dz;
+        // CutoffNonPeriodic truncation (distinct pairs only; the diagonal is
+        // handled above and never truncated). +INFINITY ⇒ never skips.
+        if (r2 > cutoff_sq) continue;
         d_ij = r2 / (4.0 * alpha2);
         exp_term = exp(-d_ij);
         denom2 = r2 + alpha2 * exp_term;
@@ -162,6 +172,13 @@ extern "C" __global__ void obc_energy_forces_direct(
 
         // 0.5·Gpol per thread; partner thread j adds its half.
         energy_i += 0.5 * gpol;
+        // CutoffNonPeriodic reaction-field shift, ENERGY ONLY (distance-
+        // independent ⇒ forceless). CPU subtracts pre·q_i·q_j/rc once per
+        // unordered pair; rowwise here each of the two threads subtracts half,
+        // so 0.5·pqi·q_j/rc per ordered pair sums to the same. +INFINITY rc ⇒
+        // x/∞ = 0 ⇒ no-op for NoCutoff. Placed AFTER the force/born_forces
+        // derivatives so it cannot perturb them.
+        energy_i -= 0.5 * pqi * charges[j] / rc;
         // Force on SELF: +deltaR_{self→partner} · dGpol_dr.
         // Thread i sees deltaR = r_j - r_i; thread j (visiting i) sees
         // deltaR = r_i - r_j = -above, which gives +force-on-j symmetrically.
@@ -206,6 +223,9 @@ extern "C" __global__ void obc_force_spread(
     const double* __restrict__ born_forces,   // already transformed
     double offset,
     int    n_atoms,
+    double cutoff_sq,                          // MUST match the Born kernel's cutoff²
+                                               // (+INFINITY for NoCutoff) so forces stay
+                                               // the gradient of the truncated energy
     double* __restrict__ forces               // 3N accumulated
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -224,6 +244,8 @@ extern "C" __global__ void obc_force_spread(
     double dz = coords[j*3+2] - coords[i*3+2];
     double r2 = dx*dx + dy*dy + dz*dz;
     if (r2 < 0.01) return;
+    // Spread over EXACTLY the pairs that entered the Born integral.
+    if (r2 > cutoff_sq) return;
     double r = sqrt(r2);
     double r_scaled_radius_j = r + scaled_radius_j;
     if (offset_radius_i >= r_scaled_radius_j) return;

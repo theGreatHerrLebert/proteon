@@ -218,6 +218,11 @@ struct GpuTopology {
     obc_gamma: f64,
     obc_pre_factor: f64, // -τ·k_C, kcal/(mol·e²·Å)
     obc_include_self: i32,
+    // CutoffNonPeriodic GB: squared cutoff + reaction-field distance. Set to
+    // f64::INFINITY for the default NoCutoff method (then `r2 > cutoff_sq` never
+    // fires and the `−0.5·pqi·q_j/rc` energy shift is exactly zero).
+    obc_cutoff_sq: f64,
+    obc_rc: f64,
 }
 
 /// Per-structure mutable GPU state: coords, forces, energy output arrays.
@@ -255,16 +260,11 @@ impl GpuStructState {
         nbl: &NeighborList,
         ff: &F,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // The GPU OBC kernels implement only the all-pairs NoCutoff method. If
-        // the force field selects CutoffNonPeriodic GB, refuse to build GPU
-        // state so the caller (e.g. NbCache) falls back to the CPU path, which
-        // computes the cutoff GB correctly. Without this, the Hamiltonian would
-        // silently depend on CUDA availability (GB_CUTOFF_PLAN §0; codex #6).
-        if ff.gb_cutoff().is_some() {
-            return Err(
-                "GPU OBC kernels are NoCutoff-only; CutoffNonPeriodic GB runs on CPU".into(),
-            );
-        }
+        // The GPU OBC kernels handle both the NoCutoff method and (via the
+        // cutoff_sq/rc scalars threaded into the pair kernels) CutoffNonPeriodic
+        // GB, so they no longer refuse the cutoff method — GPU and CPU now
+        // compute the SAME Hamiltonian regardless of CUDA availability
+        // (GPU_CUTOFF_GB_PLAN).
         let stream = gpu.ctx.new_stream()?;
         let n_atoms = topo.atoms.len();
         let n_pairs = nbl.pairs.len();
@@ -454,6 +454,19 @@ impl GpuStructState {
         // the CPU path (it's a diagnostic-only feature).
         let obc_params = super::gb_obc::ObcGbParams::obc2();
         let obc_pre_factor = -332.0 * obc_params.tau();
+        // CutoffNonPeriodic GB scalars. NoCutoff ⇒ +INFINITY sentinels: the
+        // kernels' `r2 > cutoff_sq` never fires and `pqi·q_j/rc` is exactly 0,
+        // so the NoCutoff path is unchanged for valid finite inputs.
+        let (obc_cutoff_sq, obc_rc) = match ff.gb_cutoff() {
+            Some(rc) => {
+                debug_assert!(
+                    rc.is_finite() && rc > 0.0,
+                    "GB cutoff must be finite and positive, got {rc}"
+                );
+                (rc * rc, rc)
+            }
+            None => (f64::INFINITY, f64::INFINITY),
+        };
 
         let topo_gpu = GpuTopology {
             pair_i: stream.clone_htod(&pi)?,
@@ -512,6 +525,8 @@ impl GpuStructState {
             obc_gamma: obc_params.gamma,
             obc_pre_factor,
             obc_include_self: if obc_params.include_self_term { 1 } else { 0 },
+            obc_cutoff_sq,
+            obc_rc,
         };
 
         let np = n_pairs.max(1);
@@ -761,6 +776,7 @@ impl GpuStructState {
                 a.arg(&t.obc_gamma);
                 let n_i32 = t.n_atoms as i32;
                 a.arg(&n_i32);
+                a.arg(&t.obc_cutoff_sq);
                 a.arg(&mut self.obc_born_radii);
                 a.arg(&mut self.obc_chain);
                 unsafe {
@@ -779,6 +795,8 @@ impl GpuStructState {
                 let n_i32 = t.n_atoms as i32;
                 a.arg(&n_i32);
                 a.arg(&t.obc_include_self);
+                a.arg(&t.obc_cutoff_sq);
+                a.arg(&t.obc_rc);
                 a.arg(&mut self.obc_per_atom_energy);
                 a.arg(&mut self.forces);
                 a.arg(&mut self.obc_born_forces);
@@ -809,6 +827,7 @@ impl GpuStructState {
                 a.arg(&t.obc_offset);
                 let n_i32 = t.n_atoms as i32;
                 a.arg(&n_i32);
+                a.arg(&t.obc_cutoff_sq);
                 a.arg(&mut self.forces);
                 // 8×8 tiles (64 threads/block). The OBC spread kernel
                 // carries ~30 f64 live locals per thread — 16×16 blocks

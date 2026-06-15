@@ -1353,4 +1353,151 @@ mod gpu_parity_tests {
             gpu_energy.total, cpu_energy.total, diff_total, diff_solv, max_f_diff,
         );
     }
+
+    /// Load crambin + place H, returning (topo, coords, coords_flat) for `ff`,
+    /// or `None` if the GPU/fixture is unavailable.
+    #[cfg(feature = "cuda")]
+    fn crambin_topo<F: super::super::params::ForceField>(
+        ff: &F,
+    ) -> Option<(super::super::topology::Topology, Vec<[f64; 3]>, Vec<f64>)> {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("../test-pdbs/1crn.pdb");
+        if !p.exists() {
+            return None;
+        }
+        let (mut pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(p.to_str().unwrap())
+            .expect("failed to read 1crn");
+        add_hydrogens::place_peptide_hydrogens(&mut pdb);
+        let topo = build_topology(&pdb, ff);
+        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+        let flat: Vec<f64> = coords.iter().flat_map(|c| c.iter().copied()).collect();
+        Some((topo, coords, flat))
+    }
+
+    #[test]
+    fn gpu_obc_cutoff_matches_cpu_on_crambin() {
+        use super::super::gpu;
+        use crate::forcefield::params::amber96_obc_cutoff;
+
+        let gpu_ctx = match gpu::GpuContext::try_global() {
+            Some(ctx) => ctx,
+            None => {
+                eprintln!("gpu_parity_tests: no GPU, skipping cutoff-OBC parity");
+                return;
+            }
+        };
+
+        // 8 Å cutoff genuinely truncates on crambin (~larger than 8 Å across),
+        // so this exercises the GPU truncation + reaction-field shift, not just
+        // the all-pairs path with everything in range.
+        let mut ff = amber96_obc_cutoff();
+        ff.cutoff_override = Some(8.0);
+        let (topo, coords, coords_flat) = match crambin_topo(&ff) {
+            Some(t) => t,
+            None => return,
+        };
+
+        let nbl = super::super::neighbor_list::NeighborList::build(
+            &coords,
+            ff.nonbonded_cutoff(),
+            &topo.excluded_pairs,
+            &topo.pairs_14,
+        );
+        // CPU cutoff path (builds the exclusion-free GB list internally at 8 Å).
+        let (cpu_e, cpu_f) =
+            super::super::energy::compute_energy_and_forces_nbl(&coords, &topo, &ff, &nbl);
+
+        let mut gpu_state = gpu::GpuStructState::new(gpu_ctx, &topo, &nbl, &ff)
+            .expect("GPU cutoff-OBC state build failed (guard removed?)");
+        let (gpu_e, gpu_f) = gpu_state
+            .energy_and_forces(gpu_ctx, &coords_flat)
+            .expect("GPU cutoff-OBC eval failed");
+
+        let diff_total = (gpu_e.total - cpu_e.total).abs();
+        let diff_solv = (gpu_e.solvation - cpu_e.solvation).abs();
+        assert!(diff_total < 1e-3, "cutoff-OBC total diff {diff_total:.2e}");
+        assert!(
+            diff_solv < 1e-3,
+            "cutoff-OBC solvation diff {diff_solv:.2e}"
+        );
+        let mut max_f = 0.0_f64;
+        for i in 0..cpu_f.len() {
+            for k in 0..3 {
+                max_f = max_f.max((cpu_f[i][k] - gpu_f[i][k]).abs());
+            }
+        }
+        assert!(max_f < 1e-3, "cutoff-OBC max force diff {max_f:.2e}");
+        eprintln!(
+            "gpu_parity_tests: cutoff-OBC(8Å) crambin solv GPU={:+.2} CPU={:+.2} \
+             diff_solv={:.2e} max_f={:.2e} PASS",
+            gpu_e.solvation, cpu_e.solvation, diff_solv, max_f
+        );
+    }
+
+    #[test]
+    fn gpu_obc_cutoff_shift_is_forceless() {
+        // The reaction-field shift is distance-independent ⇒ it changes the
+        // energy but not the forces. With a cutoff LARGER than the box, every
+        // pair is kept, so the cutoff path and NoCutoff path differ ONLY by the
+        // shift: GPU forces must match (within atomicAdd noise) while the
+        // solvation energies must differ by a clearly nonzero amount.
+        use super::super::gpu;
+        use crate::forcefield::params::{amber96_obc, amber96_obc_cutoff};
+
+        let gpu_ctx = match gpu::GpuContext::try_global() {
+            Some(ctx) => ctx,
+            None => {
+                eprintln!("gpu_parity_tests: no GPU, skipping forceless-shift");
+                return;
+            }
+        };
+
+        // Both force fields share the SAME nonbonded (LJ/Coulomb) cutoff so the
+        // ONLY difference is the GB method (NoCutoff vs cutoff). The cutoff is
+        // larger than the crambin diameter ⇒ the GB pair set is identical too,
+        // leaving the reaction-field shift as the sole difference.
+        let mut ff_nc = amber96_obc();
+        ff_nc.cutoff_override = Some(1000.0);
+        let (topo, coords, flat) = match crambin_topo(&ff_nc) {
+            Some(t) => t,
+            None => return,
+        };
+        let nbl = super::super::neighbor_list::NeighborList::build(
+            &coords,
+            ff_nc.nonbonded_cutoff(),
+            &topo.excluded_pairs,
+            &topo.pairs_14,
+        );
+
+        let mut s_nc = gpu::GpuStructState::new(gpu_ctx, &topo, &nbl, &ff_nc).unwrap();
+        let (e_nc, f_nc) = s_nc.energy_and_forces(gpu_ctx, &flat).unwrap();
+
+        let mut ff_co = amber96_obc_cutoff();
+        ff_co.cutoff_override = Some(1000.0);
+        let mut s_co = gpu::GpuStructState::new(gpu_ctx, &topo, &nbl, &ff_co).unwrap();
+        let (e_co, f_co) = s_co.energy_and_forces(gpu_ctx, &flat).unwrap();
+
+        // Forces unchanged by the (forceless) shift.
+        let mut max_f = 0.0_f64;
+        for i in 0..f_nc.len() {
+            for k in 0..3 {
+                max_f = max_f.max((f_nc[i][k] - f_co[i][k]).abs());
+            }
+        }
+        assert!(
+            max_f < 1e-3,
+            "forceless shift perturbed forces by {max_f:.2e}"
+        );
+        // But the energy IS shifted (and on crambin it's a sizable amount).
+        let dsolv = (e_co.solvation - e_nc.solvation).abs();
+        assert!(
+            dsolv > 1.0,
+            "expected a nonzero reaction-field shift, got {dsolv:.2e}"
+        );
+        eprintln!(
+            "gpu_parity_tests: forceless-shift max_force_diff={max_f:.2e} solv_shift={dsolv:.2e} PASS"
+        );
+    }
 }

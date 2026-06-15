@@ -178,6 +178,15 @@ impl NbCache {
         topo: &Topology,
         params: &F,
     ) -> EnergyResult {
+        // The GB method must match the one the cache (CPU list AND GPU constants,
+        // both captured at construction) was built for. Checked BEFORE the GPU
+        // dispatch — the GPU's cutoff is baked in at `GpuStructState::new`, so a
+        // reused cache with a swapped force field would otherwise silently use
+        // the stale GPU cutoff (codex review).
+        debug_assert!(
+            params.gb_cutoff() == self.gb_cutoff,
+            "NbCache GB method changed since construction"
+        );
         // GPU path: launch kernels, sync, read energy (no forces download)
         #[cfg(feature = "cuda")]
         if let Some(ref mut gpu) = self.gpu {
@@ -195,10 +204,6 @@ impl NbCache {
 
         // CPU fallback. The cached GB list (when present) feeds the GB term so
         // iterative callers don't rebuild it each eval.
-        debug_assert!(
-            params.gb_cutoff() == self.gb_cutoff,
-            "NbCache GB method changed since construction"
-        );
         match &self.nbl {
             Some(nbl) => {
                 compute_energy_and_forces_nbl_inner(coords, topo, params, nbl, self.gb_nbl.as_ref())
@@ -214,6 +219,11 @@ impl NbCache {
         topo: &Topology,
         params: &F,
     ) -> (EnergyResult, Vec<[f64; 3]>) {
+        // Method-consistency check BEFORE GPU dispatch (see `energy`).
+        debug_assert!(
+            params.gb_cutoff() == self.gb_cutoff,
+            "NbCache GB method changed since construction"
+        );
         // GPU path: launch kernels, sync, read energy + forces
         #[cfg(feature = "cuda")]
         if let Some(ref mut gpu) = self.gpu {
@@ -230,10 +240,6 @@ impl NbCache {
         }
 
         // CPU fallback. Pass the cached GB list (when present) into the GB term.
-        debug_assert!(
-            params.gb_cutoff() == self.gb_cutoff,
-            "NbCache GB method changed since construction"
-        );
         match &self.nbl {
             Some(nbl) => {
                 compute_energy_and_forces_nbl_inner(coords, topo, params, nbl, self.gb_nbl.as_ref())
