@@ -144,6 +144,14 @@ pub struct SearchOptions {
     /// different things across `reduce_to` / matrix / `k` / `bit_factor`. Tune
     /// it per configuration (upstream MMseqs2 ≈ 90 for BLOSUM62, k=6, bf=2).
     pub similar_kmer_threshold: Option<i32>,
+    /// Minimum indexed-target count for `search()` to send the prefilter to the
+    /// GPU. `None` (default) uses the measured floor [`GPU_PREFILTER_MIN_TARGETS`]
+    /// — below it the CPU prefilter wins (GPU launch overhead dominates the tiny
+    /// per-query voting work). `Some(0)` forces GPU whenever a device is present;
+    /// `Some(usize::MAX)` forces CPU. Ignored without the `cuda` feature. The
+    /// crossover is hardware-dependent (the default is tuned for an RTX 2070);
+    /// lower it on a faster GPU.
+    pub gpu_prefilter_min_targets: Option<usize>,
 }
 
 impl Default for SearchOptions {
@@ -160,6 +168,7 @@ impl Default for SearchOptions {
             max_results: None,
             use_gpu: true,
             similar_kmer_threshold: None,
+            gpu_prefilter_min_targets: None,
         }
     }
 }
@@ -339,7 +348,24 @@ pub struct SearchEngine {
     /// falls back to the CPU path. Built from the in-memory `KmerIndex` only.
     #[cfg(feature = "cuda")]
     gpu_prefilter: std::sync::OnceLock<Option<crate::gpu::prefilter::GpuPrefilterIndex>>,
+    /// One device scratch arena reused across `search()` calls so the
+    /// single-query GPU prefilter amortizes its buffer + stream allocation (a
+    /// fresh scratch per query pushes the GPU-vs-CPU crossover far higher — see
+    /// [`GPU_PREFILTER_MIN_TARGETS`]). `Mutex` because `search()` is `&self`; it
+    /// guards only the prefilter dispatch, which is a small slice of `search()`.
+    #[cfg(feature = "cuda")]
+    gpu_scratch: std::sync::Mutex<Option<crate::gpu::prefilter::PrefilterScratch>>,
 }
+
+/// Minimum indexed-target count for `search()` to dispatch the prefilter to the
+/// GPU. Below this the CPU prefilter wins: the diagonal-voting work per query is
+/// tiny, so the GPU's fixed launch overhead dominates. Measured on an RTX 2070
+/// (`prefilter_bench`, reused-scratch single-query path = the wired path): the
+/// crossover is ~55k random-corpus targets (0.95× at 50k, 1.30× at 100k). Set
+/// conservatively above it — and real corpora have skewed postings (more votes
+/// per query) that favour the GPU EARLIER, so this is a safe floor.
+#[cfg(feature = "cuda")]
+const GPU_PREFILTER_MIN_TARGETS: usize = 75_000;
 
 /// Build the prefilter-alphabet score matrix for the similar-k-mer generator.
 /// With a reducer: average the full matrix into the reduced alphabet, then apply
@@ -416,6 +442,8 @@ impl SearchEngine {
             prefilter_score_matrix,
             #[cfg(feature = "cuda")]
             gpu_prefilter: std::sync::OnceLock::new(),
+            #[cfg(feature = "cuda")]
+            gpu_scratch: std::sync::Mutex::new(None),
         })
     }
 
@@ -529,6 +557,8 @@ impl SearchEngine {
             prefilter_score_matrix,
             #[cfg(feature = "cuda")]
             gpu_prefilter: std::sync::OnceLock::new(),
+            #[cfg(feature = "cuda")]
+            gpu_scratch: std::sync::Mutex::new(None),
         })
     }
 
@@ -635,6 +665,8 @@ impl SearchEngine {
             prefilter_score_matrix,
             #[cfg(feature = "cuda")]
             gpu_prefilter: std::sync::OnceLock::new(),
+            #[cfg(feature = "cuda")]
+            gpu_scratch: std::sync::Mutex::new(None),
         })
     }
 
@@ -677,6 +709,17 @@ impl SearchEngine {
         if !(self.opts.use_gpu && crate::gpu::is_available()) {
             return None;
         }
+        // Below the crossover the CPU prefilter wins — don't pay GPU launch
+        // overhead on a tiny per-query workload (the index is never even
+        // uploaded for small corpora). Override via
+        // `SearchOptions::gpu_prefilter_min_targets`.
+        let min_targets = self
+            .opts
+            .gpu_prefilter_min_targets
+            .unwrap_or(GPU_PREFILTER_MIN_TARGETS);
+        if self.target_count() < min_targets {
+            return None;
+        }
         self.gpu_prefilter
             .get_or_init(|| match &self.index {
                 KmerIndexStorage::InMemory(idx) => {
@@ -694,6 +737,42 @@ impl SearchEngine {
                 KmerIndexStorage::OnDisk(_) => None,
             })
             .as_ref()
+    }
+
+    /// Dispatch a GPU prefilter using the engine's cached, reused
+    /// [`PrefilterScratch`] (so the single-query `search()` path amortizes its
+    /// device-buffer + stream allocation). Returns `None` when the GPU path is
+    /// unavailable (below the crossover, no device, on-disk index, upload or
+    /// scratch-alloc failure) so the caller runs the CPU prefilter; `Some(Err)`
+    /// is a mid-flight GPU failure the caller also falls back from.
+    #[cfg(feature = "cuda")]
+    fn run_gpu_prefilter<F>(&self, f: F) -> Option<anyhow::Result<Vec<PrefilterHit>>>
+    where
+        F: FnOnce(
+            &crate::gpu::prefilter::GpuPrefilterIndex,
+            &mut crate::gpu::prefilter::PrefilterScratch,
+        ) -> anyhow::Result<Vec<PrefilterHit>>,
+    {
+        let handle = self.gpu_handle()?;
+        // Poisoned only if a prior prefilter panicked mid-dispatch; the scratch
+        // is still structurally valid (zeroed per query), so recover it.
+        let mut guard = self
+            .gpu_scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.is_none() {
+            match crate::gpu::prefilter::PrefilterScratch::new() {
+                Ok(s) => *guard = Some(s),
+                Err(e) => {
+                    eprintln!(
+                        "[proteon-search-gpu] prefilter scratch alloc failed, using CPU: {e:#}"
+                    );
+                    return None;
+                }
+            }
+        }
+        let scratch = guard.as_mut().expect("scratch initialised above");
+        Some(f(handle, scratch))
     }
 
     /// Run the k-mer prefilter — exact, or SENSITIVE (similar-k-mer-expanded)
@@ -722,9 +801,11 @@ impl SearchEngine {
                 };
                 #[cfg(feature = "cuda")]
                 {
-                    if let Some(h) = self.gpu_handle() {
-                        match h.prefilter_sensitive(query_for_prefilter, self.skip_idx, &sim, opts)
-                        {
+                    let skip_idx = self.skip_idx;
+                    if let Some(res) = self.run_gpu_prefilter(|h, s| {
+                        h.prefilter_sensitive_with(s, query_for_prefilter, skip_idx, &sim, opts)
+                    }) {
+                        match res {
                             Ok(hits) => return hits,
                             Err(e) => eprintln!(
                                 "[proteon-search-gpu] sensitive prefilter failed, using CPU: {e:#}"
@@ -743,8 +824,11 @@ impl SearchEngine {
             None => {
                 #[cfg(feature = "cuda")]
                 {
-                    if let Some(h) = self.gpu_handle() {
-                        match h.prefilter(query_for_prefilter, self.skip_idx, opts) {
+                    let skip_idx = self.skip_idx;
+                    if let Some(res) = self.run_gpu_prefilter(|h, s| {
+                        h.prefilter_with(s, query_for_prefilter, skip_idx, opts)
+                    }) {
+                        match res {
                             Ok(hits) => return hits,
                             Err(e) => eprintln!(
                                 "[proteon-search-gpu] prefilter failed, using CPU prefilter: {e:#}"
@@ -1621,6 +1705,9 @@ mod tests {
             k: 3,
             reduce_to: Some(13),
             use_gpu: true,
+            // Force GPU on this tiny corpus to test the WIRING (the default
+            // crossover would route 3 targets to CPU).
+            gpu_prefilter_min_targets: Some(0),
             ..Default::default()
         };
         let engine = SearchEngine::build(targets.clone(), &m, alpha.clone(), opts).unwrap();
@@ -1653,6 +1740,51 @@ mod tests {
         );
     }
 
+    /// Below the target-count crossover, `search()` must route the prefilter to
+    /// the CPU — the GPU index is never even uploaded — while still returning the
+    /// exact prefilter result. Default threshold, tiny corpus.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn small_corpus_skips_gpu_prefilter_below_threshold() {
+        let (alpha, m) = alpha_and_matrix();
+        let seqs = [
+            (1u32, b"MNALVVKFGGTSVANAERFLRVADILESNARQGQ".as_slice()),
+            (2u32, b"WVLSAADKTNVKAAWGKVGAHAGEYGAEALERMFLSFP".as_slice()),
+        ];
+        let targets: Vec<(u32, Sequence)> = seqs
+            .iter()
+            .map(|(id, s)| (*id, Sequence::from_ascii(alpha.clone(), s)))
+            .collect();
+        // Default gpu_prefilter_min_targets (None → 75k) with use_gpu on.
+        let opts = SearchOptions {
+            k: 3,
+            reduce_to: Some(13),
+            use_gpu: true,
+            ..Default::default()
+        };
+        let engine = SearchEngine::build(targets.clone(), &m, alpha.clone(), opts).unwrap();
+
+        for (_id, seq) in &targets {
+            let q_for_pf = match &engine.reducer {
+                Some(r) => r.reduce_sequence(&seq.data),
+                None => seq.data.clone(),
+            };
+            let pf = engine.run_prefilter(&q_for_pf, &PrefilterOptions::default());
+            let cpu = diagonal_prefilter(
+                &engine.index,
+                &q_for_pf,
+                engine.skip_idx,
+                &PrefilterOptions::default(),
+            );
+            assert_eq!(pf, cpu, "below-threshold prefilter must equal CPU");
+        }
+        // GPU handle was NEVER built — the small corpus stayed on CPU.
+        assert!(
+            engine.gpu_prefilter.get().is_none(),
+            "GPU index must not be uploaded below the target-count crossover"
+        );
+    }
+
     // --- Phase 3d: sensitive prefilter in search() ---
 
     fn three_protein_engine(threshold: Option<i32>, reduce_to: Option<usize>) -> SearchEngine {
@@ -1671,6 +1803,9 @@ mod tests {
             reduce_to,
             similar_kmer_threshold: threshold,
             max_prefilter_hits: None,
+            // Force GPU on this tiny corpus so the sensitive-wiring tests
+            // exercise the GPU path (default crossover would route to CPU).
+            gpu_prefilter_min_targets: Some(0),
             ..Default::default()
         };
         SearchEngine::build(targets, &m, alpha, opts).unwrap()

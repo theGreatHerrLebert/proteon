@@ -77,6 +77,7 @@ impl PySearchEngine {
             max_results,
             use_gpu,
             similar_kmer_threshold: None,
+            gpu_prefilter_min_targets: None,
         };
         let target_seqs: Vec<(u32, Sequence)> = targets
             .into_iter()
@@ -137,6 +138,7 @@ impl PySearchEngine {
             max_results,
             use_gpu,
             similar_kmer_threshold: None,
+            gpu_prefilter_min_targets: None,
         };
         let inner = CoreSearchEngine::build_from_mmseqs_db(prefix, &matrix, alphabet.clone(), opts)
             .map_err(|e| PyValueError::new_err(format!("mmseqs DB build failed: {e}")))?;
@@ -218,6 +220,7 @@ impl PySearchEngine {
             max_results,
             use_gpu,
             similar_kmer_threshold: None,
+            gpu_prefilter_min_targets: None,
         };
         let inner = CoreSearchEngine::open_from_mmseqs_db_with_kmi(
             db_prefix,

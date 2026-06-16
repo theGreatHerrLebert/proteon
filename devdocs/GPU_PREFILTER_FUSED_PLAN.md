@@ -135,9 +135,16 @@ front).
   **Gate:** beats CPU steady-state at realistic batch sizes — *required if the
   goal is a throughput unlock, optional if the goal is only fixing
   N-degradation.*
-- **P4 — wire + default.** If P3 beats CPU on the benchmark, consider flipping
-  the `search()` default; else keep CPU default and expose the batched path for
-  explicit batched callers only.
+- **P4 — wire `search()` to the crossover. DONE (ahead of P3).** `search()` is
+  single-query, so it wires the single-query path. A fresh scratch per query only
+  crosses 1.0 near ~200k targets, so the engine now CACHES one `PrefilterScratch`
+  (`Mutex<Option<…>>` on `&self`) and reuses it across `search()` calls via the
+  new public `prefilter_with` / `prefilter_sensitive_with`, recovering the ~55k
+  crossover. `gpu_handle()` gates on `target_count() >= GPU_PREFILTER_MIN_TARGETS`
+  (default 75k, overridable via `SearchOptions::gpu_prefilter_min_targets`); below
+  it the index is never uploaded. Bit-exact wiring tests + a below-threshold
+  skip test. P3 (small-N batched launches) remains the only open item, and only
+  matters for batched callers below ~55k targets.
 
 ## 6. Tests
 - Per-phase **bit-exact vs CPU** on the existing parity corpora (exact +

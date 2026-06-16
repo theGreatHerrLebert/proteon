@@ -97,6 +97,7 @@ fn main() {
         max_results: Some(result_cap),
         use_gpu,
         similar_kmer_threshold: None,
+        gpu_prefilter_min_targets: None,
     };
 
     let t_build = Instant::now();
