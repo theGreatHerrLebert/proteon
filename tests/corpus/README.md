@@ -10,8 +10,13 @@ Each subdirectory contains minimal PDB files that trigger a specific edge case:
 - `insertion_codes/` — Residues with insertion codes (e.g., prosegment interleaving)
 - `multimodel/` — NMR-style multi-model structures
 - `altloc/` — Alternate conformations (A/B occupancy)
-- `missing_atoms/` — Incomplete residues (missing backbone or sidechain atoms)
-- `ligands/` — Structures with HETATM ligands/waters
+- `missing_atoms/` — Incomplete residues:
+  - `missing_cb.pdb` — a missing **sidechain** atom (CB); reconstruct should add it
+  - `missing_backbone_c.pdb` — a missing **backbone** atom (carbonyl C of res 2);
+    the affected dihedrals must NaN, not crash
+- `ligands/` — Structures with HETATM ligands (`protein_with_ligand.pdb`)
+- `waters/` — Crystallographic HOH solvent (`protein_with_waters.pdb`); must load,
+  stay distinguishable from protein, and not break energy/prepare
 - `chain_breaks/` — Chains with sequence gaps (missing residues)
 
 ## Policy
