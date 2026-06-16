@@ -451,17 +451,25 @@ Keep current SASA path strong by formalizing:
 - tolerance by structure size class
 - random corpus sampling with pinned seed
 
-### 12. DSSP Validation
+### 12. DSSP Validation (shipped)
 
-Current gap:
+The pydssp oracle (`test_dssp_oracle.py`) only validated 3 classes (H/E/loop).
+`tests/oracle/test_dssp_8class_oracle.py` adds a **canonical 8-class** oracle:
 
-- DSSP has internal tests and sanity checks, but no strong external oracle in CI
+- proteon's full H/G/I/E/B/T/S/C vs canonical DSSP from either **mkdssp** (DSSP
+  4.x, via Biopython — the CI backend, `apt-get install dssp`) or **`gmx dssp`**
+  (GROMACS, a local-developer backend). Both keyed by residue id for robust
+  alignment.
+- residue-level agreement (8-class + 3-class) + per-confusion categorization;
+  coverage asserted separately so a residue-set divergence fails loudly.
+- thresholds from measured mkdssp 4.2.2 agreement (8-class 93–100%, 3-class
+  93.5–100%): 8-class ≥ 0.90, 3-class ≥ 0.92, **zero** helix↔strand swaps.
+- mkdssp's polyproline-II (`P`) class — which proteon doesn't model — is folded
+  into loop; the residual disagreements are within-category boundary calls
+  (alpha vs pi helix, turn vs bend vs 3-10 helix), confirmed not gross errors.
 
-Add:
-
-- `mkdssp` or GROMACS-based oracle workflow
-- residue-level agreement reports
-- discrepancy categorization for chain ends, bends, and H-placement effects
+Validated end-to-end in an ubuntu:24.04 container matching CI before shipping
+(caught mkdssp 4.x's HEADER-required-or-mmCIF parsing trap).
 
 ### 13. H-Bond Validation
 

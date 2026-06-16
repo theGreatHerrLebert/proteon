@@ -102,6 +102,14 @@ jobs:
           # 0.1.0a6 adds the SES bindings (ses_area/ses_mesh/ses_graph)
           # that back the surface_ses_ball oracle.
           pip install biopython gemmi pydssp freesasa "ball-py==0.1.0a6"
+      - name: Install mkdssp (canonical 8-class DSSP oracle)
+        run: |
+          # The `dssp` package ships /usr/bin/mkdssp (DSSP 4.x). Drives the
+          # 8-class DSSP oracle (tests/oracle/test_dssp_8class_oracle.py) via
+          # Biopython; the test self-skips if absent. pydssp stays the 3-class
+          # oracle. ~2 MB, so it runs every PR alongside the pip oracles.
+          sudo apt-get update
+          sudo apt-get install -y dssp
       - name: Build connector
         run: |
           source .venv/bin/activate
