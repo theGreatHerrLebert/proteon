@@ -16,7 +16,9 @@
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
-use cudarc::driver::{CudaFunction, CudaModule, CudaSlice, LaunchConfig, PushKernelArg};
+use cudarc::driver::{
+    CudaFunction, CudaModule, CudaSlice, CudaStream, DeviceRepr, LaunchConfig, PushKernelArg,
+};
 use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 
 use super::GpuContext;
@@ -95,6 +97,70 @@ pub struct GpuPrefilterIndex {
     /// seq-keyed reduction never depends on the external id range, which may be
     /// sparse — codex); decode maps the compacted output back through this.
     dense_to_orig: Vec<u32>,
+}
+
+/// Reusable per-call device scratch for the voting pipeline: a stream plus all
+/// the growable device buffers, so a batch of queries reuses ONE allocation set
+/// (and one stream) instead of `cudaMalloc`-ing — and creating a stream — per
+/// query. That per-query alloc/stream churn was the fixed-overhead wall the
+/// benchmark exposed (P2).
+///
+/// Grow-not-shrink: each buffer is reallocated only when a query needs more than
+/// its current capacity (mirrors `DPWorkspace`). The scratch is CALLER-owned, so
+/// the resident [`GpuPrefilterIndex`] stays `&self` and concurrency-safe — there
+/// is no shared mutable device state on the handle (claudex: a `Mutex` on
+/// `&self` would silently serialize concurrent callers).
+struct PrefilterScratch {
+    stream: Arc<CudaStream>,
+    d_qpos: CudaSlice<i32>,
+    d_hash: CudaSlice<u64>,
+    d_keys: CudaSlice<u64>,
+    d_counts: CudaSlice<u32>,
+    d_best_keys: CudaSlice<u64>,
+    d_best_vals: CudaSlice<u64>,
+    d_out_seq: CudaSlice<u32>,
+    d_out_packed: CudaSlice<u64>,
+    /// Compaction counter, len 1. Zeroed per query.
+    d_out_count: CudaSlice<u32>,
+    /// `[0]` vote-probe, `[1]` seq-probe, `[2]` output-overflow. Zeroed per query.
+    d_err: CudaSlice<u32>,
+}
+
+impl PrefilterScratch {
+    /// Allocate the scratch (one stream + stub buffers grown on first use).
+    fn new() -> Result<Self> {
+        let ctx = GpuContext::try_global().ok_or_else(|| anyhow!("GPU context unavailable"))?;
+        let stream = ctx.cuda_context().new_stream()?;
+        // cudarc rejects zero-byte allocations, so start the growable buffers at
+        // a 1-element stub; `ensure` grows them to the first query's needs.
+        Ok(Self {
+            d_qpos: unsafe { stream.alloc::<i32>(1) }?,
+            d_hash: unsafe { stream.alloc::<u64>(1) }?,
+            d_keys: unsafe { stream.alloc::<u64>(1) }?,
+            d_counts: unsafe { stream.alloc::<u32>(1) }?,
+            d_best_keys: unsafe { stream.alloc::<u64>(1) }?,
+            d_best_vals: unsafe { stream.alloc::<u64>(1) }?,
+            d_out_seq: unsafe { stream.alloc::<u32>(1) }?,
+            d_out_packed: unsafe { stream.alloc::<u64>(1) }?,
+            d_out_count: stream.alloc_zeros::<u32>(1)?,
+            d_err: stream.alloc_zeros::<u32>(3)?,
+            stream,
+        })
+    }
+}
+
+/// Grow `buf` to at least `needed` elements (never shrinks). The realloc drops
+/// the old buffer's contents — callers `memset`/`memcpy` the used range before
+/// the kernels read it, so uninitialised growth is safe.
+fn ensure_cap<T: DeviceRepr>(
+    stream: &Arc<CudaStream>,
+    buf: &mut CudaSlice<T>,
+    needed: usize,
+) -> Result<()> {
+    if buf.len() < needed {
+        *buf = unsafe { stream.alloc::<T>(needed) }?;
+    }
+    Ok(())
 }
 
 impl GpuPrefilterIndex {
@@ -210,12 +276,14 @@ impl GpuPrefilterIndex {
         skip_idx: u8,
         opts: &PrefilterOptions,
     ) -> Result<Vec<PrefilterHit>> {
-        self.run_query(query, skip_idx, opts)
+        let mut scratch = PrefilterScratch::new()?;
+        self.run_query(&mut scratch, query, skip_idx, opts)
     }
 
-    /// Many queries against the resident index, reusing the upload + one stream.
-    /// `out[i]` is `queries[i]`'s hit list — identical to calling [`prefilter`]
-    /// per query, but the index is sent once.
+    /// Many queries against the resident index, reusing the upload + ONE scratch
+    /// allocation set + stream across the whole batch (the per-query
+    /// malloc/stream churn was the fixed-overhead wall — P2). `out[i]` is
+    /// `queries[i]`'s hit list — identical to calling [`prefilter`] per query.
     ///
     /// [`prefilter`]: GpuPrefilterIndex::prefilter
     pub fn prefilter_batch(
@@ -224,9 +292,10 @@ impl GpuPrefilterIndex {
         skip_idx: u8,
         opts: &PrefilterOptions,
     ) -> Result<Vec<Vec<PrefilterHit>>> {
+        let mut scratch = PrefilterScratch::new()?;
         let mut out = Vec::with_capacity(queries.len());
         for q in queries {
-            out.push(self.run_query(q, skip_idx, opts)?);
+            out.push(self.run_query(&mut scratch, q, skip_idx, opts)?);
         }
         Ok(out)
     }
@@ -241,12 +310,16 @@ impl GpuPrefilterIndex {
         similarity: &SimilarityConfig<'_>,
         opts: &PrefilterOptions,
     ) -> Result<Vec<PrefilterHit>> {
+        let mut scratch = PrefilterScratch::new()?;
         let diag_bias = self.validate_diag_bias(query.len())?;
         let kmers = self.build_sensitive_kmers(query, skip_idx, similarity)?;
-        self.vote_and_reduce(&kmers, diag_bias, opts)
+        self.vote_and_reduce(&mut scratch, &kmers, diag_bias, opts)
     }
 
-    /// Many sensitive queries against the resident index (index sent once).
+    /// Many sensitive queries against the resident index (one scratch + stream
+    /// reused across the batch, like [`prefilter_batch`]).
+    ///
+    /// [`prefilter_batch`]: GpuPrefilterIndex::prefilter_batch
     pub fn prefilter_sensitive_batch(
         &self,
         queries: &[&[u8]],
@@ -254,11 +327,12 @@ impl GpuPrefilterIndex {
         similarity: &SimilarityConfig<'_>,
         opts: &PrefilterOptions,
     ) -> Result<Vec<Vec<PrefilterHit>>> {
+        let mut scratch = PrefilterScratch::new()?;
         let mut out = Vec::with_capacity(queries.len());
         for q in queries {
             let diag_bias = self.validate_diag_bias(q.len())?;
             let kmers = self.build_sensitive_kmers(q, skip_idx, similarity)?;
-            out.push(self.vote_and_reduce(&kmers, diag_bias, opts)?);
+            out.push(self.vote_and_reduce(&mut scratch, &kmers, diag_bias, opts)?);
         }
         Ok(out)
     }
@@ -339,6 +413,7 @@ impl GpuPrefilterIndex {
     /// the shared [`vote_and_reduce`](Self::vote_and_reduce) core.
     fn run_query(
         &self,
+        scratch: &mut PrefilterScratch,
         query: &[u8],
         skip_idx: u8,
         opts: &PrefilterOptions,
@@ -351,16 +426,17 @@ impl GpuPrefilterIndex {
             .iter_kmers(query, skip_idx)
             .filter(|&(_, h)| h < self.table_size)
             .collect();
-        self.vote_and_reduce(&kmers, diag_bias, opts)
+        self.vote_and_reduce(scratch, &kmers, diag_bias, opts)
     }
 
     /// Shared GPU voting core for a prebuilt `(q_pos, hash)` list — exact OR
-    /// similar-k-mer-expanded; the kernels are identical for both. Allocates its
-    /// OWN per-query scratch (hash table + best[] + error flag, all
-    /// `alloc_zeros`), so there is no cross-query state; each call uses its own
-    /// stream (the resident index is what's reused).
+    /// similar-k-mer-expanded; the kernels are identical for both. Reuses the
+    /// caller-provided [`PrefilterScratch`] (grown as needed, zeroed per query),
+    /// so a batch reuses one allocation set + stream. The resident index buffers
+    /// are read-only `&self`.
     fn vote_and_reduce(
         &self,
+        scratch: &mut PrefilterScratch,
         kmers: &[(usize, u64)],
         diag_bias: i32,
         opts: &PrefilterOptions,
@@ -412,13 +488,8 @@ impl GpuPrefilterIndex {
         let kmer_qpos: Vec<i32> = kmers.iter().map(|&(p, _)| p as i32).collect();
         let kmer_hash: Vec<u64> = kmers.iter().map(|&(_, h)| h).collect();
 
-        // Acquire kernels + a stream only now (a no-hit query returned above
-        // without touching the GPU). Each query uses its own stream; the
-        // resident index buffers are read-only and shared.
         let kernels = PrefilterKernels::try_global()
             .ok_or_else(|| anyhow!("GPU prefilter kernels unavailable"))?;
-        let ctx = GpuContext::try_global().ok_or_else(|| anyhow!("GPU context unavailable"))?;
-        let stream = ctx.cuda_context().new_stream()?;
 
         // Output capacity: at most one hit per DISTINCT target, and distinct
         // targets <= total_hits (every posting could be a different seq). The
@@ -426,22 +497,34 @@ impl GpuPrefilterIndex {
         // fits u32 and is a safe, target-count-INDEPENDENT bound (claudex §2b).
         let out_cap = total_hits as usize;
 
-        let d_qpos = stream.clone_htod(&kmer_qpos)?;
-        let d_hash = stream.clone_htod(&kmer_hash)?;
-        // Fresh per-query scratch, all zeroed. Vote table: EMPTY=0 keys, 0
-        // counts. Seq-hash table: EMPTY=0 keys, 0 (= "no vote") packed vals.
-        // The seq-hash table reuses the vote table's cap (distinct seqs <=
-        // total_hits <= table_cap/2 ⇒ load factor < 0.5).
-        let mut d_keys = stream.alloc_zeros::<u64>(table_cap)?;
-        let mut d_counts = stream.alloc_zeros::<u32>(table_cap)?;
-        let mut d_best_keys = stream.alloc_zeros::<u64>(table_cap)?;
-        let mut d_best_vals = stream.alloc_zeros::<u64>(table_cap)?;
-        let mut d_out_seq = stream.alloc_zeros::<u32>(out_cap)?;
-        let mut d_out_packed = stream.alloc_zeros::<u64>(out_cap)?;
-        let mut d_out_count = stream.alloc_zeros::<u32>(1)?;
-        // [0] vote probe exhaustion, [1] seq-hash probe exhaustion, [2] output
-        // overflow — each → Err → CPU fallback, never a silent miscount.
-        let mut d_err = stream.alloc_zeros::<u32>(3)?;
+        // Reuse the caller's scratch: grow buffers to this query's needs, then
+        // zero only the ranges the kernels touch (the malloc is amortized across
+        // the batch; P2). Clone the stream Arc so `scratch`'s buffer fields can
+        // be borrowed disjointly while the stream drives the launches.
+        let stream = scratch.stream.clone();
+        ensure_cap(&stream, &mut scratch.d_qpos, n_kmers)?;
+        ensure_cap(&stream, &mut scratch.d_hash, n_kmers)?;
+        ensure_cap(&stream, &mut scratch.d_keys, table_cap)?;
+        ensure_cap(&stream, &mut scratch.d_counts, table_cap)?;
+        ensure_cap(&stream, &mut scratch.d_best_keys, table_cap)?;
+        ensure_cap(&stream, &mut scratch.d_best_vals, table_cap)?;
+        ensure_cap(&stream, &mut scratch.d_out_seq, out_cap)?;
+        ensure_cap(&stream, &mut scratch.d_out_packed, out_cap)?;
+
+        // Zero only the USED ranges. Vote table: EMPTY=0 keys, 0 counts.
+        // Seq-hash table: EMPTY=0 keys, 0 (= "no vote") packed vals. Counters +
+        // error flags reset. out_seq/out_packed need NO zeroing — compaction
+        // writes by index and the host reads only [0, n_out).
+        stream.memset_zeros(&mut scratch.d_keys.slice_mut(0..table_cap))?;
+        stream.memset_zeros(&mut scratch.d_counts.slice_mut(0..table_cap))?;
+        stream.memset_zeros(&mut scratch.d_best_keys.slice_mut(0..table_cap))?;
+        stream.memset_zeros(&mut scratch.d_best_vals.slice_mut(0..table_cap))?;
+        stream.memset_zeros(&mut scratch.d_out_count)?;
+        stream.memset_zeros(&mut scratch.d_err)?;
+
+        // Upload the query's k-mer list into the (reused) input buffers.
+        stream.memcpy_htod(&kmer_qpos, &mut scratch.d_qpos)?;
+        stream.memcpy_htod(&kmer_hash, &mut scratch.d_hash)?;
 
         // Kernel A: one block per k-mer; threads stride its posting list,
         // insert-or-increment into the (seq, diag) vote table.
@@ -456,14 +539,14 @@ impl GpuPrefilterIndex {
             a.arg(&self.d_offsets);
             a.arg(&self.d_seq_id);
             a.arg(&self.d_pos);
-            a.arg(&d_qpos);
-            a.arg(&d_hash);
+            a.arg(&scratch.d_qpos);
+            a.arg(&scratch.d_hash);
             a.arg(&n_kmers_i);
             a.arg(&diag_bias);
-            a.arg(&mut d_keys);
-            a.arg(&mut d_counts);
+            a.arg(&mut scratch.d_keys);
+            a.arg(&mut scratch.d_counts);
             a.arg(&table_mask);
-            a.arg(&mut d_err); // slot [0]
+            a.arg(&mut scratch.d_err); // slot [0]
             unsafe { a.launch(cfg)? };
         }
 
@@ -477,14 +560,14 @@ impl GpuPrefilterIndex {
             };
             let mut a = stream.launch_builder(&kernels.reduce_seqhash);
             let table_cap_u = table_cap as u32;
-            a.arg(&d_keys);
-            a.arg(&d_counts);
+            a.arg(&scratch.d_keys);
+            a.arg(&scratch.d_counts);
             a.arg(&table_cap_u);
             a.arg(&diag_max);
-            a.arg(&mut d_best_keys);
-            a.arg(&mut d_best_vals);
+            a.arg(&mut scratch.d_best_keys);
+            a.arg(&mut scratch.d_best_vals);
             a.arg(&table_mask); // best cap == vote cap ⇒ same mask
-            let d_err_best = d_err.slice(1..2);
+            let d_err_best = scratch.d_err.slice(1..2);
             a.arg(&d_err_best); // slot [1]
             unsafe { a.launch(cfg)? };
         }
@@ -500,20 +583,20 @@ impl GpuPrefilterIndex {
             let mut a = stream.launch_builder(&kernels.compact);
             let best_size_u = table_cap as u32;
             let out_cap_u = out_cap as u32;
-            a.arg(&d_best_keys);
-            a.arg(&d_best_vals);
+            a.arg(&scratch.d_best_keys);
+            a.arg(&scratch.d_best_vals);
             a.arg(&best_size_u);
-            a.arg(&mut d_out_seq);
-            a.arg(&mut d_out_packed);
+            a.arg(&mut scratch.d_out_seq);
+            a.arg(&mut scratch.d_out_packed);
             a.arg(&out_cap_u);
-            a.arg(&mut d_out_count);
-            let d_err_out = d_err.slice(2..3);
+            a.arg(&mut scratch.d_out_count);
+            let d_err_out = scratch.d_err.slice(2..3);
             a.arg(&d_err_out); // slot [2]
             unsafe { a.launch(cfg)? };
         }
         stream.synchronize()?;
 
-        let err = stream.clone_dtoh(&d_err)?;
+        let err = stream.clone_dtoh(&scratch.d_err)?;
         if err[0] != 0 {
             return Err(anyhow!(
                 "GPU prefilter: vote hash table probe exhausted (capacity bug)"
@@ -530,9 +613,11 @@ impl GpuPrefilterIndex {
             ));
         }
 
-        let n_out = (stream.clone_dtoh(&d_out_count)?[0] as usize).min(out_cap);
-        let out_seq = stream.clone_dtoh(&d_out_seq)?;
-        let out_packed = stream.clone_dtoh(&d_out_packed)?;
+        let n_out = (stream.clone_dtoh(&scratch.d_out_count)?[0] as usize).min(out_cap);
+        // Copy back only the compacted prefix (O(hits)); the buffers may be
+        // larger than `n_out` after grow-not-shrink, so slice before DTOH.
+        let out_seq = stream.clone_dtoh(&scratch.d_out_seq.slice(0..n_out))?;
+        let out_packed = stream.clone_dtoh(&scratch.d_out_packed.slice(0..n_out))?;
 
         // Decode the compacted output → PrefilterHit; same filter/sort/truncate
         // as the CPU path. Compaction order is nondeterministic, but each seq
