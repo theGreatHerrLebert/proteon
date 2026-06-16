@@ -153,6 +153,51 @@ fn main() {
             cpu_elapsed / (gpu_elapsed + upload_elapsed)
         );
 
+        // ---- Single-query path (what SearchEngine::search actually does) ----
+        // search() calls prefilter() once per query, each making its OWN scratch
+        // (no batch amortization). This is the crossover that gates the search()
+        // wiring, NOT the batched number above.
+        let _ = gpu
+            .prefilter(query_slices[0], skip_idx, &opts)
+            .expect("gpu single warmup");
+        let t_sq = Instant::now();
+        let mut sq_hits = 0usize;
+        for q in &query_slices {
+            sq_hits += gpu.prefilter(q, skip_idx, &opts).expect("gpu single").len();
+        }
+        let sq_elapsed = t_sq.elapsed().as_secs_f64();
+        let sq_qps = n_queries as f64 / sq_elapsed;
+        println!(
+            "gpu single:    {sq_elapsed:.3} s   ({sq_qps:.1} queries/s)   total_hits={sq_hits}   \
+             speedup={:.2}x  (fresh scratch/query = search() path)",
+            cpu_elapsed / sq_elapsed
+        );
+
+        // ---- Cached single-query path (search() with a REUSED scratch) ----
+        // What search() does once we cache one PrefilterScratch on the engine:
+        // single-query calls, but the device buffers + stream are reused across
+        // calls. This is the crossover that the search() wiring should gate on.
+        use proteon_search::gpu::prefilter::PrefilterScratch;
+        let mut scratch = PrefilterScratch::new().expect("scratch");
+        let _ = gpu
+            .prefilter_with(&mut scratch, query_slices[0], skip_idx, &opts)
+            .expect("gpu cached warmup");
+        let t_cs = Instant::now();
+        let mut cs_hits = 0usize;
+        for q in &query_slices {
+            cs_hits += gpu
+                .prefilter_with(&mut scratch, q, skip_idx, &opts)
+                .expect("gpu cached single")
+                .len();
+        }
+        let cs_elapsed = t_cs.elapsed().as_secs_f64();
+        let cs_qps = n_queries as f64 / cs_elapsed;
+        println!(
+            "gpu cached:    {cs_elapsed:.3} s   ({cs_qps:.1} queries/s)   total_hits={cs_hits}   \
+             speedup={:.2}x  (reused scratch/query = wired search() path)",
+            cpu_elapsed / cs_elapsed
+        );
+
         // ---- Bit-exact verification ----
         let mut mismatches = 0usize;
         for (qi, (c, g)) in cpu_results.iter().zip(gpu_results.iter()).enumerate() {

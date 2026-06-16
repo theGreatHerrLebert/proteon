@@ -88,7 +88,32 @@ still wins (the three un-batched launches' fixed latency dominates the tiny
 per-query work); P3 (batched launches over the whole tile) targets that small-N
 regime.
 
-## What would make GPU win
+## Update — `search()` wired to the crossover
+
+`SearchEngine::search` runs **one query at a time**, so the path it wires is the
+single-query prefilter, NOT the batched numbers above. Two single-query modes
+measured on the RTX 2070 (`prefilter_bench`):
+
+| corpus | single (fresh scratch/query) | cached (reused scratch/query) |
+|--------|------------------------------|-------------------------------|
+| 20k    | 0.44–0.51×                   | 0.70× |
+| 35k    | 0.56×                        | 0.84× |
+| 50k    | 0.61–0.66×                   | 0.95× |
+| 100k   | 0.72–0.83×                   | 1.30× |
+| 200k   | 1.07×                        | — |
+
+A **fresh `PrefilterScratch` per query** (the naive single-query path) only
+crosses 1.0 near ~200k targets — the per-call alloc/stream cost dominates. So the
+engine now **caches one `PrefilterScratch` and reuses it across `search()` calls**
+(`Mutex<Option<…>>`, since `search()` is `&self`); that recovers the batch-level
+curve (crossover ~55k). `gpu_handle()` gates the GPU prefilter on
+`target_count() >= GPU_PREFILTER_MIN_TARGETS` (default **75 000**, a conservative
+floor above the ~55k random-corpus crossover; real corpora have skewed postings
+that favour the GPU earlier). Overridable per engine via
+`SearchOptions::gpu_prefilter_min_targets` (the default is tuned for an RTX 2070;
+lower it on a faster GPU). Below the floor the index is never even uploaded.
+
+## What would make GPU win (small-N regime)
 
 A **fused multi-query kernel**:
 - one launch covering *all* queries in the batch (amortize launch latency),

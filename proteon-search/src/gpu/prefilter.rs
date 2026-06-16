@@ -110,7 +110,12 @@ pub struct GpuPrefilterIndex {
 /// the resident [`GpuPrefilterIndex`] stays `&self` and concurrency-safe — there
 /// is no shared mutable device state on the handle (claudex: a `Mutex` on
 /// `&self` would silently serialize concurrent callers).
-struct PrefilterScratch {
+///
+/// Hold one across many single-query [`GpuPrefilterIndex::prefilter_with`] calls
+/// (e.g. an engine reusing it across `search()` calls) to get the same
+/// amortization the batch methods get internally — a fresh scratch per query
+/// pays the alloc/stream cost and pushes the GPU-vs-CPU crossover much higher.
+pub struct PrefilterScratch {
     stream: Arc<CudaStream>,
     d_qpos: CudaSlice<i32>,
     d_hash: CudaSlice<u64>,
@@ -128,7 +133,7 @@ struct PrefilterScratch {
 
 impl PrefilterScratch {
     /// Allocate the scratch (one stream + stub buffers grown on first use).
-    fn new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let ctx = GpuContext::try_global().ok_or_else(|| anyhow!("GPU context unavailable"))?;
         let stream = ctx.cuda_context().new_stream()?;
         // cudarc rejects zero-byte allocations, so start the growable buffers at
@@ -280,6 +285,22 @@ impl GpuPrefilterIndex {
         self.run_query(&mut scratch, query, skip_idx, opts)
     }
 
+    /// Single-query prefilter reusing a CALLER-owned [`PrefilterScratch`] — hold
+    /// one across many calls (e.g. per `search()`) to amortize the device-buffer
+    /// allocation + stream creation a fresh-scratch [`prefilter`] would repay
+    /// every call. Bit-exact equal to [`crate::prefilter::diagonal_prefilter`].
+    ///
+    /// [`prefilter`]: GpuPrefilterIndex::prefilter
+    pub fn prefilter_with(
+        &self,
+        scratch: &mut PrefilterScratch,
+        query: &[u8],
+        skip_idx: u8,
+        opts: &PrefilterOptions,
+    ) -> Result<Vec<PrefilterHit>> {
+        self.run_query(scratch, query, skip_idx, opts)
+    }
+
     /// Many queries against the resident index, reusing the upload + ONE scratch
     /// allocation set + stream across the whole batch (the per-query
     /// malloc/stream churn was the fixed-overhead wall — P2). `out[i]` is
@@ -311,9 +332,25 @@ impl GpuPrefilterIndex {
         opts: &PrefilterOptions,
     ) -> Result<Vec<PrefilterHit>> {
         let mut scratch = PrefilterScratch::new()?;
+        self.prefilter_sensitive_with(&mut scratch, query, skip_idx, similarity, opts)
+    }
+
+    /// Sensitive single-query prefilter reusing a CALLER-owned
+    /// [`PrefilterScratch`] (see [`prefilter_with`]). Bit-exact equal to
+    /// [`crate::prefilter::diagonal_prefilter_sensitive`].
+    ///
+    /// [`prefilter_with`]: GpuPrefilterIndex::prefilter_with
+    pub fn prefilter_sensitive_with(
+        &self,
+        scratch: &mut PrefilterScratch,
+        query: &[u8],
+        skip_idx: u8,
+        similarity: &SimilarityConfig<'_>,
+        opts: &PrefilterOptions,
+    ) -> Result<Vec<PrefilterHit>> {
         let diag_bias = self.validate_diag_bias(query.len())?;
         let kmers = self.build_sensitive_kmers(query, skip_idx, similarity)?;
-        self.vote_and_reduce(&mut scratch, &kmers, diag_bias, opts)
+        self.vote_and_reduce(scratch, &kmers, diag_bias, opts)
     }
 
     /// Many sensitive queries against the resident index (one scratch + stream
