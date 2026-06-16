@@ -48,7 +48,6 @@ pytestmark = pytest.mark.oracle("pydssp")
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROTEON_PDBS = os.path.normpath(os.path.join(_HERE, "..", "..", "test-pdbs"))
-SHARED_PDBS = os.path.normpath(os.path.join(_HERE, "..", "..", "..", "test-pdbs"))
 
 
 def _pdb(name: str, base: str) -> str:
@@ -59,9 +58,9 @@ def _pdb(name: str, base: str) -> str:
 STRUCTURES = [
     ("1crn", _pdb("1crn", PROTEON_PDBS)),       # 46 res,  mixed
     ("1ubq", _pdb("1ubq", PROTEON_PDBS)),       # 76 res,  mixed
-    ("1enh", _pdb("1enh", SHARED_PDBS)),         # 54 res,  3-helix bundle
-    ("1ake", _pdb("1ake", SHARED_PDBS)),         # 428 res, alpha/beta
-    ("4hhb", _pdb("4hhb", SHARED_PDBS)),         # 574 res, 4-chain hemoglobin
+    ("1enh", _pdb("1enh", PROTEON_PDBS)),       # 54 res,  3-helix bundle
+    ("1ake", _pdb("1ake", PROTEON_PDBS)),       # 428 res, alpha/beta
+    ("4hhb", _pdb("4hhb", PROTEON_PDBS)),       # 574 res, 4-chain hemoglobin
 ]
 
 AGREEMENT_TOLERANCE = 0.95
