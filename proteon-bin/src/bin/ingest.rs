@@ -268,6 +268,14 @@ fn main() -> Result<()> {
         );
     }
 
+    // Per-file failures are isolated (the bulk 45k-PDB use case always has a
+    // few), so partial success exits 0. But if EVERY input failed we produced
+    // an empty output — that is an error state, not success: a pipeline gating
+    // on the exit code must not mistake "ingested nothing" for "ingested all".
+    if done == 0 {
+        anyhow::bail!("no structures ingested: all {failed} input(s) failed; output is empty");
+    }
+
     Ok(())
 }
 

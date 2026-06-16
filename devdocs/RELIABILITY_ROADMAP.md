@@ -290,15 +290,20 @@ Why:
 - test count alone hides untested surfaces
 - current test distribution is strong but uneven
 
-### 4. Add CLI Integration Tests
+### 4. Add CLI Integration Tests (shipped)
 
-Add explicit tests for:
+`proteon-bin/tests/cli_align_ingest.rs` covers the three surfaces the existing
+`cli.rs` (the `proteon` analysis CLI) did not:
 
-- `proteon-ingest` single-file output
-- `proteon-ingest --per-structure`
-- `tmalign` tabular output
-- `usalign` tabular output
-- failure modes on bad input
+- `ingest` single-file (valid Parquet, exact 327-atom row count + schema),
+  multi-file concatenation, and `--per-structure` (one valid file each)
+- `ingest` failure modes: a bad file is **isolated** (good file still written,
+  exit 0) but an **all-failed** run now **exits nonzero** instead of silently
+  writing an empty Parquet (fixed in `ingest.rs` — a pipeline gating on the exit
+  code must not mistake "ingested nothing" for "ingested all")
+- `tmalign` / `usalign` `--outfmt 2` tabular contract (11 columns, header,
+  self-alignment is exactly TM=1.0 / RMSD=0) + human-readable default
+- `tmalign` / `usalign` failure on missing / nonexistent input
 
 Why:
 
