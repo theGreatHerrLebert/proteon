@@ -47,6 +47,27 @@ across the batch — and the target-set-sized `best[]` copyback + scan is exactl
 what makes throughput **degrade with N**. The actual voting work per query
 (~200 k-mers, each hitting ~1–10 postings) is dwarfed by this fixed overhead.
 
+## Update — P1 (seq-keyed reduction) landed
+
+`GPU_PREFILTER_FUSED_PLAN.md` P1 replaced the dense `best[#targets]` with a
+seq-keyed hash table + on-device compaction (copyback is now O(hits)). Same
+RTX 2070 sweep, 1 000 queries, bit-exact verified:
+
+| corpus (targets) | CPU q/s | GPU q/s | steady-state | (was) |
+|------------------|---------|---------|--------------|-------|
+| 5 000            | 22 000  | 8 800   | 0.40×        | 0.49× |
+| 20 000           | 16 700  | 9 500   | 0.57×        | 0.37× |
+| 50 000           | 12 600  | 8 300   | 0.66×        | 0.39× |
+| 100 000          | 7 800   | 6 700   | **0.87×**    | 0.32× |
+
+The **degradation-with-N is eliminated and reversed**: GPU q/s now holds roughly
+flat while CPU falls off as postings densify, so the speedup *rises* with corpus
+size (0.40× → 0.87×) instead of sinking (0.49× → 0.32×). GPU still doesn't beat
+CPU at these sizes — the remaining gap is per-query alloc churn + three
+un-batched launches, which **P2 (persistent scratch)** and **P3 (batched
+launches)** target. The slight regression at 5k (0.49× → 0.40×) is the extra
+compaction kernel + best-hash table fixed overhead, which P2/P3 also amortize.
+
 ## What would make GPU win
 
 A **fused multi-query kernel**:

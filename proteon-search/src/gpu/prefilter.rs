@@ -30,7 +30,8 @@ const DIAG_BITS: u32 = 20;
 /// Compiled vote + reduce kernels, cached in a process-global `OnceLock`.
 pub(crate) struct PrefilterKernels {
     vote: CudaFunction,
-    reduce: CudaFunction,
+    reduce_seqhash: CudaFunction,
+    compact: CudaFunction,
     _module: Arc<CudaModule>,
 }
 
@@ -62,10 +63,12 @@ impl PrefilterKernels {
             .with_context(|| "NVRTC compile of prefilter.cu failed")?;
         let module = ctx.cuda_context().load_module(ptx)?;
         let vote = module.load_function("prefilter_vote")?;
-        let reduce = module.load_function("prefilter_reduce")?;
+        let reduce_seqhash = module.load_function("prefilter_reduce_seqhash")?;
+        let compact = module.load_function("prefilter_compact")?;
         Ok(Self {
             vote,
-            reduce,
+            reduce_seqhash,
+            compact,
             _module: module,
         })
     }
@@ -87,13 +90,10 @@ pub struct GpuPrefilterIndex {
     /// lengths without a device round-trip.
     offsets_host: Vec<u64>,
     table_size: u64,
-    /// Number of DISTINCT targets = `best[]` length. The kernel votes into a
-    /// dense `[0, best_len)` space (see `dense_to_orig`), so `best[]` is sized by
-    /// the target COUNT, never the max external `seq_id` (which may be sparse).
-    best_len: usize,
     /// `dense_to_orig[d]` is the original `seq_id` for dense target index `d`.
-    /// The uploaded `entries_seq_id` use dense indices; decode maps back through
-    /// this. Keeps `best[]` bounded by target count, not external id range (codex).
+    /// The uploaded `entries_seq_id` use dense `[0, n_targets)` indices (so the
+    /// seq-keyed reduction never depends on the external id range, which may be
+    /// sparse — codex); decode maps the compacted output back through this.
     dense_to_orig: Vec<u32>,
 }
 
@@ -128,9 +128,9 @@ impl GpuPrefilterIndex {
             ));
         }
 
-        // Dense-remap seq_ids → [0, n_targets). `best[]` (per-query, device + host
-        // DTOH copy) is then sized by the DISTINCT-TARGET COUNT, not the max
-        // external id — a sparse huge id no longer blows it up (codex). Every host
+        // Dense-remap seq_ids → [0, n_targets) so the kernels vote in a compact
+        // index space (the seq-keyed reduction + decode map back via
+        // `dense_to_orig`); a sparse huge external id costs nothing. Every host
         // allocation (the map AND its key vec) is fallible so a pathological index
         // falls back to CPU instead of OOM-aborting on infallible growth.
         let mut dense_to_orig: Vec<u32> = Vec::new();
@@ -155,17 +155,12 @@ impl GpuPrefilterIndex {
             dense_to_orig.push(h.seq_id);
             orig_to_dense.insert(h.seq_id, d as u32);
         }
-        let best_len = dense_to_orig.len().max(1);
-
-        // Full capacity guard now that `best[]`'s (target-bounded) size is known.
-        let needed_bytes = resident_bytes.saturating_add((best_len as u64).saturating_mul(8));
-        if total_mem > 0 && needed_bytes > total_mem / 2 {
-            return Err(anyhow!(
-                "GPU prefilter: index needs ~{needed_bytes} B (resident {resident_bytes} + \
-                 best[] {}), over half of {total_mem} B device memory; using CPU prefilter",
-                best_len * 8
-            ));
-        }
+        // No second capacity guard: the resident pre-check above already bounds
+        // the only upload-time buffers (offsets + entries). Per-query scratch
+        // (vote + seq-hash tables + output) is sized by QUERY work, allocated and
+        // freed per query — a too-large query's alloc fails → Err → CPU fallback,
+        // never a fixed target-count tax at upload (codex: P1 removed the dense
+        // best[] this guard used to reserve for).
 
         // Host SoA via FALLIBLE allocation (entries use DENSE seq ids).
         let n = index.entries.len();
@@ -203,7 +198,6 @@ impl GpuPrefilterIndex {
             encoder: index.encoder().clone(),
             offsets_host,
             table_size: index.encoder().table_size(),
-            best_len,
             dense_to_orig,
         })
     }
@@ -426,15 +420,31 @@ impl GpuPrefilterIndex {
         let ctx = GpuContext::try_global().ok_or_else(|| anyhow!("GPU context unavailable"))?;
         let stream = ctx.cuda_context().new_stream()?;
 
+        // Output capacity: at most one hit per DISTINCT target, and distinct
+        // targets <= total_hits (every posting could be a different seq). The
+        // table_cap guard already proved 2*total_hits <= u32::MAX ⇒ total_hits
+        // fits u32 and is a safe, target-count-INDEPENDENT bound (claudex §2b).
+        let out_cap = total_hits as usize;
+
         let d_qpos = stream.clone_htod(&kmer_qpos)?;
         let d_hash = stream.clone_htod(&kmer_hash)?;
-        // Fresh per-query scratch (zeroed: EMPTY=0, zero counts, best=0=no-vote).
+        // Fresh per-query scratch, all zeroed. Vote table: EMPTY=0 keys, 0
+        // counts. Seq-hash table: EMPTY=0 keys, 0 (= "no vote") packed vals.
+        // The seq-hash table reuses the vote table's cap (distinct seqs <=
+        // total_hits <= table_cap/2 ⇒ load factor < 0.5).
         let mut d_keys = stream.alloc_zeros::<u64>(table_cap)?;
         let mut d_counts = stream.alloc_zeros::<u32>(table_cap)?;
-        let mut d_best = stream.alloc_zeros::<u64>(self.best_len)?;
-        let mut d_err = stream.alloc_zeros::<u32>(1)?;
+        let mut d_best_keys = stream.alloc_zeros::<u64>(table_cap)?;
+        let mut d_best_vals = stream.alloc_zeros::<u64>(table_cap)?;
+        let mut d_out_seq = stream.alloc_zeros::<u32>(out_cap)?;
+        let mut d_out_packed = stream.alloc_zeros::<u64>(out_cap)?;
+        let mut d_out_count = stream.alloc_zeros::<u32>(1)?;
+        // [0] vote probe exhaustion, [1] seq-hash probe exhaustion, [2] output
+        // overflow — each → Err → CPU fallback, never a silent miscount.
+        let mut d_err = stream.alloc_zeros::<u32>(3)?;
 
-        // Kernel A: one block per k-mer; threads stride its posting list.
+        // Kernel A: one block per k-mer; threads stride its posting list,
+        // insert-or-increment into the (seq, diag) vote table.
         {
             let cfg = LaunchConfig {
                 grid_dim: (n_kmers as u32, 1, 1),
@@ -453,26 +463,52 @@ impl GpuPrefilterIndex {
             a.arg(&mut d_keys);
             a.arg(&mut d_counts);
             a.arg(&table_mask);
-            a.arg(&mut d_err);
+            a.arg(&mut d_err); // slot [0]
             unsafe { a.launch(cfg)? };
         }
 
-        // Kernel B: one thread per hash slot → atomicMax into best[seq].
+        // Kernel B: one thread per VOTE slot → insert-or-max into the seq-keyed
+        // hash table (replaces the old dense best[#targets]).
         {
             let cfg = LaunchConfig {
                 grid_dim: ((table_cap as u32).div_ceil(256), 1, 1),
                 block_dim: (256, 1, 1),
                 shared_mem_bytes: 0,
             };
-            let mut a = stream.launch_builder(&kernels.reduce);
+            let mut a = stream.launch_builder(&kernels.reduce_seqhash);
             let table_cap_u = table_cap as u32;
-            let best_len_u = self.best_len as u32;
             a.arg(&d_keys);
             a.arg(&d_counts);
             a.arg(&table_cap_u);
             a.arg(&diag_max);
-            a.arg(&mut d_best);
-            a.arg(&best_len_u);
+            a.arg(&mut d_best_keys);
+            a.arg(&mut d_best_vals);
+            a.arg(&table_mask); // best cap == vote cap ⇒ same mask
+            let d_err_best = d_err.slice(1..2);
+            a.arg(&d_err_best); // slot [1]
+            unsafe { a.launch(cfg)? };
+        }
+
+        // Kernel C: one thread per SEQ-HASH slot → stream-compact occupied
+        // (seq, packed) into the dense output list. Host copies back O(hits).
+        {
+            let cfg = LaunchConfig {
+                grid_dim: ((table_cap as u32).div_ceil(256), 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            let mut a = stream.launch_builder(&kernels.compact);
+            let best_size_u = table_cap as u32;
+            let out_cap_u = out_cap as u32;
+            a.arg(&d_best_keys);
+            a.arg(&d_best_vals);
+            a.arg(&best_size_u);
+            a.arg(&mut d_out_seq);
+            a.arg(&mut d_out_packed);
+            a.arg(&out_cap_u);
+            a.arg(&mut d_out_count);
+            let d_err_out = d_err.slice(2..3);
+            a.arg(&d_err_out); // slot [2]
             unsafe { a.launch(cfg)? };
         }
         stream.synchronize()?;
@@ -480,23 +516,36 @@ impl GpuPrefilterIndex {
         let err = stream.clone_dtoh(&d_err)?;
         if err[0] != 0 {
             return Err(anyhow!(
-                "GPU prefilter: hash table probe exhausted (capacity bug)"
+                "GPU prefilter: vote hash table probe exhausted (capacity bug)"
             ));
         }
-        let best = stream.clone_dtoh(&d_best)?;
+        if err[1] != 0 {
+            return Err(anyhow!(
+                "GPU prefilter: seq hash table probe exhausted (capacity bug)"
+            ));
+        }
+        if err[2] != 0 {
+            return Err(anyhow!(
+                "GPU prefilter: compaction output overflow (capacity bug)"
+            ));
+        }
 
-        // Decode best[] → PrefilterHit; same filter/sort/truncate as the CPU path.
-        let mut hits: Vec<PrefilterHit> = Vec::new();
-        for (seq, &packed) in best.iter().enumerate() {
-            if packed == 0 {
-                continue; // no vote
-            }
+        let n_out = (stream.clone_dtoh(&d_out_count)?[0] as usize).min(out_cap);
+        let out_seq = stream.clone_dtoh(&d_out_seq)?;
+        let out_packed = stream.clone_dtoh(&d_out_packed)?;
+
+        // Decode the compacted output → PrefilterHit; same filter/sort/truncate
+        // as the CPU path. Compaction order is nondeterministic, but each seq
+        // appears once and the sort below is a total order (score desc, seq_id
+        // asc), so the result is deterministic and bit-exact vs CPU.
+        let mut hits: Vec<PrefilterHit> = Vec::with_capacity(n_out);
+        for i in 0..n_out {
+            let packed = out_packed[i];
             let count = (packed >> DIAG_BITS) as u32;
             let diag_b = diag_max - (packed & diag_max);
             let diagonal = diag_b as i64 - diag_bias as i64;
-            // `seq` is the DENSE index the kernel voted into; map back to the
-            // original external seq_id.
-            let seq_id = self.dense_to_orig[seq];
+            // The kernel voted in DENSE space; map back to the external seq_id.
+            let seq_id = self.dense_to_orig[out_seq[i] as usize];
             if count >= opts.score_threshold && opts.exclude_self != Some(seq_id) {
                 hits.push(PrefilterHit {
                     seq_id,
