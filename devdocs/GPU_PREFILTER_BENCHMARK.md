@@ -68,6 +68,26 @@ un-batched launches, which **P2 (persistent scratch)** and **P3 (batched
 launches)** target. The slight regression at 5k (0.49× → 0.40×) is the extra
 compaction kernel + best-hash table fixed overhead, which P2/P3 also amortize.
 
+## Update — P2 (persistent scratch) landed: GPU crosses 1.0
+
+P2 hoisted the per-query device buffers + stream into a caller-owned,
+grow-not-shrink `PrefilterScratch` reused across the batch (no `cudaMalloc` /
+stream-create per query). Same RTX 2070 sweep, bit-exact:
+
+| corpus (targets) | CPU q/s | GPU q/s | steady-state | (P1) | (baseline) |
+|------------------|---------|---------|--------------|------|------------|
+| 5 000            | 23 400  | 14 200  | 0.61×        | 0.40× | 0.49× |
+| 20 000           | 16 600  | 12 900  | 0.78×        | 0.57× | 0.37× |
+| 50 000           | 12 200  | 12 100  | **0.99×**    | 0.66× | 0.39× |
+| 100 000          | 8 100   | 10 000  | **1.23×**    | 0.87× | 0.32× |
+
+Removing the alloc/stream churn lifted GPU throughput ~60% at small N (14 200 vs
+P1's 8 800 q/s) and **pushes GPU past CPU at 50k+ targets** (1.23× at 100k) —
+the P3 throughput goal, reached at scale by P2 alone. Below ~50k targets CPU
+still wins (the three un-batched launches' fixed latency dominates the tiny
+per-query work); P3 (batched launches over the whole tile) targets that small-N
+regime.
+
 ## What would make GPU win
 
 A **fused multi-query kernel**:

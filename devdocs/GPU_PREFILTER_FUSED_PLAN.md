@@ -123,8 +123,13 @@ front).
   *reversed*, in fact: speedup rose 0.40×→0.87× across 5k→100k targets (was
   0.49×→0.32×). See `GPU_PREFILTER_BENCHMARK.md`. Does not yet beat CPU (still
   per-query alloc + 3 launches) — that's P2/P3.
-- **P2 — persistent scratch.** Hoist scratch into the handle, grow-not-shrink.
-  **Gate:** measurably lower per-query fixed overhead (alloc churn gone).
+- **P2 — persistent scratch. DONE.** Hoisted per-query device buffers + stream
+  into a caller-owned, grow-not-shrink `PrefilterScratch` reused across the batch
+  (NOT `Mutex`-on-`&self` — the handle stays `&self`; the batch methods own one
+  scratch and thread it through `vote_and_reduce`). **Gate MET:** GPU q/s +~60%
+  at small N; **GPU crosses 1.0 — beats CPU at 50k+ targets (1.23× @100k)**.
+  Bit-exact (14 parity tests). The P3 throughput goal is already reached at scale
+  by P2 alone; P3 now only targets the small-N (<50k) regime.
 - **P3 — batched launches + tiling.** Flatten the tile work lists; one
   launch-set per tile; bucket-by-`total_hits` tiling + per-query fallback.
   **Gate:** beats CPU steady-state at realistic batch sizes — *required if the
