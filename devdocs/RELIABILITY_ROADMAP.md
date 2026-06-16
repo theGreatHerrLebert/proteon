@@ -384,25 +384,25 @@ Focus first on:
 
 ## P2: Build a Real Regression Corpus
 
-### 8. Create `tests/corpus/`
+### 8. Create `tests/corpus/` (mostly shipped)
 
-Add small, curated structures for:
+`tests/corpus/` + `tests/test_corpus.py` cover:
 
-- alt conformers
-- insertion codes
-- multi-model NMR
-- missing sidechain atoms
-- missing backbone atoms
-- chain breaks
-- ligands
-- waters
-- mixed protein/RNA if supported
-- large-ish structures for performance smoke
+- alt conformers — `altloc/dual_conformer.pdb` ✅
+- insertion codes — `insertion_codes/icode_interleave.pdb` ✅
+- multi-model NMR — `multimodel/` ✅
+- missing sidechain atoms — `missing_atoms/missing_cb.pdb` ✅
+- missing backbone atoms — `missing_atoms/missing_backbone_c.pdb` ✅
+- chain breaks — `chain_breaks/gap_in_chain.pdb` ✅
+- ligands — `ligands/protein_with_ligand.pdb` ✅
+- waters — `waters/protein_with_waters.pdb` ✅
 
-Each fixture should have:
+Still open (lower priority):
 
-- a one-line reason it exists
-- a linked bug or failure mode if applicable
+- mixed protein/RNA (only if/when RNA is a supported analysis target)
+- large-ish structures for performance smoke (perf tier, not correctness)
+
+Each fixture carries a one-line REMARK reason; `README.md` indexes them.
 
 ### 9. Add Bug-Repro Tests
 

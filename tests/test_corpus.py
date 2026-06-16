@@ -211,3 +211,85 @@ class TestLigands:
         s = proteon.load(corpus_path("ligands", "protein_with_ligand.pdb"))
         report = proteon.prepare(s, reconstruct=False, hydrogens="general", minimize=False)
         assert isinstance(report, proteon.PrepReport)
+
+
+# =========================================================================
+# Waters
+# =========================================================================
+
+
+class TestWaters:
+    """Edge case: structures with crystallographic HOH waters.
+
+    Solvent must load and be distinguishable from protein (so callers can
+    strip it), and must not break energy or prepare. The fixture is 2 ALA
+    (10 atoms) plus 3 HOH oxygens placed well away from the protein.
+    """
+
+    def test_loads(self):
+        s = proteon.load(corpus_path("waters", "protein_with_waters.pdb"))
+        assert s.atom_count == 13  # 10 protein + 3 water oxygens
+
+    def test_waters_are_distinguishable_from_protein(self):
+        s = proteon.load(corpus_path("waters", "protein_with_waters.pdb"))
+        # residue_names is per-atom; solvent is labelled HOH, protein ALA.
+        names = list(s.residue_names)
+        assert names.count("HOH") == 3, "three water oxygens expected"
+        assert names.count("ALA") == 10, "ten protein atoms expected"
+
+    def test_energy_finite(self):
+        s = proteon.load(corpus_path("waters", "protein_with_waters.pdb"))
+        e = proteon.compute_energy(s)
+        assert np.isfinite(e["total"]), "waters must not make the energy non-finite"
+
+    def test_prepare_succeeds(self):
+        s = proteon.load(corpus_path("waters", "protein_with_waters.pdb"))
+        report = proteon.prepare(s, reconstruct=False, minimize=False)
+        assert isinstance(report, proteon.PrepReport)
+
+
+# =========================================================================
+# Missing backbone atoms
+# =========================================================================
+
+
+class TestMissingBackbone:
+    """Edge case: a residue missing a BACKBONE atom (the carbonyl C of res 2).
+
+    Distinct from TestMissingAtoms (a missing sidechain CB): a missing
+    backbone atom breaks the dihedral chain around that residue, so the
+    affected phi/psi/omega must come back NaN rather than be computed from
+    the wrong atoms or crash. Energy must stay finite and prepare must not
+    crash on the incomplete backbone.
+    """
+
+    def test_loads(self):
+        s = proteon.load(corpus_path("missing_atoms", "missing_backbone_c.pdb"))
+        assert s.atom_count == 11  # res 2 is missing its C
+
+    def test_backbone_c_of_residue_2_is_absent(self):
+        s = proteon.load(corpus_path("missing_atoms", "missing_backbone_c.pdb"))
+        serials = list(s.residue_serial_numbers)
+        names = list(s.atom_names)
+        res2_atoms = {a for ser, a in zip(serials, names) if ser == 2}
+        assert "C" not in res2_atoms, "fixture must omit the backbone C of res 2"
+        assert {"N", "CA", "O"} <= res2_atoms, "res 2 keeps its other backbone atoms"
+
+    def test_dihedrals_nan_at_break_no_crash(self):
+        s = proteon.load(corpus_path("missing_atoms", "missing_backbone_c.pdb"))
+        phi, psi, omega = proteon.backbone_dihedrals(s)
+        assert len(phi) > 0
+        # The missing carbonyl C breaks psi(res2)/omega(res2-3)/phi(res3).
+        assert np.any(np.isnan(psi)) or np.any(np.isnan(omega)), (
+            "a missing backbone atom must NaN the affected dihedrals"
+        )
+
+    def test_energy_finite(self):
+        s = proteon.load(corpus_path("missing_atoms", "missing_backbone_c.pdb"))
+        e = proteon.compute_energy(s)
+        assert np.isfinite(e["total"])
+
+    def test_prepare_succeeds(self):
+        s = proteon.load(corpus_path("missing_atoms", "missing_backbone_c.pdb"))
+        report = proteon.prepare(s, reconstruct=False, minimize=False)
+        assert isinstance(report, proteon.PrepReport)

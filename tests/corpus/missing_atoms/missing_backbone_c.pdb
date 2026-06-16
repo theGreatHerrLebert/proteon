@@ -1,0 +1,16 @@
+REMARK   0 Three residues where residue 2 is missing its backbone C (carbonyl).
+REMARK   0 Distinct from missing_cb (sidechain): a missing BACKBONE atom breaks
+REMARK   0 the dihedral chain (psi/omega/phi around res 2). Analysis must NaN
+REMARK   0 those angles gracefully, not crash; prepare must not crash.
+ATOM      1  N   ALA A   1       1.000   1.000   1.000  1.00  0.00           N
+ATOM      2  CA  ALA A   1       2.000   1.000   1.000  1.00  0.00           C
+ATOM      3  C   ALA A   1       3.000   1.000   1.000  1.00  0.00           C
+ATOM      4  O   ALA A   1       3.000   2.000   1.000  1.00  0.00           O
+ATOM      5  N   ALA A   2       4.000   1.000   1.000  1.00  0.00           N
+ATOM      6  CA  ALA A   2       5.000   1.000   1.000  1.00  0.00           C
+ATOM      7  O   ALA A   2       5.000   2.000   1.000  1.00  0.00           O
+ATOM      8  N   ALA A   3       7.000   1.000   1.000  1.00  0.00           N
+ATOM      9  CA  ALA A   3       8.000   1.000   1.000  1.00  0.00           C
+ATOM     10  C   ALA A   3       9.000   1.000   1.000  1.00  0.00           C
+ATOM     11  O   ALA A   3       9.000   2.000   1.000  1.00  0.00           O
+END
