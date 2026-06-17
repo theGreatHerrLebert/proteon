@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "proteon-connector"
-version = "0.2.1"
+version = "0.3.0"
 description = "PyO3 bindings for proteon structural bioinformatics tools"
 readme = "README.md"
 requires-python = ">=3.11"

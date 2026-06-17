@@ -482,6 +482,21 @@ tests/              Python test suite
 validation/         benchmarks, reports, and oracle checks
 ```
 
+## Ecosystem
+
+Framework-specific integrations live in **satellite repos** that depend on
+`proteon` (≥ 0.3) but keep this core package framework-agnostic — they move at
+their own dependency cadence:
+
+- [**proteon-pyg**](https://github.com/theGreatHerrLebert/proteon-pyg) —
+  PyTorch Geometric integration: proteon structures → PyG `Data`/`HeteroData`
+  graphs for geometric deep learning.
+- [**proteon-graphein**](https://github.com/theGreatHerrLebert/proteon-graphein) —
+  [Graphein](https://github.com/a-r-j/graphein) integration over proteon's batch
+  primitives (SASA, DSSP, CHARMM19+EEF1).
+- [**proteon-vis**](https://github.com/theGreatHerrLebert/proteon-vis) —
+  interactive 3D visualization for proteon structures and custom geometry.
+
 ## Acknowledgements
 
 Derived and paper-inspired components (upstream license preserved in each module):

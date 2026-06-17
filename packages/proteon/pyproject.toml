@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "proteon"
-version = "0.2.1"
+version = "0.3.0"
 description = "Rust-first structural bioinformatics toolkit for loading, aligning, analyzing, and preparing structures"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,7 +22,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.24",
     "pyarrow>=14",
-    "proteon-connector==0.2.1",
+    "proteon-connector==0.3.0",
 ]
 
 [project.optional-dependencies]
