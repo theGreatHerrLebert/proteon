@@ -1757,7 +1757,7 @@ mod tests {
     // Two ALA residues; residue 1 is N-terminal (amide H always skipped), so only
     // residue 2 is a candidate. Vary the C(1)–N(2) distance to make it a real
     // peptide bond vs a chain break.
-    fn _two_ala(c1_to_n2: f64) -> pdbtbx::PDB {
+    fn two_ala(c1_to_n2: f64) -> pdbtbx::PDB {
         let c = [2.0, 1.4, 0.0]; // residue 1 carbonyl C
         let n2 = [c[0] + c1_to_n2, c[1], c[2]]; // residue 2 amide N, offset along x
         let txt = format!(
@@ -1800,7 +1800,7 @@ mod tests {
     #[test]
     fn test_peptide_h_placed_when_bonded() {
         // C(1)–N(2) = 1.33 Å: a real peptide bond → residue 2 gets its amide H.
-        let mut pdb = _two_ala(1.33);
+        let mut pdb = two_ala(1.33);
         let result = place_peptide_hydrogens(&mut pdb);
         assert_eq!(
             result.added, 1,
@@ -1812,7 +1812,7 @@ mod tests {
     fn test_peptide_h_skipped_at_chain_break() {
         // C(1)–N(2) = 5.0 Å: a chain break — using residue 1's carbonyl would
         // place a wrong-but-plausible H, so it must be skipped, not placed.
-        let mut pdb = _two_ala(5.0);
+        let mut pdb = two_ala(5.0);
         let result = place_peptide_hydrogens(&mut pdb);
         assert_eq!(
             result.added, 0,
