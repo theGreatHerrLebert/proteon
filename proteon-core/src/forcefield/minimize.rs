@@ -146,6 +146,17 @@ fn check_energy_plateau(prev_energy: Option<f64>, energy: f64, counter: usize) -
     }
 }
 
+/// True iff every component of every vector is finite (no NaN/Inf).
+///
+/// The convergence test takes `max_force.max(per_atom_force)`, and `f64::max`
+/// ignores NaN, so a non-finite force would be silently dropped and a blown-up
+/// step could read as converged. Minimizers check this each step and bail with
+/// `NumericalFailure` instead.
+fn all_finite(v: &[[f64; 3]]) -> bool {
+    v.iter()
+        .all(|a| a[0].is_finite() && a[1].is_finite() && a[2].is_finite())
+}
+
 /// Minimize energy using steepest descent with line search.
 ///
 /// # Arguments
@@ -202,7 +213,15 @@ pub fn steepest_descent(
         // a single global vector — NOT the old per-atom unit step, which moved every
         // atom the same distance regardless of its force and was not a descent
         // direction on heterogeneous structures.
-        let (_e_res, forces) = nbc.energy_and_forces(&pos, topo, params);
+        let (e_res, forces) = nbc.energy_and_forces(&pos, topo, params);
+
+        // A non-finite energy or force means the geometry blew up; the gradient
+        // test would silently swallow a NaN (f64::max ignores it) and could
+        // report convergence. Bail honestly instead.
+        if !e_res.total.is_finite() || !all_finite(&forces) {
+            status = MinimizeStatus::NumericalFailure;
+            break;
+        }
 
         let mut max_force = 0.0f64;
         for i in 0..n {
@@ -257,6 +276,11 @@ pub fn steepest_descent(
         nbc.refresh(&pos, topo);
     }
 
+    // Refresh the neighbor list against the FINAL accepted coords before the
+    // reported energy: a failed line search leaves the cache built against a
+    // rejected trial, which would otherwise make final_energy inconsistent with
+    // the returned `pos` on NBL-sized systems.
+    nbc.refresh(&pos, topo);
     let final_energy = nbc.energy(&pos, topo, params);
     MinimizeResult::new(
         pos,
@@ -438,6 +462,12 @@ pub fn conjugate_gradient(
     for step in 0..max_steps {
         steps = step + 1;
 
+        // Non-finite forces would be swallowed by the max() convergence test.
+        if !all_finite(&old_forces) {
+            status = MinimizeStatus::NumericalFailure;
+            break;
+        }
+
         // Check convergence: max force magnitude
         let mut max_force = 0.0f64;
         for i in 0..n {
@@ -546,6 +576,11 @@ pub fn conjugate_gradient(
         old_gtg = new_gtg;
     }
 
+    // Refresh the neighbor list against the FINAL accepted coords before the
+    // reported energy: a failed line search leaves the cache built against a
+    // rejected trial, which would otherwise make final_energy inconsistent with
+    // the returned `pos` on NBL-sized systems.
+    nbc.refresh(&pos, topo);
     let final_energy = nbc.energy(&pos, topo, params);
     MinimizeResult::new(
         pos,
@@ -620,6 +655,12 @@ pub fn lbfgs(
 
     for step in 0..max_steps {
         steps = step + 1;
+
+        // Non-finite gradient would be swallowed by the max() convergence test.
+        if !all_finite(&grad) {
+            status = MinimizeStatus::NumericalFailure;
+            break;
+        }
 
         // Check convergence: max gradient magnitude
         let mut max_grad = 0.0f64;
@@ -746,6 +787,11 @@ pub fn lbfgs(
         grad = new_grad;
     }
 
+    // Refresh the neighbor list against the FINAL accepted coords before the
+    // reported energy: a failed line search leaves the cache built against a
+    // rejected trial, which would otherwise make final_energy inconsistent with
+    // the returned `pos` on NBL-sized systems.
+    nbc.refresh(&pos, topo);
     let final_energy = nbc.energy(&pos, topo, params);
     MinimizeResult::new(
         pos,
@@ -1090,6 +1136,36 @@ mod reliability_tests {
                 "{name}: converged/status disagree"
             );
         }
+    }
+
+    /// A hard clash (overlapping non-bonded atoms → non-finite 1/r^12 energy and
+    /// forces) must NEVER be reported as converged. Without the finiteness guards
+    /// a NaN gradient slips through `max()` (which ignores NaN) and masquerades as
+    /// `ConvergedGradient`; with them, every minimizer reports `NumericalFailure`.
+    #[test]
+    fn hard_clash_is_never_reported_as_converged() {
+        let Some((topo, mut coords)) = protonated_amber_system() else {
+            return;
+        };
+        let ff = amber96();
+        let n = coords.len();
+        coords[n - 1] = coords[0]; // collapse a non-bonded pair onto one point
+        let constrained = vec![false; n];
+        for (name, run) in RUNNERS {
+            let r = run(&coords, &topo, &ff, 30, 0.1, &constrained);
+            assert!(
+                !r.status.is_converged(),
+                "{name}: a hard clash must not report convergence (got {:?})",
+                r.status
+            );
+        }
+    }
+
+    #[test]
+    fn all_finite_rejects_nan_and_inf() {
+        assert!(super::all_finite(&[[0.0, 1.0, -2.0]]));
+        assert!(!super::all_finite(&[[0.0, f64::NAN, 0.0]]));
+        assert!(!super::all_finite(&[[f64::INFINITY, 0.0, 0.0]]));
     }
 
     /// Guards the LBFGS transactional fix: a minimizer must NEVER return a structure
