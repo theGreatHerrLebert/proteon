@@ -1,7 +1,7 @@
 //! Spherical-circle arrangement — the exposed region of an atom sphere given its
 //! incident contact circles.
 //!
-//! Per the stitching design (`TO_SES_STITCHING.md`), a contact cap is **not** the
+//! Per the stitching design (`devdocs/TO_SES_STITCHING.md`), a contact cap is **not** the
 //! sphere minus independent holes: the incident contact circles overlap, nest,
 //! and touch, so the exposed region is the part of the sphere outside the
 //! **union of buried caps**. This module is that arrangement, working in

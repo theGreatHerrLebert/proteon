@@ -10,14 +10,14 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Pure-Rust boundary-element (BEM) continuum protein electrostatics — local and nonlocal (Lorentz/Yukawa) reaction-field energies and potentials. A high-accuracy reference/research tier ported from NESSie.jl and gated against it. No Python/PyO3 dependency. SCAFFOLD — see TO_ELECTROSTATICS.md."
+description = "Pure-Rust boundary-element (BEM) continuum protein electrostatics — local and nonlocal (Lorentz/Yukawa) reaction-field energies and potentials. A high-accuracy reference/research tier ported from NESSie.jl and gated against it. No Python/PyO3 dependency. SCAFFOLD — see devdocs/TO_ELECTROSTATICS.md."
 
 [lints]
 workspace = true
 
 [dependencies]
 # Geometry kernel + index mesh are reused from proteon-core::surface
-# (Vec3, Sphere, Mesh, icosphere) — do NOT re-derive (TO_ELECTROSTATICS.md §2).
+# (Vec3, Sphere, Mesh, icosphere) — do NOT re-derive (devdocs/TO_ELECTROSTATICS.md §2).
 proteon-core = { path = "../proteon-core" }
 
 # Multicore matrix assembly + matvecs. The dense BEM is O(N^2) in both; rayon

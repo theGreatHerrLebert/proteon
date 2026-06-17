@@ -3,7 +3,7 @@
 //! surface Γ makes the molecular-potential trace near-singular — both silently corrupt
 //! a solve. This module *measures* the relevant quantities over the element list and
 //! classifies them against thresholds so the caller can refuse or warn rather than hand
-//! back a wrong-but-plausible answer (plan §6 / `TO_ELECTROSTATICS.md`).
+//! back a wrong-but-plausible answer (plan §6 / `devdocs/TO_ELECTROSTATICS.md`).
 //!
 //! Scope: per-element triangle quality (min angle, aspect ratio, area spread, near-
 //! degenerate faces) and charge-to-surface separation **relative to local element size**

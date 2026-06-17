@@ -1,5 +1,5 @@
 //! Triangulate a region of a sphere bounded by arbitrary loops, via an
-//! azimuthal-equidistant chart + constrained Delaunay (`TO_SES_EXACT_COMPLETION.md`).
+//! azimuthal-equidistant chart + constrained Delaunay (`devdocs/TO_SES_EXACT_COMPLETION.md`).
 //!
 //! This is the contact-cap interior mesher: the exposed region of an atom is a
 //! sphere minus `k` buried-cap holes (not a disk for `k ≥ 2`, so a fan can't mesh

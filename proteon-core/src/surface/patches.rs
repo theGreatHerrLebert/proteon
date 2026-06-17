@@ -11,10 +11,10 @@
 //! - **Contact cap** (RS vertex / surface atom): the convex atom-sphere patch
 //!   outside the contact discs. `contact_cap_mesh` handles the single-hole case
 //!   (cap from rim to antipode) sharing its rim with the toric face; the
-//!   multi-hole spherical arrangement (`TO_SES_STITCHING.md`) is the next step.
+//!   multi-hole spherical arrangement (`devdocs/TO_SES_STITCHING.md`) is the next step.
 //!
 //! Watertight stitching of these patches across shared boundaries is the next
-//! step (`TO_SES_STITCHING.md`). Each patch is
+//! step (`devdocs/TO_SES_STITCHING.md`). Each patch is
 //! gated on a closed-form quantity independent of the triangulation (spheric:
 //! `radius² × spherical excess`; toric: distance-to-roll-circle + Pappus area).
 
@@ -121,7 +121,7 @@ pub fn spheric_face_mesh(
 /// so the two patches share the curve exactly. Convex face → outward normals.
 ///
 /// (Single-hole only. Atoms with ≥2 incident contact circles need the spherical
-/// arrangement from `TO_SES_STITCHING.md`; this is the building block.)
+/// arrangement from `devdocs/TO_SES_STITCHING.md`; this is the building block.)
 pub fn contact_cap_mesh(
     center: Vec3,
     radius: f64,
@@ -200,7 +200,7 @@ pub fn contact_cap_mesh(
 /// star-shaped from `apex_dir`** (every boundary point's geodesic to the apex
 /// stays inside) — true for the exposed cap of an atom with a few neighbours,
 /// with the apex taken away from them; pathological crowding needs the
-/// projection/CDT fill noted in `TO_SES_STITCHING.md`.
+/// projection/CDT fill noted in `devdocs/TO_SES_STITCHING.md`.
 ///
 /// Two contracts the *caller* (the assembler) owns, not this function:
 /// - **Winding** is computed locally from `outward` assuming `loop_dirs` are

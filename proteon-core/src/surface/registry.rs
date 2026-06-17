@@ -1,6 +1,6 @@
 //! Shared-boundary registry — the backbone of watertight SES assembly.
 //!
-//! Per `TO_SES_STITCHING.md`: the only robust way to stitch the analytic patches
+//! Per `devdocs/TO_SES_STITCHING.md`: the only robust way to stitch the analytic patches
 //! (contact caps, toric faces, spheric faces) into a closed mesh is to discretize
 //! every shared boundary **once** and have both adjacent patches index the *same*
 //! vertices. The registry is that single source of truth. Keys are **topological

@@ -8,14 +8,14 @@
 //! later via `proteon-connector`).
 //!
 //! **Under construction.** The lower layers are landing phase by phase; the plan,
-//! phasing, and per-layer EVIDENT gates live in `TO_ELECTROSTATICS.md` at the repo
+//! phasing, and per-layer EVIDENT gates live in `devdocs/TO_ELECTROSTATICS.md` at the repo
 //! root. Ported from [NESSie.jl](https://github.com/tkemmer/NESSie.jl) (MIT,
 //! Thomas Kemmer) and gated against it — and against NESSie's own closed-form
 //! Born/Xie models — exactly as proteon ports BALL/MMseqs2.
 //!
 //! Positioning (decided): **not** a drop-in GB replacement for routine workloads.
 //! The matvec is O(N²) without fast summation; ship with explicit size/runtime
-//! limits. See `TO_ELECTROSTATICS.md` §0 / §6.
+//! limits. See `devdocs/TO_ELECTROSTATICS.md` §0 / §6.
 //!
 //! # Pipeline (the layers, bottom-up)
 //! - [`model`]      — `BemModel`, `Charge`, `Params`, `Domain`, Yukawa exponent.

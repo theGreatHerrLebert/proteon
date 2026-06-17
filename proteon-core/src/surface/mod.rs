@@ -2,7 +2,7 @@
 //!
 //! Port of BALL's Connolly/Sanner pipeline (reduced surface → SES →
 //! triangulation), built bottom-up and gated layer-by-layer against BALL as an
-//! oracle (`ball-py`; see proteon `TO_SES_TRIANGULATION.md`).
+//! oracle (`ball-py`; see proteon `devdocs/TO_SES_TRIANGULATION.md`).
 //!
 //! - `geom` (L0) — the geometry kernel: vectors, spheres, circles, planes, and
 //!   the probe/contact predicates the reduced-surface algorithm rolls on. No
@@ -21,7 +21,7 @@
 //!   gated on a closed-form area.
 //! - `stitch` (L4) — assembly: stitch patches into one closed, consistently
 //!   oriented mesh sharing boundary vertices. Two-atom SES gated end-to-end vs
-//!   `ball-py ses_area`; the general registry + arrangement (`TO_SES_STITCHING.md`)
+//!   `ball-py ses_area`; the general registry + arrangement (`devdocs/TO_SES_STITCHING.md`)
 //!   follows.
 
 pub mod arrangement;

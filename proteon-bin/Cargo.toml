@@ -26,7 +26,7 @@ proteon-io = { path = "../proteon-io" }
 proteon-search = { path = "../proteon-search" }
 # The `proteon` analysis/MM CLI calls the pure-Rust compute directly from
 # proteon-core — no PyO3 anywhere in the binary's link graph (Option B,
-# TO_RUST_CLI.md). The connector (PyO3 bindings) is not a dependency here.
+# devdocs/TO_RUST_CLI.md). The connector (PyO3 bindings) is not a dependency here.
 proteon-core = { path = "../proteon-core" }
 # Pure-Rust BEM electrostatics (no PyO3) — the `electrostatics` subcommand calls
 # the same `solve_surface` entry point the Python connector does.
