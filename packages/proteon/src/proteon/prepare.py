@@ -523,6 +523,128 @@ def load_and_prepare(
     return structure, report
 
 
+@dataclass
+class LoadPrepResult:
+    """One aligned record per input path from :func:`batch_load_and_prepare`.
+
+    Collapses the pipeline's two failure modes — a file that never loaded and a
+    structure that loaded but did not prepare cleanly — into a single
+    :attr:`ready` decision, so the load->prepare loop is one branch::
+
+        for res in proteon.batch_load_and_prepare(paths):
+            if res.ready:
+                use(res.structure)
+            else:
+                log(res.path, res.reason)
+
+    Attributes:
+        path: The input path this record corresponds to (always set; the result
+            list is the same length and order as the input ``paths``).
+        structure: The loaded (and prepared) Structure, or ``None`` if the file
+            failed to load.
+        report: The :class:`PrepReport`, or ``None`` if the file failed to load
+            (prepare never ran).
+        error: A short load-failure message, or ``None`` if the file loaded.
+    """
+
+    path: str
+    structure: Optional[object] = None
+    report: Optional[PrepReport] = None
+    error: Optional[str] = None
+
+    @property
+    def loaded(self) -> bool:
+        """True iff the file parsed into a Structure (prepare may still have failed)."""
+        return self.error is None
+
+    @property
+    def ready(self) -> bool:
+        """True iff the file loaded AND prepared with no hard failure.
+
+        The single trust gate across both pipeline stages. Does not imply
+        minimizer convergence — see :attr:`PrepReport.converged`.
+        """
+        return self.error is None and self.report is not None and self.report.ready
+
+    @property
+    def reason(self) -> str:
+        """Empty when :attr:`ready`; else why-not, spanning both stages.
+
+        A load failure reports ``"load failed: ..."``; a structure that loaded
+        but did not prepare cleanly forwards :attr:`PrepReport.reason`.
+        """
+        if self.error is not None:
+            return f"load failed: {self.error}"
+        if self.report is not None:
+            return self.report.reason
+        return ""
+
+
+def batch_load_and_prepare(
+    paths: Sequence,
+    *,
+    n_threads: Optional[int] = None,
+    **prepare_kwargs,
+) -> List[LoadPrepResult]:
+    """Load many files and prepare them, returning one verdict per input path.
+
+    Both stages run in parallel in Rust (rayon, GIL released): a tolerant
+    parallel load, then :func:`batch_prepare` over the survivors. Files that
+    fail to load are not dropped silently — they come back as a
+    :class:`LoadPrepResult` with ``loaded=False`` and a load error, so the
+    returned list is always the same length and order as ``paths``.
+
+    This is the batch counterpart of :func:`load_and_prepare`, and the
+    recommended entry point for archive-scale ingestion: ``res.ready`` is a
+    single decision covering both load and prepare failures.
+
+    Args:
+        paths: File paths (.pdb, .cif, .mmcif).
+        n_threads: Thread count for both the load and the prepare stage.
+            ``None`` / ``-1`` / ``0`` = all cores (default); a positive integer
+            = exactly that many threads.
+        **prepare_kwargs: Forwarded verbatim to :func:`batch_prepare`
+            (``reconstruct``, ``hydrogens``, ``minimize``, ``minimize_method``,
+            ``minimize_steps``, ``gradient_tolerance``, ``strip_hydrogens``,
+            ``ff``, ``constrain_heavy``, …).
+
+    Returns:
+        List of :class:`LoadPrepResult`, one per input path, in input order.
+
+    Examples:
+        >>> results = proteon.batch_load_and_prepare(glob.glob("pdbs/*.pdb"))
+        >>> ready = [r.structure for r in results if r.ready]
+        >>> for r in results:
+        ...     if not r.ready:
+        ...         print(r.path, "->", r.reason)
+    """
+    from .io import batch_load_tolerant
+
+    str_paths = [str(p) for p in paths]
+    # Stage 1: tolerant parallel load. Survivors carry their original index;
+    # absent indices are load failures.
+    results = [
+        LoadPrepResult(path=p, error="could not parse file as PDB or mmCIF")
+        for p in str_paths
+    ]
+    loaded = batch_load_tolerant(str_paths, n_threads=n_threads)  # [(idx, Structure)]
+    structures = []
+    positions = []
+    for orig_idx, structure in loaded:
+        results[orig_idx].structure = structure
+        results[orig_idx].error = None
+        structures.append(structure)
+        positions.append(orig_idx)
+
+    # Stage 2: parallel prepare over the survivors only.
+    if structures:
+        reports = batch_prepare(structures, n_threads=n_threads, **prepare_kwargs)
+        for pos, report in zip(positions, reports):
+            results[pos].report = report
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # AMBER96 histidine tautomer normalisation
 # ---------------------------------------------------------------------------
