@@ -11,6 +11,47 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-17
+
+### GPU k-mer prefilter: from 0.32× to beating CPU, wired into `search()`
+
+The resident GPU prefilter went from *slower-than-CPU-and-degrading* to a real
+win, in four steps (benchmarked on an RTX 2070, every step bit-exact vs the CPU
+oracle `diagonal_prefilter`):
+
+- **Benchmark (#163)** — an isolated `prefilter_bench` showed the GPU path at
+  0.49×→0.32× across 5k→100k targets (degrading with corpus size) because the
+  reduction wrote a dense `best[#targets]` array, copied back and host-scanned
+  per query.
+- **Seq-keyed reduction (#164)** — replaced that dense array with a second
+  open-addressing hash table keyed by `seq_id` plus on-device compaction, so
+  copyback is O(hits) and nothing scales with target count. N-degradation
+  *reversed*: 0.40×→0.87×.
+- **Persistent scratch (#165)** — hoisted the per-query device buffers + stream
+  into a caller-owned, grow-not-shrink `PrefilterScratch` reused across a batch.
+  **GPU now beats CPU at 50k+ targets (1.23× at 100k).**
+- **`search()` wiring (#166)** — `SearchEngine::search` is single-query, so it
+  caches one scratch and gates the GPU prefilter on a measured target-count
+  crossover (`SearchOptions::gpu_prefilter_min_targets`, default 75k), routing
+  to CPU below it.
+
+### Reliability: CLI tests, regression corpus, and canonical-tool oracles
+
+- **CLI integration tests (#167)** for `tmalign` / `usalign` (`--outfmt 2`
+  tabular contract) and `ingest` (valid Parquet, `--per-structure`, failure
+  isolation). Fixed `ingest` to **exit nonzero when *every* input fails** rather
+  than silently writing an empty Parquet.
+- **Regression corpus (#168)** — added `waters` and `missing-backbone-atom`
+  edge-case fixtures (with behaviour probed before asserting).
+- **Canonical 8-class DSSP oracle (#169, #170)** — proteon's full H/G/I/E/B/T/S/C
+  assignment vs `mkdssp` (DSSP 4.x, via Biopython) / `gmx dssp`, id-aligned,
+  93–100% agreement, zero helix↔strand confusion. Vendored multi-chain fixtures
+  so it runs on 4hhb in CI.
+- **Backbone H-bond oracle (#171)** — `backbone_hbonds` vs `mkdssp`'s
+  Kabsch–Sander H-bonds (unordered residue-id pairs + energy agreement);
+  93.6–100% precision, 91.1–100% recall. Both oracles container-validated
+  against real mkdssp 4.2.2 before shipping.
+
 ### EVIDENT: GROMACS AMBER96 fold-preservation oracle (#37)
 
 Re-produces the GROMACS fold-preservation artifact (previously a partial run
