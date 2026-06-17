@@ -2,7 +2,7 @@
 //!
 //! Index-based (`verts` + `tris`), the clean Rust shape — not BALL's
 //! pointer-linked `TrianglePoint*`/`Triangle*`. The invariants here are exactly
-//! the L4 oracle gates (`TO_SES_TRIANGULATION.md`): surface area (→ analytic
+//! the L4 oracle gates (`devdocs/TO_SES_TRIANGULATION.md`): surface area (→ analytic
 //! SES area as density rises), watertightness / manifoldness (every edge shared
 //! by two triangles), signed enclosed volume (orientation — catches inside-out),
 //! and Euler characteristic per the topology.
@@ -619,7 +619,7 @@ impl Mesh {
     /// values (not merely close ones), so an exact-coordinate dedup is correct and
     /// — unlike a tolerance/grid-snap weld — can never false-merge distinct
     /// near-degenerate features. Crowded / arrangement stitching uses the explicit
-    /// shared-index registry (`TO_SES_STITCHING.md`) and needs no coordinate
+    /// shared-index registry (`devdocs/TO_SES_STITCHING.md`) and needs no coordinate
     /// matching at all. Keeps the first occurrence's normal: **seam normals are
     /// shading-only after this** (a seam vertex belongs to two patches with
     /// different geometric normals) — the residual/normal gates must use

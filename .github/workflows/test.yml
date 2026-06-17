@@ -215,7 +215,7 @@ jobs:
         run: |
           ./target/release/tmalign test-pdbs/1crn.pdb test-pdbs/1crn.pdb --outfmt 2 | head -5
       # The `proteon` binary links the pyo3 extension-module connector as an
-      # rlib (Option A, TO_RUST_CLI.md). This release build (lto=true,
+      # rlib (Option A, devdocs/TO_RUST_CLI.md). This release build (lto=true,
       # codegen-units=1) is the worst case for dead-code GC of the unused pyo3
       # symbols; if it links + runs here, the Linux link path is confirmed.
       - name: proteon help

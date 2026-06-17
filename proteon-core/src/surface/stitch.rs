@@ -9,7 +9,7 @@
 //! This is the smallest assembly that exercises cross-patch stitching. The
 //! general assembler (the shared-index registry + the per-atom spherical-circle
 //! arrangement for ≥2 incident holes) is the next step — see
-//! `TO_SES_STITCHING.md`.
+//! `devdocs/TO_SES_STITCHING.md`.
 
 use super::geom::{intersect_two_spheres, Sphere, Vec3};
 use super::mesh::Mesh;

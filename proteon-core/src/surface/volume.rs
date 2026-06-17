@@ -1,5 +1,5 @@
 //! SES by iso-surfacing a signed distance field — the sane mesher (chosen over
-//! analytic patch stitching; see `TO_SES_STITCHING.md`).
+//! analytic patch stitching; see `devdocs/TO_SES_STITCHING.md`).
 //!
 //! **Erosion identity.** The solvent-accessible solid `A_p` is the union of the
 //! atoms inflated by the probe radius. The solvent-*excluded* solid is `A_p`

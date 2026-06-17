@@ -1,7 +1,7 @@
 //! Constrained Delaunay triangulation of a planar region, over `spade`.
 //!
 //! Used to mesh the *interior* of an analytic SES contact cap once its exposed
-//! region has been projected to a planar chart (`TO_SES_EXACT_COMPLETION.md`):
+//! region has been projected to a planar chart (`devdocs/TO_SES_EXACT_COMPLETION.md`):
 //! the boundary loops (outer + buried-cap holes) are sampled once into shared
 //! registry vertices and passed as **constraints**, so the triangulation keeps
 //! the exact boundary (no Steiner points on constraint edges) and the caller can

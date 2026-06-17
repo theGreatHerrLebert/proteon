@@ -13,13 +13,13 @@
 //! in kJ/mol like `proteon.compute_energy`; the write commands are presets over
 //! the `batch_prepare` pipeline).
 //!
-//! Write-command I/O contract: see TO_RUST_CLI.md. In brief — first model only;
+//! Write-command I/O contract: see devdocs/TO_RUST_CLI.md. In brief — first model only;
 //! highest-occupancy altloc; missing heavy *atoms* reconstructed, missing
 //! *residues* never fabricated; non-protein residues pass through but are not
 //! parameterized (>50% non-water-unassigned ⇒ skipped_no_protein, minimize
 //! skipped); output format follows the `-o`/`--out-dir` path extension.
 //!
-//! Implemented via the "Option A" path (TO_RUST_CLI.md): `proteon-bin` depends
+//! Implemented via the "Option A" path (devdocs/TO_RUST_CLI.md): `proteon-bin` depends
 //! on the pyo3 `extension-module` connector as an rlib and calls only the
 //! pure-Rust paths. Verified to link + run on Linux including release/LTO; the
 //! eventual clean home is a pyo3-free `proteon-core` crate (Option B), tracked
