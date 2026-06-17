@@ -18,6 +18,23 @@ use crate::forcefield::{
     topology,
 };
 
+/// Standard PDB residue names for nucleic-acid (DNA/RNA) monomers, plus the
+/// legacy 3-letter spellings. Used to keep untyped nucleic-acid atoms out of
+/// the soft "cofactor/ligand" bucket — a nucleic-acid strand is a polymer the
+/// FF should cover, not a small het-group, so an untyped one is a hard
+/// `incomplete_ff` defect, not `READY_WITH_LIGANDS`.
+fn is_nucleic_acid_residue(name: &str) -> bool {
+    matches!(
+        name,
+        // DNA
+        "DA" | "DC" | "DG" | "DT" | "DU" | "DI"
+        // RNA
+        | "A" | "C" | "G" | "U" | "I"
+        // legacy 3-letter
+        | "ADE" | "CYT" | "GUA" | "THY" | "URA" | "DGN"
+    )
+}
+
 /// Knobs for [`prepare_structure`]. [`Default`] mirrors the Python
 /// `batch_prepare` signature (reconstruct, hydrogens="all", minimize via lbfgs
 /// 500 steps, strip pre-existing H, FF-aware heavy-atom constraint).
@@ -63,13 +80,29 @@ pub struct PrepareReport {
     pub h_added: usize,
     pub h_skipped: usize,
     pub n_unassigned: usize,
+    /// Untyped atoms EXCLUDING water (the raw `n_unassigned` counts waters, which
+    /// are always untyped under a protein-only FF). Zero iff every protein and
+    /// het atom got a force-field type — the basis for the strict `fully_typed`
+    /// gate on the Python side.
+    pub n_unassigned_nonwater: usize,
     pub skipped_no_protein: bool,
-    /// Mostly-a-protein, but a size-significant chunk of NON-WATER atoms have no
-    /// FF type (>10 AND >2%), so topology/energy is partially wrong. Computed
-    /// here (not in the Python verdict) because the raw `n_unassigned` counts
-    /// waters too — only the Rust side has the water-filtered counts. Distinct
-    /// from `skipped_no_protein` (>50%, not a protein at all).
+    /// A size-significant chunk of untyped atoms are in a POLYMER chain — a
+    /// standard amino-acid OR nucleic-acid residue (>10 AND >2% of non-water):
+    /// a macromolecule the FF should cover is missing params, so its
+    /// topology/energy is partially wrong. A hard defect. Computed here (not in
+    /// the Python verdict) because the raw `n_unassigned` counts waters and
+    /// het-groups too — only the Rust side has the residue-classified counts.
+    /// Distinct from `skipped_no_protein` (>50%, not a protein at all) and from
+    /// `untyped_cofactors` (untyped small het-groups on an otherwise
+    /// well-covered protein, which is NOT a defect).
     pub incomplete_ff: bool,
+    /// The protein chain is well covered, but there are untyped NON-WATER,
+    /// NON-AMINO-ACID atoms (heme, other cofactors, ligands, ions, modified
+    /// residues). These contribute nothing to the force field, but the protein
+    /// is still usable — this drives the soft `READY_WITH_LIGANDS` tier rather
+    /// than a hard failure. Mutually exclusive with `incomplete_ff` /
+    /// `skipped_no_protein` (those take precedence).
+    pub untyped_cofactors: bool,
     pub init_e: f64,
     pub final_e: f64,
     pub bond_stretch: f64,
@@ -175,14 +208,63 @@ pub fn prepare_structure<P: ForceField>(
         .iter()
         .filter(|s| !add_hydrogens::is_water_residue(s.split(':').next().unwrap_or("")))
         .count();
+    out.n_unassigned_nonwater = non_water_unassigned;
     out.skipped_no_protein = non_water_total > 0 && non_water_unassigned * 2 > non_water_total;
-    // Size-aware FF incompleteness when it IS mostly a protein: >10 non-water
-    // unassigned atoms AND >2% of non-water. Both bounds matter — 11 unassigned
-    // in a 5000-atom protein is negligible, but 11 in a small peptide is not.
-    // Uses the water-filtered counts (the raw `n_unassigned` includes waters).
+
+    // Classify the non-water unassigned atoms by residue. There are three
+    // buckets that matter for the verdict:
+    //   * MACROMOLECULAR (protein or nucleic-acid residues) — a polymer chain
+    //     the FF should cover but doesn't. A real defect: those atoms enter the
+    //     topology with fallback types/zero charge, so energy/minimization is
+    //     partial. Drives the HARD `incomplete_ff`.
+    //   * HET-GROUP (heme, other cofactors, ligands, ions, modified residues) —
+    //     small groups the protein-only FF simply doesn't parameterise. The
+    //     protein itself is still usable. Drives the SOFT `untyped_cofactors`.
+    // We build the set of residue names pdbtbx classifies as amino acids, plus a
+    // static nucleic-acid name set, then bucket each unassigned "RESNAME:atom"
+    // string by its residue name.
+    // Mirror topology::build_topology exactly: first model only, residue name
+    // via `Residue::name().unwrap_or("UNK")` (the same string used as the
+    // "RESNAME" prefix of each unassigned_atoms entry), amino-acid test via the
+    // first conformer. This keeps the bucketing keys identical to the strings
+    // we are bucketing.
+    let aa_residue_names: std::collections::HashSet<String> = pdb
+        .models()
+        .next()
+        .into_iter()
+        .flat_map(|m| m.chains())
+        .flat_map(|c| c.residues())
+        .filter(|r| r.conformers().next().is_some_and(|c| c.is_amino_acid()))
+        .map(|r| r.name().unwrap_or("UNK").to_string())
+        .collect();
+    // Untyped atoms in a polymer chain (protein OR nucleic acid). pdbtbx has no
+    // nucleic-acid classifier, so nucleic acids are matched by residue name.
+    let unassigned_macromol = topo
+        .unassigned_atoms
+        .iter()
+        .filter(|s| {
+            let rn = s.split(':').next().unwrap_or("");
+            !add_hydrogens::is_water_residue(rn)
+                && (aa_residue_names.contains(rn) || is_nucleic_acid_residue(rn))
+        })
+        .count();
+    // Het-group untyped atoms = non-water unassigned that are NOT in a polymer
+    // chain (i.e. cofactors / ligands / ions / modified residues).
+    let unassigned_cofactor = non_water_unassigned.saturating_sub(unassigned_macromol);
+
+    // HARD: a polymer chain is under-covered. Size-aware: >10 untyped polymer
+    // atoms AND >2% of non-water. Both bounds matter — 11 unassigned in a
+    // 5000-atom protein is negligible, but 11 in a small peptide is not. This
+    // catches protein-chain gaps AND protein–nucleic-acid complexes where the
+    // nucleic acid is a sub-50% (so not `skipped_no_protein`) untyped component.
     out.incomplete_ff = !out.skipped_no_protein
-        && non_water_unassigned > 10
-        && non_water_unassigned * 50 > non_water_total;
+        && unassigned_macromol > 10
+        && unassigned_macromol * 50 > non_water_total;
+    // SOFT: protein well covered, but untyped het-groups are present (cofactors,
+    // ligands, ions, modified residues). Usable, not a defect — only set when
+    // neither hard condition fired.
+    out.untyped_cofactors =
+        !out.skipped_no_protein && !out.incomplete_ff && unassigned_cofactor > 0;
 
     let has_any_h = crate::altloc::pdb_atoms_primary(pdb).any(|a| {
         a.element()
@@ -359,4 +441,28 @@ pub fn apply_coords_to_pdb<F: ForceField + ?Sized>(
         coords.len(),
         idx,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_nucleic_acid_residue;
+
+    #[test]
+    fn nucleic_acid_residue_names() {
+        // DNA / RNA monomers are nucleic acids.
+        for n in ["DA", "DC", "DG", "DT", "DU", "DI", "A", "C", "G", "U", "I"] {
+            assert!(is_nucleic_acid_residue(n), "{n} should be nucleic acid");
+        }
+        // Legacy 3-letter spellings.
+        for n in ["ADE", "CYT", "GUA", "THY", "URA"] {
+            assert!(is_nucleic_acid_residue(n), "{n} should be nucleic acid");
+        }
+        // Amino acids, het-groups, ions and water are NOT nucleic acids.
+        for n in ["ALA", "GLY", "HEM", "ATP", "NA", "ZN", "SO4", "HOH", "UNK"] {
+            assert!(
+                !is_nucleic_acid_residue(n),
+                "{n} should NOT be nucleic acid"
+            );
+        }
+    }
 }

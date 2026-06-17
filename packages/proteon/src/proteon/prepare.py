@@ -19,16 +19,27 @@ from typing import Dict, List, Optional, Sequence
 class PrepStatus(str, Enum):
     """Outcome verdict for a prepared structure (see :attr:`PrepReport.status`)."""
 
-    #: Usable structure, no hard failure. Does NOT imply the minimizer converged
-    #: — pair with :attr:`PrepReport.converged` for energy-sensitive work.
+    #: Fully FF-covered, usable structure, no hard failure. Does NOT imply the
+    #: minimizer converged — pair with :attr:`PrepReport.converged` for
+    #: energy-sensitive work.
     READY = "ready"
+    #: Usable protein, but it carries untyped het-groups (heme, other cofactors,
+    #: ligands, ions, modified residues) the protein-only FF doesn't cover. The
+    #: protein chain itself is well covered, so the structure is still
+    #: ``ready`` — but it is NOT :attr:`PrepReport.fully_typed`, so energy-grade
+    #: callers that need every atom parameterised should gate on that instead.
+    READY_WITH_LIGANDS = "ready_with_ligands"
     #: >50% of non-water atoms have no force-field type (nucleic acid, ligand-only
     #: entry, exotic residues) — not a protein the FF could process.
     NOT_PROTEIN = "not_protein"
     #: Minimization hit a non-finite energy/force (the geometry blew up).
     MINIMIZE_FAILED = "minimize_failed"
-    #: Mostly a protein, but a size-significant chunk of atoms lack FF types
-    #: (>10 atoms AND >2%), so topology/energy is partially wrong.
+    #: A size-significant chunk of atoms IN A POLYMER CHAIN — amino-acid OR
+    #: nucleic-acid residues — lack FF types (>10 atoms AND >2% of non-water):
+    #: a macromolecule is under-parameterised, so topology/energy is partially
+    #: wrong. Catches protein-chain gaps and protein–nucleic-acid complexes
+    #: whose nucleic acid the protein-only FF can't type. (Untyped small
+    #: cofactors/ligands are :attr:`READY_WITH_LIGANDS`, not this.)
     INCOMPLETE_FF = "incomplete_ff"
 
 try:
@@ -127,10 +138,21 @@ class PrepReport:
     #: ``converged`` bool conflates.
     minimizer_status: str = ""
     n_unassigned_atoms: int = 0
+    #: Untyped atoms EXCLUDING water (``n_unassigned_atoms`` counts waters, which
+    #: are always untyped under a protein-only FF). Zero iff every protein and
+    #: het atom got a force-field type — the basis for :attr:`fully_typed`.
+    n_unassigned_nonwater: int = 0
     skipped_no_protein: bool = False
-    #: Mostly a protein, but a size-significant chunk of atoms lack FF types
-    #: (>10 AND >2% of non-water). Drives :attr:`status` == ``INCOMPLETE_FF``.
+    #: A size-significant chunk of atoms IN A POLYMER CHAIN (amino-acid or
+    #: nucleic-acid residues) lack FF types (>10 AND >2% of non-water). A
+    #: macromolecule is under-covered — a hard defect. Drives :attr:`status` ==
+    #: ``INCOMPLETE_FF``.
     incomplete_ff: bool = False
+    #: The protein chain is well covered, but untyped small het-groups
+    #: (cofactors, ligands, ions, modified residues) are present. A soft signal:
+    #: the structure is still :attr:`ready`, but not :attr:`fully_typed`. Drives
+    #: :attr:`status` == ``READY_WITH_LIGANDS``.
+    untyped_cofactors: bool = False
     warnings: List[str] = field(default_factory=list)
 
     @property
@@ -152,23 +174,45 @@ class PrepReport:
             return PrepStatus.MINIMIZE_FAILED
         if self.incomplete_ff:
             return PrepStatus.INCOMPLETE_FF
+        if self.untyped_cofactors:
+            return PrepStatus.READY_WITH_LIGANDS
         return PrepStatus.READY
+
+    #: Statuses that count as a usable structure (the :attr:`ready` gate).
+    _READY_STATUSES = frozenset({PrepStatus.READY, PrepStatus.READY_WITH_LIGANDS})
 
     @property
     def ready(self) -> bool:
         """True iff prepare produced a usable structure with no hard failure.
 
-        See :attr:`status`. Does not imply minimization convergence (check
-        :attr:`converged`), protonation correctness, or chemical validity beyond
-        the FF-coverage and numerical checks.
+        Includes :attr:`PrepStatus.READY_WITH_LIGANDS` — a protein with untyped
+        cofactors/ligands is still usable. For an energy-grade gate that also
+        requires every atom to be parameterised, use :attr:`fully_typed`.
+
+        Does not imply minimization convergence (check :attr:`converged`),
+        protonation correctness, or chemical validity beyond the FF-coverage and
+        numerical checks.
         """
-        return self.status == PrepStatus.READY
+        return self.status in self._READY_STATUSES
+
+    @property
+    def fully_typed(self) -> bool:
+        """True iff :attr:`ready` AND every non-water atom got a force-field type.
+
+        The strict, energy-grade gate. Excludes ``READY_WITH_LIGANDS`` (untyped
+        cofactors/ligands) and also a plain ``READY`` structure that still has a
+        few untyped atoms below the ``incomplete_ff`` threshold — any untyped
+        non-water atom makes the topology partial. Use this when that would
+        corrupt an energy or MD calculation; use :attr:`ready` when you just need
+        a usable protein structure.
+        """
+        return self.status == PrepStatus.READY and self.n_unassigned_nonwater == 0
 
     @property
     def reason(self) -> str:
         """Empty when :attr:`ready`; otherwise a short why-not explanation."""
         s = self.status
-        if s == PrepStatus.READY:
+        if s in self._READY_STATUSES:
             return ""
         if s == PrepStatus.NOT_PROTEIN:
             return (
@@ -178,8 +222,9 @@ class PrepReport:
         if s == PrepStatus.MINIMIZE_FAILED:
             return "minimization hit a non-finite energy/force (geometry blew up)"
         return (
-            f"incomplete force-field coverage "
-            f"({self.n_unassigned_atoms} unassigned atoms, >2% of non-water)"
+            f"incomplete force-field coverage in a polymer chain "
+            f"(protein or nucleic acid; {self.n_unassigned_atoms} unassigned "
+            f"atoms, >2% of non-water)"
         )
 
     def __repr__(self) -> str:
@@ -305,8 +350,10 @@ def prepare(
             report.minimized = r.get("minimized", False)
             report.minimizer_status = r.get("minimizer_status", "")
             report.n_unassigned_atoms = r["n_unassigned_atoms"]
+            report.n_unassigned_nonwater = r.get("n_unassigned_nonwater", 0)
             report.skipped_no_protein = r["skipped_no_protein"]
             report.incomplete_ff = r.get("incomplete_ff", False)
+            report.untyped_cofactors = r.get("untyped_cofactors", False)
             if report.skipped_no_protein:
                 report.warnings.append(
                     f"skipped: {report.n_unassigned_atoms} atoms have no "
@@ -361,6 +408,7 @@ def prepare(
             report.minimizer_status = r.get("minimizer_status", "")
             report.skipped_no_protein = r["skipped_no_protein"]
             report.incomplete_ff = r.get("incomplete_ff", False)
+            report.untyped_cofactors = r.get("untyped_cofactors", False)
 
     # Step 4: FF coverage + readiness flags. Source them from the SAME Rust
     # prepare path the default (strip_hydrogens) branch uses, via a coverage-only
@@ -375,8 +423,10 @@ def prepare(
     if cov:
         c = cov[0]
         report.n_unassigned_atoms = c.get("n_unassigned_atoms", 0)
+        report.n_unassigned_nonwater = c.get("n_unassigned_nonwater", 0)
         report.skipped_no_protein = c["skipped_no_protein"]
         report.incomplete_ff = c.get("incomplete_ff", False)
+        report.untyped_cofactors = c.get("untyped_cofactors", False)
     if report.n_unassigned_atoms > 10:
         report.warnings.append(
             f"{report.n_unassigned_atoms} atoms without force field type "
@@ -472,13 +522,20 @@ def batch_prepare(
             minimized=r.get("minimized", False),
             minimizer_status=r.get("minimizer_status", ""),
             n_unassigned_atoms=r["n_unassigned_atoms"],
+            n_unassigned_nonwater=r.get("n_unassigned_nonwater", 0),
             skipped_no_protein=r["skipped_no_protein"],
             incomplete_ff=r.get("incomplete_ff", False),
+            untyped_cofactors=r.get("untyped_cofactors", False),
         )
         if report.skipped_no_protein:
             report.warnings.append(
                 f"skipped: {report.n_unassigned_atoms} atoms have no protein "
                 "force-field type (likely nucleic acid, ligand, or non-standard residue)"
+            )
+        elif report.untyped_cofactors:
+            report.warnings.append(
+                f"{report.n_unassigned_atoms} atoms without force field type "
+                "(untyped cofactors/ligands; protein chain is covered)"
             )
         elif report.n_unassigned_atoms > 10:
             report.warnings.append(
