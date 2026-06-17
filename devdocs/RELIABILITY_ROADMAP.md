@@ -471,17 +471,25 @@ The pydssp oracle (`test_dssp_oracle.py`) only validated 3 classes (H/E/loop).
 Validated end-to-end in an ubuntu:24.04 container matching CI before shipping
 (caught mkdssp 4.x's HEADER-required-or-mmCIF parsing trap).
 
-### 13. H-Bond Validation
+### 13. H-Bond Validation (backbone shipped)
 
-Split validation into:
+`tests/oracle/test_hbond_oracle.py` validates the backbone-H-bond path against
+canonical DSSP — proteon's `backbone_hbonds` uses the same Kabsch–Sander energy
+criterion DSSP does:
 
-- backbone H-bonds with energy criterion
-- geometric H-bonds for broader atom classes
+- proteon's H-bond set vs mkdssp's (from the residue NH→O partners), aligned by
+  **residue ID** and compared as **unordered pairs** (proteon's columns are not a
+  stable donor/acceptor convention — measured, documented). mkdssp-only (no gmx
+  H-bond energies); CI's existing `dssp` install drives it, skips locally.
+- metrics: precision ≥ 0.90, recall ≥ 0.88, count-parity ≤ 8%, plus matched-pair
+  energy agreement (median < 0.5, p90 < 1.0 kcal/mol) and an aggregate
+  precision/recall floor. Measured: 93.6–100% precision, 91.1–100% recall.
+- container-validated before shipping (the shipped DSSP-side builder run verbatim
+  on all five in an ubuntu:24.04 image).
 
-Compare against:
-
-- DSSP where applicable
-- GROMACS or mdtraj-style references if feasible
+Still open: **geometric** H-bonds for broader atom classes (sidechain / ligand),
+and a GROMACS/mdtraj cross-check for those — the backbone energy path is the one
+DSSP can anchor.
 
 ### 14. Forcefield / Minimization / MD Validation
 
