@@ -115,6 +115,7 @@ from .hydrogens import (
 )
 from .prepare import (
     PrepReport,
+    PrepStatus,
     batch_prepare,
     load_and_prepare,
     normalize_histidine_tautomers,
@@ -446,6 +447,7 @@ _HYDROGEN_API = (
 
 _PREPARE_API = (
     "PrepReport",
+    "PrepStatus",
     "batch_prepare",
     "load_and_prepare",
     "normalize_histidine_tautomers",
