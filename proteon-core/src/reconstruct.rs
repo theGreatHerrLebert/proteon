@@ -232,8 +232,11 @@ fn match_points(
 
 /// Result of fragment reconstruction.
 pub struct ReconstructResult {
-    /// Number of atoms added.
+    /// Number of atoms added (heavy + template hydrogens).
     pub added: usize,
+    /// Number of HEAVY atoms added (excludes template hydrogens). The prepare
+    /// pipeline reports this, since the force-field-aware placer owns H.
+    pub heavy_added: usize,
 }
 
 /// Find two reference atoms (already placed) near `center` in the template bond graph.
@@ -320,8 +323,13 @@ pub(crate) fn reconstruct_residue(
         }
     }
 
-    if placed.is_empty() {
-        return result; // nothing to anchor to
+    // A rigid 3-point alignment (match_points) needs ≥3 placed anchors. With
+    // only 1–2, reconstruction degenerates to a pure translation of the template
+    // (arbitrary orientation) — a complete-looking but geometrically wrong
+    // residue, placed silently. Refuse it: better an unreconstructed residue
+    // (the caller sees the gap) than a plausible-but-wrong one.
+    if placed.len() < 3 {
+        return result; // too few anchors for a reliable rigid fit
     }
 
     // Find missing atoms
@@ -411,7 +419,12 @@ pub fn reconstruct_fragments(pdb: &mut pdbtbx::PDB) -> ReconstructResult {
 
     let first_model = match pdb.models().next() {
         Some(m) => m,
-        None => return ReconstructResult { added: 0 },
+        None => {
+            return ReconstructResult {
+                added: 0,
+                heavy_added: 0,
+            }
+        }
     };
 
     for (chain_idx, chain) in first_model.chains().enumerate() {
@@ -451,6 +464,8 @@ pub fn reconstruct_fragments(pdb: &mut pdbtbx::PDB) -> ReconstructResult {
     }
 
     let added = placements.len();
+    // Heavy atoms = elem (tuple field .3) not hydrogen.
+    let heavy_added = placements.iter().filter(|p| p.3 != "H").count();
 
     // Write pass
     for (chain_idx, residue_idx, name, elem, pos, serial) in placements {
@@ -489,7 +504,7 @@ pub fn reconstruct_fragments(pdb: &mut pdbtbx::PDB) -> ReconstructResult {
         }
     }
 
-    ReconstructResult { added }
+    ReconstructResult { added, heavy_added }
 }
 
 #[cfg(test)]
@@ -562,18 +577,37 @@ mod tests {
     }
 
     #[test]
-    fn test_reconstruct_full_residue() {
-        // Give only CA — should reconstruct everything else
+    fn test_reconstruct_refuses_single_anchor() {
+        // Only CA — 1 anchor is too few for a reliable rigid fit, so
+        // reconstruction must REFUSE (returns nothing) rather than synthesize a
+        // geometrically arbitrary residue by pure translation.
         let template = fragment_templates::get_template("GLY").unwrap();
         let mut existing = HashMap::new();
-
-        // Only CA
         let ca_pos = template.1.iter().find(|a| a.0 == "CA").unwrap().2;
         existing.insert("CA".to_string(), ca_pos);
 
         let added = reconstruct_residue(&existing, template.1, template.2);
-        // GLY has 7 atoms total, we gave 1, should add 6
-        assert_eq!(added.len(), 6, "Should add 6 atoms to GLY with only CA");
+        assert!(
+            added.is_empty(),
+            "1 anchor must be refused, got {} atoms",
+            added.len()
+        );
+    }
+
+    #[test]
+    fn test_reconstruct_accepts_three_anchors() {
+        // N, CA, C (3 anchors) is enough for a rigid fit — reconstruct the rest.
+        let template = fragment_templates::get_template("GLY").unwrap();
+        let mut existing = HashMap::new();
+        for nm in ["N", "CA", "C"] {
+            let p = template.1.iter().find(|a| a.0 == nm).unwrap().2;
+            existing.insert(nm.to_string(), p);
+        }
+        let added = reconstruct_residue(&existing, template.1, template.2);
+        assert!(
+            !added.is_empty(),
+            "3 anchors should reconstruct the remaining atoms"
+        );
     }
 
     #[test]

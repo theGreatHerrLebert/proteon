@@ -114,7 +114,15 @@ pub fn prepare_structure<P: ForceField>(
     }
 
     out.reconstructed = if opts.reconstruct {
-        crate::reconstruct::reconstruct_fragments(pdb).added
+        let r = crate::reconstruct::reconstruct_fragments(pdb);
+        // reconstruct_fragments also adds template hydrogens, but the
+        // force-field-aware placer below owns H placement — so when we cleaned H
+        // up front, strip the template H again to keep the output heavy-only +
+        // FF-consistent (no non-polar C-H leaking under a polar-H force field).
+        if opts.strip_hydrogens {
+            add_hydrogens::strip_hydrogens(pdb);
+        }
+        r.heavy_added
     } else {
         0
     };
