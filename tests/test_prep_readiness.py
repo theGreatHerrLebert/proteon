@@ -45,7 +45,47 @@ class TestVerdictLogic:
         r = PrepReport(incomplete_ff=True, n_unassigned_atoms=40)
         assert r.status == PrepStatus.INCOMPLETE_FF
         assert r.ready is False
+        assert r.fully_typed is False
         assert "incomplete" in r.reason
+
+    def test_ready_with_ligands_is_ready_but_not_fully_typed(self):
+        # An untyped cofactor/ligand on an otherwise covered protein is USABLE
+        # (ready) but not energy-grade (fully_typed False).
+        r = PrepReport(untyped_cofactors=True, n_unassigned_atoms=43)
+        assert r.status == PrepStatus.READY_WITH_LIGANDS
+        assert r.ready is True
+        assert r.fully_typed is False
+        assert r.reason == ""  # ready -> no why-not
+
+    def test_fully_typed_only_for_plain_ready(self):
+        assert PrepReport(hydrogens_added=10).fully_typed is True
+        assert PrepReport(untyped_cofactors=True).fully_typed is False
+        assert PrepReport(incomplete_ff=True).fully_typed is False
+        assert PrepReport(skipped_no_protein=True).fully_typed is False
+
+    def test_fully_typed_false_for_subthreshold_protein_gap(self):
+        # A few untyped atoms in AA residues stay below the incomplete_ff
+        # threshold -> status READY, but fully_typed must still be False because
+        # not every atom got a type. (codex P2: fully_typed claimed "every atom
+        # typed" while non-water unassigned > 0.)
+        r = PrepReport(hydrogens_added=50, n_unassigned_nonwater=5)
+        assert r.status == PrepStatus.READY  # below the hard-fail threshold
+        assert r.ready is True
+        assert r.fully_typed is False  # but NOT energy-grade
+
+    def test_fully_typed_ignores_water_unassigned(self):
+        # Waters are always untyped under a protein-only FF; they must not make a
+        # clean protein non-fully-typed (n_unassigned_nonwater is what matters).
+        r = PrepReport(hydrogens_added=50, n_unassigned_atoms=120,
+                       n_unassigned_nonwater=0)
+        assert r.fully_typed is True
+
+    def test_incomplete_ff_precedence_over_cofactors(self):
+        # A protein-chain gap is a hard defect even if het-groups are also
+        # untyped: INCOMPLETE_FF wins over READY_WITH_LIGANDS.
+        r = PrepReport(incomplete_ff=True, untyped_cofactors=True)
+        assert r.status == PrepStatus.INCOMPLETE_FF
+        assert r.ready is False
 
     def test_minimize_not_requested_is_still_ready(self):
         # minimize=False -> minimizer_status "not_run": intentional, not a failure.
@@ -104,6 +144,25 @@ class TestVerdictIntegration:
         assert r_legacy.ready is True
         assert r_legacy.skipped_no_protein == r_default.skipped_no_protein
         assert r_legacy.incomplete_ff == r_default.incomplete_ff
+
+    def test_heme_protein_is_ready_with_ligands(self):
+        # 4hhb (hemoglobin) carries heme groups the protein-only FF can't type.
+        # The protein chain IS covered, so it must be usable (ready) under the
+        # soft tier — not rejected as incomplete_ff.
+        p = os.path.join(os.path.dirname(__file__), "..", "test-pdbs", "4hhb.pdb")
+        report = proteon.prepare(proteon.load(p), minimize=False)
+        assert report.status == PrepStatus.READY_WITH_LIGANDS
+        assert report.ready is True
+        assert report.fully_typed is False
+        assert report.untyped_cofactors is True
+        assert report.n_unassigned_atoms > 0
+
+    def test_ligand_free_protein_is_fully_typed(self):
+        p = os.path.join(os.path.dirname(__file__), "..", "test-pdbs", "1crn.pdb")
+        report = proteon.prepare(proteon.load(p), minimize=False)
+        assert report.status == PrepStatus.READY
+        assert report.fully_typed is True
+        assert report.untyped_cofactors is False
 
     def test_waters_only_structure_handles_gracefully(self):
         # A corpus fixture that is mostly solvent / non-protein should not crash
