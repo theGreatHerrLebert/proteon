@@ -114,8 +114,10 @@ from .hydrogens import (
     reconstruct_fragments,
 )
 from .prepare import (
+    LoadPrepResult,
     PrepReport,
     PrepStatus,
+    batch_load_and_prepare,
     batch_prepare,
     load_and_prepare,
     normalize_histidine_tautomers,
@@ -446,8 +448,10 @@ _HYDROGEN_API = (
 )
 
 _PREPARE_API = (
+    "LoadPrepResult",
     "PrepReport",
     "PrepStatus",
+    "batch_load_and_prepare",
     "batch_prepare",
     "load_and_prepare",
     "normalize_histidine_tautomers",
