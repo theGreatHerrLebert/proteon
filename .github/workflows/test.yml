@@ -110,6 +110,16 @@ jobs:
           # oracle. ~2 MB, so it runs every PR alongside the pip oracles.
           sudo apt-get update
           sudo apt-get install -y dssp
+      - name: Install PDBFixer (H-placement oracle, Python 3.12 only)
+        if: matrix.python-version == '3.12'
+        run: |
+          # openmm + pdbfixer drive the second H-placement oracle
+          # (tests/oracle/test_pdbfixer_hydrogen_oracle.py); the test self-skips
+          # if absent. openmm is a ~150 MB wheel, so install it on ONE Python leg
+          # only — the oracle is deterministic, running it 3× adds cost not
+          # coverage. The Reduce oracle stays the off-CI gold standard.
+          source .venv/bin/activate
+          pip install openmm pdbfixer
       - name: Build connector
         run: |
           source .venv/bin/activate
