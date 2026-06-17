@@ -38,6 +38,13 @@ pub(crate) fn strip_hydrogens(pdb: &mut pdbtbx::PDB) -> usize {
 
 /// Bond lengths in Ångströms.
 const NH_BOND_LENGTH: f64 = 1.01; // matches DSSP virtual H exactly
+
+/// Max C(i-1)–N(i) distance (Å) accepted as a real peptide bond. A peptide bond
+/// is ~1.33 Å; beyond this the previous residue is NOT bonded to this one (a
+/// chain break / missing segment), so its carbonyl must not be used to place the
+/// amide H — doing so yields a plausible-but-wrong hydrogen. Same spirit as the
+/// CA–CA break detection used for dihedrals/DSSP.
+const PEPTIDE_BOND_MAX: f64 = 1.8;
 const CH_BOND_LENGTH: f64 = 1.09; // aliphatic C-H
 const AROMATIC_CH_BOND_LENGTH: f64 = 1.08; // aromatic C-H
 const OH_BOND_LENGTH: f64 = 0.96; // O-H
@@ -162,7 +169,21 @@ pub fn place_peptide_hydrogens(pdb: &mut pdbtbx::PDB) -> AddHydrogensResult {
             if let (Some(prev), Some(ref curr)) = (&prev_backbone, &backbone) {
                 let is_proline = residue.name() == Some("PRO");
 
-                if is_proline || has_backbone_h(residue) {
+                // Chain-break guard: only use prev.C to place the amide H if prev
+                // is actually peptide-bonded to curr. Across a missing segment the
+                // bisector would otherwise produce a wrong-but-plausible H.
+                let cn = [
+                    curr.n[0] - prev.c[0],
+                    curr.n[1] - prev.c[1],
+                    curr.n[2] - prev.c[2],
+                ];
+                let cn_dist_sq = cn[0] * cn[0] + cn[1] * cn[1] + cn[2] * cn[2];
+
+                if cn_dist_sq > PEPTIDE_BOND_MAX * PEPTIDE_BOND_MAX {
+                    // Chain break / missing residue(s): no real preceding C, so
+                    // the amide H is undefined here — skip (as for the N-terminus).
+                    skipped += 1;
+                } else if is_proline || has_backbone_h(residue) {
                     skipped += 1;
                 } else {
                     // Bisector method: H is along the average of two vectors
@@ -1731,6 +1752,76 @@ mod tests {
         let result = place_peptide_hydrogens(&mut pdb);
         assert_eq!(result.added, 0);
         assert_eq!(result.skipped, 0);
+    }
+
+    // Two ALA residues; residue 1 is N-terminal (amide H always skipped), so only
+    // residue 2 is a candidate. Vary the C(1)–N(2) distance to make it a real
+    // peptide bond vs a chain break.
+    fn two_ala(c1_to_n2: f64) -> pdbtbx::PDB {
+        let c = [2.0, 1.4, 0.0]; // residue 1 carbonyl C
+        let n2 = [c[0] + c1_to_n2, c[1], c[2]]; // residue 2 amide N, offset along x
+        let txt = format!(
+            "ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N\n\
+             ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00  0.00           C\n\
+             ATOM      3  C   ALA A   1       {:.3}   {:.3}   {:.3}  1.00  0.00           C\n\
+             ATOM      4  O   ALA A   1       1.300   2.400   0.000  1.00  0.00           O\n\
+             ATOM      5  N   ALA A   2       {:.3}   {:.3}   {:.3}  1.00  0.00           N\n\
+             ATOM      6  CA  ALA A   2       {:.3}   {:.3}   {:.3}  1.00  0.00           C\n\
+             ATOM      7  C   ALA A   2       {:.3}   {:.3}   {:.3}  1.00  0.00           C\n\
+             ATOM      8  O   ALA A   2       {:.3}   {:.3}   {:.3}  1.00  0.00           O\n\
+             END\n",
+            c[0],
+            c[1],
+            c[2],
+            n2[0],
+            n2[1],
+            n2[2],
+            n2[0] + 0.7,
+            n2[1] + 1.0,
+            n2[2],
+            n2[0] + 1.4,
+            n2[1] + 1.4,
+            n2[2],
+            n2[0] + 0.7,
+            n2[1] + 2.4,
+            n2[2],
+        );
+        let path =
+            std::env::temp_dir().join(format!("proteon_cb_{}.pdb", (c1_to_n2 * 1000.0) as i64));
+        std::fs::write(&path, txt).unwrap();
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(path.to_str().unwrap())
+            .expect("read synthetic PDB");
+        let _ = std::fs::remove_file(&path);
+        pdb
+    }
+
+    #[test]
+    fn test_peptide_h_placed_when_bonded() {
+        // C(1)–N(2) = 1.33 Å: a real peptide bond → residue 2 gets its amide H.
+        let mut pdb = two_ala(1.33);
+        let result = place_peptide_hydrogens(&mut pdb);
+        assert_eq!(
+            result.added, 1,
+            "contiguous peptide should place the amide H"
+        );
+    }
+
+    #[test]
+    fn test_peptide_h_skipped_at_chain_break() {
+        // C(1)–N(2) = 5.0 Å: a chain break — using residue 1's carbonyl would
+        // place a wrong-but-plausible H, so it must be skipped, not placed.
+        let mut pdb = two_ala(5.0);
+        let result = place_peptide_hydrogens(&mut pdb);
+        assert_eq!(
+            result.added, 0,
+            "amide H must not be placed across a chain break"
+        );
+        assert!(
+            result.skipped >= 1,
+            "the break residue should be counted as skipped"
+        );
     }
 
     #[test]
