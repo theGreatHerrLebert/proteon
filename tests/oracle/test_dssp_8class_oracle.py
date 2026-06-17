@@ -56,9 +56,9 @@ SHARED_PDBS = os.path.normpath(os.path.join(_HERE, "..", "..", "..", "test-pdbs"
 STRUCTURES = [
     ("1crn", os.path.join(PROTEON_PDBS, "1crn.pdb")),
     ("1ubq", os.path.join(PROTEON_PDBS, "1ubq.pdb")),
-    ("1enh", os.path.join(SHARED_PDBS, "1enh.pdb")),
-    ("1ake", os.path.join(SHARED_PDBS, "1ake.pdb")),
-    ("4hhb", os.path.join(SHARED_PDBS, "4hhb.pdb")),
+    ("1enh", os.path.join(PROTEON_PDBS, "1enh.pdb")),
+    ("1ake", os.path.join(PROTEON_PDBS, "1ake.pdb")),
+    ("4hhb", os.path.join(PROTEON_PDBS, "4hhb.pdb")),
 ]
 
 EIGHT_CLASS_TOLERANCE = 0.90
