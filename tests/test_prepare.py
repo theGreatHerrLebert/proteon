@@ -149,6 +149,26 @@ class TestPrepare:
         )
         assert report.minimizer_steps > 0
 
+    def test_default_tolerance_actually_converges(self):
+        # The default gradient_tolerance (1.0 kcal/mol/A) is the achievable
+        # max-per-atom-force band: a full default prepare must report honest
+        # convergence, not burn the step budget at an unreachable 0.1. Regression
+        # guard for the minimize-defaults tuning.
+        s = proteon.load(CRAMBIN)
+        report = proteon.prepare(s)  # all defaults: minimize on, tol 1.0
+        assert report.minimized is True
+        assert report.converged is True, (
+            f"crambin should converge at the default tolerance, "
+            f"got status={report.minimizer_status}"
+        )
+
+    def test_tight_tolerance_can_still_be_requested(self):
+        # The tighter 0.1 is still available for callers who want it (and will
+        # typically hit the step cap on heavy-atom relaxation — that's expected).
+        s = proteon.load(CRAMBIN)
+        report = proteon.prepare(s, gradient_tolerance=0.1, minimize_steps=50)
+        assert report.minimizer_steps > 0
+
 
 # =========================================================================
 # Idempotency

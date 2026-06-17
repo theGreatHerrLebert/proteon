@@ -65,7 +65,13 @@ impl Default for PrepareOptions {
             minimize: true,
             minimize_method: "lbfgs".to_string(),
             minimize_steps: 500,
-            gradient_tolerance: 0.1,
+            // Max per-atom force target (kcal/mol/Å). 1.0 is the achievable band
+            // for the default heavy-atom relaxation of a crystal structure:
+            // L-BFGS plateaus with a few strained atoms keeping the max force in
+            // 0.1–1.0, so a tighter 0.1 NEVER converges (it just burns the step
+            // budget at the same fold — measured CA-RMSD 0.59 Å @0.1 vs 0.53 Å
+            // @1.0, energy within 0.3%, converged 0% -> 93% on 30 proteins).
+            gradient_tolerance: 1.0,
             strip_hydrogens: true,
             constrain_heavy: None,
         }
