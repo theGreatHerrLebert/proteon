@@ -227,7 +227,7 @@ use crate::prepare::{self, PrepareOptions, PrepareReport};
 /// is provided for like-for-like comparison against other AMBER96
 /// implementations (OpenMM, BALL) in the SOTA validation harness.
 #[pyfunction]
-#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=0.1, n_threads=None, strip_hydrogens=true, ff="charmm19_eef1", constrain_heavy=None))]
+#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=1.0, n_threads=None, strip_hydrogens=true, ff="charmm19_eef1", constrain_heavy=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn batch_prepare(
     py: Python<'_>,
