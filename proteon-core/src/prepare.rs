@@ -64,6 +64,12 @@ pub struct PrepareReport {
     pub h_skipped: usize,
     pub n_unassigned: usize,
     pub skipped_no_protein: bool,
+    /// Mostly-a-protein, but a size-significant chunk of NON-WATER atoms have no
+    /// FF type (>10 AND >2%), so topology/energy is partially wrong. Computed
+    /// here (not in the Python verdict) because the raw `n_unassigned` counts
+    /// waters too — only the Rust side has the water-filtered counts. Distinct
+    /// from `skipped_no_protein` (>50%, not a protein at all).
+    pub incomplete_ff: bool,
     pub init_e: f64,
     pub final_e: f64,
     pub bond_stretch: f64,
@@ -170,6 +176,13 @@ pub fn prepare_structure<P: ForceField>(
         .filter(|s| !add_hydrogens::is_water_residue(s.split(':').next().unwrap_or("")))
         .count();
     out.skipped_no_protein = non_water_total > 0 && non_water_unassigned * 2 > non_water_total;
+    // Size-aware FF incompleteness when it IS mostly a protein: >10 non-water
+    // unassigned atoms AND >2% of non-water. Both bounds matter — 11 unassigned
+    // in a 5000-atom protein is negligible, but 11 in a small peptide is not.
+    // Uses the water-filtered counts (the raw `n_unassigned` includes waters).
+    out.incomplete_ff = !out.skipped_no_protein
+        && non_water_unassigned > 10
+        && non_water_unassigned * 50 > non_water_total;
 
     let has_any_h = crate::altloc::pdb_atoms_primary(pdb).any(|a| {
         a.element()

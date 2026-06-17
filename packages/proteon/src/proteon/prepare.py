@@ -12,7 +12,24 @@ Functions:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Dict, List, Optional, Sequence
+
+
+class PrepStatus(str, Enum):
+    """Outcome verdict for a prepared structure (see :attr:`PrepReport.status`)."""
+
+    #: Usable structure, no hard failure. Does NOT imply the minimizer converged
+    #: — pair with :attr:`PrepReport.converged` for energy-sensitive work.
+    READY = "ready"
+    #: >50% of non-water atoms have no force-field type (nucleic acid, ligand-only
+    #: entry, exotic residues) — not a protein the FF could process.
+    NOT_PROTEIN = "not_protein"
+    #: Minimization hit a non-finite energy/force (the geometry blew up).
+    MINIMIZE_FAILED = "minimize_failed"
+    #: Mostly a protein, but a size-significant chunk of atoms lack FF types
+    #: (>10 atoms AND >2%), so topology/energy is partially wrong.
+    INCOMPLETE_FF = "incomplete_ff"
 
 try:
     import proteon_connector
@@ -111,7 +128,59 @@ class PrepReport:
     minimizer_status: str = ""
     n_unassigned_atoms: int = 0
     skipped_no_protein: bool = False
+    #: Mostly a protein, but a size-significant chunk of atoms lack FF types
+    #: (>10 AND >2% of non-water). Drives :attr:`status` == ``INCOMPLETE_FF``.
+    incomplete_ff: bool = False
     warnings: List[str] = field(default_factory=list)
+
+    @property
+    def status(self) -> PrepStatus:
+        """Single readiness verdict, derived from the per-step fields.
+
+        A **hard-failure gate**: ``READY`` means a usable structure was produced
+        and nothing failed — NOT that the minimizer converged. Convergence
+        quality (``max_steps`` / line-search stalls) is a separate axis: a
+        ``READY`` structure may not be at an energy minimum. For energy-sensitive
+        work, gate on both::
+
+            if report.ready and report.converged:
+                ...
+        """
+        if self.skipped_no_protein:
+            return PrepStatus.NOT_PROTEIN
+        if self.minimizer_status == "numerical_failure":
+            return PrepStatus.MINIMIZE_FAILED
+        if self.incomplete_ff:
+            return PrepStatus.INCOMPLETE_FF
+        return PrepStatus.READY
+
+    @property
+    def ready(self) -> bool:
+        """True iff prepare produced a usable structure with no hard failure.
+
+        See :attr:`status`. Does not imply minimization convergence (check
+        :attr:`converged`), protonation correctness, or chemical validity beyond
+        the FF-coverage and numerical checks.
+        """
+        return self.status == PrepStatus.READY
+
+    @property
+    def reason(self) -> str:
+        """Empty when :attr:`ready`; otherwise a short why-not explanation."""
+        s = self.status
+        if s == PrepStatus.READY:
+            return ""
+        if s == PrepStatus.NOT_PROTEIN:
+            return (
+                f"not a protein the force field can process "
+                f"({self.n_unassigned_atoms} unassigned atoms, >50% of non-water)"
+            )
+        if s == PrepStatus.MINIMIZE_FAILED:
+            return "minimization hit a non-finite energy/force (geometry blew up)"
+        return (
+            f"incomplete force-field coverage "
+            f"({self.n_unassigned_atoms} unassigned atoms, >2% of non-water)"
+        )
 
     def __repr__(self) -> str:
         lines = [
@@ -134,6 +203,10 @@ class PrepReport:
                 lines.append(f"  unassigned_atoms={self.n_unassigned_atoms}")
         if self.warnings:
             lines.append(f"  warnings={self.warnings}")
+        verdict = f"  ready={self.ready} (status={self.status.value})"
+        if not self.ready:
+            verdict += f": {self.reason}"
+        lines.append(verdict)
         lines.append(")")
         return "\n".join(lines)
 
@@ -233,6 +306,7 @@ def prepare(
             report.minimizer_status = r.get("minimizer_status", "")
             report.n_unassigned_atoms = r["n_unassigned_atoms"]
             report.skipped_no_protein = r["skipped_no_protein"]
+            report.incomplete_ff = r.get("incomplete_ff", False)
             if report.skipped_no_protein:
                 report.warnings.append(
                     f"skipped: {report.n_unassigned_atoms} atoms have no "
@@ -286,10 +360,23 @@ def prepare(
             report.minimized = r.get("minimized", False)
             report.minimizer_status = r.get("minimizer_status", "")
             report.skipped_no_protein = r["skipped_no_protein"]
+            report.incomplete_ff = r.get("incomplete_ff", False)
 
-    # Step 4: Check force field coverage
-    energy_result = _ff.compute_energy(ptr, ff, None, None)
-    report.n_unassigned_atoms = energy_result.get("n_unassigned_atoms", 0)
+    # Step 4: FF coverage + readiness flags. Source them from the SAME Rust
+    # prepare path the default (strip_hydrogens) branch uses, via a coverage-only
+    # no-op call (no strip / reconstruct / placement / minimize — just build
+    # topology and compute the flags). This keeps skipped_no_protein /
+    # incomplete_ff correct on this legacy path too, instead of leaving the
+    # readiness verdict blind when minimization is skipped.
+    cov = _add_h.batch_prepare(
+        [ptr], False, "none", False, False, "lbfgs", 0, gradient_tolerance,
+        None, False, ff, None,
+    )
+    if cov:
+        c = cov[0]
+        report.n_unassigned_atoms = c.get("n_unassigned_atoms", 0)
+        report.skipped_no_protein = c["skipped_no_protein"]
+        report.incomplete_ff = c.get("incomplete_ff", False)
     if report.n_unassigned_atoms > 10:
         report.warnings.append(
             f"{report.n_unassigned_atoms} atoms without force field type "
@@ -386,6 +473,7 @@ def batch_prepare(
             minimizer_status=r.get("minimizer_status", ""),
             n_unassigned_atoms=r["n_unassigned_atoms"],
             skipped_no_protein=r["skipped_no_protein"],
+            incomplete_ff=r.get("incomplete_ff", False),
         )
         if report.skipped_no_protein:
             report.warnings.append(

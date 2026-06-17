@@ -322,6 +322,7 @@ pub(crate) fn batch_prepare(
             dict.set_item("n_unassigned_atoms", r.n_unassigned).unwrap();
             dict.set_item("skipped_no_protein", r.skipped_no_protein)
                 .unwrap();
+            dict.set_item("incomplete_ff", r.incomplete_ff).unwrap();
             // Component breakdown at the post-minimization geometry (all
             // zero if minimize=False or skipped_no_protein).
             let components = pyo3::types::PyDict::new(py);
