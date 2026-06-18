@@ -281,6 +281,7 @@ mod tests {
             lj_excluded_pairs: HashSet::new(),
             unassigned_atoms: vec![],
             inferred_bonds: false,
+            inferred_residues: std::collections::HashSet::new(),
         }
     }
 

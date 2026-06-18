@@ -190,6 +190,26 @@ class PrepReport:
     #: the structure is still :attr:`ready`, but not :attr:`fully_typed`. Drives
     #: :attr:`status` == ``READY_WITH_LIGANDS``.
     untyped_cofactors: bool = False
+    # --- label-safety hazards (for geometric-DL supervision) ---
+    #: Heavy-atom steric clashes on the final geometry. A clash left by H-only
+    #: minimization (or introduced by a reconstructed atom) silently poisons a
+    #: training label, so it is surfaced as a first-class count. See
+    #: :attr:`has_heavy_clashes` and :attr:`label_safe`.
+    n_heavy_clashes: int = 0
+    #: True if the clash count is APPROXIMATE because the topology used the
+    #: distance-inferred bond fallback for un-templated residues (ligands /
+    #: non-standard). Intra-ligand clashes there can't be told from bonds.
+    clash_count_inferred: bool = False
+    #: Number of models in the input. Only model 0 is prepared; ``> 1`` (e.g. an
+    #: NMR ensemble) means a silent model choice was made — see
+    #: :attr:`has_multiple_models`.
+    n_models: int = 1
+    #: True if any residue carries alternate locations (a conformer was silently
+    #: chosen). An arbitrary label decision for the affected residues.
+    has_altlocs: bool = False
+    #: True if any residue carries a PDB insertion code — a residue-identity /
+    #: numbering hazard for ``(chain, resnum)``-keyed (sequence-indexed) labels.
+    has_insertion_codes: bool = False
     warnings: List[str] = field(default_factory=list)
 
     @property
@@ -244,6 +264,120 @@ class PrepReport:
         a usable protein structure.
         """
         return self.status == PrepStatus.READY and self.n_unassigned_nonwater == 0
+
+    # --- label-safety contract (geometric-DL supervision) ---
+    #
+    # `prepare` is step 0 of supervision pipelines; the prepared coordinates and
+    # FF assignment BECOME the training labels, so a silent corruption (guessed
+    # atom, residual clash, arbitrary altloc/model pick) poisons every example
+    # invisibly. These derived signals make that class of error a structured,
+    # impossible-to-ignore decision rather than text in `warnings`.
+
+    @property
+    def has_heavy_clashes(self) -> bool:
+        """Any heavy-atom steric clash on the final geometry (see :attr:`n_heavy_clashes`)."""
+        return self.n_heavy_clashes > 0
+
+    @property
+    def has_reconstructed_atoms(self) -> bool:
+        """Any heavy atoms were fabricated from templates (model-derived, not observed)."""
+        return self.atoms_reconstructed > 0
+
+    @property
+    def has_untyped_atoms(self) -> bool:
+        """Any non-water atom lacks a force-field type."""
+        return self.n_unassigned_nonwater > 0
+
+    @property
+    def has_multiple_models(self) -> bool:
+        """Input had >1 model; only model 0 was prepared (silent selection)."""
+        return self.n_models > 1
+
+    @property
+    def label_hazards(self) -> List[str]:
+        """The label-corrupting hazards that fired, by name (empty iff none).
+
+        The structured replacement for parsing :attr:`warnings`. A consumer that
+        tolerates some hazards for a specific label type can inspect this instead
+        of the all-or-nothing :attr:`label_safe`.
+        """
+        h: List[str] = []
+        if not self.ready:
+            h.append(self.status.value)
+        if self.has_reconstructed_atoms:
+            h.append("reconstructed_atoms")
+        if self.has_heavy_clashes:
+            h.append("heavy_clashes")
+        if self.has_untyped_atoms:
+            h.append("untyped_atoms")
+        if self.has_altlocs:
+            h.append("altlocs")
+        if self.has_multiple_models:
+            h.append("multiple_models")
+        if self.has_insertion_codes:
+            h.append("insertion_codes")
+        return h
+
+    @property
+    def label_safe_heavy_coords(self) -> bool:
+        """Safe for backbone / heavy-atom coordinate labels.
+
+        Experimentally-observed heavy atoms, sterically sane, with an unambiguous
+        conformer and a single model. Does NOT require full FF typing — an
+        untyped heme does not corrupt the protein backbone coordinates.
+        """
+        return (
+            self.status != PrepStatus.NOT_PROTEIN
+            and self.minimizer_status != "numerical_failure"
+            and not self.has_reconstructed_atoms
+            and not self.has_heavy_clashes
+            and not self.has_altlocs
+            and not self.has_multiple_models
+        )
+
+    @property
+    def label_safe_all_atom_coords(self) -> bool:
+        """:attr:`label_safe_heavy_coords` AND hydrogens were placed.
+
+        Does NOT require ``hydrogens_skipped == 0``: skips are dominated by
+        legitimate chemistry (proline has no backbone amide H, chain termini),
+        which the count cannot tell from a genuine failure — so it is not a
+        label hazard on its own.
+        """
+        return self.label_safe_heavy_coords and self.hydrogens_added > 0
+
+    @property
+    def label_safe_energy(self) -> bool:
+        """All-atom coords + full FF typing — for energy / force labels.
+
+        NOTE: protonation / histidine-tautomer correctness is not yet verified
+        (a later phase); this gate covers coverage and sterics, not chemistry.
+        """
+        return self.label_safe_all_atom_coords and self.fully_typed
+
+    @property
+    def label_safe_sequence_indexed(self) -> bool:
+        """Safe for ``(chain, resnum)``-keyed labels: no residue-identity ambiguity.
+
+        NOTE: chain-gap false-adjacency detection is a later phase.
+        """
+        return (
+            self.status != PrepStatus.NOT_PROTEIN
+            and not self.has_insertion_codes
+            and not self.has_multiple_models
+        )
+
+    @property
+    def label_safe(self) -> bool:
+        """The strict gate: safe to use as a training label of ANY supported type.
+
+        The conjunction of every label profile — experimentally-observed,
+        sterically sane, fully typed, unambiguous conformer/model, and free of
+        residue-identity ambiguity. Use a specific ``label_safe_*`` profile to
+        relax this for one label type; inspect :attr:`label_hazards` to see why a
+        structure is excluded.
+        """
+        return self.label_safe_energy and self.label_safe_sequence_indexed
 
     @property
     def reason(self) -> str:
@@ -427,6 +561,11 @@ def prepare(
             report.skipped_no_protein = r["skipped_no_protein"]
             report.incomplete_ff = r.get("incomplete_ff", False)
             report.untyped_cofactors = r.get("untyped_cofactors", False)
+            report.n_heavy_clashes = r.get("n_heavy_clashes", 0)
+            report.clash_count_inferred = r.get("clash_count_inferred", False)
+            report.n_models = r.get("n_models", 1)
+            report.has_altlocs = r.get("has_altlocs", False)
+            report.has_insertion_codes = r.get("has_insertion_codes", False)
             if report.skipped_no_protein:
                 report.warnings.append(
                     f"skipped: {report.n_unassigned_atoms} atoms have no "
@@ -485,6 +624,11 @@ def prepare(
             report.skipped_no_protein = r["skipped_no_protein"]
             report.incomplete_ff = r.get("incomplete_ff", False)
             report.untyped_cofactors = r.get("untyped_cofactors", False)
+            report.n_heavy_clashes = r.get("n_heavy_clashes", 0)
+            report.clash_count_inferred = r.get("clash_count_inferred", False)
+            report.n_models = r.get("n_models", 1)
+            report.has_altlocs = r.get("has_altlocs", False)
+            report.has_insertion_codes = r.get("has_insertion_codes", False)
 
     # Step 4: FF coverage + readiness flags. Source them from the SAME Rust
     # prepare path the default (strip_hydrogens) branch uses, via a coverage-only
@@ -503,6 +647,11 @@ def prepare(
         report.skipped_no_protein = c["skipped_no_protein"]
         report.incomplete_ff = c.get("incomplete_ff", False)
         report.untyped_cofactors = c.get("untyped_cofactors", False)
+        report.n_heavy_clashes = c.get("n_heavy_clashes", 0)
+        report.clash_count_inferred = c.get("clash_count_inferred", False)
+        report.n_models = c.get("n_models", 1)
+        report.has_altlocs = c.get("has_altlocs", False)
+        report.has_insertion_codes = c.get("has_insertion_codes", False)
     if report.n_unassigned_atoms > 10:
         report.warnings.append(
             f"{report.n_unassigned_atoms} atoms without force field type "
@@ -615,6 +764,11 @@ def batch_prepare(
             skipped_no_protein=r["skipped_no_protein"],
             incomplete_ff=r.get("incomplete_ff", False),
             untyped_cofactors=r.get("untyped_cofactors", False),
+            n_heavy_clashes=r.get("n_heavy_clashes", 0),
+            clash_count_inferred=r.get("clash_count_inferred", False),
+            n_models=r.get("n_models", 1),
+            has_altlocs=r.get("has_altlocs", False),
+            has_insertion_codes=r.get("has_insertion_codes", False),
         )
         if report.skipped_no_protein:
             report.warnings.append(

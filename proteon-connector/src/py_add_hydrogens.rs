@@ -327,6 +327,14 @@ pub(crate) fn batch_prepare(
             dict.set_item("incomplete_ff", r.incomplete_ff).unwrap();
             dict.set_item("untyped_cofactors", r.untyped_cofactors)
                 .unwrap();
+            // Label-safety hazards (geometric-DL supervision).
+            dict.set_item("n_heavy_clashes", r.n_heavy_clashes).unwrap();
+            dict.set_item("clash_count_inferred", r.clash_count_inferred)
+                .unwrap();
+            dict.set_item("n_models", r.n_models).unwrap();
+            dict.set_item("has_altlocs", r.has_altlocs).unwrap();
+            dict.set_item("has_insertion_codes", r.has_insertion_codes)
+                .unwrap();
             // Component breakdown at the post-minimization geometry (all
             // zero if minimize=False or skipped_no_protein).
             let components = pyo3::types::PyDict::new(py);

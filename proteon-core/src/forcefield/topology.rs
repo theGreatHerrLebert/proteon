@@ -77,6 +77,12 @@ pub struct Topology {
     /// this so the clash count over un-templated residues is known to be
     /// approximate rather than silently under-counted.
     pub inferred_bonds: bool,
+    /// `residue_idx` of residues prepared WITHOUT a fragment template (ligands /
+    /// non-standard) — their bond graph is distance-inferred and incomplete, so
+    /// their dense internal contacts cannot be reliably told from bonds. The
+    /// clash metric skips INTRA-residue pairs here (inter-residue protein–ligand
+    /// clashes still count); see [`crate::clash`].
+    pub inferred_residues: std::collections::HashSet<usize>,
 }
 
 /// Maximum bond distance for element pairs (Å).
@@ -267,6 +273,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                 lj_excluded_pairs: HashSet::new(),
                 unassigned_atoms: Vec::new(),
                 inferred_bonds: false,
+                inferred_residues: HashSet::new(),
             }
         }
     };
@@ -649,10 +656,18 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
 
     // Phase D: Distance fallback for residues without templates (ligands, non-standard)
     let mut inferred_bonds = false;
+    let mut inferred_residues: HashSet<usize> = HashSet::new();
     for (&res_idx, atom_indices) in &residue_atoms {
         if residues_with_templates.contains(&res_idx) {
             continue;
         }
+        // Every un-templated residue is marked — including single-atom ligands /
+        // ions / metals (Zn, Mg, Ca, …). The clash metric skips pairs touching
+        // these, so protein–metal coordination contacts (which fall below the
+        // Bondi clash threshold) are not mis-counted as clashes (codex). The
+        // `inferred_bonds` flag below is separate: it tracks whether an actual
+        // bond was inferred, which only happens for multi-atom residues.
+        inferred_residues.insert(res_idx);
         for ai in 0..atom_indices.len() {
             for aj in (ai + 1)..atom_indices.len() {
                 let (i, j) = (atom_indices[ai], atom_indices[aj]);
@@ -1015,6 +1030,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
         lj_excluded_pairs,
         unassigned_atoms,
         inferred_bonds,
+        inferred_residues,
     }
 }
 
