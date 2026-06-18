@@ -221,6 +221,13 @@ class PrepReport:
     #: A metal atom is present — coordination chemistry the protein-only force
     #: field does not model (an energy-label hazard).
     has_metals: bool = False
+    #: Broken peptide bonds between consecutive amino acids (missing residues /
+    #: physical breaks) — a FALSE sequential-adjacency hazard for graph /
+    #: sequence-indexed labels (the present residues' coordinates are fine).
+    n_chain_gaps: int = 0
+    #: CA centres with non-L (D) chirality — a D-amino acid or a modeling error;
+    #: a coordinate-geometry anomaly a standard L-protein pipeline should see.
+    n_chirality_outliers: int = 0
     warnings: List[str] = field(default_factory=list)
 
     @property
@@ -295,6 +302,16 @@ class PrepReport:
         return self.atoms_reconstructed > 0
 
     @property
+    def has_chain_gaps(self) -> bool:
+        """Broken peptide bonds between consecutive residues (false adjacency)."""
+        return self.n_chain_gaps > 0
+
+    @property
+    def has_chirality_outliers(self) -> bool:
+        """CA centres with non-L (D) chirality — a D-amino acid or modeling error."""
+        return self.n_chirality_outliers > 0
+
+    @property
     def has_missing_atoms(self) -> bool:
         """Standard residues are missing heavy atoms (an incomplete coordinate label).
 
@@ -343,6 +360,10 @@ class PrepReport:
             h.append("nonstandard_residues")
         if self.has_metals:
             h.append("metals")
+        if self.has_chirality_outliers:
+            h.append("chirality_outliers")
+        if self.has_chain_gaps:
+            h.append("chain_gaps")
         if self.hydrogens_added == 0:
             # No hydrogens placed (e.g. hydrogens="none"): all-atom / energy
             # labels are unavailable. Not a hazard for heavy-coordinate labels,
@@ -370,6 +391,7 @@ class PrepReport:
             and self.minimizer_status != "numerical_failure"
             and not self.has_reconstructed_atoms
             and not self.has_missing_atoms
+            and not self.has_chirality_outliers
             and not self.heavy_relaxed
             and not self.has_heavy_clashes
             and not self.has_altlocs
@@ -415,6 +437,7 @@ class PrepReport:
             and not self.has_insertion_codes
             and not self.has_multiple_models
             and not self.has_nonstandard_residues
+            and not self.has_chain_gaps
         )
 
     @property
@@ -619,6 +642,8 @@ def prepare(
             report.n_missing_heavy_atoms = r.get("n_missing_heavy_atoms", 0)
             report.has_nonstandard_residues = r.get("has_nonstandard_residues", False)
             report.has_metals = r.get("has_metals", False)
+            report.n_chain_gaps = r.get("n_chain_gaps", 0)
+            report.n_chirality_outliers = r.get("n_chirality_outliers", 0)
             if report.skipped_no_protein:
                 report.warnings.append(
                     f"skipped: {report.n_unassigned_atoms} atoms have no "
@@ -685,6 +710,8 @@ def prepare(
             report.n_missing_heavy_atoms = r.get("n_missing_heavy_atoms", 0)
             report.has_nonstandard_residues = r.get("has_nonstandard_residues", False)
             report.has_metals = r.get("has_metals", False)
+            report.n_chain_gaps = r.get("n_chain_gaps", 0)
+            report.n_chirality_outliers = r.get("n_chirality_outliers", 0)
 
     # Step 4: FF coverage + readiness flags. Source them from the SAME Rust
     # prepare path the default (strip_hydrogens) branch uses, via a coverage-only
@@ -711,6 +738,8 @@ def prepare(
         report.n_missing_heavy_atoms = c.get("n_missing_heavy_atoms", 0)
         report.has_nonstandard_residues = c.get("has_nonstandard_residues", False)
         report.has_metals = c.get("has_metals", False)
+        report.n_chain_gaps = c.get("n_chain_gaps", 0)
+        report.n_chirality_outliers = c.get("n_chirality_outliers", 0)
     if report.n_unassigned_atoms > 10:
         report.warnings.append(
             f"{report.n_unassigned_atoms} atoms without force field type "
@@ -831,6 +860,8 @@ def batch_prepare(
             n_missing_heavy_atoms=r.get("n_missing_heavy_atoms", 0),
             has_nonstandard_residues=r.get("has_nonstandard_residues", False),
             has_metals=r.get("has_metals", False),
+            n_chain_gaps=r.get("n_chain_gaps", 0),
+            n_chirality_outliers=r.get("n_chirality_outliers", 0),
         )
         if report.skipped_no_protein:
             report.warnings.append(
