@@ -149,6 +149,21 @@ Convenience presets: `RepairPolicy.strict()` (drop everything), `.coords_only()`
    (`RepairPolicy.from_callback(fn, name=...)`) whose resolved per-structure
    decisions are recorded (not just "callback accepted") for replayability.
 
+### Implemented: `relax` done right (follow-on after the first cut)
+
+Clash relaxation now ships, built to the safety requirements above:
+- **Per-structure, two-pass.** Pass 1 prepares H-only (faithful coords, clash
+  detection). Pass 2 re-runs heavy-atom minimization on ONLY the structures that
+  actually clash — never the whole batch.
+- **`relaxed_coords` is an explicit provenance hazard.** Heavy relaxation moves
+  the deposited coordinates (~0.5 Å), so `PrepReport.heavy_relaxed` now surfaces
+  a `relaxed_coords` label hazard that blocks the coordinate profiles. The
+  policy must `relaxed_coords="accept"` explicitly — relaxed coords never pass as
+  observed labels silently.
+- **Loud drift.** `RepairOutcome.coords_drift` records the CA-RMSD off the
+  deposited structure; `relax_failed:heavy_clashes` is reported when relaxation
+  cannot clear every clash.
+
 ### First-cut scope (safest)
 
 profile-targeted policy + explicit provenance acceptance + single-pass repair +

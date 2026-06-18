@@ -42,6 +42,7 @@ _HEAVY_COORDS_BLOCKERS = {
     "minimize_failed",
     "reconstructed_atoms",
     "missing_atoms",
+    "relaxed_coords",
     "heavy_clashes",
     "altlocs",
     "multiple_models",
@@ -64,14 +65,18 @@ PROFILE_BLOCKERS: Dict[str, frozenset] = {
 # to `default`, which is dangerous with `default="accept"` (codex).
 KNOWN_HAZARDS = frozenset().union(*PROFILE_BLOCKERS.values())
 
-# Valid actions, and which hazards each FIX action applies to. NOTE: clash
-# relaxation (`relax`) is intentionally NOT in the first cut — doing it safely
-# needs per-structure application (relax only clashy inputs, not the whole batch)
-# and explicit acceptance of the moved-off-experiment coordinates. It is the
-# primary follow-on (see devdocs/REPAIR_POLICY_DESIGN.md). For now `heavy_clashes`
-# can only be accepted or dropped.
-ACTIONS = {"reconstruct", "accept", "accept_selected", "drop"}
-_FIX_FOR = {"reconstruct": "missing_atoms"}
+# Valid actions, and which hazards each FIX action applies to.
+#   reconstruct (missing_atoms): fill from templates -> reconstructed_atoms.
+#   relax (heavy_clashes): heavy-atom minimize to resolve clashes. LOSSY — it
+#     moves the deposited coordinates, so it is applied PER-STRUCTURE (only the
+#     clashy inputs), records a CA-drift metric, and the resulting
+#     `relaxed_coords` provenance must be explicitly accepted.
+ACTIONS = {"reconstruct", "relax", "accept", "accept_selected", "drop"}
+_FIX_FOR = {"reconstruct": "missing_atoms", "relax": "heavy_clashes"}
+# A FIX creates a provenance hazard that must be decided EXPLICITLY (a rule,
+# never via `default`) so a broad default="accept" can't silently let
+# fabricated / moved-off-experiment coordinates pass as observed labels (codex).
+_FIX_PROVENANCE = {"reconstruct": "reconstructed_atoms", "relax": "relaxed_coords"}
 _SELECTION_HAZARDS = {"altlocs", "multiple_models"}
 
 
@@ -114,6 +119,16 @@ class RepairPolicy:
         # hazard-specific and would silently not be applied (codex).
         if default not in ("accept", "drop"):
             raise ValueError(f"default action must be 'accept' or 'drop', not {default!r}")
+        # A FIX's provenance hazard must be decided by an EXPLICIT rule, not the
+        # default — otherwise default="accept" silently lets lossy / fabricated
+        # coordinates pass (codex).
+        for action, provenance in _FIX_PROVENANCE.items():
+            if any(a == action for a in rules.values()) and provenance not in rules:
+                raise ValueError(
+                    f"action {action!r} requires an explicit rule for its provenance "
+                    f"hazard {provenance!r} (e.g. {provenance}='accept' or 'drop'); "
+                    "it must not be left to `default`"
+                )
         return cls(profile=profile, rules=dict(rules), default=default)
 
     def action_for(self, hazard: str) -> str:
@@ -123,6 +138,11 @@ class RepairPolicy:
     def reconstruct(self) -> bool:
         """Whether the policy fixes missing atoms by reconstruction."""
         return self.action_for("missing_atoms") == "reconstruct"
+
+    @property
+    def relax(self) -> bool:
+        """Whether the policy resolves clashes by per-structure heavy relaxation (lossy)."""
+        return self.action_for("heavy_clashes") == "relax"
 
     # Convenience presets ---------------------------------------------------
 
@@ -156,9 +176,13 @@ class RepairOutcome:
     remaining_hazards: List[str] = field(default_factory=list)
     accepted_hazards: List[str] = field(default_factory=list)
     dropped_for: List[str] = field(default_factory=list)
+    #: CA-RMSD (Å) of the relaxed vs deposited coordinates when `relax` moved
+    #: heavy atoms; None when no relaxation happened. The "loud" drift signal.
+    coords_drift: Optional[float] = None
 
 
-def evaluate(report, policy: RepairPolicy, *, reconstruct_applied: bool) -> RepairOutcome:
+def evaluate(report, policy: RepairPolicy, *, reconstruct_applied: bool,
+             relax_applied: bool = False, coords_drift: Optional[float] = None) -> RepairOutcome:
     """Decide the policy verdict for an already-prepared `report`.
 
     `report` must reflect any FIXes already applied (the caller re-prepares with
@@ -172,6 +196,10 @@ def evaluate(report, policy: RepairPolicy, *, reconstruct_applied: bool) -> Repa
     # so it should not be counted as repaired.
     if reconstruct_applied and report.atoms_reconstructed > 0:
         out.actions_taken.append(f"reconstruct(missing_atoms; +{report.atoms_reconstructed})")
+    if relax_applied and report.heavy_relaxed:
+        out.coords_drift = coords_drift
+        d = f"{coords_drift:.3f}A" if coords_drift is not None else "?"
+        out.actions_taken.append(f"relax(heavy_clashes; CA-drift {d})")
 
     present = set(report.label_hazards)
     # The hazards this policy cares about: the profile's blockers PLUS any the
@@ -186,10 +214,10 @@ def evaluate(report, policy: RepairPolicy, *, reconstruct_applied: bool) -> Repa
         action = policy.action_for(hazard)
         if action in ("accept", "accept_selected"):
             out.accepted_hazards.append(hazard)
-        elif action == "reconstruct" and hazard == "missing_atoms":
+        elif action in _FIX_FOR and _FIX_FOR[action] == hazard:
             # The FIX was applied but the hazard PERSISTS (reconstruction could
-            # not fill it) -> does not pass.
-            out.dropped_for.append(f"reconstruct_failed:{hazard}")
+            # not fill, or relaxation could not clear every clash) -> does not pass.
+            out.dropped_for.append(f"{action}_failed:{hazard}")
             passes = False
         else:
             out.dropped_for.append(hazard)  # "drop"
