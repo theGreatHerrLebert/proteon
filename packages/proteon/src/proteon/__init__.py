@@ -122,6 +122,7 @@ from .prepare import (
     load_and_prepare,
     normalize_histidine_tautomers,
     prepare,
+    prepare_for_supervision,
 )
 from .dssp import (
     batch_dssp,
@@ -454,6 +455,7 @@ _PREPARE_API = (
     "batch_load_and_prepare",
     "batch_prepare",
     "load_and_prepare",
+    "prepare_for_supervision",
     "normalize_histidine_tautomers",
     "prepare",
 )

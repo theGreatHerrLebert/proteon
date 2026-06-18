@@ -239,6 +239,49 @@ pub struct ReconstructResult {
     pub heavy_added: usize,
 }
 
+/// Count HEAVY atoms MISSING from standard amino-acid residues, by comparing each
+/// residue's present atoms against its fragment template. Detection only — does
+/// not modify the structure. This is the basis for the missing-atom label hazard:
+/// with reconstruction disabled (the supervision default) a residue can be
+/// incomplete with no other signal, so a coordinate label would be silently
+/// partial. Hydrogens and terminal-only atoms (not in templates) are excluded.
+pub fn count_missing_heavy_atoms(pdb: &pdbtbx::PDB) -> usize {
+    let first_model = match pdb.models().next() {
+        Some(m) => m,
+        None => return 0,
+    };
+    let mut missing = 0usize;
+    for chain in first_model.chains() {
+        for residue in chain.residues() {
+            let is_aa = residue
+                .conformers()
+                .next()
+                .is_some_and(|c| c.is_amino_acid());
+            if !is_aa {
+                continue;
+            }
+            let resname = match residue.name() {
+                Some(n) => n,
+                None => continue,
+            };
+            let template = match fragment_templates::get_template(resname) {
+                Some(t) => t,
+                None => continue,
+            };
+            let existing: std::collections::HashSet<String> =
+                crate::altloc::residue_atoms_primary(residue)
+                    .map(|a| a.name().trim().to_string())
+                    .collect();
+            for &(name, elem, _) in template.1 {
+                if elem != "H" && elem != "D" && !existing.contains(name.trim()) {
+                    missing += 1;
+                }
+            }
+        }
+    }
+    missing
+}
+
 /// Find two reference atoms (already placed) near `center` in the template bond graph.
 /// Returns (found_two, ref1_name, ref2_name).
 fn get_two_reference_atoms<'a>(

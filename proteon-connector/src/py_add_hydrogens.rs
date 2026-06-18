@@ -335,6 +335,8 @@ pub(crate) fn batch_prepare(
             dict.set_item("has_altlocs", r.has_altlocs).unwrap();
             dict.set_item("has_insertion_codes", r.has_insertion_codes)
                 .unwrap();
+            dict.set_item("n_missing_heavy_atoms", r.n_missing_heavy_atoms)
+                .unwrap();
             // Component breakdown at the post-minimization geometry (all
             // zero if minimize=False or skipped_no_protein).
             let components = pyo3::types::PyDict::new(py);

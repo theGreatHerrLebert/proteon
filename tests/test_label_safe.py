@@ -56,6 +56,14 @@ class TestContractLogic:
         assert r.label_safe_heavy_coords is False  # fabricated coords aren't observed
         assert "reconstructed_atoms" in r.label_hazards
 
+    def test_missing_atoms_block_coords(self):
+        # Incomplete residues (reconstruct off) — a partial coordinate label.
+        r = PrepReport(hydrogens_added=50, n_missing_heavy_atoms=2)
+        assert r.has_missing_atoms is True
+        assert r.label_safe_heavy_coords is False
+        assert r.label_safe is False
+        assert "missing_atoms" in r.label_hazards
+
     def test_altlocs_block_coords_but_not_sequence(self):
         r = PrepReport(hydrogens_added=50, has_altlocs=True)
         assert r.label_safe_heavy_coords is False  # arbitrary conformer pick
