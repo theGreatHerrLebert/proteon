@@ -1049,6 +1049,21 @@ class LoadPrepResult:
     #: The :class:`~proteon.repair.RepairOutcome` when a ``repair`` policy was
     #: applied via :func:`prepare_for_supervision`; ``None`` otherwise.
     repair: Optional[object] = None
+    #: The :class:`~proteon.residue_mask.ResidueCoverage` when ``min_coverage``
+    #: was requested via :func:`prepare_for_supervision`; ``None`` otherwise. Use
+    #: ``res.coverage_info.node_valid`` as a per-residue label mask (phase 1:
+    #: completeness only).
+    coverage_info: Optional[object] = None
+
+    @property
+    def coverage(self) -> Optional[float]:
+        """Valid / exportable protein residues, or ``None`` if not computed.
+
+        Set only when :func:`prepare_for_supervision` is called with
+        ``min_coverage`` (or ``coverage=True``). See
+        :class:`~proteon.residue_mask.ResidueCoverage`.
+        """
+        return None if self.coverage_info is None else self.coverage_info.coverage
 
     @property
     def loaded(self) -> bool:
@@ -1177,12 +1192,37 @@ def batch_load_and_prepare(
     return results
 
 
+def _annotate_coverage(results, profile: str) -> None:
+    """Attach per-residue completeness coverage to each loaded result.
+
+    Phase 1 of per-residue masking: localizes the missing-atoms hazard so a
+    mostly-complete structure is kept (with a per-residue validity mask) instead
+    of dropped whole. See :mod:`proteon.residue_mask`.
+    """
+    from .residue_mask import structure_coverage
+
+    for res in results:
+        if not res.loaded or res.structure is None:
+            continue
+        try:
+            res.coverage_info = structure_coverage(res.structure, profile=profile)
+        except (ValueError, AttributeError):
+            # Per-STRUCTURE non-scorability (a multi-chain input with no chain_id,
+            # or an unexpected structure): leave coverage unset (None) so the gate
+            # drops it, rather than aborting the batch. A misspelled `profile` is a
+            # CONFIG error and is rejected up front in prepare_for_supervision, not
+            # swallowed here (codex).
+            continue
+
+
 def prepare_for_supervision(
     paths: Sequence,
     *,
     n_threads: Optional[int] = None,
     only_safe: bool = False,
     repair=None,
+    min_coverage: Optional[float] = None,
+    coverage_profile: str = "heavy_coords",
     **prepare_kwargs,
 ) -> List[LoadPrepResult]:
     """Load + prepare structures for geometric-DL supervision, label-safe by default.
@@ -1216,6 +1256,21 @@ def prepare_for_supervision(
             the policy's label profile; the outcome is attached as ``res.repair``
             and ``res.passes_policy`` is the gate. Without a policy, ``reconstruct``
             defaults to False (don't fabricate atoms into labels).
+        min_coverage: If set, switch to **coverage-based** supervision (phase 1 of
+            per-residue masking). Each result gets a
+            :class:`~proteon.residue_mask.ResidueCoverage` (``res.coverage_info``,
+            ``res.coverage``) whose ``node_valid`` is a per-residue label mask
+            (chain-level, aligned to the supervision ``residue_index``). With
+            ``only_safe``, a structure is kept iff coverage ≥ this floor (``0.8``
+            is the calibrated default) **AND it carries no other unmasked
+            coordinate hazard** — coverage masks only *missing atoms*, so severe
+            clashes / altlocs / chirality / multi-model still gate (phase 1 does
+            not localize those). Coverage is computed over a single protein chain,
+            like the export; a multi-chain input is left unscored (coverage
+            ``None`` → dropped by the gate) — per-chain multi-chain coverage is a
+            follow-on.
+        coverage_profile: Completeness level for ``min_coverage``: ``"heavy_coords"``
+            (all expected heavy atoms, the default) or ``"backbone"`` (N, CA, C, O).
         **prepare_kwargs: Forwarded to :func:`batch_prepare`. ``reconstruct``
             defaults to False here (vs True elsewhere); a ``repair`` policy sets
             the fix flags.
@@ -1247,15 +1302,53 @@ def prepare_for_supervision(
         results = _prepare_with_repair(
             paths, repair, n_threads=n_threads, only_safe=False, **prepare_kwargs
         )
-        if only_safe:
-            return [r for r in results if r.passes_policy]
-        return results
-    prepare_kwargs.setdefault("reconstruct", False)
-    results = batch_load_and_prepare(paths, n_threads=n_threads, **prepare_kwargs)
-    _annotate_assembly(results)
+    else:
+        prepare_kwargs.setdefault("reconstruct", False)
+        results = batch_load_and_prepare(paths, n_threads=n_threads, **prepare_kwargs)
+        _annotate_assembly(results)
+
+    if min_coverage is not None:
+        from .residue_mask import _COVERAGE_PROFILES
+
+        # Surface a misspelled profile NOW, not silently per-structure (codex).
+        if coverage_profile not in _COVERAGE_PROFILES:
+            raise ValueError(
+                f"unknown coverage_profile {coverage_profile!r}; "
+                f"{list(_COVERAGE_PROFILES)}"
+            )
+        _annotate_coverage(results, coverage_profile)
+
     if only_safe:
-        return [r for r in results if r.label_safe]
+        return [r for r in results if _supervision_keep(r, repair, min_coverage)]
     return results
+
+
+#: Hazards that per-residue COVERAGE masking handles (phase 1: missing atoms
+#: only). Every OTHER profile blocker must still gate the coverage mode — a
+#: complete structure with severe clashes / altlocs / chirality is NOT safe just
+#: because coverage is high (codex). Grows as phase 2 localizes more hazards.
+_COVERAGE_MASKED_HAZARDS = frozenset({"missing_atoms"})
+
+
+def _supervision_keep(res, repair, min_coverage) -> bool:
+    """The ``only_safe`` keep decision: coverage gate if requested, else policy,
+    else strict label-safety."""
+    if min_coverage is not None:
+        # Coverage-based supervision: keep a structure iff (a) enough residues are
+        # complete AND (b) it carries no UNMASKED coordinate hazard. Coverage only
+        # masks missing atoms; severe clashes / altlocs / chirality / multi-model
+        # would still corrupt the kept residues' labels, so they still gate.
+        from .repair import PROFILE_BLOCKERS
+
+        if res.coverage is None or res.coverage < min_coverage or res.report is None:
+            return False
+        unmasked = (
+            set(res.report.label_hazards) & PROFILE_BLOCKERS["heavy_coords"]
+        ) - _COVERAGE_MASKED_HAZARDS
+        return not unmasked
+    if repair is not None:
+        return res.passes_policy
+    return res.label_safe
 
 
 def _annotate_assembly(results) -> None:
