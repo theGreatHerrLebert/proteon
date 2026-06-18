@@ -174,6 +174,42 @@ structures over a single missing loop that masking would handle fine.
   (decide the rule, build later); resolution-aware coverage threshold; metal
   first-shell energy/interface attribution.
 
+## Phase 2 implementation decisions (the export last mile)
+
+Building the export integration surfaced a sharpening of the two-tier model:
+
+- **Completeness stays GATE-ONLY, never an export mask.** The export's *presence*
+  masks already encode completeness per-label (`pseudo_beta_mask` is 0 if CB is
+  missing; `phi_mask` is 0 if the neighbour's C is missing; frames need N/CA/C).
+  Broadcasting a per-residue *completeness* validity into frames/torsions would
+  OVER-mask — a residue missing one side-chain tip still has a valid backbone
+  frame and φ/ψ. So completeness drives the **coverage gate** (phase 1) only.
+- **Trustworthiness hazards ARE the export masks**, because they corrupt even the
+  backbone: a severe-clash residue's coords are physically wrong; an altloc
+  residue's chosen conformer is arbitrary; a D-chirality residue is anomalous.
+  These multiply into the *coordinate* masks (NOT `seq_mask` — identity is fine).
+- **Phase 2 ships altloc first** (`residue.conformer_count > 1` — pure Python,
+  aligned to the export residues by construction). Severe-clash attribution
+  (needs the Rust topology; topology `res_idx` is over ALL model-0 residues while
+  the export `residue_index` is AA-only, so it must align via the
+  `(res_idx, atom_name)` key, not raw index) and chirality are the next hazards
+  into the SAME wiring.
+- **`apply_residue_trust_mask(example, trust)`** combines a per-residue
+  trustworthiness bool into each coordinate mask with that mask's neighbour
+  dependency — the "don't broadcast" rule made concrete:
+
+  | mask | trust dependency |
+  |---|---|
+  | `all_atom_mask` (37), `atom14_gt_exists` (14), `pseudo_beta_mask`, `chi_mask`, `rigidgroups_*` | `t[i]` |
+  | `phi_mask`, `omega_mask` | `t[i] · t[i-1]` |
+  | `psi_mask` | `t[i] · t[i+1]` |
+  | `torsion_angles_mask` cols `[pre_omega, phi]` | `t[i] · t[i-1]` |
+  | `torsion_angles_mask` cols `[psi, chi1..4]` | `t[i]` (AF psi is residue-local: own N,CA,C,O) |
+  | `seq_mask`, `aatype`, `residue_index` | UNTOUCHED |
+
+- **Opt-in (default off)** so the oracle-gated export keeps byte-parity; the
+  label-safe corpus path enables it.
+
 ## Validation plan
 
 Re-run `validation/eval_prepare_diverse.py` with a `--mask` mode reporting the

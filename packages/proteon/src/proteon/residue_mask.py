@@ -113,6 +113,39 @@ def residue_completeness(residues, profile: str = "heavy_coords") -> NDArray:
     return missing == 0
 
 
+#: Trustworthiness hazards localizable per residue in phase 2. Unlike
+#: completeness (a GATE signal — the presence masks already handle it per label,
+#: see the sketch), these corrupt even the backbone, so they DO mask coordinate
+#: labels. Phase 2 ships ``altloc``; ``severe_clash`` / ``chirality`` are the
+#: next hazards into the same wiring (severe_clash needs the Rust topology).
+_TRUST_HAZARDS = ("altloc",)
+
+
+def residue_trustworthy(residues, hazards=_TRUST_HAZARDS) -> NDArray:
+    """Per-residue boolean: is this residue a TRUSTWORTHY coordinate label?
+
+    A residue is untrustworthy if any requested trustworthiness hazard touches
+    it. Phase 2 localizes ``altloc`` (alternate locations → the chosen conformer
+    is arbitrary; ``residue.conformer_count > 1``). This is the mask that feeds
+    :func:`proteon.supervision_mask.apply_residue_trust_mask` — it corrupts the
+    coordinate labels (not the sequence: identity is unambiguous). Empty input →
+    empty array.
+
+    Aligned to the supervision ``residue_index`` by construction (computed on the
+    same amino-acid residue list the export uses).
+    """
+    unknown = set(hazards) - set(_TRUST_HAZARDS)
+    if unknown:
+        raise ValueError(f"unknown trust hazards {sorted(unknown)}; {list(_TRUST_HAZARDS)}")
+    n = len(residues)
+    trust = np.ones((n,), dtype=bool)
+    if "altloc" in hazards:
+        for i, r in enumerate(residues):
+            if getattr(r, "conformer_count", 1) > 1:
+                trust[i] = False
+    return trust
+
+
 def structure_coverage(
     structure, *, profile: str = "heavy_coords", chain_id: Optional[str] = None
 ) -> ResidueCoverage:

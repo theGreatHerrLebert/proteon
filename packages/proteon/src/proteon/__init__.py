@@ -128,8 +128,10 @@ from .residue_mask import (
     DEFAULT_COVERAGE,
     ResidueCoverage,
     residue_completeness,
+    residue_trustworthy,
     structure_coverage,
 )
+from .supervision_mask import apply_residue_trust_mask
 from .repair import (
     RepairOutcome,
     RepairPolicy,
@@ -470,6 +472,8 @@ _PREPARE_API = (
     "ResidueCoverage",
     "structure_coverage",
     "residue_completeness",
+    "residue_trustworthy",
+    "apply_residue_trust_mask",
     "DEFAULT_COVERAGE",
     "RepairPolicy",
     "RepairOutcome",

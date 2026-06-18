@@ -276,9 +276,31 @@ calibrated default floor is **0.8** (keeps 89% of structures, cuts the sparse
 ~10% tail) — a quality / crop-efficiency knob, not a corruption guard, since the
 missing residues are masked rather than trusted. `coverage_profile="backbone"`
 requires only N/CA/C/O (for backbone/frame labels). This is **phase 1**: it
-localizes the dominant *missing-atoms* hazard; per-residue clash/altloc/chirality
-attribution and the per-label export masks (torsions need valid neighbors, FAPE
-frames are separate from target atoms) are the follow-on
+localizes the dominant *missing-atoms* hazard for the structure-level coverage
+gate.
+
+### Trustworthiness masking into the export (the last mile)
+
+Completeness drives the *gate*, but the export's presence masks already zero
+missing atoms per label. What presence **can't** see is the *trustworthiness*
+hazards — a residue with every atom present can still be an arbitrary altloc
+pick, a severe clash, or a chirality outlier, which corrupt even the backbone.
+The supervision export combines a per-residue trustworthiness mask into the
+**coordinate** label masks (opt-in, off by default so the oracle-gated tensors
+keep byte-parity):
+
+```python
+ex = proteon.build_structure_supervision_example(structure, mask_untrustworthy_coords=True)
+# atom37/14, pseudo-beta, φ/ψ/ω, χ, torsions, frame masks are zeroed on
+# untrustworthy residues; seq_mask / aatype / residue_index are untouched.
+```
+
+The combination respects each label's dependency — **not one broadcast mask**:
+`phi`/`pre_omega` zero on residue *i* **and** *i+1* (they read residue *i-1*),
+`psi` zeros on *i* and *i-1* (reads *i+1*), residue-local masks (atoms, χ,
+pseudo-beta, frames) zero only on *i*. **Phase 2 ships the altloc hazard**
+(`residue.conformer_count > 1`); severe-clash attribution (needs the Rust
+topology) and chirality plug into the same `apply_residue_trust_mask` wiring
 (`devdocs/PER_RESIDUE_MASKING_SKETCH.md`).
 
 ## Validation
