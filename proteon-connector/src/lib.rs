@@ -6,7 +6,7 @@ use pyo3::wrap_pymodule;
 // so the connector still presents the same Rust surface.
 pub use proteon_core::{
     add_hydrogens, altloc, bond_order, dssp, forcefield, fragment_templates, hbond, prepare,
-    reconstruct, sasa,
+    reconstruct, sasa, select,
 };
 
 mod batch;

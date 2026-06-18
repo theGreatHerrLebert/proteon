@@ -1166,6 +1166,7 @@ def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwarg
     re-detects. The verdict is then computed per structure relative to the
     policy's label profile.
     """
+    from .io import batch_load_tolerant
     from .repair import RepairOutcome, evaluate
 
     prepare_kwargs["reconstruct"] = policy.reconstruct
@@ -1173,10 +1174,41 @@ def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwarg
     # action), so pass 1 is ALWAYS H-only — override any caller `constrain_heavy`
     # so a forwarded `constrain_heavy=False` can't relax the whole batch (codex).
     prepare_kwargs["constrain_heavy"] = True
-    # Pass 1: H-only — faithful coords + clash detection.
-    results = batch_load_and_prepare(
-        [str(p) for p in paths], n_threads=n_threads, **prepare_kwargs
-    )
+
+    # Tolerant load (skeleton 1:1 with input; load failures stay as records).
+    str_paths = [str(p) for p in paths]
+    results = [
+        LoadPrepResult(path=p, error="could not parse file as PDB or mmCIF")
+        for p in str_paths
+    ]
+    loaded = batch_load_tolerant(str_paths, n_threads=n_threads)
+    structures, positions = [], []
+    for orig_idx, structure in loaded:
+        results[orig_idx].structure = structure
+        results[orig_idx].error = None
+        structures.append(structure)
+        positions.append(orig_idx)
+
+    # SELECTORS run BEFORE prepare: collapse altlocs / pick a model so those
+    # hazards are RESOLVED structurally (vs accepted). Recorded per result.
+    selector_actions = {}
+    altloc_sel = policy.altloc_selector
+    for pos, structure in zip(positions, structures):
+        acts = []
+        if policy.select_first_model and _add_h.select_model(_get_ptr(structure), 0):
+            acts.append("select_model(0)")
+        if altloc_sel is not None:
+            n = _add_h.collapse_altlocs(_get_ptr(structure), altloc_sel == "highest_occupancy")
+            if n > 0:
+                acts.append(f"select_altloc({altloc_sel}; {n} residues)")
+        if acts:
+            selector_actions[pos] = acts
+
+    # Pass 1: H-only prepare over survivors — faithful coords + clash detection.
+    if structures:
+        reports = batch_prepare(structures, n_threads=n_threads, **prepare_kwargs)
+        for pos, report in zip(positions, reports):
+            results[pos].report = report
 
     # Pass 2: relax ONLY the clashy structures (lossy, so never the whole batch).
     drift = {}
@@ -1213,7 +1245,7 @@ def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwarg
                         np.sqrt(np.mean(np.sum((cb - ca) ** 2, axis=1)))
                     )
 
-    for res in results:
+    for i, res in enumerate(results):
         if not res.loaded or res.report is None:
             # A load/parse failure is a dropped structure — account for it in the
             # outcome (and the corpus summary), not silently skipped (codex).
@@ -1230,6 +1262,8 @@ def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwarg
             relax_applied=id(res) in relaxed,
             coords_drift=drift.get(id(res)),
         )
+        # Selectors ran before prepare; record them (they resolved the hazard).
+        res.repair.actions_taken[:0] = selector_actions.get(i, [])
 
     if only_safe:
         return [r for r in results if r.passes_policy]

@@ -83,13 +83,26 @@ KNOWN_HAZARDS = frozenset().union(*PROFILE_BLOCKERS.values())
 #     moves the deposited coordinates, so it is applied PER-STRUCTURE (only the
 #     clashy inputs), records a CA-drift metric, and the resulting
 #     `relaxed_coords` provenance must be explicitly accepted.
-ACTIONS = {"reconstruct", "relax", "accept", "accept_selected", "drop"}
-_FIX_FOR = {"reconstruct": "missing_atoms", "relax": "heavy_clashes"}
+ACTIONS = {
+    "reconstruct", "relax", "accept", "accept_selected", "drop",
+    "select_highest_occupancy", "select_first",
+}
+# `accept` / `drop` apply to any hazard; every other action applies only to the
+# hazards listed here (a mismatch is rejected at construction).
+_ACTION_HAZARDS = {
+    "reconstruct": {"missing_atoms"},
+    "relax": {"heavy_clashes"},
+    "accept_selected": {"altlocs", "multiple_models"},
+    "select_highest_occupancy": {"altlocs"},
+    "select_first": {"altlocs", "multiple_models"},
+}
 # A FIX creates a provenance hazard that must be decided EXPLICITLY (a rule,
 # never via `default`) so a broad default="accept" can't silently let
 # fabricated / moved-off-experiment coordinates pass as observed labels (codex).
 _FIX_PROVENANCE = {"reconstruct": "reconstructed_atoms", "relax": "relaxed_coords"}
-_SELECTION_HAZARDS = {"altlocs", "multiple_models"}
+# Selector actions that RESOLVE a hazard structurally (collapse altlocs / pick a
+# model) rather than just accepting the silent default.
+_SELECTOR_ACTIONS = {"select_highest_occupancy", "select_first"}
 
 
 @dataclass(frozen=True)
@@ -118,13 +131,10 @@ class RepairPolicy:
                 )
             if action not in ACTIONS:
                 raise ValueError(f"unknown action {action!r} for {hazard!r}; {sorted(ACTIONS)}")
-            if action in _FIX_FOR and _FIX_FOR[action] != hazard:
+            allowed = _ACTION_HAZARDS.get(action)
+            if allowed is not None and hazard not in allowed:
                 raise ValueError(
-                    f"action {action!r} only applies to hazard {_FIX_FOR[action]!r}, not {hazard!r}"
-                )
-            if action == "accept_selected" and hazard not in _SELECTION_HAZARDS:
-                raise ValueError(
-                    f"'accept_selected' only applies to {sorted(_SELECTION_HAZARDS)}, not {hazard!r}"
+                    f"action {action!r} only applies to {sorted(allowed)}, not {hazard!r}"
                 )
         # `default` applies to every unlisted hazard, so only the universal
         # tolerate/exclude actions are valid — a FIX or accept_selected is
@@ -155,6 +165,21 @@ class RepairPolicy:
     def relax(self) -> bool:
         """Whether the policy resolves clashes by per-structure heavy relaxation (lossy)."""
         return self.action_for("heavy_clashes") == "relax"
+
+    @property
+    def altloc_selector(self) -> Optional[str]:
+        """``"highest_occupancy"`` / ``"first"`` if the policy collapses altlocs, else None."""
+        a = self.action_for("altlocs")
+        if a == "select_highest_occupancy":
+            return "highest_occupancy"
+        if a == "select_first":
+            return "first"
+        return None
+
+    @property
+    def select_first_model(self) -> bool:
+        """Whether the policy resolves multiple models by keeping model 0."""
+        return self.action_for("multiple_models") == "select_first"
 
     # Convenience presets ---------------------------------------------------
 
@@ -226,9 +251,11 @@ def evaluate(report, policy: RepairPolicy, *, reconstruct_applied: bool,
         action = policy.action_for(hazard)
         if action in ("accept", "accept_selected"):
             out.accepted_hazards.append(hazard)
-        elif action in _FIX_FOR and _FIX_FOR[action] == hazard:
-            # The FIX was applied but the hazard PERSISTS (reconstruction could
-            # not fill, or relaxation could not clear every clash) -> does not pass.
+        elif action in _FIX_PROVENANCE and hazard in _ACTION_HAZARDS.get(action, ()):
+            # A FIX (reconstruct / relax) was applied but the hazard PERSISTS
+            # (couldn't fill, or couldn't clear every clash) -> does not pass.
+            # (Selectors resolve their hazard before prepare, so a select_* action
+            # never reaches here with its hazard still present.)
             out.dropped_for.append(f"{action}_failed:{hazard}")
             passes = False
         else:

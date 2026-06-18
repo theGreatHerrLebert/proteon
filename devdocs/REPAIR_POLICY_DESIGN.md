@@ -132,8 +132,10 @@ Convenience presets: `RepairPolicy.strict()` (drop everything), `.coords_only()`
    never hidden.
 4. **altloc / multiple_models are `accept_selected`, not FIX.** The selection
    already happened in prepare (primary conformer, model 0); the policy accepts
-   that lossy choice. Real selectors (highest-occupancy, specific model) are a
-   later primitive, not the first cut.
+   that lossy choice. (IMPLEMENTED follow-on: real SELECTORS —
+   `select_highest_occupancy` / `select_first` for altlocs, `select_first` for
+   models — collapse the structure to one conformer / model BEFORE prepare, so
+   the hazard is RESOLVED, not just accepted.)
 5. **Single-pass repair** (collect FIX flags → one re-prepare → re-verify). No
    iterate-to-fixpoint in the first cut.
 6. **Result provenance is more precise than the input action**, classified by

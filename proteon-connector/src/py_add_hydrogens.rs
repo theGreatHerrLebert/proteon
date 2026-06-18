@@ -157,6 +157,24 @@ pub(crate) fn reconstruct_fragments(py: Python<'_>, pdb: &mut PyPDB) -> usize {
     result.added
 }
 
+/// Collapse every alternate-location residue to one conformer (highest mean
+/// occupancy if `by_occupancy`, else the first), clearing the altloc id. In
+/// place. Returns the number of residues collapsed. Resolves the `has_altlocs`
+/// label hazard (the repair layer's altloc selector).
+#[pyfunction]
+#[pyo3(signature = (pdb, by_occupancy=true))]
+pub(crate) fn collapse_altlocs(py: Python<'_>, pdb: &mut PyPDB, by_occupancy: bool) -> usize {
+    py.allow_threads(|| crate::select::collapse_altlocs(&mut pdb.inner, by_occupancy))
+}
+
+/// Keep only model `index`, dropping all others. In place. Resolves the
+/// `has_multiple_models` label hazard (the repair layer's model selector).
+#[pyfunction]
+#[pyo3(signature = (pdb, index=0))]
+pub(crate) fn select_model(py: Python<'_>, pdb: &mut PyPDB, index: usize) -> bool {
+    py.allow_threads(|| crate::select::select_model(&mut pdb.inner, index))
+}
+
 /// Batch place peptide hydrogens on multiple structures in parallel.
 ///
 /// Returns list of (n_added, n_skipped) tuples.
@@ -451,6 +469,8 @@ pub(crate) fn py_add_hydrogens(_py: Python, m: &Bound<'_, PyModule>) -> PyResult
     m.add_function(wrap_pyfunction!(place_all_hydrogens, m)?)?;
     m.add_function(wrap_pyfunction!(place_general_hydrogens, m)?)?;
     m.add_function(wrap_pyfunction!(reconstruct_fragments, m)?)?;
+    m.add_function(wrap_pyfunction!(collapse_altlocs, m)?)?;
+    m.add_function(wrap_pyfunction!(select_model, m)?)?;
     m.add_function(wrap_pyfunction!(batch_place_peptide_hydrogens, m)?)?;
     m.add_function(wrap_pyfunction!(batch_prepare, m)?)?;
     Ok(())

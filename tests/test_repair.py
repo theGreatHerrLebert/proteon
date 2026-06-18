@@ -90,6 +90,16 @@ class TestPolicyValidation:
         with pytest.raises(ValueError):
             RepairPolicy.for_profile("energy", untyped_atoms="accept_selected")
 
+    def test_selector_action_hazard_matching(self):
+        # select_highest_occupancy is altloc-only; select_first works for both
+        # altlocs and multiple_models.
+        RepairPolicy.for_profile("heavy_coords", altlocs="select_highest_occupancy",
+                                 multiple_models="select_first")
+        with pytest.raises(ValueError):
+            RepairPolicy.for_profile("heavy_coords", multiple_models="select_highest_occupancy")
+        with pytest.raises(ValueError):
+            RepairPolicy.for_profile("heavy_coords", missing_atoms="select_first")
+
     def test_rejects_unknown_hazard(self):
         # A typo'd rule must be rejected, not silently fall back to default
         # (dangerous with default="accept") — codex.
@@ -288,6 +298,43 @@ class TestRepairIntegration:
         assert r.report.atoms_reconstructed > 0      # provenance survived the relax pass
         assert "reconstructed_atoms" in r.repair.dropped_for
         assert r.passes_policy is False
+
+    def test_altloc_selector_resolves_and_records(self):
+        # select_highest_occupancy collapses the altloc -> has_altlocs False,
+        # action recorded (vs accept_selected which leaves the ambiguity).
+        fix = os.path.join(CORPUS, "altloc", "dual_conformer.pdb")
+        pol = RepairPolicy.for_profile("heavy_coords",
+                                       altlocs="select_highest_occupancy",
+                                       multiple_models="select_first")
+        r = proteon.prepare_for_supervision([fix], repair=pol)[0]
+        assert r.report.has_altlocs is False
+        assert any("select_altloc" in a for a in r.repair.actions_taken)
+
+    def test_model_selector_resolves_and_records(self):
+        fix = os.path.join(CORPUS, "multimodel", "two_models.pdb")
+        pol = RepairPolicy.for_profile("heavy_coords",
+                                       altlocs="select_first",
+                                       multiple_models="select_first")
+        r = proteon.prepare_for_supervision([fix], repair=pol)[0]
+        assert r.report.n_models == 1
+        assert any("select_model" in a for a in r.repair.actions_taken)
+
+    def test_selector_composes_with_reconstruct(self):
+        # The selector resolves altlocs even alongside reconstruct; the altloc
+        # hazard is gone from the verdict (any remaining hazard is a separate
+        # issue, e.g. clashes from the rebuilt atoms in this tiny fragment).
+        fix = os.path.join(CORPUS, "altloc", "dual_conformer.pdb")
+        pol = RepairPolicy.for_profile(
+            "heavy_coords",
+            altlocs="select_highest_occupancy",
+            multiple_models="select_first",
+            missing_atoms="reconstruct", reconstructed_atoms="accept",
+        )
+        r = proteon.prepare_for_supervision([fix], repair=pol)[0]
+        assert r.report.has_altlocs is False                 # selector resolved it
+        assert "altlocs" not in r.repair.remaining_hazards
+        assert "reconstructed_atoms" in r.repair.accepted_hazards
+        assert any("select_altloc" in a for a in r.repair.actions_taken)
 
     def test_only_safe_filters_by_policy(self):
         paths = [_pdb("1crn.pdb"), _pdb("4hhb.pdb")]
