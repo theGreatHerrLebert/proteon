@@ -121,6 +121,88 @@ fn is_metal_element(symbol: &str) -> bool {
     )
 }
 
+/// Maximum C(i)–N(i+1) peptide-bond distance (Å) for two consecutive amino-acid
+/// residues to count as connected. A real peptide bond is ~1.33 Å; beyond this
+/// the backbone is broken (missing residues / a physical gap), which creates a
+/// FALSE sequential edge in graph / sequence-indexed labels.
+const PEPTIDE_GAP_MAX: f64 = 2.5;
+
+/// Position of the named atom in a residue's primary conformer.
+fn residue_atom_pos(residue: &pdbtbx::Residue, name: &str) -> Option<[f64; 3]> {
+    crate::altloc::residue_atoms_primary(residue)
+        .find(|a| a.name().trim() == name)
+        .map(|a| {
+            let (x, y, z) = a.pos();
+            [x, y, z]
+        })
+}
+
+#[inline]
+fn dist3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let (dx, dy, dz) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+/// CA handedness via the signed volume of (N-CA, C-CA, CB-CA). L-amino acids —
+/// the overwhelming norm — give a POSITIVE triple product with this atom order;
+/// a negative value is a D-amino acid or a chirality modeling error (sign
+/// calibrated on the all-L crambin: 0 outliers). GLY (no CB) has no chirality.
+fn ca_chirality_is_d(n: [f64; 3], ca: [f64; 3], c: [f64; 3], cb: [f64; 3]) -> bool {
+    let v1 = [n[0] - ca[0], n[1] - ca[1], n[2] - ca[2]];
+    let v2 = [c[0] - ca[0], c[1] - ca[1], c[2] - ca[2]];
+    let v3 = [cb[0] - ca[0], cb[1] - ca[1], cb[2] - ca[2]];
+    // (v1 x v2) . v3
+    let cross = [
+        v1[1] * v2[2] - v1[2] * v2[1],
+        v1[2] * v2[0] - v1[0] * v2[2],
+        v1[0] * v2[1] - v1[1] * v2[0],
+    ];
+    cross[0] * v3[0] + cross[1] * v3[1] + cross[2] * v3[2] < 0.0
+}
+
+/// Count backbone-geometry label hazards in model 0: `(n_chain_gaps,
+/// n_chirality_outliers)`. Chain gaps are broken peptide bonds between
+/// consecutive amino acids; chirality outliers are non-L CA centres.
+fn scan_geometry_hazards(pdb: &pdbtbx::PDB) -> (usize, usize) {
+    let mut n_gaps = 0;
+    let mut n_chirality = 0;
+    let Some(model) = pdb.models().next() else {
+        return (0, 0);
+    };
+    for chain in model.chains() {
+        let mut prev_c: Option<[f64; 3]> = None;
+        let mut prev_was_aa = false;
+        for residue in chain.residues() {
+            let is_aa = residue
+                .conformers()
+                .next()
+                .is_some_and(|c| c.is_amino_acid());
+            if prev_was_aa && is_aa {
+                if let (Some(c), Some(n)) = (prev_c, residue_atom_pos(residue, "N")) {
+                    if dist3(c, n) > PEPTIDE_GAP_MAX {
+                        n_gaps += 1;
+                    }
+                }
+            }
+            if is_aa && residue.name() != Some("GLY") {
+                if let (Some(n), Some(ca), Some(c), Some(cb)) = (
+                    residue_atom_pos(residue, "N"),
+                    residue_atom_pos(residue, "CA"),
+                    residue_atom_pos(residue, "C"),
+                    residue_atom_pos(residue, "CB"),
+                ) {
+                    if ca_chirality_is_d(n, ca, c, cb) {
+                        n_chirality += 1;
+                    }
+                }
+            }
+            prev_c = residue_atom_pos(residue, "C");
+            prev_was_aa = is_aa;
+        }
+    }
+    (n_gaps, n_chirality)
+}
+
 /// Knobs for [`prepare_structure`]. [`Default`] mirrors the Python
 /// `batch_prepare` signature (reconstruct, hydrogens="all", minimize via lbfgs
 /// 500 steps, strip pre-existing H, FF-aware heavy-atom constraint).
@@ -251,6 +333,13 @@ pub struct PrepareReport {
     /// A metal atom is present — coordination chemistry the protein-only force
     /// field does not model (an energy-label hazard).
     pub has_metals: bool,
+    /// Broken peptide bonds between consecutive amino acids (C(i)–N(i+1) beyond
+    /// PEPTIDE_GAP_MAX) — missing residues / physical breaks that create FALSE
+    /// sequential adjacency in graph / sequence-indexed labels.
+    pub n_chain_gaps: usize,
+    /// CA centres with non-L (D) chirality — a D-amino acid or a modeling error;
+    /// a coordinate-geometry anomaly a standard L-protein pipeline should see.
+    pub n_chirality_outliers: usize,
 }
 
 /// Force fields the preparation pipeline supports (`amber96_obc` is not a
@@ -484,6 +573,9 @@ pub fn prepare_structure<P: ForceField>(
     out.has_insertion_codes = sh.has_insertion_codes;
     out.has_nonstandard_residues = sh.has_nonstandard_residues;
     out.has_metals = sh.has_metals;
+    let (n_chain_gaps, n_chirality_outliers) = scan_geometry_hazards(pdb);
+    out.n_chain_gaps = n_chain_gaps;
+    out.n_chirality_outliers = n_chirality_outliers;
     // Missing heavy atoms on the FINAL structure: nonzero only when residues are
     // incomplete AND reconstruction did not fill them (the supervision default).
     out.n_missing_heavy_atoms = crate::reconstruct::count_missing_heavy_atoms(pdb);
@@ -687,6 +779,21 @@ mod tests {
             assert!(!is_canonical_amino_acid(n), "{n} is not canonical");
             assert!(is_modified_amino_acid(n), "{n} is a modified residue");
         }
+    }
+
+    #[test]
+    fn ca_chirality_flips_under_mirror() {
+        // The detector must be chirality-sensitive: mirroring one substituent
+        // flips the handedness verdict. (The L/D sign itself is calibrated on the
+        // all-L crambin in the Python integration test -> 0 outliers.)
+        use super::ca_chirality_is_d;
+        let n = [1.0, 1.0, 0.0];
+        let ca = [0.0, 0.0, 0.0];
+        let c = [1.0, -1.0, 0.0];
+        let cb = [0.0, 0.0, 1.0];
+        let d1 = ca_chirality_is_d(n, ca, c, cb);
+        let d2 = ca_chirality_is_d(n, ca, c, [0.0, 0.0, -1.0]); // mirror CB
+        assert_ne!(d1, d2, "mirroring CB must flip the chirality verdict");
     }
 
     #[test]

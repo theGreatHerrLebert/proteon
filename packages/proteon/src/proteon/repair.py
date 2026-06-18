@@ -44,6 +44,7 @@ _HEAVY_COORDS_BLOCKERS = {
     "missing_atoms",
     "relaxed_coords",
     "heavy_clashes",
+    "chirality_outliers",
     "altlocs",
     "multiple_models",
 }
@@ -59,6 +60,7 @@ _SEQ_INDEXED_BLOCKERS = {
     "insertion_codes",
     "multiple_models",
     "nonstandard_residues",  # not a canonical sequence token
+    "chain_gaps",            # false sequential adjacency
 }
 
 PROFILE_BLOCKERS: Dict[str, frozenset] = {

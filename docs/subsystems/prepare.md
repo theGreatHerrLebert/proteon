@@ -127,6 +127,8 @@ type, use a profile on `res.report` to tolerate hazards that don't affect it:
 | Insertion codes | `has_insertion_codes` | `(chain, resnum)` label keys shift |
 | Non-standard residues | `has_nonstandard_residues` | modified AA (MSE, SEP…) — not a canonical token, no FF typing |
 | Metals | `has_metals` | coordination chemistry the protein-only FF doesn't model |
+| Chain gaps | `has_chain_gaps` (`n_chain_gaps`) | broken peptide bond → false sequential edge in graph/sequence labels |
+| Chirality outliers | `has_chirality_outliers` (`n_chirality_outliers`) | D-amino acid / modeling error — coordinate-geometry anomaly |
 
 The clash count is **protein-scoped and validated**: pristine high-resolution
 structures (1crn, 0.5 Å) report 0; older/lower-resolution structures report many.
