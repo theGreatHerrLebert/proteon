@@ -48,8 +48,18 @@ _HEAVY_COORDS_BLOCKERS = {
     "multiple_models",
 }
 _ALL_ATOM_BLOCKERS = _HEAVY_COORDS_BLOCKERS | {"no_hydrogens"}
-_ENERGY_BLOCKERS = _ALL_ATOM_BLOCKERS | {"incomplete_ff", "untyped_atoms"}
-_SEQ_INDEXED_BLOCKERS = {"not_protein", "insertion_codes", "multiple_models"}
+_ENERGY_BLOCKERS = _ALL_ATOM_BLOCKERS | {
+    "incomplete_ff",
+    "untyped_atoms",
+    "nonstandard_residues",  # unmodelled FF typing
+    "metals",                # unmodelled coordination chemistry
+}
+_SEQ_INDEXED_BLOCKERS = {
+    "not_protein",
+    "insertion_codes",
+    "multiple_models",
+    "nonstandard_residues",  # not a canonical sequence token
+}
 
 PROFILE_BLOCKERS: Dict[str, frozenset] = {
     "heavy_coords": frozenset(_HEAVY_COORDS_BLOCKERS),

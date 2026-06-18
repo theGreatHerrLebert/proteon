@@ -214,6 +214,13 @@ class PrepReport:
     #: templates). Nonzero only when residues are incomplete AND reconstruction
     #: did not fill them (the supervision default) — a partial coordinate label.
     n_missing_heavy_atoms: int = 0
+    #: A non-standard / modified amino-acid residue is present (selenomethionine,
+    #: a PTM, the 21st/22nd amino acids) — a residue-identity / typing hazard for
+    #: sequence-indexed and energy labels (the heavy coordinates are still real).
+    has_nonstandard_residues: bool = False
+    #: A metal atom is present — coordination chemistry the protein-only force
+    #: field does not model (an energy-label hazard).
+    has_metals: bool = False
     warnings: List[str] = field(default_factory=list)
 
     @property
@@ -332,6 +339,10 @@ class PrepReport:
             h.append("heavy_clashes")
         if self.has_untyped_atoms:
             h.append("untyped_atoms")
+        if self.has_nonstandard_residues:
+            h.append("nonstandard_residues")
+        if self.has_metals:
+            h.append("metals")
         if self.hydrogens_added == 0:
             # No hydrogens placed (e.g. hydrogens="none"): all-atom / energy
             # labels are unavailable. Not a hazard for heavy-coordinate labels,
@@ -378,23 +389,32 @@ class PrepReport:
 
     @property
     def label_safe_energy(self) -> bool:
-        """All-atom coords + full FF typing — for energy / force labels.
+        """All-atom coords + full FF typing + clean chemistry — for energy labels.
 
+        Also excludes non-standard residues and metals: their force-field typing
+        / coordination chemistry is not modelled, so the energy is unreliable.
         NOTE: protonation / histidine-tautomer correctness is not yet verified
-        (a later phase); this gate covers coverage and sterics, not chemistry.
+        (a later phase).
         """
-        return self.label_safe_all_atom_coords and self.fully_typed
+        return (
+            self.label_safe_all_atom_coords
+            and self.fully_typed
+            and not self.has_nonstandard_residues
+            and not self.has_metals
+        )
 
     @property
     def label_safe_sequence_indexed(self) -> bool:
         """Safe for ``(chain, resnum)``-keyed labels: no residue-identity ambiguity.
 
-        NOTE: chain-gap false-adjacency detection is a later phase.
+        Excludes non-standard / modified residues — they are not a canonical
+        sequence token. NOTE: chain-gap false-adjacency detection is a later phase.
         """
         return (
             self.status != PrepStatus.NOT_PROTEIN
             and not self.has_insertion_codes
             and not self.has_multiple_models
+            and not self.has_nonstandard_residues
         )
 
     @property
@@ -597,6 +617,8 @@ def prepare(
             report.has_altlocs = r.get("has_altlocs", False)
             report.has_insertion_codes = r.get("has_insertion_codes", False)
             report.n_missing_heavy_atoms = r.get("n_missing_heavy_atoms", 0)
+            report.has_nonstandard_residues = r.get("has_nonstandard_residues", False)
+            report.has_metals = r.get("has_metals", False)
             if report.skipped_no_protein:
                 report.warnings.append(
                     f"skipped: {report.n_unassigned_atoms} atoms have no "
@@ -661,6 +683,8 @@ def prepare(
             report.has_altlocs = r.get("has_altlocs", False)
             report.has_insertion_codes = r.get("has_insertion_codes", False)
             report.n_missing_heavy_atoms = r.get("n_missing_heavy_atoms", 0)
+            report.has_nonstandard_residues = r.get("has_nonstandard_residues", False)
+            report.has_metals = r.get("has_metals", False)
 
     # Step 4: FF coverage + readiness flags. Source them from the SAME Rust
     # prepare path the default (strip_hydrogens) branch uses, via a coverage-only
@@ -685,6 +709,8 @@ def prepare(
         report.has_altlocs = c.get("has_altlocs", False)
         report.has_insertion_codes = c.get("has_insertion_codes", False)
         report.n_missing_heavy_atoms = c.get("n_missing_heavy_atoms", 0)
+        report.has_nonstandard_residues = c.get("has_nonstandard_residues", False)
+        report.has_metals = c.get("has_metals", False)
     if report.n_unassigned_atoms > 10:
         report.warnings.append(
             f"{report.n_unassigned_atoms} atoms without force field type "
@@ -803,6 +829,8 @@ def batch_prepare(
             has_altlocs=r.get("has_altlocs", False),
             has_insertion_codes=r.get("has_insertion_codes", False),
             n_missing_heavy_atoms=r.get("n_missing_heavy_atoms", 0),
+            has_nonstandard_residues=r.get("has_nonstandard_residues", False),
+            has_metals=r.get("has_metals", False),
         )
         if report.skipped_no_protein:
             report.warnings.append(

@@ -337,6 +337,9 @@ pub(crate) fn batch_prepare(
                 .unwrap();
             dict.set_item("n_missing_heavy_atoms", r.n_missing_heavy_atoms)
                 .unwrap();
+            dict.set_item("has_nonstandard_residues", r.has_nonstandard_residues)
+                .unwrap();
+            dict.set_item("has_metals", r.has_metals).unwrap();
             // Component breakdown at the post-minimization geometry (all
             // zero if minimize=False or skipped_no_protein).
             let components = pyo3::types::PyDict::new(py);

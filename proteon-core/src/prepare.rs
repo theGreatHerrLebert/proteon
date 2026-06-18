@@ -35,6 +35,92 @@ fn is_nucleic_acid_residue(name: &str) -> bool {
     )
 }
 
+/// Canonical amino-acid residue names (the 20) plus protonation / tautomer /
+/// disulfide naming variants that are STILL standard residues. Used to flag
+/// genuinely NON-standard (modified) residues in a protein chain.
+fn is_canonical_amino_acid(name: &str) -> bool {
+    matches!(
+        name,
+        "ALA" | "ARG" | "ASN" | "ASP" | "CYS" | "GLN" | "GLU" | "GLY" | "HIS"
+            | "ILE" | "LEU" | "LYS" | "MET" | "PHE" | "PRO" | "SER" | "THR"
+            | "TRP" | "TYR" | "VAL"
+        // protonation / tautomer / disulfide variants of the standard 20
+            | "HID" | "HIE" | "HIP" | "HSD" | "HSE" | "HSP" | "CYX" | "CYM"
+            | "ASH" | "GLH" | "LYN" | "TYM"
+    )
+}
+
+/// Common modified amino-acid residue codes (PTMs, oxidations, selenomethionine,
+/// the 21st/22nd amino acids) that occupy a polymer position but are not
+/// standard tokens — a residue-identity / typing hazard for labels.
+fn is_modified_amino_acid(name: &str) -> bool {
+    matches!(
+        name,
+        "MSE"
+            | "SEP"
+            | "TPO"
+            | "PTR"
+            | "CSO"
+            | "CSD"
+            | "KCX"
+            | "MLY"
+            | "M3L"
+            | "MLZ"
+            | "HYP"
+            | "PCA"
+            | "CME"
+            | "OCS"
+            | "SAC"
+            | "LLP"
+            | "CAS"
+            | "SEC"
+            | "PYL"
+            | "FME"
+            | "AYA"
+            | "NEP"
+            | "SCY"
+            | "CSS"
+            | "CGU"
+    )
+}
+
+/// Whether `symbol` is a metal element (coordination chemistry the protein-only
+/// force field does not model). Case-insensitive — PDB columns are upper-case,
+/// pdbtbx canonicalises to mixed case.
+fn is_metal_element(symbol: &str) -> bool {
+    matches!(
+        symbol.to_ascii_uppercase().as_str(),
+        "NA" | "K"
+            | "LI"
+            | "RB"
+            | "CS"
+            | "MG"
+            | "CA"
+            | "SR"
+            | "BA"
+            | "MN"
+            | "FE"
+            | "CO"
+            | "NI"
+            | "CU"
+            | "ZN"
+            | "CD"
+            | "HG"
+            | "MO"
+            | "W"
+            | "V"
+            | "CR"
+            | "PT"
+            | "AU"
+            | "AG"
+            | "PD"
+            | "RU"
+            | "RH"
+            | "AL"
+            | "PB"
+    )
+}
+
 /// Knobs for [`prepare_structure`]. [`Default`] mirrors the Python
 /// `batch_prepare` signature (reconstruct, hydrogens="all", minimize via lbfgs
 /// 500 steps, strip pre-existing H, FF-aware heavy-atom constraint).
@@ -159,6 +245,12 @@ pub struct PrepareReport {
     /// Zero when reconstruction filled everything (those atoms are then flagged
     /// as reconstructed instead).
     pub n_missing_heavy_atoms: usize,
+    /// A non-standard / modified amino-acid residue is present (selenomethionine,
+    /// a PTM, the 21st/22nd amino acids) — a residue-identity / typing hazard.
+    pub has_nonstandard_residues: bool,
+    /// A metal atom is present — coordination chemistry the protein-only force
+    /// field does not model (an energy-label hazard).
+    pub has_metals: bool,
 }
 
 /// Force fields the preparation pipeline supports (`amber96_obc` is not a
@@ -386,10 +478,12 @@ pub fn prepare_structure<P: ForceField>(
     // Structure-level hazards (model count, altlocs, insertion codes) from the
     // input — silent label decisions otherwise (only model 0 / primary conformer
     // is prepared).
-    let (n_models, has_altlocs, has_insertion_codes) = scan_structure_hazards(pdb);
-    out.n_models = n_models;
-    out.has_altlocs = has_altlocs;
-    out.has_insertion_codes = has_insertion_codes;
+    let sh = scan_structure_hazards(pdb);
+    out.n_models = sh.n_models;
+    out.has_altlocs = sh.has_altlocs;
+    out.has_insertion_codes = sh.has_insertion_codes;
+    out.has_nonstandard_residues = sh.has_nonstandard_residues;
+    out.has_metals = sh.has_metals;
     // Missing heavy atoms on the FINAL structure: nonzero only when residues are
     // incomplete AND reconstruction did not fill them (the supervision default).
     out.n_missing_heavy_atoms = crate::reconstruct::count_missing_heavy_atoms(pdb);
@@ -402,27 +496,59 @@ pub fn prepare_structure<P: ForceField>(
 /// primary conformer are prepared, so `n_models > 1` and `has_altlocs` mark
 /// silent selection decisions; insertion codes are a residue-identity hazard for
 /// sequence-indexed labels.
-fn scan_structure_hazards(pdb: &pdbtbx::PDB) -> (usize, bool, bool) {
-    let n_models = pdb.model_count();
-    let mut has_altlocs = false;
-    let mut has_insertion_codes = false;
+struct StructureHazards {
+    n_models: usize,
+    has_altlocs: bool,
+    has_insertion_codes: bool,
+    /// A residue is a non-standard / modified amino acid (selenomethionine, a
+    /// PTM, the 21st/22nd amino acids) — a residue-identity / typing hazard.
+    has_nonstandard_residues: bool,
+    /// A metal atom is present — coordination chemistry the protein-only force
+    /// field does not model (an energy-label hazard).
+    has_metals: bool,
+}
+
+fn scan_structure_hazards(pdb: &pdbtbx::PDB) -> StructureHazards {
+    let mut out = StructureHazards {
+        n_models: pdb.model_count(),
+        has_altlocs: false,
+        has_insertion_codes: false,
+        has_nonstandard_residues: false,
+        has_metals: false,
+    };
     if let Some(model) = pdb.models().next() {
         for chain in model.chains() {
             for residue in chain.residues() {
                 if residue.insertion_code().is_some() {
-                    has_insertion_codes = true;
+                    out.has_insertion_codes = true;
                 }
                 if residue.conformer_count() > 1
                     || residue
                         .conformers()
                         .any(|c| c.alternative_location().is_some())
                 {
-                    has_altlocs = true;
+                    out.has_altlocs = true;
+                }
+                let name = residue.name().unwrap_or("");
+                let is_aa = residue
+                    .conformers()
+                    .next()
+                    .is_some_and(|c| c.is_amino_acid());
+                // Non-standard if pdbtbx calls it an amino acid but it isn't a
+                // canonical one, OR it is a known modified-residue code (which
+                // pdbtbx may not classify as an amino acid at all, e.g. MSE).
+                if (is_aa && !is_canonical_amino_acid(name)) || is_modified_amino_acid(name) {
+                    out.has_nonstandard_residues = true;
+                }
+                if crate::altloc::residue_atoms_primary(residue)
+                    .any(|a| a.element().is_some_and(|e| is_metal_element(e.symbol())))
+                {
+                    out.has_metals = true;
                 }
             }
         }
     }
-    (n_models, has_altlocs, has_insertion_codes)
+    out
 }
 
 /// Prepare `pdb` in place, dispatching on a force-field string. Returns `Err`
@@ -540,7 +666,39 @@ pub fn apply_coords_to_pdb<F: ForceField + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    use super::is_nucleic_acid_residue;
+    use super::{
+        is_canonical_amino_acid, is_metal_element, is_modified_amino_acid, is_nucleic_acid_residue,
+    };
+
+    #[test]
+    fn canonical_vs_modified_amino_acids() {
+        for n in ["ALA", "GLY", "HIS", "TRP", "VAL"] {
+            assert!(is_canonical_amino_acid(n), "{n} is canonical");
+            assert!(!is_modified_amino_acid(n));
+        }
+        // Protonation / tautomer variants are still canonical (not "modified").
+        for n in ["HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN"] {
+            assert!(is_canonical_amino_acid(n), "{n} is a canonical variant");
+        }
+        // Modified residues / PTMs / Sec/Pyl are NOT canonical but ARE modified.
+        for n in [
+            "MSE", "SEP", "TPO", "PTR", "CSO", "MLY", "HYP", "PCA", "SEC", "PYL",
+        ] {
+            assert!(!is_canonical_amino_acid(n), "{n} is not canonical");
+            assert!(is_modified_amino_acid(n), "{n} is a modified residue");
+        }
+    }
+
+    #[test]
+    fn metal_elements() {
+        for s in ["Zn", "FE", "Mg", "ca", "MN", "Cu", "NA", "K", "Co", "Ni"] {
+            assert!(is_metal_element(s), "{s} is a metal");
+        }
+        // C/N/O/S/H/P and the selenium of MSE are not metals.
+        for s in ["C", "N", "O", "S", "H", "P", "Se", "Cl"] {
+            assert!(!is_metal_element(s), "{s} is not a metal");
+        }
+    }
 
     #[test]
     fn nucleic_acid_residue_names() {
