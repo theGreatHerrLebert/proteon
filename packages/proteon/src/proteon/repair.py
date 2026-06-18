@@ -72,10 +72,16 @@ PROFILE_BLOCKERS: Dict[str, frozenset] = {
     "all": frozenset(_ENERGY_BLOCKERS | _SEQ_INDEXED_BLOCKERS),
 }
 
-# Every hazard name a policy rule may target (the union of all profile blockers).
+# Every hazard name a policy rule may target (the union of all profile blockers,
+# plus hazards that aren't a profile blocker but a policy may still drop/accept).
 # A typo'd rule must be rejected, not silently ignored — otherwise it falls back
 # to `default`, which is dangerous with `default="accept"` (codex).
-KNOWN_HAZARDS = frozenset().union(*PROFILE_BLOCKERS.values())
+KNOWN_HAZARDS = frozenset().union(*PROFILE_BLOCKERS.values()) | {
+    # Interface-only hazard: gated by `PrepReport.label_safe_interface` (not a
+    # profile here), but a policy may still drop/accept it on any profile via an
+    # explicit rule, so it must be a recognised hazard name (codex).
+    "assembly_mismatch",
+}
 
 # Valid actions, and which hazards each FIX action applies to.
 #   reconstruct (missing_atoms): fill from templates -> reconstructed_atoms.

@@ -129,6 +129,28 @@ type, use a profile on `res.report` to tolerate hazards that don't affect it:
 | Metals | `has_metals` | coordination chemistry the protein-only FF doesn't model |
 | Chain gaps | `has_chain_gaps` (`n_chain_gaps`) | broken peptide bond → false sequential edge in graph/sequence labels |
 | Chirality outliers | `has_chirality_outliers` (`n_chirality_outliers`) | D-amino acid / modeling error — coordinate-geometry anomaly |
+| Assembly mismatch | `assembly_is_asu is False` (`assembly_mismatch`) | deposited ASU is not the biological assembly → wrong oligomeric state for interface labels |
+
+### Biological assembly (interface labels)
+
+The asymmetric unit you load is not always the biological assembly, and that
+only matters for **interface / contact / SASA / neighbor-graph** labels (per-chain
+coordinates, energy, and sequence are oligomer-invariant). The path-based
+`prepare_for_supervision` parses PDB `REMARK 350` and sets:
+
+- `report.biological_assembly_copies` — operators in the first assembly (1 = no expansion);
+- `report.assembly_is_asu` — three-state: `True` the deposited chains already are
+  the assembly (identity transforms over exactly the present chains); `False`
+  they are not (expansion needed, crystal-packing extras, or multiple separate
+  assemblies — e.g. two chains that are each a monomer); `None` not determined
+  (no path, or no `REMARK 350`).
+
+Gate interface-type labels on **`report.label_safe_interface`** (sane coords AND
+`assembly_is_asu is True`). It is intentionally NOT part of the strict
+`label_safe` gate — interface labels are opt-in. This is **detection only** (a
+conservative gate that prevents training on the wrong oligomer); it does not
+build the assembly. Capability: PDB `REMARK 350` only — mmCIF
+`_pdbx_struct_assembly` and applying the transforms are follow-ons.
 
 The clash count is **protein-scoped and validated**: pristine high-resolution
 structures (1crn, 0.5 Å) report 0; older/lower-resolution structures report many.
