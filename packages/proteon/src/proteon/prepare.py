@@ -884,11 +884,23 @@ class LoadPrepResult:
     structure: Optional[object] = None
     report: Optional[PrepReport] = None
     error: Optional[str] = None
+    #: The :class:`~proteon.repair.RepairOutcome` when a ``repair`` policy was
+    #: applied via :func:`prepare_for_supervision`; ``None`` otherwise.
+    repair: Optional[object] = None
 
     @property
     def loaded(self) -> bool:
         """True iff the file parsed into a Structure (prepare may still have failed)."""
         return self.error is None
+
+    @property
+    def passes_policy(self) -> bool:
+        """True iff a repair policy was applied and the structure passes it.
+
+        ``False`` for a load failure or when no ``repair`` policy was used (check
+        :attr:`label_safe` in that case).
+        """
+        return self.repair is not None and self.repair.passes_policy
 
     @property
     def ready(self) -> bool:
@@ -1008,6 +1020,7 @@ def prepare_for_supervision(
     *,
     n_threads: Optional[int] = None,
     only_safe: bool = False,
+    repair=None,
     **prepare_kwargs,
 ) -> List[LoadPrepResult]:
     """Load + prepare structures for geometric-DL supervision, label-safe by default.
@@ -1032,11 +1045,18 @@ def prepare_for_supervision(
     Args:
         paths: File paths (.pdb, .cif, .mmcif).
         n_threads: Thread count for both stages (``None``/``-1``/``0`` = all).
-        only_safe: If True, return ONLY the label-safe results (the dropped ones
-            are not returned). Default False — every input path comes back so you
-            can log/inspect the excluded ones and their hazards.
+        only_safe: If True, return ONLY the passing results (label_safe, or — with
+            a ``repair`` policy — passes_policy). Default False — every input path
+            comes back so you can log/inspect the excluded ones and their hazards.
+        repair: An optional :class:`~proteon.repair.RepairPolicy`. When given, the
+            structure is prepared with the policy's FIX flags (currently
+            ``reconstruct`` for ``missing_atoms``), then re-verified relative to
+            the policy's label profile; the outcome is attached as ``res.repair``
+            and ``res.passes_policy`` is the gate. Without a policy, ``reconstruct``
+            defaults to False (don't fabricate atoms into labels).
         **prepare_kwargs: Forwarded to :func:`batch_prepare`. ``reconstruct``
-            defaults to False here (vs True elsewhere); other defaults match.
+            defaults to False here (vs True elsewhere); a ``repair`` policy sets
+            the fix flags.
 
     Returns:
         List of :class:`LoadPrepResult`. Same length/order as ``paths`` unless
@@ -1049,15 +1069,54 @@ def prepare_for_supervision(
         ...     else:
         ...         log.info("skip %s: %s", res.path, res.label_hazards)
 
+        >>> policy = proteon.RepairPolicy.coords_only()   # fix missing, accept ligands
+        >>> results = proteon.prepare_for_supervision(paths, repair=policy)
+        >>> ready = [r.structure for r in results if r.passes_policy]
+        >>> print(proteon.RepairSummary.from_results(results))
+
     Note:
         Per-atom provenance masks (observed / reconstructed) are produced by the
         supervision tensor export, where atoms are indexed (atom37/atom14); this
         preset is the structure-level gate that precedes it.
     """
+    if repair is not None:
+        return _prepare_with_repair(
+            paths, repair, n_threads=n_threads, only_safe=only_safe, **prepare_kwargs
+        )
     prepare_kwargs.setdefault("reconstruct", False)
     results = batch_load_and_prepare(paths, n_threads=n_threads, **prepare_kwargs)
     if only_safe:
         return [r for r in results if r.label_safe]
+    return results
+
+
+def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwargs):
+    """Apply a RepairPolicy: prepare with its FIX flags, then re-verify per profile."""
+    from .repair import RepairOutcome, evaluate
+
+    # FIX flags implied by the policy (single-pass). Currently only `reconstruct`;
+    # clash relaxation is a follow-on (see RepairPolicy / the design doc).
+    prepare_kwargs["reconstruct"] = policy.reconstruct
+
+    results = batch_load_and_prepare(
+        [str(p) for p in paths], n_threads=n_threads, **prepare_kwargs
+    )
+
+    for res in results:
+        if not res.loaded or res.report is None:
+            # A load/parse failure is a dropped structure — account for it in the
+            # outcome (and the corpus summary), not silently skipped (codex).
+            res.repair = RepairOutcome(
+                profile=policy.profile,
+                passes_policy=False,
+                dropped_for=["load_failed"],
+                remaining_hazards=["load_failed"],
+            )
+            continue
+        res.repair = evaluate(res.report, policy, reconstruct_applied=policy.reconstruct)
+
+    if only_safe:
+        return [r for r in results if r.passes_policy]
     return results
 
 
