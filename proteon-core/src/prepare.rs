@@ -135,6 +135,24 @@ pub struct PrepareReport {
     /// did not run; lets the supervision layer distinguish a real relax from a
     /// stall instead of trusting a bare `converged` bool.
     pub minimizer_status: String,
+    // --- label-safety hazards (for geometric-DL supervision) ---
+    /// Heavy-atom steric clashes on the final geometry (see [`crate::clash`]).
+    /// Silent label-poison otherwise: H-only minimization cannot relax a
+    /// deposited or reconstruction-induced clash away.
+    pub n_heavy_clashes: usize,
+    /// True if the clash count is APPROXIMATE because the topology used the
+    /// distance-inferred bond fallback for un-templated residues (ligands /
+    /// non-standard); intra-residue clashes there cannot be told from bonds.
+    pub clash_count_inferred: bool,
+    /// Number of models in the input. Only model 0 is prepared; `> 1` (e.g. an
+    /// NMR ensemble) means a silent model choice was made.
+    pub n_models: usize,
+    /// True if any residue carries alternate locations (a conformer was silently
+    /// chosen — an arbitrary label decision).
+    pub has_altlocs: bool,
+    /// True if any residue carries a PDB insertion code (residue-identity /
+    /// numbering hazard for `(chain, resnum)`-keyed labels).
+    pub has_insertion_codes: bool,
 }
 
 /// Force fields the preparation pipeline supports (`amber96_obc` is not a
@@ -284,8 +302,11 @@ pub fn prepare_structure<P: ForceField>(
             .is_some_and(|e| e.symbol() == "H" || e.symbol() == "D")
     });
 
+    // Coords in topology order; updated to the minimized geometry if
+    // minimization runs. Used for the final-geometry clash count below.
+    let mut final_coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
+
     if !out.skipped_no_protein && opts.minimize && (h_added > 0 || has_any_h) {
-        let coords: Vec<[f64; 3]> = topo.atoms.iter().map(|a| a.pos).collect();
         // FF-aware default: AMBER96 freezes heavy atoms, CHARMM19+EEF1 relaxes
         // them. `!ff.has_eef1()` reproduces the per-FF default the PyO3 caller
         // set explicitly (amber → true, charmm → false).
@@ -297,7 +318,7 @@ pub fn prepare_structure<P: ForceField>(
         };
         let result = match opts.minimize_method.as_str() {
             "cg" => minimize::conjugate_gradient(
-                &coords,
+                &final_coords,
                 &topo,
                 ff,
                 opts.minimize_steps,
@@ -305,7 +326,7 @@ pub fn prepare_structure<P: ForceField>(
                 &constrained,
             ),
             "lbfgs" => minimize::lbfgs(
-                &coords,
+                &final_coords,
                 &topo,
                 ff,
                 opts.minimize_steps,
@@ -313,7 +334,7 @@ pub fn prepare_structure<P: ForceField>(
                 &constrained,
             ),
             _ => minimize::steepest_descent(
-                &coords,
+                &final_coords,
                 &topo,
                 ff,
                 opts.minimize_steps,
@@ -322,6 +343,7 @@ pub fn prepare_structure<P: ForceField>(
             ),
         };
         apply_coords_to_pdb(pdb, &result.coords, ff);
+        final_coords = result.coords;
         out.init_e = result.initial_energy;
         out.final_e = result.energy.total;
         out.bond_stretch = result.energy.bond_stretch;
@@ -344,7 +366,54 @@ pub fn prepare_structure<P: ForceField>(
         out.heavy_relaxed = out.minimized && !constrain_heavy;
     }
 
+    // --- label-safety hazards ---
+    // Heavy-atom clashes on the FINAL geometry (post-minimization if it ran).
+    // H-only minimization cannot relax a deposited or reconstruction-induced
+    // clash away, so without this the corruption is silent.
+    out.n_heavy_clashes = crate::clash::count_heavy_clashes(&final_coords, &topo);
+    // Approximate whenever ANY un-templated residue was present: the clash count
+    // skips every pair touching one (ligands / non-standard / single-atom metals),
+    // so its contacts are excluded. Sourced from `inferred_residues` (non-empty),
+    // not `inferred_bonds` — a lone metal ion has no inferred bond but its
+    // coordination contacts are still excluded (codex).
+    out.clash_count_inferred = !topo.inferred_residues.is_empty();
+    // Structure-level hazards (model count, altlocs, insertion codes) from the
+    // input — silent label decisions otherwise (only model 0 / primary conformer
+    // is prepared).
+    let (n_models, has_altlocs, has_insertion_codes) = scan_structure_hazards(pdb);
+    out.n_models = n_models;
+    out.has_altlocs = has_altlocs;
+    out.has_insertion_codes = has_insertion_codes;
+
     out
+}
+
+/// Scan model 0 of `pdb` for label-safety structure hazards: returns
+/// `(n_models, has_altlocs, has_insertion_codes)`. Only the first model and the
+/// primary conformer are prepared, so `n_models > 1` and `has_altlocs` mark
+/// silent selection decisions; insertion codes are a residue-identity hazard for
+/// sequence-indexed labels.
+fn scan_structure_hazards(pdb: &pdbtbx::PDB) -> (usize, bool, bool) {
+    let n_models = pdb.model_count();
+    let mut has_altlocs = false;
+    let mut has_insertion_codes = false;
+    if let Some(model) = pdb.models().next() {
+        for chain in model.chains() {
+            for residue in chain.residues() {
+                if residue.insertion_code().is_some() {
+                    has_insertion_codes = true;
+                }
+                if residue.conformer_count() > 1
+                    || residue
+                        .conformers()
+                        .any(|c| c.alternative_location().is_some())
+                {
+                    has_altlocs = true;
+                }
+            }
+        }
+    }
+    (n_models, has_altlocs, has_insertion_codes)
 }
 
 /// Prepare `pdb` in place, dispatching on a force-field string. Returns `Err`

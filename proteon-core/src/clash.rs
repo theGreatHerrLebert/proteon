@@ -13,19 +13,24 @@
 //! inference can hide a genuine clash by mistaking two overlapping non-bonded
 //! atoms for a bond. Because the topology is built from the primary conformer,
 //! mutually-exclusive alternate-location pairs are already excluded (they never
-//! coexist physically). 1-4 pairs are NOT excluded: a real 1-4 clash is a
-//! meaningful strain signal.
+//! coexist physically). 1-4 pairs ARE excluded too (like MolProbity's `probe`,
+//! which ignores atoms ≤3 bonds apart): heavy-atom 1-4 distances in normal
+//! geometry — aromatic-ring *para* carbons at ~2.8 Å, gauche backbone — fall
+//! inside the Bondi contact distance, so counting them flags every aromatic ring
+//! as a clash. A clash is therefore an overlap between atoms ≥4 bonds apart.
 //!
-//! Scope caveat: `build_topology` Phase D infers bonds *by distance* for
-//! residues without fragment templates (ligands / non-standard residues), and
-//! those inferred bonds — all INTRA-residue — enter `excluded_pairs`. So an
-//! intra-ligand overlap at a plausible bond distance is excluded and not counted
-//! (bond-vs-clash is genuinely ambiguous there without bond-order chemistry).
-//! Protein–protein and protein–ligand clashes are inter-residue and never
-//! excluded by Phase D, so they ARE counted. `Topology::inferred_bonds` reports
-//! whether any such fallback fired, so the count over un-templated residues is
-//! known-approximate rather than silently under-counted; those residues are also
-//! independently flagged by the FF-coverage signals (`fully_typed`,
+//! Scope: this is a PROTEIN clash metric. Pairs touching an un-templated residue
+//! (ligand / non-standard / metal — `Topology::inferred_residues`) are skipped,
+//! for two reasons. Intra-ligand contacts are unreliable — the distance-inferred
+//! bond graph can't be told from overlaps without bond-order chemistry. And
+//! protein–ligand contacts at a binding site are EXPECTED tight contacts
+//! (chemistry), not coordinate errors, so they do not corrupt a protein label.
+//! The count therefore reflects protein-coordinate quality (validated: pristine
+//! 1crn → 0, older / lower-resolution structures → many). Ligand geometry and
+//! protein–ligand clashes are a separate ligand-chemistry hazard;
+//! `Topology::inferred_bonds` flags that un-templated residues were present so
+//! their contacts are known to be EXCLUDED rather than silently mis-counted
+//! (those residues are also flagged by the FF-coverage signals `fully_typed` /
 //! `untyped_cofactors`).
 
 use std::collections::HashMap;
@@ -110,7 +115,25 @@ pub fn count_heavy_clashes(coords: &[[f64; 3]], topo: &Topology) -> usize {
                         }
                         let (tj, rj) = heavy[other];
                         let key = (ti.min(tj), ti.max(tj));
-                        if topo.excluded_pairs.contains(&key) {
+                        // Exclude 1-2, 1-3 (excluded_pairs) and 1-4 (pairs_14):
+                        // atoms ≤3 bonds apart are not clash candidates.
+                        if topo.excluded_pairs.contains(&key) || topo.pairs_14.contains(&key) {
+                            continue;
+                        }
+                        // Skip any pair touching an un-templated residue (ligand /
+                        // non-standard / metal). This is a PROTEIN clash metric:
+                        //   * intra-ligand contacts are unreliable (distance-inferred
+                        //     bonds can't be told from overlaps);
+                        //   * protein–ligand contacts at a binding site are expected
+                        //     tight contacts (chemistry), not coordinate errors, and
+                        //     they do not corrupt a protein-coordinate label.
+                        // Ligand geometry / protein–ligand clashes are a separate
+                        // ligand-chemistry hazard; un-templated residues are flagged
+                        // via `clash_count_inferred` and the FF-coverage signals.
+                        let (ai, aj) = (&topo.atoms[ti], &topo.atoms[tj]);
+                        if topo.inferred_residues.contains(&ai.residue_idx)
+                            || topo.inferred_residues.contains(&aj.residue_idx)
+                        {
                             continue;
                         }
                         let contact = ri + rj - CLASH_OVERLAP_TOL;
@@ -161,6 +184,7 @@ mod tests {
             lj_excluded_pairs: HashSet::new(),
             unassigned_atoms: Vec::new(),
             inferred_bonds: false,
+            inferred_residues: std::collections::HashSet::new(),
         }
     }
 
@@ -255,5 +279,44 @@ mod tests {
         assert_eq!(count_heavy_clashes(&coords(&t0), &t0), 0);
         let t1 = topo(&[([0.0, 0.0, 0.0], "C", false)], &[]);
         assert_eq!(count_heavy_clashes(&coords(&t1), &t1), 0);
+    }
+
+    #[test]
+    fn one_four_pair_is_excluded() {
+        // A 1-4 pair (aromatic para carbons, gauche backbone) at clash distance
+        // must NOT count — atoms ≤3 bonds apart are excluded.
+        let mut t = topo(
+            &[([0.0, 0.0, 0.0], "C", false), ([2.9, 0.0, 0.0], "C", false)],
+            &[],
+        );
+        assert_eq!(count_heavy_clashes(&coords(&t), &t), 1); // control: would clash
+        t.pairs_14.insert((0, 1));
+        assert_eq!(count_heavy_clashes(&coords(&t), &t), 0);
+    }
+
+    #[test]
+    fn untemplated_residue_intra_pair_is_skipped() {
+        // Two overlapping atoms in the SAME un-templated residue: skipped (their
+        // inferred bond graph can't tell a bond from an overlap).
+        let mut t = topo(
+            &[([0.0, 0.0, 0.0], "C", false), ([2.9, 0.0, 0.0], "C", false)],
+            &[],
+        );
+        assert_eq!(count_heavy_clashes(&coords(&t), &t), 1); // control: protein -> clash
+        t.inferred_residues.insert(0); // mark residue 0 un-templated
+        assert_eq!(count_heavy_clashes(&coords(&t), &t), 0);
+    }
+
+    #[test]
+    fn protein_ligand_pair_is_skipped() {
+        // A protein atom (res 0) overlapping a ligand atom (res 1, un-templated):
+        // an expected binding contact, not a protein-coordinate error -> skipped.
+        let mut t = topo(
+            &[([0.0, 0.0, 0.0], "C", false), ([2.9, 0.0, 0.0], "C", false)],
+            &[],
+        );
+        t.atoms[1].residue_idx = 1;
+        t.inferred_residues.insert(1);
+        assert_eq!(count_heavy_clashes(&coords(&t), &t), 0);
     }
 }
