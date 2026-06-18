@@ -123,6 +123,13 @@ pub struct PrepareReport {
     /// Whether the minimization branch actually ran (vs skipped: no H, or
     /// minimize=false, or skipped_no_protein).
     pub minimized: bool,
+    /// Whether the minimizer was allowed to move HEAVY atoms (vs H-only). False
+    /// for the default H-only preparation (heavy atoms frozen — the structure
+    /// keeps its experimental coordinates and `final_e` is NOT a heavy-atom
+    /// energy minimum, it still carries crystal strain). True only when
+    /// `minimized` AND `constrain_heavy` was effectively false. Lets energy/MD
+    /// callers tell an equilibrated structure from a faithfully-preserved one.
+    pub heavy_relaxed: bool,
     /// Optimizer termination status (`MinimizeStatus::as_str`), e.g.
     /// `"converged_gradient"` / `"line_search_failed"`. Empty when minimization
     /// did not run; lets the supervision layer distinguish a real relax from a
@@ -331,6 +338,10 @@ pub fn prepare_structure<P: ForceField>(
         // (e.g. minimize_steps=0 or every atom constrained -> NotRun): `minimized`
         // must reflect that the optimizer actually ran, not just that we tried.
         out.minimized = result.status != minimize::MinimizeStatus::NotRun;
+        // Did heavy atoms actually relax? Only when the optimizer ran with heavy
+        // atoms free. Drives the honest "is this an equilibrated structure or a
+        // faithfully-preserved one" signal on the report.
+        out.heavy_relaxed = out.minimized && !constrain_heavy;
     }
 
     out

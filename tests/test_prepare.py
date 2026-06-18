@@ -169,6 +169,64 @@ class TestPrepare:
         report = proteon.prepare(s, gradient_tolerance=0.1, minimize_steps=50)
         assert report.minimizer_steps > 0
 
+    def test_default_is_h_only_heavy_atoms_frozen(self):
+        # Unified default constrain_heavy=True (H-only): heavy-atom coordinates
+        # are preserved exactly, only hydrogens move.
+        ref = proteon.load(CRAMBIN)
+        ca_before = proteon.batch_extract_ca([ref])[0].copy()
+        s = proteon.load(CRAMBIN)
+        report = proteon.prepare(s)  # default H-only
+        ca_after = proteon.batch_extract_ca([s])[0]
+        assert ca_before.shape == ca_after.shape
+        max_ca_shift = float(np.max(np.abs(ca_before - ca_after)))
+        assert max_ca_shift < 1e-6, f"H-only must not move CA, moved {max_ca_shift} A"
+        # The honesty flag: default prep did NOT relax heavy atoms.
+        assert report.heavy_relaxed is False
+
+    def test_constrain_heavy_false_relaxes_heavy_atoms(self):
+        # Opt-in heavy relaxation moves the backbone (the pre-unification CHARMM
+        # behaviour, still available).
+        ca_before = proteon.batch_extract_ca([proteon.load(CRAMBIN)])[0].copy()
+        s = proteon.load(CRAMBIN)
+        report = proteon.prepare(s, constrain_heavy=False)
+        ca_after = proteon.batch_extract_ca([s])[0]
+        max_ca_shift = float(np.max(np.abs(ca_before - ca_after)))
+        assert max_ca_shift > 1e-3, "heavy relax should move CA atoms"
+        # The honesty flag: heavy relaxation DID move heavy atoms.
+        assert report.heavy_relaxed is True
+
+    def test_reconstruct_under_h_only_warns_unrelaxed(self):
+        # reconstruct adds heavy atoms; under the H-only default they stay at
+        # template positions, so prepare warns. Heavy relax settles them (no warn).
+        import os
+        fixture = os.path.join(
+            os.path.dirname(__file__), "corpus", "missing_atoms", "missing_cb.pdb"
+        )
+        r_h = proteon.prepare(proteon.load(fixture))  # default H-only
+        assert r_h.atoms_reconstructed > 0
+        assert r_h.heavy_relaxed is False
+        assert any("left unrelaxed" in w for w in r_h.warnings)
+
+        r_heavy = proteon.prepare(proteon.load(fixture), constrain_heavy=False)
+        assert r_heavy.heavy_relaxed is True
+        assert not any("left unrelaxed" in w for w in r_heavy.warnings)
+
+        # minimize=False: unrelaxed because minimization was SKIPPED, not H-only
+        # (codex) — the message must not blame constrain_heavy.
+        r_nomin = proteon.prepare(proteon.load(fixture), minimize=False)
+        assert r_nomin.atoms_reconstructed > 0
+        assert any("minimization did not run" in w for w in r_nomin.warnings)
+        assert not any("H-only" in w for w in r_nomin.warnings)
+
+    def test_batch_prepare_default_matches_prepare(self):
+        # The unification: batch_prepare now defaults H-only, same as prepare().
+        ca_before = proteon.batch_extract_ca([proteon.load(CRAMBIN)])[0].copy()
+        s = proteon.load(CRAMBIN)
+        proteon.batch_prepare([s])  # default, was heavy-relax for CHARMM pre-unification
+        ca_after = proteon.batch_extract_ca([s])[0]
+        max_ca_shift = float(np.max(np.abs(ca_before - ca_after)))
+        assert max_ca_shift < 1e-6, "batch_prepare default must now be H-only too"
+
 
 # =========================================================================
 # Idempotency

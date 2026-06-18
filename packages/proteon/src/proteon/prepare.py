@@ -60,6 +60,34 @@ def _get_ptr(structure):
     return structure
 
 
+def _warn_unrelaxed_reconstruct(report) -> None:
+    """Warn when reconstruct added heavy atoms that were not relaxed.
+
+    The rebuilt atoms sit at their template positions and may clash. Harmless
+    for global/geometric analysis, but it matters if they fall in active sites,
+    interfaces, or feed energy/supervision labels (claudex). Distinguish *why*
+    they are unrelaxed (codex): minimization was skipped, vs it ran H-only.
+    """
+    if report.atoms_reconstructed <= 0 or report.heavy_relaxed:
+        return
+    if not report.minimized:
+        # No minimization ran at all (minimize=False, or it was skipped) — the
+        # fix is to enable minimization, not to change constrain_heavy.
+        report.warnings.append(
+            f"{report.atoms_reconstructed} reconstructed heavy atoms are "
+            "unrelaxed (minimization did not run): they sit at template "
+            "positions. Enable minimize=True if these atoms matter downstream."
+        )
+    else:
+        # Minimization ran but froze heavy atoms (H-only) — relax them.
+        report.warnings.append(
+            f"{report.atoms_reconstructed} reconstructed heavy atoms left "
+            "unrelaxed (H-only minimization): they sit at template positions. "
+            "Use constrain_heavy=False (CHARMM19+EEF1) or an external solvated "
+            "minimization if these atoms matter downstream."
+        )
+
+
 # Rust batch_prepare returns energies in kcal/mol (the native unit of the
 # AMBER96/CHARMM19 parameters). The rest of the proteon Python API defaults
 # to kJ/mol via compute_energy / minimize_hydrogens, so the PrepReport
@@ -132,6 +160,15 @@ class PrepReport:
     #: added, ``minimize=False``, or ``skipped_no_protein``). ``relax_ok`` needs
     #: this to tell "did not relax" from "relaxed and converged".
     minimized: bool = False
+    #: Whether the minimizer moved HEAVY atoms (vs the default H-only). ``False``
+    #: under the default ``constrain_heavy=True``: heavy atoms keep their
+    #: experimental coordinates, so :attr:`final_energy` is NOT a heavy-atom
+    #: energy minimum — it still carries crystal strain (and any reconstructed
+    #: heavy atoms / clashes are unrelaxed). ``True`` only when minimization ran
+    #: with heavy atoms free (``constrain_heavy=False``/``None``-for-CHARMM): an
+    #: equilibrated structure suitable for energy/MD work. Check this before
+    #: trusting ``final_energy``/``components`` as an equilibrium quantity.
+    heavy_relaxed: bool = False
     #: Optimizer termination status ("converged_gradient", "line_search_failed",
     #: "max_steps", "numerical_failure", "not_run", …). Empty when minimization
     #: did not run. Distinguishes a real relax from a stall that the bare
@@ -276,6 +313,7 @@ def prepare(
     gradient_tolerance: float = 1.0,
     strip_hydrogens: bool = True,
     ff: str = "charmm19_eef1",
+    constrain_heavy: Optional[bool] = True,
 ) -> PrepReport:
     """Prepare a structure for downstream analysis or simulation.
 
@@ -316,6 +354,34 @@ def prepare(
             energy parity against OpenMM at NoCutoff, but the preparation
             path uses proteon's default cutoff policy and is still the
             secondary workflow. Emits a UserWarning once per process.
+        constrain_heavy: Whether to freeze heavy atoms during minimization
+            (move only hydrogens). Unified default across ``prepare`` /
+            ``batch_prepare`` / ``load_and_prepare``. Pick by what you need:
+
+            ``True`` (**H-only**, the default) — freeze heavy atoms, relax only
+            the placed hydrogens. Preserves the deposited coordinates exactly
+            (CA-RMSD 0), fast, converges. The right choice for ANALYSIS
+            (alignment, SASA, DSSP, contacts, ML/supervision features) where
+            faithfulness to the experimental structure matters. NOTE this does
+            NOT equilibrate the structure: ``final_energy`` still carries crystal
+            strain (``heavy_relaxed`` is False), and if ``reconstruct`` added
+            heavy atoms they stay at their template positions, unrelaxed.
+
+            ``False`` (**heavy relax**) — also relax heavy atoms. A deeper,
+            clash-reduced minimum that settles reconstructed atoms; for
+            energy/minimized-structure work. Moves the backbone ~0.5 Å off the
+            deposited coordinates. Most appropriate under CHARMM19+EEF1 (its
+            implicit solvent screens electrostatics); under AMBER96 (vacuum +
+            cutoff) it can distort charged/polar geometry — prefer H-only here,
+            or do a restrained/solvated minimization in an MD engine.
+
+            ``None`` (**FF-aware**) — heavy relax for CHARMM19+EEF1, H-only for
+            AMBER96 (the pre-unification batch behaviour). A reasonable
+            "do the right thing per force field" shortcut for energy work.
+
+            See the prepare subsystem docs for the full decision tree and the
+            NMR/membrane/crystal-packing caveats. Check ``report.heavy_relaxed``
+            to know which you got, and gate any trust in ``final_energy`` on it.
 
     Returns:
         PrepReport with preparation statistics.
@@ -334,15 +400,14 @@ def prepare(
     # Step 0: Optionally strip existing hydrogens.
     if strip_hydrogens:
         # Use the batch path so strip+reconstruct+place+minimize all run in
-        # one Rust call. Single-structure prepare is documented as a
-        # hydrogen-placement / hydrogen-minimization workflow, so freeze
-        # heavy atoms explicitly even on CHARMM.
+        # one Rust call. `constrain_heavy` (default True = H-only) controls
+        # whether heavy atoms move; see the function docstring for the trade-off.
         results = _add_h.batch_prepare(
             [ptr], reconstruct, hydrogens, include_water,
             minimize, minimize_method, minimize_steps, gradient_tolerance, None,
             True,
             ff,
-            True,
+            constrain_heavy,
         )
         if results:
             r = _convert_prep_result_to_kj(results[0])
@@ -355,6 +420,7 @@ def prepare(
             report.minimizer_steps = r["minimizer_steps"]
             report.converged = r["converged"]
             report.minimized = r.get("minimized", False)
+            report.heavy_relaxed = r.get("heavy_relaxed", False)
             report.minimizer_status = r.get("minimizer_status", "")
             report.n_unassigned_atoms = r["n_unassigned_atoms"]
             report.n_unassigned_nonwater = r.get("n_unassigned_nonwater", 0)
@@ -372,6 +438,7 @@ def prepare(
                     f"{report.n_unassigned_atoms} atoms without force field type "
                     "(non-standard residues or ligands)"
                 )
+            _warn_unrelaxed_reconstruct(report)
         return report
 
     # Step 1: Reconstruct missing heavy atoms
@@ -396,13 +463,14 @@ def prepare(
     # Use batch_prepare for a single structure so coords are applied back in Rust.
     if minimize and report.hydrogens_added > 0:
         # Run minimization via the Rust batch path (applies coords in-place).
-        # Keep this hydrogen-only to match the public prepare() contract.
+        # `constrain_heavy` (default True = H-only) controls whether heavy atoms
+        # move; see the function docstring for the trade-off.
         results = _add_h.batch_prepare(
             [ptr], False, "none", False,
             True, minimize_method, minimize_steps, gradient_tolerance, None,
             False,
             ff,
-            True,
+            constrain_heavy,
         )
         if results:
             r = _convert_prep_result_to_kj(results[0])
@@ -412,6 +480,7 @@ def prepare(
             report.minimizer_steps = r["minimizer_steps"]
             report.converged = r["converged"]
             report.minimized = r.get("minimized", False)
+            report.heavy_relaxed = r.get("heavy_relaxed", False)
             report.minimizer_status = r.get("minimizer_status", "")
             report.skipped_no_protein = r["skipped_no_protein"]
             report.incomplete_ff = r.get("incomplete_ff", False)
@@ -439,6 +508,7 @@ def prepare(
             f"{report.n_unassigned_atoms} atoms without force field type "
             "(non-standard residues or ligands)"
         )
+    _warn_unrelaxed_reconstruct(report)
 
     return report
 
@@ -456,7 +526,7 @@ def batch_prepare(
     n_threads: Optional[int] = None,
     strip_hydrogens: bool = True,
     ff: str = "charmm19_eef1",
-    constrain_heavy: Optional[bool] = None,
+    constrain_heavy: Optional[bool] = True,
 ) -> List[PrepReport]:
     """Prepare many structures in parallel (Rust + rayon, zero GIL).
 
@@ -498,16 +568,20 @@ def batch_prepare(
             energy parity against OpenMM at NoCutoff, but the preparation
             path uses proteon's default cutoff policy and is still the
             secondary workflow. Emits a UserWarning once per process.
-        constrain_heavy: Whether to freeze heavy atoms during minimization.
-            ``None`` (default) uses the FF-aware default: True for AMBER96
-            (H-only minimization is the intended pattern — all-atom AMBER
-            in vacuum has unscreened electrostatic issues, so full minimization
-            gives meaningless numbers), False for CHARMM19+EEF1 (polar-H
-            united-atom with inflated carbon radii needs heavy-atom relaxation
-            for correctly-signed totals). Pass ``True`` or ``False`` to
-            override the default explicitly. Primarily useful for testing,
-            profiling, or when you specifically want to preserve
-            experimentally-determined heavy-atom geometry.
+        constrain_heavy: Whether to freeze heavy atoms during minimization
+            (move only hydrogens). Unified with ``prepare`` /
+            ``load_and_prepare`` — same default and meaning:
+            ``True`` (**H-only**, the default) preserves the experimental
+            heavy-atom coordinates exactly (perfect fold, CA-RMSD 0) and relaxes
+            only the placed hydrogens — fast, converges, energy correctly-signed.
+            The right default for "load and prepare a usable structure".
+            ``False`` (**heavy relax**) also relaxes heavy atoms — a deeper
+            energy minimum (better for energy/MD work) but moves the backbone
+            ~0.5 Å off the deposited structure. NOTE: before unification this was
+            the CHARMM19+EEF1 default; pass ``False`` to restore it.
+            ``None`` (**FF-aware**) picks per force field: True for AMBER96
+            (all-atom AMBER in vacuum has unscreened electrostatics, so full
+            minimization gives meaningless numbers), False for CHARMM19+EEF1.
 
     Returns:
         List of PrepReport, one per structure.
@@ -534,6 +608,7 @@ def batch_prepare(
             minimizer_steps=r["minimizer_steps"],
             converged=r["converged"],
             minimized=r.get("minimized", False),
+            heavy_relaxed=r.get("heavy_relaxed", False),
             minimizer_status=r.get("minimizer_status", ""),
             n_unassigned_atoms=r["n_unassigned_atoms"],
             n_unassigned_nonwater=r.get("n_unassigned_nonwater", 0),
@@ -555,6 +630,7 @@ def batch_prepare(
             report.warnings.append(
                 f"{report.n_unassigned_atoms} atoms without force field type"
             )
+        _warn_unrelaxed_reconstruct(report)
         reports.append(report)
     return reports
 
@@ -567,6 +643,7 @@ def load_and_prepare(
     minimize: bool = True,
     minimize_method: str = "lbfgs",
     minimize_steps: int = 500,
+    constrain_heavy: Optional[bool] = True,
 ) -> "tuple[object, PrepReport]":
     """Load a structure file and prepare it in one call.
 
@@ -577,6 +654,9 @@ def load_and_prepare(
         minimize: Minimize H positions (default True).
         minimize_method: "sd", "cg", or "lbfgs" (default "lbfgs").
         minimize_steps: Max minimization steps (default 500).
+        constrain_heavy: Freeze heavy atoms during minimization. Default
+            ``True`` (H-only) preserves experimental coordinates; ``False``
+            relaxes heavy atoms; ``None`` is FF-aware. See :func:`prepare`.
 
     Returns:
         (structure, PrepReport) tuple.
@@ -590,6 +670,7 @@ def load_and_prepare(
         minimize=minimize,
         minimize_method=minimize_method,
         minimize_steps=minimize_steps,
+        constrain_heavy=constrain_heavy,
     )
     return structure, report
 
