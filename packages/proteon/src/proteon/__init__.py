@@ -124,6 +124,11 @@ from .prepare import (
     prepare,
     prepare_for_supervision,
 )
+from .repair import (
+    RepairOutcome,
+    RepairPolicy,
+    RepairSummary,
+)
 from .dssp import (
     batch_dssp,
     dssp,
@@ -456,6 +461,9 @@ _PREPARE_API = (
     "batch_prepare",
     "load_and_prepare",
     "prepare_for_supervision",
+    "RepairPolicy",
+    "RepairOutcome",
+    "RepairSummary",
     "normalize_histidine_tautomers",
     "prepare",
 )
