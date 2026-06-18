@@ -124,6 +124,12 @@ from .prepare import (
     prepare,
     prepare_for_supervision,
 )
+from .residue_mask import (
+    DEFAULT_COVERAGE,
+    ResidueCoverage,
+    residue_completeness,
+    structure_coverage,
+)
 from .repair import (
     RepairOutcome,
     RepairPolicy,
@@ -461,6 +467,10 @@ _PREPARE_API = (
     "batch_prepare",
     "load_and_prepare",
     "prepare_for_supervision",
+    "ResidueCoverage",
+    "structure_coverage",
+    "residue_completeness",
+    "DEFAULT_COVERAGE",
     "RepairPolicy",
     "RepairOutcome",
     "RepairSummary",

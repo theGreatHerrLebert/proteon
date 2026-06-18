@@ -253,10 +253,33 @@ add missing residues. Sterics are fixable; missing density is not.
 **The takeaway for training-data builders.** ~80% of diverse PDB clears the
 clash gate as-deposited; the realistic ceiling for *complete, observed*
 heavy-coordinate labels is bounded by structural completeness (missing
-loops/residues), not clashes. For coordinate labels that tolerate gaps, the next
-lever is per-residue masking (a planned follow-on) rather than demanding a whole
-complete structure. Sequence-indexed labels fare far better (768/974, 79%) — they
-don't depend on coordinate completeness or sterics at all.
+loops/residues), not clashes. Sequence-indexed labels fare far better (768/974,
+79%) — they don't depend on coordinate completeness or sterics at all.
+
+### Coverage-based masking (keep the good residues)
+
+Demanding a *whole* complete structure throws away the 85% of diverse PDB that is
+a complete core plus a few missing loops: only ~15% of structures are 100%
+complete, but **~87% of all residues are**. So rather than drop an incomplete
+structure, keep it and mask its missing residues. `prepare_for_supervision` takes
+a `min_coverage` floor:
+
+```python
+for res in proteon.prepare_for_supervision(paths, min_coverage=0.8, only_safe=True):
+    mask = res.coverage_info.node_valid   # per-residue bool, residue_index order
+    add_training_example(res.structure, label_mask=mask)
+```
+
+`res.coverage` is valid / exportable protein residues; `node_valid` is the
+per-residue label mask (aligned to the supervision `residue_index`). The
+calibrated default floor is **0.8** (keeps 89% of structures, cuts the sparse
+~10% tail) — a quality / crop-efficiency knob, not a corruption guard, since the
+missing residues are masked rather than trusted. `coverage_profile="backbone"`
+requires only N/CA/C/O (for backbone/frame labels). This is **phase 1**: it
+localizes the dominant *missing-atoms* hazard; per-residue clash/altloc/chirality
+attribution and the per-label export masks (torsions need valid neighbors, FAPE
+frames are separate from target atoms) are the follow-on
+(`devdocs/PER_RESIDUE_MASKING_SKETCH.md`).
 
 ## Validation
 

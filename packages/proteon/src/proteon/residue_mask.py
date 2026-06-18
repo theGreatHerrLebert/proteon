@@ -1,0 +1,132 @@
+"""Per-residue label validity + structure coverage (phase 1: completeness).
+
+The structure-level ``label_safe`` gate is all-or-nothing: a structure with one
+missing loop is dropped whole, which caps diverse-PDB yield at ~15% of
+*structures* even though ~87% of *residues* are complete coordinate labels.
+Per-residue masking keeps the observed residues instead. This module computes,
+per residue, whether it is a valid coordinate label, and the structure's
+**coverage** (valid / exportable residues) — so a coverage gate can keep
+mostly-complete structures and a downstream export can mask the incomplete ones.
+
+**Phase 1 localizes the DOMINANT hazard only: missing atoms** (completeness, from
+the atom37 presence-vs-exists mask — exact, and aligned to the supervision
+residue order by construction). Severe-clash / chirality / altloc localization
+(which need the Rust topology) and the per-label export masks (torsions, frames,
+pseudo-beta, pairs — each combined along its own dependency, NOT one broadcast
+mask) are phase 2. See ``devdocs/PER_RESIDUE_MASKING_SKETCH.md``.
+
+The validity here is therefore **node validity for the missing-atoms hazard**: a
+necessary condition for a coordinate label, not the full per-label mask.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Optional
+
+import numpy as np
+from numpy.typing import NDArray
+
+from .supervision_geometry import ATOM_ORDER, extract_atom37
+
+#: Measured default coverage floor (974-PDB sample, devdocs sketch): keeps ~89%
+#: of structures, cutting the sparse ~10% tail (p10 ≈ 0.79). A quality /
+#: crop-efficiency knob — masking already handles the missing residues, so this
+#: is NOT a corruption guard like the clashscore gate.
+DEFAULT_COVERAGE = 0.8
+
+#: atom37 backbone slots (N, CA, C, O) — NOT 0..3, which would include CB at 3.
+_BB_SLOTS = [ATOM_ORDER[a] for a in ("N", "CA", "C", "O")]
+
+#: Completeness levels a coverage gate can require.
+_COVERAGE_PROFILES = ("heavy_coords", "backbone")
+
+
+@dataclass
+class ResidueCoverage:
+    """Per-residue completeness validity and the structure's coverage fraction."""
+
+    #: Completeness level required: ``"heavy_coords"`` (all expected heavy atoms)
+    #: or ``"backbone"`` (N, CA, C, O).
+    profile: str
+    #: Exportable (amino-acid) residues considered — the coverage denominator.
+    n_residues: int
+    #: Valid (complete) residues — the coverage numerator.
+    n_valid: int
+    #: Per-residue boolean validity, aligned to the supervision ``residue_index``
+    #: (0-based positional over amino-acid residues, model 0, in chain order).
+    node_valid: NDArray  # bool[n_residues]
+
+    @property
+    def coverage(self) -> float:
+        """Valid / exportable protein residues (0.0 when there are none)."""
+        if self.n_residues == 0:
+            return 0.0
+        return self.n_valid / self.n_residues
+
+
+def _amino_acid_residues(structure, chain_id: Optional[str]) -> List:
+    """Model-0 amino-acid residues of ONE chain — matching the supervision export.
+
+    The export (``supervision._select_chain``) is chain-level: it supervises a
+    single chain, and ``residue_index`` is that chain's positional index. So
+    coverage must be single-chain too, or ``node_valid`` would not align with the
+    exported chain's residue order/length (codex). Scoped to ``models[0]`` so a
+    multi-model (NMR) input can't silently pull a different model's chain.
+
+    ``chain_id=None`` is allowed only when there is exactly one protein chain (as
+    the export requires); otherwise raise — the caller must say which chain.
+    """
+    chains = structure.models[0].chains
+    if chain_id is not None:
+        for ch in chains:
+            if ch.id == chain_id:
+                return [r for r in ch.residues if r.is_amino_acid]
+        return []
+    protein_chains = [ch for ch in chains if any(r.is_amino_acid for r in ch.residues)]
+    if len(protein_chains) > 1:
+        raise ValueError(
+            "structure_coverage is chain-level (like the supervision export); "
+            "pass chain_id for a multi-chain structure"
+        )
+    if not protein_chains:
+        return []
+    return [r for r in protein_chains[0].residues if r.is_amino_acid]
+
+
+def residue_completeness(residues, profile: str = "heavy_coords") -> NDArray:
+    """Per-residue boolean: are this residue's required atoms all present?
+
+    ``"heavy_coords"`` requires every atom37 slot the residue type EXPECTS;
+    ``"backbone"`` requires only N, CA, C, O. Empty input → empty array.
+    """
+    if profile not in _COVERAGE_PROFILES:
+        raise ValueError(f"unknown coverage profile {profile!r}; {list(_COVERAGE_PROFILES)}")
+    if not residues:
+        return np.zeros((0,), dtype=bool)
+    a = extract_atom37(residues)
+    mask, exists = a["mask"], a["exists"]
+    if profile == "backbone":
+        return mask[:, _BB_SLOTS].sum(axis=1) == len(_BB_SLOTS)
+    # heavy_coords: no EXPECTED atom is missing.
+    missing = ((exists > 0) & (mask == 0)).sum(axis=1)
+    return missing == 0
+
+
+def structure_coverage(
+    structure, *, profile: str = "heavy_coords", chain_id: Optional[str] = None
+) -> ResidueCoverage:
+    """Per-residue completeness validity + coverage for one prepared structure.
+
+    Aggregates model-0 amino-acid residues (optionally one ``chain_id``). The
+    returned :attr:`ResidueCoverage.node_valid` is aligned to the supervision
+    ``residue_index`` so a downstream export can apply it directly.
+    """
+    residues = _amino_acid_residues(structure, chain_id)
+    node_valid = residue_completeness(residues, profile)
+    return ResidueCoverage(
+        profile=profile,
+        n_residues=len(residues),
+        n_valid=int(node_valid.sum()),
+        node_valid=node_valid,
+    )
