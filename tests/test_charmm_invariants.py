@@ -311,15 +311,17 @@ class TestMinimizedTotalIsNegative:
     """CHARMM19+EEF1 minimized total energy MUST be negative on any
     folded protein (canonical polar-H united-atom convention).
 
-    Pre-fix rationale: the 2026-04-12 batch of fixes (EEF1 bugs, water,
-    1bpi, polar-H, heavy-atom freeze) incrementally moved totals from
-    spurious-positive to physically-correct negative. Before the final
-    heavy-atom-freeze fix, CHARMM19 minimized totals were
-    wrong-signed on 3 of 4 v1 PDBs because the minimizer was freezing
-    heavy atoms (a sensible default for AMBER96's explicit-H model but
-    wrong for CHARMM19's inflated united-atom radii). This test would
-    have caught that regression immediately — every step along the
-    way a single wrong-signed PDB turns the suite red.
+    History: the 2026-04-12 batch of fixes (EEF1 bugs, water, 1bpi,
+    polar-H) moved totals from spurious-positive to physically-correct
+    negative. At that time CHARMM19 totals were also wrong-signed on
+    3 of 4 v1 PDBs *while freezing heavy atoms*, so the batch default
+    was set to relax heavy atoms for CHARMM. Those EEF1/polar-H fixes
+    since made the sign robust to heavy-freeze: as of the
+    constrain_heavy unification the batch default is **H-only**
+    (constrain_heavy=True) and these totals stay negative (verified on
+    all v1 structures). So this test now also guards H-only CHARMM
+    sign-correctness — a wrong sign points at an EEF1 / electrostatic
+    kernel regression, NOT at the constrain_heavy default.
 
     The negative-total invariant is a STRONGER check than the
     TestSolvationNegative invariant: solvation can be negative while
@@ -356,10 +358,10 @@ class TestMinimizedTotalIsNegative:
             f"{r.final_energy:+.2f} kJ/mol, expected negative. "
             "A folded protein under a polar-H united-atom force field "
             "with EEF1 implicit solvation should always settle to a "
-            "negative total. If this regression fires, the most likely "
-            "culprit is the batch_prepare `constrain_heavy` default "
-            "having flipped back to True for CHARMM19 — see the "
-            "2026-04-12 commit for context."
+            "negative total (this holds for the H-only default and for "
+            "heavy relaxation). If this regression fires, the likely "
+            "culprit is an EEF1 / electrostatic kernel sign error, not "
+            "the constrain_heavy default."
         )
 
 
