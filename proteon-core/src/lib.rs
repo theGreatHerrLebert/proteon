@@ -14,6 +14,7 @@
 pub mod add_hydrogens;
 pub mod altloc;
 pub mod bond_order;
+pub mod clash;
 pub mod dssp;
 pub mod forcefield;
 pub mod fragment_templates;

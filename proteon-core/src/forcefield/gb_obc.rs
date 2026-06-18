@@ -964,6 +964,7 @@ mod tests {
             pairs_14: HashSet::new(),
             lj_excluded_pairs: HashSet::new(),
             unassigned_atoms: vec![],
+            inferred_bonds: false,
         }
     }
 

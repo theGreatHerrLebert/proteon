@@ -69,6 +69,14 @@ pub struct Topology {
     pub lj_excluded_pairs: HashSet<(usize, usize)>,
     /// Atoms that could not be assigned a force field type (residue:atom names)
     pub unassigned_atoms: Vec<String>,
+    /// True if any bond was inferred by the Phase-D distance fallback (residues
+    /// without fragment templates — ligands, non-standard residues). Those
+    /// inferred bonds enter `excluded_pairs`, so a steric-clash check that
+    /// trusts the exclusions cannot distinguish a real bond from a severe
+    /// intra-residue overlap there. Consumers (e.g. the clash metric) surface
+    /// this so the clash count over un-templated residues is known to be
+    /// approximate rather than silently under-counted.
+    pub inferred_bonds: bool,
 }
 
 /// Maximum bond distance for element pairs (Å).
@@ -258,6 +266,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                 pairs_14: HashSet::new(),
                 lj_excluded_pairs: HashSet::new(),
                 unassigned_atoms: Vec::new(),
+                inferred_bonds: false,
             }
         }
     };
@@ -639,6 +648,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
     }
 
     // Phase D: Distance fallback for residues without templates (ligands, non-standard)
+    let mut inferred_bonds = false;
     for (&res_idx, atom_indices) in &residue_atoms {
         if residues_with_templates.contains(&res_idx) {
             continue;
@@ -660,6 +670,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
                         });
                         neighbors[pair.0].push(pair.1);
                         neighbors[pair.1].push(pair.0);
+                        inferred_bonds = true;
                     }
                 }
             }
@@ -1003,6 +1014,7 @@ pub fn build_topology(pdb: &pdbtbx::PDB, params: &impl ForceField) -> Topology {
         pairs_14,
         lj_excluded_pairs,
         unassigned_atoms,
+        inferred_bonds,
     }
 }
 
