@@ -153,6 +153,12 @@ pub struct PrepareReport {
     /// True if any residue carries a PDB insertion code (residue-identity /
     /// numbering hazard for `(chain, resnum)`-keyed labels).
     pub has_insertion_codes: bool,
+    /// HEAVY atoms MISSING from standard residues on the FINAL structure (vs
+    /// fragment templates). With reconstruction off (the supervision default) an
+    /// incomplete residue otherwise has no signal — a partial coordinate label.
+    /// Zero when reconstruction filled everything (those atoms are then flagged
+    /// as reconstructed instead).
+    pub n_missing_heavy_atoms: usize,
 }
 
 /// Force fields the preparation pipeline supports (`amber96_obc` is not a
@@ -384,6 +390,9 @@ pub fn prepare_structure<P: ForceField>(
     out.n_models = n_models;
     out.has_altlocs = has_altlocs;
     out.has_insertion_codes = has_insertion_codes;
+    // Missing heavy atoms on the FINAL structure: nonzero only when residues are
+    // incomplete AND reconstruction did not fill them (the supervision default).
+    out.n_missing_heavy_atoms = crate::reconstruct::count_missing_heavy_atoms(pdb);
 
     out
 }

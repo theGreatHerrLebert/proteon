@@ -210,6 +210,10 @@ class PrepReport:
     #: True if any residue carries a PDB insertion code — a residue-identity /
     #: numbering hazard for ``(chain, resnum)``-keyed (sequence-indexed) labels.
     has_insertion_codes: bool = False
+    #: HEAVY atoms missing from standard residues on the final structure (vs
+    #: templates). Nonzero only when residues are incomplete AND reconstruction
+    #: did not fill them (the supervision default) — a partial coordinate label.
+    n_missing_heavy_atoms: int = 0
     warnings: List[str] = field(default_factory=list)
 
     @property
@@ -284,6 +288,16 @@ class PrepReport:
         return self.atoms_reconstructed > 0
 
     @property
+    def has_missing_atoms(self) -> bool:
+        """Standard residues are missing heavy atoms (an incomplete coordinate label).
+
+        Nonzero only with reconstruction off (the supervision default); with it
+        on, those atoms are filled and flagged as :attr:`has_reconstructed_atoms`
+        instead. Either way the structure is not a complete *observed* label.
+        """
+        return self.n_missing_heavy_atoms > 0
+
+    @property
     def has_untyped_atoms(self) -> bool:
         """Any non-water atom lacks a force-field type."""
         return self.n_unassigned_nonwater > 0
@@ -306,10 +320,18 @@ class PrepReport:
             h.append(self.status.value)
         if self.has_reconstructed_atoms:
             h.append("reconstructed_atoms")
+        if self.has_missing_atoms:
+            h.append("missing_atoms")
         if self.has_heavy_clashes:
             h.append("heavy_clashes")
         if self.has_untyped_atoms:
             h.append("untyped_atoms")
+        if self.hydrogens_added == 0:
+            # No hydrogens placed (e.g. hydrogens="none"): all-atom / energy
+            # labels are unavailable. Not a hazard for heavy-coordinate labels,
+            # but it IS why `label_safe` (the all-types gate) is False, so it must
+            # be listed — otherwise `only_safe` drops the record with no reason.
+            h.append("no_hydrogens")
         if self.has_altlocs:
             h.append("altlocs")
         if self.has_multiple_models:
@@ -330,6 +352,7 @@ class PrepReport:
             self.status != PrepStatus.NOT_PROTEIN
             and self.minimizer_status != "numerical_failure"
             and not self.has_reconstructed_atoms
+            and not self.has_missing_atoms
             and not self.has_heavy_clashes
             and not self.has_altlocs
             and not self.has_multiple_models
@@ -566,6 +589,7 @@ def prepare(
             report.n_models = r.get("n_models", 1)
             report.has_altlocs = r.get("has_altlocs", False)
             report.has_insertion_codes = r.get("has_insertion_codes", False)
+            report.n_missing_heavy_atoms = r.get("n_missing_heavy_atoms", 0)
             if report.skipped_no_protein:
                 report.warnings.append(
                     f"skipped: {report.n_unassigned_atoms} atoms have no "
@@ -629,6 +653,7 @@ def prepare(
             report.n_models = r.get("n_models", 1)
             report.has_altlocs = r.get("has_altlocs", False)
             report.has_insertion_codes = r.get("has_insertion_codes", False)
+            report.n_missing_heavy_atoms = r.get("n_missing_heavy_atoms", 0)
 
     # Step 4: FF coverage + readiness flags. Source them from the SAME Rust
     # prepare path the default (strip_hydrogens) branch uses, via a coverage-only
@@ -652,6 +677,7 @@ def prepare(
         report.n_models = c.get("n_models", 1)
         report.has_altlocs = c.get("has_altlocs", False)
         report.has_insertion_codes = c.get("has_insertion_codes", False)
+        report.n_missing_heavy_atoms = c.get("n_missing_heavy_atoms", 0)
     if report.n_unassigned_atoms > 10:
         report.warnings.append(
             f"{report.n_unassigned_atoms} atoms without force field type "
@@ -769,6 +795,7 @@ def batch_prepare(
             n_models=r.get("n_models", 1),
             has_altlocs=r.get("has_altlocs", False),
             has_insertion_codes=r.get("has_insertion_codes", False),
+            n_missing_heavy_atoms=r.get("n_missing_heavy_atoms", 0),
         )
         if report.skipped_no_protein:
             report.warnings.append(
@@ -885,6 +912,31 @@ class LoadPrepResult:
             return self.report.reason
         return ""
 
+    @property
+    def label_safe(self) -> bool:
+        """True iff loaded AND safe to use as a geometric-DL training label.
+
+        The label-safety gate across both stages: a load failure is never label
+        safe; otherwise forwards :attr:`PrepReport.label_safe` (clean coords,
+        fully typed, unambiguous conformer/model, no fabricated atoms). Use a
+        ``PrepReport.label_safe_*`` profile via :attr:`report` to relax this per
+        label type.
+        """
+        return self.error is None and self.report is not None and self.report.label_safe
+
+    @property
+    def label_hazards(self) -> List[str]:
+        """The label-corrupting hazards that fired (empty iff :attr:`label_safe`).
+
+        ``["load_failed"]`` for a parse failure; otherwise forwards
+        :attr:`PrepReport.label_hazards`.
+        """
+        if self.error is not None:
+            return ["load_failed"]
+        if self.report is not None:
+            return self.report.label_hazards
+        return []
+
 
 def batch_load_and_prepare(
     paths: Sequence,
@@ -948,6 +1000,64 @@ def batch_load_and_prepare(
         for pos, report in zip(positions, reports):
             results[pos].report = report
 
+    return results
+
+
+def prepare_for_supervision(
+    paths: Sequence,
+    *,
+    n_threads: Optional[int] = None,
+    only_safe: bool = False,
+    **prepare_kwargs,
+) -> List[LoadPrepResult]:
+    """Load + prepare structures for geometric-DL supervision, label-safe by default.
+
+    The same pipeline as :func:`batch_load_and_prepare`, but with the
+    conservative default that matters for training data: **``reconstruct=False``**.
+    A reconstructed heavy atom is a model-derived guess (the network would learn
+    the reconstruction algorithm's rotamer/loop priors, not the experiment), so
+    by default missing atoms are NOT fabricated into labels — incomplete residues
+    are left as-is and surfaced via the report. Override with
+    ``reconstruct=True`` if you explicitly want completed structures (then those
+    atoms are flagged by :attr:`PrepReport.has_reconstructed_atoms` and excluded
+    from :attr:`LoadPrepResult.label_safe`).
+
+    Gate each result on :attr:`LoadPrepResult.label_safe` (or a
+    ``PrepReport.label_safe_*`` profile for a specific label type) and inspect
+    :attr:`LoadPrepResult.label_hazards` for why a structure is excluded. Silent
+    label hazards — heavy clashes, altloc ambiguity, multi-model inputs (NMR
+    ensembles, only model 0 prepared), insertion codes — all flip ``label_safe``
+    to False rather than quietly corrupting a label.
+
+    Args:
+        paths: File paths (.pdb, .cif, .mmcif).
+        n_threads: Thread count for both stages (``None``/``-1``/``0`` = all).
+        only_safe: If True, return ONLY the label-safe results (the dropped ones
+            are not returned). Default False — every input path comes back so you
+            can log/inspect the excluded ones and their hazards.
+        **prepare_kwargs: Forwarded to :func:`batch_prepare`. ``reconstruct``
+            defaults to False here (vs True elsewhere); other defaults match.
+
+    Returns:
+        List of :class:`LoadPrepResult`. Same length/order as ``paths`` unless
+        ``only_safe=True``.
+
+    Examples:
+        >>> for res in proteon.prepare_for_supervision(glob.glob("pdbs/*.pdb")):
+        ...     if res.label_safe:
+        ...         add_training_example(res.structure)
+        ...     else:
+        ...         log.info("skip %s: %s", res.path, res.label_hazards)
+
+    Note:
+        Per-atom provenance masks (observed / reconstructed) are produced by the
+        supervision tensor export, where atoms are indexed (atom37/atom14); this
+        preset is the structure-level gate that precedes it.
+    """
+    prepare_kwargs.setdefault("reconstruct", False)
+    results = batch_load_and_prepare(paths, n_threads=n_threads, **prepare_kwargs)
+    if only_safe:
+        return [r for r in results if r.label_safe]
     return results
 
 

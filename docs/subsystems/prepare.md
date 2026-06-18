@@ -83,6 +83,61 @@ What do you need from prepare()?
 Use `report.heavy_relaxed` to know which regime you got, and gate any trust in
 `final_energy` / `components` on it.
 
+## Label-safe preparation for deep learning
+
+`prepare` is step 0 of geometric-DL supervision: the prepared coordinates and FF
+assignment *become the training labels*, so a silent corruption here poisons
+every example invisibly. The report exposes that whole class of error as
+structured, impossible-to-ignore signals — gate on them instead of parsing
+`warnings`.
+
+Use the preset, which loads + prepares with the conservative DL default
+(`reconstruct=False` — a fabricated atom is a model-derived guess, not an
+observation):
+
+```python
+for res in proteon.prepare_for_supervision(glob.glob("pdbs/*.pdb"), n_threads=-1):
+    if res.label_safe:
+        add_training_example(res.structure)
+    else:
+        log.info("skip %s: %s", res.path, res.label_hazards)
+```
+
+`label_safe` is the strict gate (safe for any label type). For a specific label
+type, use a profile on `res.report` to tolerate hazards that don't affect it:
+
+| Profile | Requires | Tolerates |
+|---|---|---|
+| `label_safe_heavy_coords` | observed heavy atoms, no clashes, single model/conformer | untyped cofactors, missing H |
+| `label_safe_all_atom_coords` | + hydrogens placed | — |
+| `label_safe_energy` | + `fully_typed` | — |
+| `label_safe_sequence_indexed` | no insertion codes, single model | clashes, typing |
+| `label_safe` | all of the above | — |
+
+### The hazards (each a first-class flag, surfaced in `label_hazards`)
+
+| Hazard | Signal | Why it poisons a label |
+|---|---|---|
+| Heavy clashes | `n_heavy_clashes` / `has_heavy_clashes` | H-only minimization can't relax a deposited/rebuilt clash away |
+| Fabricated atoms | `has_reconstructed_atoms` | reconstructed coords are model priors, not observations |
+| Missing atoms | `has_missing_atoms` (`n_missing_heavy_atoms`) | incomplete residue → a partial coordinate label (reconstruct off) |
+| Incomplete FF typing | `has_untyped_atoms` / `fully_typed` | partial topology → wrong energies/forces |
+| Alternate locations | `has_altlocs` | a conformer was silently chosen |
+| Multiple models | `has_multiple_models` (`n_models`) | only model 0 prepared (NMR ensemble = a distribution) |
+| Insertion codes | `has_insertion_codes` | `(chain, resnum)` label keys shift |
+
+The clash count is **protein-scoped and validated**: pristine high-resolution
+structures (1crn, 0.5 Å) report 0; older/lower-resolution structures report many.
+Pairs touching un-templated residues (ligands / metals) are excluded — those are
+expected binding contacts, not coordinate errors — and `clash_count_inferred`
+flags when that exclusion happened. Ligand chemistry, protonation/tautomer
+states, assembly/symmetry, and chirality are deeper hazards tracked in
+`devdocs/LABEL_SAFE_PREPARATION_DESIGN.md` for later phases.
+
+Per-atom provenance masks (observed / reconstructed) are produced by the
+supervision tensor export, where atoms are indexed; `prepare_for_supervision` is
+the structure-level gate that precedes it.
+
 ## Validation
 
 50K random PDB battle test on RTX 5090: **99.1% correct in 3.5 hours**
