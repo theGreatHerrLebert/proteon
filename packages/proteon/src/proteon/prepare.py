@@ -228,6 +228,18 @@ class PrepReport:
     #: CA centres with non-L (D) chirality — a D-amino acid or a modeling error;
     #: a coordinate-geometry anomaly a standard L-protein pipeline should see.
     n_chirality_outliers: int = 0
+    # --- biological-assembly signals (interface-label hazard; path-layer-set) ---
+    #: Number of operators in the first biological assembly (REMARK 350); 1 =
+    #: no expansion. ``None`` when the assembly was not determined (no path, or no
+    #: REMARK 350). Set only by the path-based ``prepare_for_supervision``.
+    biological_assembly_copies: Optional[int] = None
+    #: Three-state: ``True`` the deposited ASU already IS the biological assembly
+    #: (identity operators over exactly the present chains); ``False`` metadata
+    #: says it is NOT (expansion needed / crystal extras / multiple assemblies);
+    #: ``None`` not determined. Gates :attr:`label_safe_interface` — interface /
+    #: contact / SASA labels need the correct oligomeric state. Per-chain
+    #: coordinate / energy / sequence labels are oligomer-invariant (unaffected).
+    assembly_is_asu: Optional[bool] = None
     warnings: List[str] = field(default_factory=list)
 
     @property
@@ -364,6 +376,11 @@ class PrepReport:
             h.append("chirality_outliers")
         if self.has_chain_gaps:
             h.append("chain_gaps")
+        if self.assembly_is_asu is False:
+            # POSITIVE evidence the deposited ASU is not the biological assembly
+            # (e.g. crystal-packing neighbours, or expansion needed). Only flagged
+            # on evidence — `None` (not determined) is not a hazard, just unknown.
+            h.append("assembly_mismatch")
         if self.hydrogens_added == 0:
             # No hydrogens placed (e.g. hydrogens="none"): all-atom / energy
             # labels are unavailable. Not a hazard for heavy-coordinate labels,
@@ -439,6 +456,21 @@ class PrepReport:
             and not self.has_nonstandard_residues
             and not self.has_chain_gaps
         )
+
+    @property
+    def label_safe_interface(self) -> bool:
+        """Safe for INTERFACE / contact / SASA / neighbor-graph labels.
+
+        Requires sterically-sane coordinates AND **positive evidence that the
+        deposited ASU is the biological assembly** (``assembly_is_asu is True``).
+        ``None`` (not determined — e.g. prepared without a path, or no REMARK 350)
+        and ``False`` both fail: without the right oligomeric state, interface
+        labels are crystal artefacts. Requires the path-based
+        :func:`prepare_for_supervision` to have verified the assembly. NOT part of
+        the strict :attr:`label_safe` gate — interface labels are opt-in, and
+        per-chain coords/energy/sequence don't depend on the assembly.
+        """
+        return self.label_safe_heavy_coords and self.assembly_is_asu is True
 
     @property
     def label_safe(self) -> bool:
@@ -1146,14 +1178,49 @@ def prepare_for_supervision(
         preset is the structure-level gate that precedes it.
     """
     if repair is not None:
-        return _prepare_with_repair(
-            paths, repair, n_threads=n_threads, only_safe=only_safe, **prepare_kwargs
+        # _prepare_with_repair annotates assembly internally (before its policy
+        # evaluation), so we do NOT re-annotate here.
+        results = _prepare_with_repair(
+            paths, repair, n_threads=n_threads, only_safe=False, **prepare_kwargs
         )
+        if only_safe:
+            return [r for r in results if r.passes_policy]
+        return results
     prepare_kwargs.setdefault("reconstruct", False)
     results = batch_load_and_prepare(paths, n_threads=n_threads, **prepare_kwargs)
+    _annotate_assembly(results)
     if only_safe:
         return [r for r in results if r.label_safe]
     return results
+
+
+def _annotate_assembly(results) -> None:
+    """Set biological-assembly fields on each loaded result from its PDB header.
+
+    Reads only the file header (up to the first coordinate record) for
+    ``REMARK 350``; mmCIF files have no REMARK 350 so they stay ``None``
+    (mmCIF ``_pdbx_struct_assembly`` parsing is a follow-on).
+    """
+    from .assembly import assembly_metadata
+
+    for res in results:
+        if not res.loaded or res.report is None:
+            continue
+        try:
+            header = []
+            with open(res.path) as fh:
+                for line in fh:
+                    if line.startswith(("ATOM", "HETATM")):
+                        break
+                    header.append(line)
+            chains = sorted(set(res.structure.chain_ids))
+            copies, is_asu = assembly_metadata("".join(header), chains)
+        except (OSError, ValueError):
+            # Unreadable file or a malformed REMARK 350 header: leave this one
+            # structure's assembly unknown, never abort the whole batch.
+            continue
+        res.report.biological_assembly_copies = copies
+        res.report.assembly_is_asu = is_asu
 
 
 def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwargs):
@@ -1244,6 +1311,10 @@ def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwarg
                     drift[id(res)] = float(
                         np.sqrt(np.mean(np.sum((cb - ca) ** 2, axis=1)))
                     )
+
+    # Annotate assembly BEFORE evaluating, so a policy's assembly_mismatch rule
+    # is actually considered (the hazard must be present in label_hazards first).
+    _annotate_assembly(results)
 
     for i, res in enumerate(results):
         if not res.loaded or res.report is None:
