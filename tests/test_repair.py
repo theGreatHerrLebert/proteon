@@ -33,6 +33,7 @@ _HAZARD_TRIGGER = {
     "incomplete_ff": dict(incomplete_ff=True, n_unassigned_nonwater=40),
     "reconstructed_atoms": dict(atoms_reconstructed=3),
     "missing_atoms": dict(n_missing_heavy_atoms=2),
+    "relaxed_coords": dict(heavy_relaxed=True),
     "heavy_clashes": dict(n_heavy_clashes=4),
     "untyped_atoms": dict(n_unassigned_nonwater=5),
     "no_hydrogens": dict(hydrogens_added=0),
@@ -98,7 +99,7 @@ class TestPolicyValidation:
     def test_fix_action_rejected_as_default(self):
         # A FIX/accept_selected as default would be honored by action_for but not
         # applied at prepare time (codex) -> reject it.
-        for bad in ("reconstruct", "accept_selected"):
+        for bad in ("reconstruct", "relax", "accept_selected"):
             with pytest.raises(ValueError):
                 RepairPolicy.for_profile("heavy_coords", default=bad)
 
@@ -135,10 +136,22 @@ class TestEvaluate:
                        reconstruct_applied=True)
         assert out.passes_policy is True
 
-    def test_explicit_provenance_required(self):
-        # reconstruct without accepting reconstructed_atoms -> dropped for it.
+    def test_reconstruct_requires_explicit_provenance_rule(self):
+        # reconstruct without an explicit reconstructed_atoms rule is rejected at
+        # construction — default (even default="accept") must not decide it (codex).
+        with pytest.raises(ValueError):
+            RepairPolicy.for_profile("heavy_coords", missing_atoms="reconstruct",
+                                     altlocs="accept_selected", multiple_models="accept_selected")
+        with pytest.raises(ValueError):
+            RepairPolicy.for_profile("heavy_coords", missing_atoms="reconstruct",
+                                     default="accept")
+
+    def test_reconstruct_dropped_provenance(self):
+        # reconstruct with reconstructed_atoms="drop" -> the rebuilt structure
+        # is excluded for the provenance (explicit, not via default).
         r = _report(atoms_reconstructed=4)
         p = RepairPolicy.for_profile("heavy_coords", missing_atoms="reconstruct",
+                                     reconstructed_atoms="drop",
                                      altlocs="accept_selected", multiple_models="accept_selected")
         out = evaluate(r, p, reconstruct_applied=True)
         assert out.passes_policy is False
@@ -155,13 +168,45 @@ class TestEvaluate:
         assert "untyped_atoms" in out.dropped_for
 
     def test_clash_can_be_accepted(self):
-        # heavy_clashes can be accepted (or dropped) — relax is a follow-on.
+        # heavy_clashes can be accepted (or dropped or relaxed).
         r = _report(n_heavy_clashes=2)
         p = RepairPolicy.for_profile("heavy_coords", heavy_clashes="accept",
                                      altlocs="accept_selected", multiple_models="accept_selected")
         out = evaluate(r, p, reconstruct_applied=False)
         assert out.passes_policy is True
         assert "heavy_clashes" in out.accepted_hazards
+
+    def test_relax_clears_clashes_with_accepted_provenance(self):
+        # After relax: clashes gone, relaxed_coords present and accepted -> passes,
+        # drift recorded.
+        r = _report(heavy_relaxed=True, minimized=True)  # no clashes remain
+        p = RepairPolicy.for_profile("heavy_coords", heavy_clashes="relax",
+                                     relaxed_coords="accept",
+                                     altlocs="accept_selected", multiple_models="accept_selected")
+        out = evaluate(r, p, reconstruct_applied=False, relax_applied=True, coords_drift=0.5)
+        assert out.coords_drift == 0.5
+        assert any("relax" in a for a in out.actions_taken)
+        assert "relaxed_coords" in out.accepted_hazards
+        assert out.passes_policy is True
+
+    def test_relax_requires_explicit_provenance_rule(self):
+        # relax without an explicit relaxed_coords rule is rejected at
+        # construction — even with default="accept" (codex: broad accept must not
+        # silently pass moved-off-experiment coordinates).
+        with pytest.raises(ValueError):
+            RepairPolicy.for_profile("heavy_coords", heavy_clashes="relax",
+                                     altlocs="accept_selected", multiple_models="accept_selected")
+        with pytest.raises(ValueError):
+            RepairPolicy.for_profile("heavy_coords", heavy_clashes="relax", default="accept")
+
+    def test_relax_failed_when_clashes_persist(self):
+        r = _report(n_heavy_clashes=2, heavy_relaxed=True, minimized=True)
+        p = RepairPolicy.for_profile("heavy_coords", heavy_clashes="relax",
+                                     relaxed_coords="accept",
+                                     altlocs="accept_selected", multiple_models="accept_selected")
+        out = evaluate(r, p, reconstruct_applied=False, relax_applied=True, coords_drift=0.6)
+        assert any("relax_failed" in d for d in out.dropped_for)
+        assert out.passes_policy is False
 
 
 # --- integration through prepare_for_supervision ---
@@ -202,6 +247,43 @@ class TestRepairIntegration:
         s = RepairSummary.from_results(results)
         assert s.total == 2  # load failure is accounted, not skipped
         assert s.dropped_by_hazard.get("load_failed", 0) == 1
+
+    def test_relax_applied_only_to_clashy_structures(self):
+        # Two-pass: a clean structure (1crn, 0 clashes) is NOT relaxed; a clashy
+        # one (4hhb) IS, with the CA-drift recorded. relax never touches the
+        # whole batch.
+        policy = RepairPolicy.for_profile(
+            "heavy_coords",
+            heavy_clashes="relax", relaxed_coords="accept",
+            altlocs="accept_selected", multiple_models="accept_selected",
+        )
+        results = proteon.prepare_for_supervision(
+            [_pdb("1crn.pdb"), _pdb("4hhb.pdb")], repair=policy
+        )
+        by = {os.path.basename(r.path): r for r in results}
+        # clean: not relaxed (coords preserved)
+        assert by["1crn.pdb"].repair.coords_drift is None
+        assert not any("relax" in a for a in by["1crn.pdb"].repair.actions_taken)
+        # clashy: relaxed, drift measured
+        assert by["4hhb.pdb"].repair.coords_drift is not None
+        assert any("relax" in a for a in by["4hhb.pdb"].repair.actions_taken)
+
+    def test_reconstruct_then_relax_preserves_provenance(self):
+        # A structure that needs BOTH reconstruct (missing atoms) and relax (the
+        # rebuilt atoms clash): after the relax pass, the reconstructed_atoms
+        # provenance must survive — not be erased by the reconstruct=False relax
+        # pass (codex). Here it is NOT accepted, so it must drop the structure.
+        fixture = os.path.join(CORPUS, "missing_atoms", "missing_cb.pdb")
+        policy = RepairPolicy.for_profile(
+            "heavy_coords",
+            missing_atoms="reconstruct", reconstructed_atoms="drop",  # explicit: drop rebuilt
+            heavy_clashes="relax", relaxed_coords="accept",
+            altlocs="accept_selected", multiple_models="accept_selected",
+        )
+        r = proteon.prepare_for_supervision([fixture], repair=policy)[0]
+        assert r.report.atoms_reconstructed > 0      # provenance survived the relax pass
+        assert "reconstructed_atoms" in r.repair.dropped_for
+        assert r.passes_policy is False
 
     def test_only_safe_filters_by_policy(self):
         paths = [_pdb("1crn.pdb"), _pdb("4hhb.pdb")]

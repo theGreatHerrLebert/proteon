@@ -322,6 +322,12 @@ class PrepReport:
             h.append("reconstructed_atoms")
         if self.has_missing_atoms:
             h.append("missing_atoms")
+        if self.heavy_relaxed:
+            # Heavy atoms were minimized: the coordinates are no longer the
+            # deposited experimental ones (moved ~0.5 Å). A provenance hazard for
+            # coordinate labels — like reconstructed_atoms, it must be explicitly
+            # accepted (the repair layer's `relax` records the drift).
+            h.append("relaxed_coords")
         if self.has_heavy_clashes:
             h.append("heavy_clashes")
         if self.has_untyped_atoms:
@@ -353,6 +359,7 @@ class PrepReport:
             and self.minimizer_status != "numerical_failure"
             and not self.has_reconstructed_atoms
             and not self.has_missing_atoms
+            and not self.heavy_relaxed
             and not self.has_heavy_clashes
             and not self.has_altlocs
             and not self.has_multiple_models
@@ -1091,16 +1098,61 @@ def prepare_for_supervision(
 
 
 def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwargs):
-    """Apply a RepairPolicy: prepare with its FIX flags, then re-verify per profile."""
+    """Apply a RepairPolicy: prepare with its FIX flags, then re-verify per profile.
+
+    Pass 1 prepares H-only (reconstruct per the policy) so clashes are detected
+    on faithful coordinates. Pass 2 — only if the policy has ``relax`` — re-runs
+    heavy-atom minimization on JUST the structures that actually clash (not the
+    whole batch), records the CA drift off the deposited coordinates, and
+    re-detects. The verdict is then computed per structure relative to the
+    policy's label profile.
+    """
     from .repair import RepairOutcome, evaluate
 
-    # FIX flags implied by the policy (single-pass). Currently only `reconstruct`;
-    # clash relaxation is a follow-on (see RepairPolicy / the design doc).
     prepare_kwargs["reconstruct"] = policy.reconstruct
-
+    # The repair layer owns heavy-atom relaxation (via the per-structure `relax`
+    # action), so pass 1 is ALWAYS H-only — override any caller `constrain_heavy`
+    # so a forwarded `constrain_heavy=False` can't relax the whole batch (codex).
+    prepare_kwargs["constrain_heavy"] = True
+    # Pass 1: H-only — faithful coords + clash detection.
     results = batch_load_and_prepare(
         [str(p) for p in paths], n_threads=n_threads, **prepare_kwargs
     )
+
+    # Pass 2: relax ONLY the clashy structures (lossy, so never the whole batch).
+    drift = {}
+    relaxed = set()
+    if policy.relax:
+        clashy = [
+            res for res in results
+            if res.loaded and res.report is not None and res.report.has_heavy_clashes
+        ]
+        if clashy:
+            import numpy as np
+            from .analysis import batch_extract_ca
+
+            structs = [res.structure for res in clashy]
+            ca_before = batch_extract_ca(structs, n_threads=n_threads)
+            relax_kwargs = dict(prepare_kwargs)
+            relax_kwargs["reconstruct"] = False  # already done in pass 1
+            relax_kwargs["constrain_heavy"] = False  # heavy-atom relaxation
+            relax_kwargs["minimize"] = True  # the relax pass IS a minimization
+            # (override any forwarded minimize=False — codex)
+            new_reports = batch_prepare(structs, n_threads=n_threads, **relax_kwargs)
+            ca_after = batch_extract_ca(structs, n_threads=n_threads)
+            for res, rep, cb, ca in zip(clashy, new_reports, ca_before, ca_after):
+                # Pass 2 ran with reconstruct=False, so its report has
+                # atoms_reconstructed=0 — but the reconstructed atoms from pass 1
+                # are STILL in the structure. Carry the provenance forward so a
+                # reconstruct+relax policy still requires reconstructed_atoms to
+                # be accepted (codex).
+                rep.atoms_reconstructed = res.report.atoms_reconstructed
+                res.report = rep
+                relaxed.add(id(res))
+                if cb.shape == ca.shape and cb.shape[0] > 0:
+                    drift[id(res)] = float(
+                        np.sqrt(np.mean(np.sum((cb - ca) ** 2, axis=1)))
+                    )
 
     for res in results:
         if not res.loaded or res.report is None:
@@ -1113,7 +1165,12 @@ def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwarg
                 remaining_hazards=["load_failed"],
             )
             continue
-        res.repair = evaluate(res.report, policy, reconstruct_applied=policy.reconstruct)
+        res.repair = evaluate(
+            res.report, policy,
+            reconstruct_applied=policy.reconstruct,
+            relax_applied=id(res) in relaxed,
+            coords_drift=drift.get(id(res)),
+        )
 
     if only_safe:
         return [r for r in results if r.passes_policy]
