@@ -203,6 +203,7 @@ def build_structure_supervision_example(
     chain_id: Optional[str] = None,
     code_rev: Optional[str] = None,
     config_rev: Optional[str] = None,
+    mask_untrustworthy_coords: bool = False,
 ) -> StructureSupervisionExample:
     """Build a framework-neutral supervision example from a prepared structure.
 
@@ -213,6 +214,15 @@ def build_structure_supervision_example(
     - computes pseudo-beta and torsion supervision
     - attaches prep/QC metadata
     - leaves rigid-group tensors unset for now
+
+    Args:
+        mask_untrustworthy_coords: If True, zero the COORDINATE label masks on
+            residues with a trustworthiness hazard the presence masks can't see
+            (phase 2: altloc — an arbitrary conformer pick). Each mask is combined
+            with its neighbour dependency (torsions need valid neighbours), and
+            ``seq_mask`` / identity are left intact. Off by default so the
+            oracle-gated tensors keep byte-parity; the label-safe corpus path
+            enables it. See :func:`proteon.supervision_mask.apply_residue_trust_mask`.
     """
     chain = _select_chain(structure, chain_id)
     residues = [r for r in chain.residues if r.is_amino_acid]
@@ -291,7 +301,7 @@ def build_structure_supervision_example(
         continuity_index(residues),
     )
 
-    return StructureSupervisionExample(
+    example = StructureSupervisionExample(
         record_id=record_id or _default_record_id(structure, chain.id),
         source_id=source_id,
         prep_run_id=prep_run_id,
@@ -335,6 +345,15 @@ def build_structure_supervision_example(
         rigidgroups_group_is_ambiguous=rigidgroups["ambiguous"],
         quality=_with_io_provenance(_quality_from_prep_report(prep_report), structure, chain),
     )
+    if mask_untrustworthy_coords:
+        # Zero the COORDINATE label masks on untrustworthy residues (phase 2:
+        # altloc) — the trustworthiness hazards presence masks can't see. Off by
+        # default so the oracle-gated tensors keep byte-parity.
+        from .residue_mask import residue_trustworthy
+        from .supervision_mask import apply_residue_trust_mask
+
+        example = apply_residue_trust_mask(example, residue_trustworthy(residues))
+    return example
 
 
 def _batch_alt_positions(residues, batch_tensors, i, length):
@@ -358,8 +377,13 @@ def batch_build_structure_supervision_examples(
     chain_ids: Optional[Sequence[Optional[str]]] = None,
     code_rev: Optional[str] = None,
     config_rev: Optional[str] = None,
+    mask_untrustworthy_coords: bool = False,
 ) -> List[StructureSupervisionExample]:
-    """Batch convenience wrapper over `build_structure_supervision_example()`."""
+    """Batch convenience wrapper over `build_structure_supervision_example()`.
+
+    ``mask_untrustworthy_coords`` is forwarded per example (phase 2 altloc
+    coordinate-mask zeroing; off by default — see the single-example builder).
+    """
     n = len(structures)
     prep_reports = _expand_optional(prep_reports, n)
     record_ids = _expand_optional(record_ids, n)
@@ -390,8 +414,7 @@ def batch_build_structure_supervision_examples(
                 [r.name for r in residues],
                 continuity_index(residues),
             )
-            out.append(
-                StructureSupervisionExample(
+            example = StructureSupervisionExample(
                     record_id=record_ids[i] or _default_record_id(structure, chain.id),
                     source_id=source_ids[i],
                     prep_run_id=prep_run_ids[i],
@@ -433,8 +456,13 @@ def batch_build_structure_supervision_examples(
                     rigidgroups_group_exists=np.asarray(batch_tensors["rigidgroups_group_exists"])[i, :length].astype(np.float32, copy=False),
                     rigidgroups_group_is_ambiguous=np.asarray(batch_tensors["rigidgroups_group_is_ambiguous"])[i, :length].astype(np.float32, copy=False),
                     quality=_with_io_provenance(_quality_from_prep_report(prep_reports[i]), structure, chain),
-                )
             )
+            if mask_untrustworthy_coords:
+                from .residue_mask import residue_trustworthy
+                from .supervision_mask import apply_residue_trust_mask
+
+                example = apply_residue_trust_mask(example, residue_trustworthy(residues))
+            out.append(example)
         return out
 
     out: List[StructureSupervisionExample] = []
@@ -449,6 +477,7 @@ def batch_build_structure_supervision_examples(
                 chain_id=chain_ids[i],
                 code_rev=code_rev,
                 config_rev=config_rev,
+                mask_untrustworthy_coords=mask_untrustworthy_coords,
             )
         )
     return out
