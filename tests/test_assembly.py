@@ -141,7 +141,7 @@ class TestIntegration:
             "heavy_coords", assembly_mismatch="drop",
             missing_atoms="reconstruct", reconstructed_atoms="accept",
             altlocs="accept_selected", multiple_models="accept_selected",
-            heavy_clashes="accept",
+            severe_heavy_clashes="accept",
         )
         res = {os.path.basename(r.path): r for r in proteon.prepare_for_supervision(
             [os.path.join(PDBS, f"{n}.pdb") for n in ("1crn", "1ake")], repair=pol)}

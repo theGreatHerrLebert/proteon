@@ -1,0 +1,73 @@
+{
+  "corpus": "validation/pdbs_10k (random PDB sample)",
+  "tool": "validation/eval_prepare_diverse.py",
+  "gate": "clash severity (clashscore > 20 OR max_heavy_overlap > 1.0 A)",
+  "detection": {
+    "note": "reconstruct=False (DL default), minimize=False; every hazard is structural so the read-out is identical to a full prepare",
+    "corpus_size": 1000,
+    "loaded": 974,
+    "load_failed": 26,
+    "label_safe_strict": 7,
+    "profile_safe": {
+      "label_safe": 7,
+      "label_safe_heavy_coords": 37,
+      "label_safe_all_atom_coords": 37,
+      "label_safe_energy": 7,
+      "label_safe_sequence_indexed": 768,
+      "label_safe_interface": 26
+    },
+    "hazard_counts_of_974": {
+      "missing_atoms": 832,
+      "untyped_atoms": 763,
+      "altlocs": 424,
+      "assembly_mismatch": 411,
+      "metals": 376,
+      "severe_heavy_clashes": 293,
+      "nonstandard_residues": 91,
+      "multiple_models": 50,
+      "chain_gaps": 36,
+      "insertion_codes": 34,
+      "reconstructed_atoms": 0,
+      "chirality_outliers": 0
+    },
+    "n_hazards_histogram": {"0": 5, "1": 67, "2": 159, "3": 266, "4": 264, "5": 170, "6": 40, "7": 3},
+    "clashscore_note": "templated-atom denominator (matches PrepReport.clashscore / the gate); un-templated ligand/metal atoms excluded",
+    "clashscore_distribution": {"min": 0.0, "median": 11.8, "p90": 30.8, "max": 1118.3},
+    "clashscore_by_resolution": {
+      "<=1.5A": {"n": 80, "median": 7.8, "frac_le20": 1.00},
+      "1.5-2.0A": {"n": 295, "median": 9.7, "frac_le20": 0.93},
+      "2.0-2.5A": {"n": 248, "median": 12.3, "frac_le20": 0.84},
+      "2.5-3.0A": {"n": 157, "median": 16.8, "frac_le20": 0.59},
+      ">=3.0A": {"n": 142, "median": 18.9, "frac_le20": 0.54}
+    },
+    "yield_at_clashscore": {"0": 9, "2": 24, "5": 96, "10": 372, "20": 761, "40": 912},
+    "binary_gate_comparison": {
+      "any_clash_flagged": 965,
+      "severe_clash_flagged": 293,
+      "note": "the old binary 'any clash' gate flagged 99% and rejected essentially all PDB"
+    }
+  },
+  "repair_drop": {
+    "note": "heavy_coords policy: reconstruct + select altloc/model + DROP on severe clash; n=150",
+    "n": 150,
+    "passes_policy": 15,
+    "dropped": 135,
+    "seconds": 3.0,
+    "by_action": {"select_altloc": 76, "reconstruct": 58, "select_model": 7},
+    "dropped_by_hazard": {"reconstruct_failed:missing_atoms": 120, "severe_heavy_clashes": 72, "load_failed": 6},
+    "accepted_by_hazard": {"reconstructed_atoms": 58},
+    "finding": "with clashes demoted to a severity gate, structural incompleteness (reconstruct cannot rebuild whole missing residues/loops) is the binding constraint, not sterics"
+  },
+  "repair_relax": {
+    "note": "heavy_coords policy with severe_heavy_clashes=relax (heavy minimization on the severe subset only); n=80",
+    "n": 80,
+    "passes_policy": 12,
+    "dropped": 68,
+    "relax_fired_on": 30,
+    "by_action": {"select_altloc": 32, "reconstruct": 28, "relax": 30, "select_model": 2},
+    "dropped_by_hazard": {"reconstruct_failed:missing_atoms": 65, "relax_failed:severe_heavy_clashes": 2, "chirality_outliers": 1, "not_protein": 1, "load_failed": 3},
+    "accepted_by_hazard": {"reconstructed_atoms": 28, "relaxed_coords": 30},
+    "relax_ca_drift_angstrom": {"min": 0.036, "median": 0.661, "p90": 0.754, "max": 0.966},
+    "finding": "relax clears the severe clash on 28/30 structures (only 2 relax_failed) vs 1/39 under the old binary zero-clash gate -- because the target is clashscore<=20, not exactly 0; but overall yield 15% barely beats drop's 10% since most severe-clash structures are also incomplete (reconstruct_failed)"
+  }
+}

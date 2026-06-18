@@ -63,8 +63,29 @@ fn cell_of(p: [f64; 3], cell: f64) -> (i32, i32, i32) {
     )
 }
 
+/// Heavy-atom clash statistics for one structure.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ClashStats {
+    /// Number of clashing heavy-atom pairs (each unordered pair once).
+    pub n_clashes: usize,
+    /// Number of heavy (non-hydrogen) atoms considered — the denominator for a
+    /// MolProbity-style clashscore (`1000 * n_clashes / n_heavy_atoms`).
+    pub n_heavy_atoms: usize,
+    /// Worst single overlap depth in Å (`r_i + r_j - d`) over all clashing
+    /// pairs; 0.0 when there are no clashes. Caps catastrophic local defects
+    /// that a size-normalized clashscore would dilute.
+    pub max_overlap: f64,
+}
+
 /// Count heavy-atom steric clashes on `coords` (same ordering and length as
-/// `topo.atoms`).
+/// `topo.atoms`). Thin wrapper over [`clash_stats`] for callers that only need
+/// the count.
+pub fn count_heavy_clashes(coords: &[[f64; 3]], topo: &Topology) -> usize {
+    clash_stats(coords, topo).n_clashes
+}
+
+/// Heavy-atom clash statistics on `coords` (count, heavy-atom denominator, and
+/// worst overlap depth — see [`ClashStats`]).
 ///
 /// A clash is a pair of heavy atoms (both non-hydrogen) that is NOT in
 /// `topo.excluded_pairs` (i.e. not 1-2 bonded and not 1-3 angle-related) and
@@ -73,17 +94,29 @@ fn cell_of(p: [f64; 3], cell: f64) -> (i32, i32, i32) {
 /// cost is O(N) in the number of heavy atoms rather than O(N²).
 ///
 /// Each clashing pair is counted once.
-pub fn count_heavy_clashes(coords: &[[f64; 3]], topo: &Topology) -> usize {
-    // (topology index, Bondi radius) for every heavy atom.
+pub fn clash_stats(coords: &[[f64; 3]], topo: &Topology) -> ClashStats {
+    // (topology index, Bondi radius) for every heavy atom that can CONTRIBUTE a
+    // clash. Atoms in un-templated residues (ligands / cofactors / lone metals)
+    // are excluded: every pair touching one is skipped below, so they never form
+    // a clash — and counting them in `n_heavy_atoms` would dilute the clashscore
+    // denominator, letting a big cofactor mask real protein-protein clashes
+    // (codex). `n_heavy_atoms` is therefore the templated (protein) heavy-atom
+    // count — the exact set whose pairs `n_clashes` is drawn from.
     let heavy: Vec<(usize, f64)> = topo
         .atoms
         .iter()
         .enumerate()
         .filter(|(_, a)| !a.is_hydrogen)
+        .filter(|(_, a)| !topo.inferred_residues.contains(&a.residue_idx))
         .map(|(i, a)| (i, vdw_radius(&a.element).unwrap_or(FALLBACK_RADIUS)))
         .collect();
+    let n_heavy_atoms = heavy.len();
     if heavy.len() < 2 {
-        return 0;
+        return ClashStats {
+            n_clashes: 0,
+            n_heavy_atoms,
+            max_overlap: 0.0,
+        };
     }
 
     let max_r = heavy.iter().map(|&(_, r)| r).fold(0.0_f64, f64::max);
@@ -99,6 +132,7 @@ pub fn count_heavy_clashes(coords: &[[f64; 3]], topo: &Topology) -> usize {
     }
 
     let mut clashes = 0usize;
+    let mut max_overlap = 0.0_f64;
     for (pos, &(ti, ri)) in heavy.iter().enumerate() {
         let ci = coords[ti];
         let (cx, cy, cz) = cell_of(ci, cell);
@@ -120,16 +154,15 @@ pub fn count_heavy_clashes(coords: &[[f64; 3]], topo: &Topology) -> usize {
                         if topo.excluded_pairs.contains(&key) || topo.pairs_14.contains(&key) {
                             continue;
                         }
-                        // Skip any pair touching an un-templated residue (ligand /
-                        // non-standard / metal). This is a PROTEIN clash metric:
-                        //   * intra-ligand contacts are unreliable (distance-inferred
-                        //     bonds can't be told from overlaps);
-                        //   * protein–ligand contacts at a binding site are expected
-                        //     tight contacts (chemistry), not coordinate errors, and
-                        //     they do not corrupt a protein-coordinate label.
-                        // Ligand geometry / protein–ligand clashes are a separate
-                        // ligand-chemistry hazard; un-templated residues are flagged
-                        // via `clash_count_inferred` and the FF-coverage signals.
+                        // Defensive: skip any pair touching an un-templated residue
+                        // (ligand / non-standard / metal). This is a PROTEIN clash
+                        // metric — intra-ligand contacts are unreliable (inferred
+                        // bonds can't be told from overlaps) and protein–ligand
+                        // binding-site contacts are expected chemistry, not errors.
+                        // Now mostly REDUNDANT: such atoms are filtered out of
+                        // `heavy` above (so the clashscore denominator is correct);
+                        // kept as a guard so the metric stays protein-scoped even if
+                        // that filter changes.
                         let (ai, aj) = (&topo.atoms[ti], &topo.atoms[tj]);
                         if topo.inferred_residues.contains(&ai.residue_idx)
                             || topo.inferred_residues.contains(&aj.residue_idx)
@@ -139,13 +172,24 @@ pub fn count_heavy_clashes(coords: &[[f64; 3]], topo: &Topology) -> usize {
                         let contact = ri + rj - CLASH_OVERLAP_TOL;
                         if contact > 0.0 && dist2(ci, coords[tj]) < contact * contact {
                             clashes += 1;
+                            // Overlap depth uses the true vdW sum (no tolerance):
+                            // r_i + r_j - d. A clash has d < contact, so depth > tol.
+                            let d = dist2(ci, coords[tj]).sqrt();
+                            let overlap = ri + rj - d;
+                            if overlap > max_overlap {
+                                max_overlap = overlap;
+                            }
                         }
                     }
                 }
             }
         }
     }
-    clashes
+    ClashStats {
+        n_clashes: clashes,
+        n_heavy_atoms,
+        max_overlap,
+    }
 }
 
 #[cfg(test)]
@@ -318,5 +362,33 @@ mod tests {
         t.atoms[1].residue_idx = 1;
         t.inferred_residues.insert(1);
         assert_eq!(count_heavy_clashes(&coords(&t), &t), 0);
+    }
+
+    #[test]
+    fn clashscore_denominator_excludes_untemplated_atoms() {
+        // The clashscore denominator must be the TEMPLATED heavy-atom count: a big
+        // un-templated cofactor must not dilute it (codex). Here: 2 protein atoms
+        // (a clashing pair) + 3 ligand atoms in an un-templated residue.
+        let mut t = topo(
+            &[
+                ([0.0, 0.0, 0.0], "C", false),  // protein res 0
+                ([2.9, 0.0, 0.0], "C", false),  // protein res 0 (clashes with the above)
+                ([50.0, 0.0, 0.0], "C", false), // ligand res 1 (far away)
+                ([51.0, 0.0, 0.0], "C", false),
+                ([52.0, 0.0, 0.0], "C", false),
+            ],
+            &[],
+        );
+        t.atoms[2].residue_idx = 1;
+        t.atoms[3].residue_idx = 1;
+        t.atoms[4].residue_idx = 1;
+        t.inferred_residues.insert(1);
+        let s = clash_stats(&coords(&t), &t);
+        assert_eq!(s.n_clashes, 1);
+        // Denominator excludes the 3 un-templated ligand atoms (only the 2
+        // protein atoms remain).
+        assert_eq!(s.n_heavy_atoms, 2);
+        // overlap = 3.4 - 2.9 = 0.5 Å (two carbons, Bondi 1.7).
+        assert!((s.max_overlap - 0.5).abs() < 1e-6);
     }
 }

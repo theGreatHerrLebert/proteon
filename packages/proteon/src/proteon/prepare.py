@@ -95,6 +95,19 @@ def _warn_unrelaxed_reconstruct(report) -> None:
 _KCAL_TO_KJ = 4.184
 _VALID_HYDROGEN_MODES = {"backbone", "all", "general", "none"}
 
+#: Clash-severity gate for label safety. A clash is *severe* (a label hazard)
+#: when the structure's clashscore exceeds this, OR a single overlap exceeds
+#: :data:`MAX_OVERLAP_DEPTH`. Calibrated on a 974-structure random-PDB sample
+#: cross-tabbed against resolution: ``20`` passes 100% of ≤1.5 Å and 95% of
+#: 1.5–2.0 Å deposits while rejecting the clashy low-resolution tail. A *binary*
+#: "any clash" gate (threshold 0) rejected 100% of real PDB — see
+#: ``devdocs/CLASH_SEVERITY_THRESHOLD_DESIGN.md``.
+CLASH_SCORE_THRESHOLD = 20.0
+#: Worst-single-overlap cap (Å). One deep interpenetration is a toxic coordinate
+#: label even when the size-normalized clashscore stays low (interface dilution
+#: in a large complex), so it makes a structure severe on its own.
+MAX_OVERLAP_DEPTH = 1.0
+
 
 def _convert_prep_result_to_kj(r: dict) -> dict:
     """Return a copy of the Rust batch_prepare result dict with energy fields
@@ -196,6 +209,13 @@ class PrepReport:
     #: training label, so it is surfaced as a first-class count. See
     #: :attr:`has_heavy_clashes` and :attr:`label_safe`.
     n_heavy_clashes: int = 0
+    #: Heavy (non-hydrogen) atoms the clash scan considered — the denominator for
+    #: :attr:`clashscore`. 0 only for a degenerate / empty structure.
+    n_heavy_atoms: int = 0
+    #: Worst single heavy-atom overlap depth in Å (0.0 when clash-free). Caps a
+    #: catastrophic local defect that the size-normalized :attr:`clashscore`
+    #: would dilute — see :attr:`has_severe_clashes`.
+    max_heavy_overlap: float = 0.0
     #: True if the clash count is APPROXIMATE because the topology used the
     #: distance-inferred bond fallback for un-templated residues (ligands /
     #: non-standard). Intra-ligand clashes there can't be told from bonds.
@@ -305,8 +325,41 @@ class PrepReport:
 
     @property
     def has_heavy_clashes(self) -> bool:
-        """Any heavy-atom steric clash on the final geometry (see :attr:`n_heavy_clashes`)."""
+        """ANY heavy-atom steric clash on the final geometry — an *observation*.
+
+        This is NOT a label hazard on its own: 99% of deposited structures have
+        at least one 0.4 Å overlap, so gating on it rejects essentially all real
+        PDB. The label gate uses :attr:`has_severe_clashes` (a *severity*
+        threshold). A structure can therefore have ``has_heavy_clashes is True``
+        and still be :attr:`label_safe` — that is expected, not a bug; inspect
+        :attr:`clashscore` and :attr:`max_heavy_overlap` for the magnitude.
+        """
         return self.n_heavy_clashes > 0
+
+    @property
+    def clashscore(self) -> float:
+        """Clashing heavy-atom pairs per 1000 heavy atoms (MolProbity-style).
+
+        Size-normalized clash *pervasiveness*. 0.0 when clash-free or when there
+        are no heavy atoms (a degenerate structure that fails other gates).
+        """
+        if self.n_heavy_atoms <= 0:
+            return 0.0
+        return 1000.0 * self.n_heavy_clashes / self.n_heavy_atoms
+
+    @property
+    def has_severe_clashes(self) -> bool:
+        """The clash *label hazard*: pervasive OR catastrophically local.
+
+        True when :attr:`clashscore` exceeds :data:`CLASH_SCORE_THRESHOLD`
+        (too many clashes for the structure size) OR :attr:`max_heavy_overlap`
+        exceeds :data:`MAX_OVERLAP_DEPTH` (one interpenetration deep enough to
+        be a toxic coordinate label regardless of the average).
+        """
+        return (
+            self.clashscore > CLASH_SCORE_THRESHOLD
+            or self.max_heavy_overlap > MAX_OVERLAP_DEPTH
+        )
 
     @property
     def has_reconstructed_atoms(self) -> bool:
@@ -364,8 +417,11 @@ class PrepReport:
             # coordinate labels — like reconstructed_atoms, it must be explicitly
             # accepted (the repair layer's `relax` records the drift).
             h.append("relaxed_coords")
-        if self.has_heavy_clashes:
-            h.append("heavy_clashes")
+        if self.has_severe_clashes:
+            # The blocking hazard is SEVERITY-gated, and deliberately named
+            # apart from the `heavy_clashes` observation so a consumer can never
+            # mistake "any clash" (always present) for "too clashy to label".
+            h.append("severe_heavy_clashes")
         if self.has_untyped_atoms:
             h.append("untyped_atoms")
         if self.has_nonstandard_residues:
@@ -410,7 +466,7 @@ class PrepReport:
             and not self.has_missing_atoms
             and not self.has_chirality_outliers
             and not self.heavy_relaxed
-            and not self.has_heavy_clashes
+            and not self.has_severe_clashes
             and not self.has_altlocs
             and not self.has_multiple_models
         )
@@ -667,6 +723,8 @@ def prepare(
             report.incomplete_ff = r.get("incomplete_ff", False)
             report.untyped_cofactors = r.get("untyped_cofactors", False)
             report.n_heavy_clashes = r.get("n_heavy_clashes", 0)
+            report.n_heavy_atoms = r.get("n_heavy_atoms", 0)
+            report.max_heavy_overlap = r.get("max_heavy_overlap", 0.0)
             report.clash_count_inferred = r.get("clash_count_inferred", False)
             report.n_models = r.get("n_models", 1)
             report.has_altlocs = r.get("has_altlocs", False)
@@ -735,6 +793,8 @@ def prepare(
             report.incomplete_ff = r.get("incomplete_ff", False)
             report.untyped_cofactors = r.get("untyped_cofactors", False)
             report.n_heavy_clashes = r.get("n_heavy_clashes", 0)
+            report.n_heavy_atoms = r.get("n_heavy_atoms", 0)
+            report.max_heavy_overlap = r.get("max_heavy_overlap", 0.0)
             report.clash_count_inferred = r.get("clash_count_inferred", False)
             report.n_models = r.get("n_models", 1)
             report.has_altlocs = r.get("has_altlocs", False)
@@ -763,6 +823,8 @@ def prepare(
         report.incomplete_ff = c.get("incomplete_ff", False)
         report.untyped_cofactors = c.get("untyped_cofactors", False)
         report.n_heavy_clashes = c.get("n_heavy_clashes", 0)
+        report.n_heavy_atoms = c.get("n_heavy_atoms", 0)
+        report.max_heavy_overlap = c.get("max_heavy_overlap", 0.0)
         report.clash_count_inferred = c.get("clash_count_inferred", False)
         report.n_models = c.get("n_models", 1)
         report.has_altlocs = c.get("has_altlocs", False)
@@ -885,6 +947,8 @@ def batch_prepare(
             incomplete_ff=r.get("incomplete_ff", False),
             untyped_cofactors=r.get("untyped_cofactors", False),
             n_heavy_clashes=r.get("n_heavy_clashes", 0),
+            n_heavy_atoms=r.get("n_heavy_atoms", 0),
+            max_heavy_overlap=r.get("max_heavy_overlap", 0.0),
             clash_count_inferred=r.get("clash_count_inferred", False),
             n_models=r.get("n_models", 1),
             has_altlocs=r.get("has_altlocs", False),
@@ -1277,13 +1341,15 @@ def _prepare_with_repair(paths, policy, *, n_threads, only_safe, **prepare_kwarg
         for pos, report in zip(positions, reports):
             results[pos].report = report
 
-    # Pass 2: relax ONLY the clashy structures (lossy, so never the whole batch).
+    # Pass 2: relax ONLY the SEVERELY-clashing structures (lossy, so never the
+    # whole batch — and a mild clash is not a hazard, so relaxing it would only
+    # add drift/`relaxed_coords` to a structure that was already label-safe).
     drift = {}
     relaxed = set()
     if policy.relax:
         clashy = [
             res for res in results
-            if res.loaded and res.report is not None and res.report.has_heavy_clashes
+            if res.loaded and res.report is not None and res.report.has_severe_clashes
         ]
         if clashy:
             import numpy as np

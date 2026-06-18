@@ -347,6 +347,9 @@ pub(crate) fn batch_prepare(
                 .unwrap();
             // Label-safety hazards (geometric-DL supervision).
             dict.set_item("n_heavy_clashes", r.n_heavy_clashes).unwrap();
+            dict.set_item("n_heavy_atoms", r.n_heavy_atoms).unwrap();
+            dict.set_item("max_heavy_overlap", r.max_heavy_overlap)
+                .unwrap();
             dict.set_item("clash_count_inferred", r.clash_count_inferred)
                 .unwrap();
             dict.set_item("n_models", r.n_models).unwrap();

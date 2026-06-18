@@ -108,7 +108,7 @@ type, use a profile on `res.report` to tolerate hazards that don't affect it:
 
 | Profile | Requires | Tolerates |
 |---|---|---|
-| `label_safe_heavy_coords` | observed heavy atoms, no clashes, single model/conformer | untyped cofactors, missing H |
+| `label_safe_heavy_coords` | observed heavy atoms, no *severe* clashes, single model/conformer | untyped cofactors, missing H, mild clashes |
 | `label_safe_all_atom_coords` | + hydrogens placed | — |
 | `label_safe_energy` | + `fully_typed` | — |
 | `label_safe_sequence_indexed` | no insertion codes, single model | clashes, typing |
@@ -118,7 +118,7 @@ type, use a profile on `res.report` to tolerate hazards that don't affect it:
 
 | Hazard | Signal | Why it poisons a label |
 |---|---|---|
-| Heavy clashes | `n_heavy_clashes` / `has_heavy_clashes` | H-only minimization can't relax a deposited/rebuilt clash away |
+| Severe clashes | `has_severe_clashes` (`clashscore`, `max_heavy_overlap`) | pervasive or catastrophically-local steric overlap — coordinates are physically wrong |
 | Fabricated atoms | `has_reconstructed_atoms` | reconstructed coords are model priors, not observations |
 | Missing atoms | `has_missing_atoms` (`n_missing_heavy_atoms`) | incomplete residue → a partial coordinate label (reconstruct off) |
 | Incomplete FF typing | `has_untyped_atoms` / `fully_typed` | partial topology → wrong energies/forces |
@@ -152,6 +152,26 @@ conservative gate that prevents training on the wrong oligomer); it does not
 build the assembly. Capability: PDB `REMARK 350` only — mmCIF
 `_pdbx_struct_assembly` and applying the transforms are follow-ons.
 
+### Clash *severity*, not "any clash"
+
+A single 0.4 Å heavy-atom overlap is not a poisoned coordinate label — and 99%
+of deposited PDB structures have at least one. So the gate keys on **severity**,
+not presence:
+
+- `clashscore` = clashing heavy-atom pairs per 1000 heavy atoms (MolProbity
+  convention, heavy-only) — the *pervasiveness*.
+- `max_heavy_overlap` = the single worst overlap depth (Å) — one deep
+  interpenetration is toxic even when the average is fine (a small badly-modelled
+  region in a large complex would otherwise be diluted away).
+- `has_severe_clashes` (the label hazard, surfaced as **`severe_heavy_clashes`**)
+  is true when `clashscore > 20` **or** `max_heavy_overlap > 1.0 Å`.
+
+`has_heavy_clashes` / `n_heavy_clashes` remain available as honest *observations*
+— a structure can have `has_heavy_clashes is True` and still be `label_safe`.
+The `20` threshold is calibrated against deposited resolution: it passes 100% of
+≤ 1.5 Å and 95% of 1.5–2.0 Å structures while rejecting the clashy low-resolution
+tail (`devdocs/CLASH_SEVERITY_THRESHOLD_DESIGN.md`).
+
 The clash count is **protein-scoped and validated**: pristine high-resolution
 structures (1crn, 0.5 Å) report 0; older/lower-resolution structures report many.
 Pairs touching un-templated residues (ligands / metals) are excluded — those are
@@ -163,6 +183,80 @@ states, assembly/symmetry, and chirality are deeper hazards tracked in
 Per-atom provenance masks (observed / reconstructed) are produced by the
 supervision tensor export, where atoms are indexed; `prepare_for_supervision` is
 the structure-level gate that precedes it.
+
+## What a diverse PDB sample actually looks like
+
+Run the full detect→repair pipeline over **1,000 random PDB structures** and the
+honest distribution falls out (`validation/eval_prepare_diverse.py`,
+`validation/prepare_diverse_results.json`). This is the number that matters for
+training data: raw deposits are *overwhelmingly* hazardous, and the gate's job is
+to make that visible instead of silent.
+
+**Load + detect** (974/1,000 parsed; 26 unreadable):
+
+| Hazard | of 974 | Notes |
+|---|---|---|
+| missing atoms | 832 (85%) | incomplete residues / loops (median 265 heavy atoms absent) |
+| untyped atoms | 763 (78%) | cofactors, ligands, modified residues |
+| altlocs | 424 (44%) | a conformer would be silently chosen |
+| assembly mismatch | 411 (42%) | deposited ASU ≠ biological assembly |
+| metals | 376 (39%) | coordination chemistry the protein FF doesn't model |
+| **severe clashes** | **293 (30%)** | `clashscore > 20` or one overlap `> 1.0 Å` |
+| nonstandard / models / gaps / ins-codes | 91 / 50 / 36 / 34 | |
+| chirality outliers | 0 | gross D-chirality is genuinely rare in deposits |
+
+The median structure trips **3–4 hazards**; only 5/974 trip none. Strict
+`label_safe` is 7/974 and `label_safe_heavy_coords` 37/974 — diverse PDB is *not*
+training-ready out of the box, by a wide margin.
+
+**Why severity matters.** A *binary* "any clash" gate flags 965/974 (99%) and
+rejects essentially the entire PDB. The severity gate flags 289 (30%) — the
+difference is real structures with a handful of mild overlaps that do not corrupt
+a coordinate label. Median deposited `clashscore` is 11.8; calibrated by
+resolution:
+
+| Resolution | n | median clashscore | frac ≤ 20 (the gate) |
+|---|---|---|---|
+| ≤ 1.5 Å | 80 | 7.8 | 100% |
+| 1.5–2.0 Å | 295 | 9.7 | 93% |
+| 2.0–2.5 Å | 248 | 12.3 | 84% |
+| 2.5–3.0 Å | 157 | 16.8 | 59% |
+| ≥ 3.0 Å | 142 | 18.9 | 54% |
+
+**Detect → repair.** Apply a `heavy_coords` policy (reconstruct missing atoms,
+collapse altlocs, pick model 0, drop on severe clash) and the bottleneck shifts:
+
+```python
+policy = proteon.RepairPolicy.for_profile(
+    "heavy_coords",
+    missing_atoms="reconstruct", reconstructed_atoms="accept",
+    altlocs="select_highest_occupancy", multiple_models="select_first",
+    severe_heavy_clashes="drop",
+)
+```
+
+On 150 structures: **15 pass (10%)**, and the dominant drop reason is
+**`reconstruct_failed:missing_atoms` (120/150, 80%)** — template reconstruction
+fills missing *side-chain* atoms but cannot rebuild whole missing residues or
+loops, so structures with large gaps stay incomplete. Severe clashes drop a
+further 72. With clashes demoted to a severity gate, **structural incompleteness
+is now the binding constraint** on complete heavy-coordinate labels, not sterics.
+
+Swapping `drop` for `severe_heavy_clashes="relax"` (heavy minimization on just the
+severe subset, median CA drift 0.66 Å) confirms it: relaxation now **clears the
+severe clash on 28 of 30** structures it touches (only 2 `relax_failed`) — versus
+just 1 of 39 under the old binary "zero clashes" bar, because the target is now
+`clashscore ≤ 20`, not literally zero. Yet overall yield barely moves (15% vs
+10%): most severe-clash structures are *also* incomplete, and relaxation cannot
+add missing residues. Sterics are fixable; missing density is not.
+
+**The takeaway for training-data builders.** ~80% of diverse PDB clears the
+clash gate as-deposited; the realistic ceiling for *complete, observed*
+heavy-coordinate labels is bounded by structural completeness (missing
+loops/residues), not clashes. For coordinate labels that tolerate gaps, the next
+lever is per-residue masking (a planned follow-on) rather than demanding a whole
+complete structure. Sequence-indexed labels fare far better (768/974, 79%) — they
+don't depend on coordinate completeness or sterics at all.
 
 ## Validation
 

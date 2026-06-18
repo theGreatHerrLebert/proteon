@@ -17,8 +17,9 @@ Design (claudex-reviewed, see devdocs/REPAIR_POLICY_DESIGN.md):
 - The first cut's only FIX is ``reconstruct`` (fill missing atoms). Clash
   relaxation (``relax``) is a deliberate follow-on: doing it safely needs
   per-structure application (relax only clashy inputs, not the whole batch) and
-  explicit acceptance of the moved-off-experiment coordinates. For now
-  ``heavy_clashes`` can only be accepted or dropped.
+  explicit acceptance of the moved-off-experiment coordinates. The clash hazard
+  is severity-gated: the policy key is ``severe_heavy_clashes`` (a mild clash is
+  an observation, not a blocker — see ``PrepReport.has_severe_clashes``).
 - A FIX does NOT implicitly accept the provenance hazard it creates:
   ``reconstruct`` requires ``reconstructed_atoms="accept"`` explicitly.
 - ``altlocs`` / ``multiple_models`` are ``accept_selected`` — the selection
@@ -43,7 +44,7 @@ _HEAVY_COORDS_BLOCKERS = {
     "reconstructed_atoms",
     "missing_atoms",
     "relaxed_coords",
-    "heavy_clashes",
+    "severe_heavy_clashes",
     "chirality_outliers",
     "altlocs",
     "multiple_models",
@@ -85,7 +86,7 @@ KNOWN_HAZARDS = frozenset().union(*PROFILE_BLOCKERS.values()) | {
 
 # Valid actions, and which hazards each FIX action applies to.
 #   reconstruct (missing_atoms): fill from templates -> reconstructed_atoms.
-#   relax (heavy_clashes): heavy-atom minimize to resolve clashes. LOSSY — it
+#   relax (severe_heavy_clashes): heavy-atom minimize to resolve clashes. LOSSY — it
 #     moves the deposited coordinates, so it is applied PER-STRUCTURE (only the
 #     clashy inputs), records a CA-drift metric, and the resulting
 #     `relaxed_coords` provenance must be explicitly accepted.
@@ -97,7 +98,7 @@ ACTIONS = {
 # hazards listed here (a mismatch is rejected at construction).
 _ACTION_HAZARDS = {
     "reconstruct": {"missing_atoms"},
-    "relax": {"heavy_clashes"},
+    "relax": {"severe_heavy_clashes"},
     "accept_selected": {"altlocs", "multiple_models"},
     "select_highest_occupancy": {"altlocs"},
     "select_first": {"altlocs", "multiple_models"},
@@ -170,7 +171,7 @@ class RepairPolicy:
     @property
     def relax(self) -> bool:
         """Whether the policy resolves clashes by per-structure heavy relaxation (lossy)."""
-        return self.action_for("heavy_clashes") == "relax"
+        return self.action_for("severe_heavy_clashes") == "relax"
 
     @property
     def altloc_selector(self) -> Optional[str]:
@@ -199,7 +200,7 @@ class RepairPolicy:
             reconstructed_atoms="accept",
             altlocs="accept_selected",
             multiple_models="accept_selected",
-            heavy_clashes="drop",
+            severe_heavy_clashes="drop",
             default="drop",
         )
 
@@ -242,7 +243,7 @@ def evaluate(report, policy: RepairPolicy, *, reconstruct_applied: bool,
     if relax_applied and report.heavy_relaxed:
         out.coords_drift = coords_drift
         d = f"{coords_drift:.3f}A" if coords_drift is not None else "?"
-        out.actions_taken.append(f"relax(heavy_clashes; CA-drift {d})")
+        out.actions_taken.append(f"relax(severe_heavy_clashes; CA-drift {d})")
 
     present = set(report.label_hazards)
     # The hazards this policy cares about: the profile's blockers PLUS any the
