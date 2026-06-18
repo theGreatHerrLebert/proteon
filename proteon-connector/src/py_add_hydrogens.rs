@@ -227,7 +227,7 @@ use crate::prepare::{self, PrepareOptions, PrepareReport};
 /// is provided for like-for-like comparison against other AMBER96
 /// implementations (OpenMM, BALL) in the SOTA validation harness.
 #[pyfunction]
-#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=1.0, n_threads=None, strip_hydrogens=true, ff="charmm19_eef1", constrain_heavy=None))]
+#[pyo3(signature = (structures, reconstruct=true, hydrogens="all", include_water=false, minimize=true, minimize_method="lbfgs", minimize_steps=500, gradient_tolerance=1.0, n_threads=None, strip_hydrogens=true, ff="charmm19_eef1", constrain_heavy=true))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn batch_prepare(
     py: Python<'_>,
@@ -243,14 +243,13 @@ pub(crate) fn batch_prepare(
     strip_hydrogens: bool,
     ff: &str,
     // Whether to freeze heavy atoms during minimization:
-    //   * None (default): FF-aware — True for AMBER96 (explicit H absorbs
-    //     clashes via hydrogen motion, heavy atoms already roughly at
-    //     AMBER's minimum on a crystal structure), False for CHARMM19+EEF1
-    //     (united-atom inflated C radii need heavy-atom relaxation).
-    //   * Some(true): always freeze heavy atoms, move only H.
-    //   * Some(false): always move all atoms.
-    // The FF-aware default means existing AMBER96 callers keep exactly the
-    // same behavior while CHARMM19 users automatically get full relaxation.
+    //   * Some(true) (default): H-only — freeze heavy atoms, move only H.
+    //     Preserves experimental coordinates; the unified prepare default.
+    //   * Some(false): always move all atoms (heavy relaxation).
+    //   * None: FF-aware — True for AMBER96 (explicit H absorbs clashes via
+    //     hydrogen motion, heavy atoms already roughly at AMBER's minimum on a
+    //     crystal structure), False for CHARMM19+EEF1 (united-atom inflated C
+    //     radii need heavy-atom relaxation for a deeper minimum).
     constrain_heavy: Option<bool>,
 ) -> PyResult<Vec<PyObject>> {
     let all_results = match ff {
@@ -317,6 +316,7 @@ pub(crate) fn batch_prepare(
             dict.set_item("minimizer_steps", r.steps).unwrap();
             dict.set_item("converged", r.converged).unwrap();
             dict.set_item("minimized", r.minimized).unwrap();
+            dict.set_item("heavy_relaxed", r.heavy_relaxed).unwrap();
             dict.set_item("minimizer_status", r.minimizer_status.as_str())
                 .unwrap();
             dict.set_item("n_unassigned_atoms", r.n_unassigned).unwrap();
