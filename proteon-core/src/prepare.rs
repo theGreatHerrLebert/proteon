@@ -308,6 +308,12 @@ pub struct PrepareReport {
     /// Silent label-poison otherwise: H-only minimization cannot relax a
     /// deposited or reconstruction-induced clash away.
     pub n_heavy_clashes: usize,
+    /// Heavy (non-hydrogen) atoms considered by the clash scan — the denominator
+    /// for the MolProbity-style clashscore (`1000 * n_heavy_clashes / this`).
+    pub n_heavy_atoms: usize,
+    /// Worst single heavy-atom overlap depth in Å (0.0 when clash-free). A large
+    /// value is a catastrophic local defect a size-normalized clashscore hides.
+    pub max_heavy_overlap: f64,
     /// True if the clash count is APPROXIMATE because the topology used the
     /// distance-inferred bond fallback for un-templated residues (ligands /
     /// non-standard); intra-residue clashes there cannot be told from bonds.
@@ -557,7 +563,10 @@ pub fn prepare_structure<P: ForceField>(
     // Heavy-atom clashes on the FINAL geometry (post-minimization if it ran).
     // H-only minimization cannot relax a deposited or reconstruction-induced
     // clash away, so without this the corruption is silent.
-    out.n_heavy_clashes = crate::clash::count_heavy_clashes(&final_coords, &topo);
+    let clash = crate::clash::clash_stats(&final_coords, &topo);
+    out.n_heavy_clashes = clash.n_clashes;
+    out.n_heavy_atoms = clash.n_heavy_atoms;
+    out.max_heavy_overlap = clash.max_overlap;
     // Approximate whenever ANY un-templated residue was present: the clash count
     // skips every pair touching one (ligands / non-standard / single-atom metals),
     // so its contacts are excluded. Sourced from `inferred_residues` (non-empty),

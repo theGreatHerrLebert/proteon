@@ -34,7 +34,8 @@ _HAZARD_TRIGGER = {
     "reconstructed_atoms": dict(atoms_reconstructed=3),
     "missing_atoms": dict(n_missing_heavy_atoms=2),
     "relaxed_coords": dict(heavy_relaxed=True),
-    "heavy_clashes": dict(n_heavy_clashes=4),
+    # clashscore = 1000*4/10 = 400 >> 20 -> severe (the label hazard).
+    "severe_heavy_clashes": dict(n_heavy_clashes=4, n_heavy_atoms=10),
     "untyped_atoms": dict(n_unassigned_nonwater=5),
     "nonstandard_residues": dict(has_nonstandard_residues=True),
     "metals": dict(has_metals=True),
@@ -80,7 +81,7 @@ class TestPolicyValidation:
 
     def test_rejects_unknown_action(self):
         with pytest.raises(ValueError):
-            RepairPolicy.for_profile("heavy_coords", heavy_clashes="teleport")
+            RepairPolicy.for_profile("heavy_coords", severe_heavy_clashes="teleport")
 
     def test_fix_action_must_match_hazard(self):
         with pytest.raises(ValueError):
@@ -108,7 +109,7 @@ class TestPolicyValidation:
 
     def test_default_action(self):
         p = RepairPolicy.for_profile("heavy_coords", default="accept")
-        assert p.action_for("heavy_clashes") == "accept"
+        assert p.action_for("severe_heavy_clashes") == "accept"
 
     def test_fix_action_rejected_as_default(self):
         # A FIX/accept_selected as default would be honored by action_for but not
@@ -136,11 +137,11 @@ class TestEvaluate:
         assert out.dropped_for == []
 
     def test_clash_drops_under_coords_only(self):
-        r = _report(n_heavy_clashes=3)
+        r = _report(n_heavy_clashes=3, n_heavy_atoms=10)  # clashscore 300 -> severe
         out = evaluate(r, RepairPolicy.coords_only(),
                        reconstruct_applied=True)
         assert out.passes_policy is False
-        assert "heavy_clashes" in out.dropped_for
+        assert "severe_heavy_clashes" in out.dropped_for
 
     def test_accepted_hazard_passes(self):
         # An untyped cofactor blocks energy, but coords_only targets heavy_coords
@@ -182,19 +183,19 @@ class TestEvaluate:
         assert "untyped_atoms" in out.dropped_for
 
     def test_clash_can_be_accepted(self):
-        # heavy_clashes can be accepted (or dropped or relaxed).
-        r = _report(n_heavy_clashes=2)
-        p = RepairPolicy.for_profile("heavy_coords", heavy_clashes="accept",
+        # severe_heavy_clashes can be accepted (or dropped or relaxed).
+        r = _report(n_heavy_clashes=2, n_heavy_atoms=10)  # clashscore 200 -> severe
+        p = RepairPolicy.for_profile("heavy_coords", severe_heavy_clashes="accept",
                                      altlocs="accept_selected", multiple_models="accept_selected")
         out = evaluate(r, p, reconstruct_applied=False)
         assert out.passes_policy is True
-        assert "heavy_clashes" in out.accepted_hazards
+        assert "severe_heavy_clashes" in out.accepted_hazards
 
     def test_relax_clears_clashes_with_accepted_provenance(self):
         # After relax: clashes gone, relaxed_coords present and accepted -> passes,
         # drift recorded.
         r = _report(heavy_relaxed=True, minimized=True)  # no clashes remain
-        p = RepairPolicy.for_profile("heavy_coords", heavy_clashes="relax",
+        p = RepairPolicy.for_profile("heavy_coords", severe_heavy_clashes="relax",
                                      relaxed_coords="accept",
                                      altlocs="accept_selected", multiple_models="accept_selected")
         out = evaluate(r, p, reconstruct_applied=False, relax_applied=True, coords_drift=0.5)
@@ -208,14 +209,14 @@ class TestEvaluate:
         # construction — even with default="accept" (codex: broad accept must not
         # silently pass moved-off-experiment coordinates).
         with pytest.raises(ValueError):
-            RepairPolicy.for_profile("heavy_coords", heavy_clashes="relax",
+            RepairPolicy.for_profile("heavy_coords", severe_heavy_clashes="relax",
                                      altlocs="accept_selected", multiple_models="accept_selected")
         with pytest.raises(ValueError):
-            RepairPolicy.for_profile("heavy_coords", heavy_clashes="relax", default="accept")
+            RepairPolicy.for_profile("heavy_coords", severe_heavy_clashes="relax", default="accept")
 
     def test_relax_failed_when_clashes_persist(self):
-        r = _report(n_heavy_clashes=2, heavy_relaxed=True, minimized=True)
-        p = RepairPolicy.for_profile("heavy_coords", heavy_clashes="relax",
+        r = _report(n_heavy_clashes=2, n_heavy_atoms=10, heavy_relaxed=True, minimized=True)
+        p = RepairPolicy.for_profile("heavy_coords", severe_heavy_clashes="relax",
                                      relaxed_coords="accept",
                                      altlocs="accept_selected", multiple_models="accept_selected")
         out = evaluate(r, p, reconstruct_applied=False, relax_applied=True, coords_drift=0.6)
@@ -268,7 +269,7 @@ class TestRepairIntegration:
         # whole batch.
         policy = RepairPolicy.for_profile(
             "heavy_coords",
-            heavy_clashes="relax", relaxed_coords="accept",
+            severe_heavy_clashes="relax", relaxed_coords="accept",
             altlocs="accept_selected", multiple_models="accept_selected",
         )
         results = proteon.prepare_for_supervision(
@@ -291,7 +292,7 @@ class TestRepairIntegration:
         policy = RepairPolicy.for_profile(
             "heavy_coords",
             missing_atoms="reconstruct", reconstructed_atoms="drop",  # explicit: drop rebuilt
-            heavy_clashes="relax", relaxed_coords="accept",
+            severe_heavy_clashes="relax", relaxed_coords="accept",
             altlocs="accept_selected", multiple_models="accept_selected",
         )
         r = proteon.prepare_for_supervision([fixture], repair=policy)[0]

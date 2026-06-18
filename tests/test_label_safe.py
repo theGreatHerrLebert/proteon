@@ -43,12 +43,31 @@ class TestContractLogic:
         assert r.label_safe_energy is True
         assert r.label_safe_sequence_indexed is True
 
-    def test_heavy_clash_blocks_label_safe(self):
-        r = PrepReport(hydrogens_added=50, n_heavy_clashes=3)
+    def test_severe_clash_blocks_label_safe(self):
+        # Severe = clashscore > threshold: 3 clashes / 10 heavy atoms = 300.
+        r = PrepReport(hydrogens_added=50, n_heavy_clashes=3, n_heavy_atoms=10)
         assert r.has_heavy_clashes is True
+        assert r.has_severe_clashes is True
         assert r.label_safe is False
         assert r.label_safe_heavy_coords is False
-        assert "heavy_clashes" in r.label_hazards
+        assert "severe_heavy_clashes" in r.label_hazards
+
+    def test_mild_clash_is_observation_not_hazard(self):
+        # A few clashes in a large structure (clashscore well under 20) is an
+        # observation, NOT a label hazard — the whole point of the severity gate.
+        r = PrepReport(hydrogens_added=50, n_heavy_clashes=3, n_heavy_atoms=3000)
+        assert r.has_heavy_clashes is True       # honest: clashes exist
+        assert r.has_severe_clashes is False     # but not severe
+        assert r.label_safe_heavy_coords is True
+        assert "severe_heavy_clashes" not in r.label_hazards
+
+    def test_deep_overlap_is_severe_regardless_of_clashscore(self):
+        # One catastrophic interpenetration in a huge structure: clashscore tiny,
+        # but the max-overlap cap makes it severe (interface-dilution guard).
+        r = PrepReport(hydrogens_added=50, n_heavy_clashes=1, n_heavy_atoms=5000,
+                       max_heavy_overlap=2.0)
+        assert r.has_severe_clashes is True
+        assert "severe_heavy_clashes" in r.label_hazards
 
     def test_reconstructed_atoms_block_coords(self):
         r = PrepReport(hydrogens_added=50, atoms_reconstructed=4)
