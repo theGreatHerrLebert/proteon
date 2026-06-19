@@ -127,6 +127,7 @@ from .prepare import (
 from .residue_mask import (
     DEFAULT_COVERAGE,
     ResidueCoverage,
+    residue_clash_mask,
     residue_completeness,
     residue_trustworthy,
     structure_coverage,
@@ -473,6 +474,7 @@ _PREPARE_API = (
     "structure_coverage",
     "residue_completeness",
     "residue_trustworthy",
+    "residue_clash_mask",
     "apply_residue_trust_mask",
     "DEFAULT_COVERAGE",
     "RepairPolicy",
