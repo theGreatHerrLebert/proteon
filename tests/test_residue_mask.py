@@ -51,6 +51,38 @@ class TestStructureCoverage:
         with pytest.raises(ValueError):
             structure_coverage(_load(os.path.join(PDBS, "1crn.pdb")), profile="nonsense")
 
+    def test_report_makes_coverage_count_clashes_invalid(self):
+        # With a report, coverage drops because clashing residues become invalid.
+        s = _load(os.path.join(PDBS, "4hhb.pdb"))
+        r = proteon.prepare(s, minimize=False)
+        assert r.clash_residue_indices  # 4hhb clashes
+        no_rep = structure_coverage(s, chain_id="A")
+        with_rep = structure_coverage(s, chain_id="A", report=r)
+        assert with_rep.n_valid < no_rep.n_valid
+        assert with_rep.coverage < no_rep.coverage
+
+    def test_mild_clash_does_not_reduce_coverage(self):
+        # 1bpi: clashes present but NOT severe (clashscore 11). Coverage must skip
+        # them (mild clashes are tolerated heavy-coordinate labels) (codex) — only
+        # completeness + altloc apply, NOT clash.
+        from proteon.residue_mask import residue_completeness, residue_trustworthy
+
+        s = _load(os.path.join(PDBS, "1bpi.pdb"))
+        r = proteon.prepare(s, minimize=False)
+        assert r.clash_residue_indices and not r.has_severe_clashes
+        res = [x for x in s.models[0].chains[0].residues if x.is_amino_acid]
+        complete, altloc = residue_completeness(res), residue_trustworthy(res)
+        expected = int((complete & altloc).sum())  # no clash term
+        assert structure_coverage(s, report=r).n_valid == expected
+        # ...and clash WOULD have reduced it, proving it was genuinely skipped.
+        clash_free = proteon.residue_clash_mask(s, r.clash_residue_indices, "A")
+        assert int((complete & altloc & clash_free).sum()) < expected
+
+    def test_report_clean_structure_same_coverage(self):
+        s = _load(os.path.join(PDBS, "1crn.pdb"))
+        r = proteon.prepare(s, minimize=False)
+        assert structure_coverage(s, report=r).coverage == structure_coverage(s).coverage == 1.0
+
     def test_coverage_property_zero_when_no_residues(self):
         from proteon.residue_mask import ResidueCoverage
 
@@ -115,24 +147,41 @@ class TestCoverageGate:
             only_safe=True, minimize=False)
         assert kept == []
 
-    def test_severe_clash_complete_chain_excluded(self):
-        # A complete-but-severely-clashing chain: coverage high, but the unmasked
-        # severe-clash hazard excludes it from the coverage gate.
-        from proteon import PrepReport
+    def _keep_with(self, report, frac_valid):
+        # _supervision_keep over a result whose coverage already reflects the
+        # report (the clash residues counted invalid -> frac_valid).
         from proteon.prepare import _supervision_keep
         from proteon.residue_mask import ResidueCoverage
 
         class _R:
-            coverage_info = ResidueCoverage("heavy_coords", 100, 100,
+            coverage_info = ResidueCoverage("heavy_coords", 100, int(frac_valid * 100),
                                             np.ones((100,), dtype=bool))
-            report = PrepReport(hydrogens_added=50, n_heavy_clashes=50, n_heavy_atoms=200)
 
             @property
             def coverage(self):
                 return self.coverage_info.coverage
 
-        assert "severe_heavy_clashes" in _R().report.label_hazards
-        assert _supervision_keep(_R(), repair=None, min_coverage=0.8) is False
+        r = _R()
+        r.report = report
+        return _supervision_keep(r, repair=None, min_coverage=0.8)
+
+    def test_severe_clash_is_coverage_decided_not_auto_excluded(self):
+        # Gate-relaxation: severe clash is localized + masked, so it no longer
+        # auto-excludes — coverage (which already counts clash residues invalid)
+        # decides. Localized (high coverage) kept; pervasive (low) dropped.
+        from proteon import PrepReport
+        rep = PrepReport(hydrogens_added=50, n_heavy_clashes=50, n_heavy_atoms=200)
+        assert "severe_heavy_clashes" in rep.label_hazards
+        assert self._keep_with(rep, 0.9) is True   # localized -> kept + masked
+        assert self._keep_with(rep, 0.6) is False  # pervasive -> dropped
+
+    def test_unmasked_hazard_still_excludes_at_full_coverage(self):
+        # Chirality is NOT localized by coverage masking -> still drops the whole
+        # structure even at coverage 1.0.
+        from proteon import PrepReport
+        rep = PrepReport(hydrogens_added=50, n_chirality_outliers=1)
+        assert "chirality_outliers" in rep.label_hazards
+        assert self._keep_with(rep, 1.0) is False
 
     def test_multichain_requires_chain_id(self):
         cov = structure_coverage(_load(os.path.join(PDBS, "4hhb.pdb")), chain_id="A")

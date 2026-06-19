@@ -170,17 +170,53 @@ def residue_clash_mask(structure, clash_residue_indices, chain_id: str) -> NDArr
     return np.array(out, dtype=bool)
 
 
-def structure_coverage(
-    structure, *, profile: str = "heavy_coords", chain_id: Optional[str] = None
-) -> ResidueCoverage:
-    """Per-residue completeness validity + coverage for one prepared structure.
+def _resolve_export_chain_id(structure, chain_id: Optional[str]) -> Optional[str]:
+    """The export chain id: the given one, or the single protein chain's id."""
+    if chain_id is not None:
+        return chain_id
+    protein = [
+        ch for ch in structure.models[0].chains if any(r.is_amino_acid for r in ch.residues)
+    ]
+    return protein[0].id if len(protein) == 1 else None
 
-    Aggregates model-0 amino-acid residues (optionally one ``chain_id``). The
-    returned :attr:`ResidueCoverage.node_valid` is aligned to the supervision
-    ``residue_index`` so a downstream export can apply it directly.
+
+def structure_coverage(
+    structure,
+    *,
+    profile: str = "heavy_coords",
+    chain_id: Optional[str] = None,
+    report=None,
+) -> ResidueCoverage:
+    """Per-residue label validity + coverage for one prepared structure.
+
+    ``node_valid[i]`` is whether residue *i* is a USABLE coordinate label — and
+    coverage is the fraction that are. With ``report=None`` that is COMPLETENESS
+    only (phase 1). When a :class:`PrepReport` is given, ``node_valid`` also
+    requires the residue to be TRUSTWORTHY — not an altloc pick, not in a severe
+    clash (``report.clash_residue_indices``) — so a *pervasively* clashing or
+    altloc-ridden structure gets a LOW coverage and is dropped, while a
+    *localized* defect leaves coverage high. The export must then mask those same
+    residues (``mask_untrustworthy_coords=True`` with the report) or the kept
+    defects become labels.
+
+    Aligned to the supervision ``residue_index`` (model-0 amino-acid residues of
+    one chain) so the mask applies directly.
     """
     residues = _amino_acid_residues(structure, chain_id)
     node_valid = residue_completeness(residues, profile)
+    if report is not None:
+        node_valid = node_valid & residue_trustworthy(residues)  # altloc
+        # Clash masking ONLY for SEVERE structures: mild clashes (clashscore ≤ 20)
+        # are intentionally tolerated as heavy-coordinate labels, so they must not
+        # reduce coverage and drop an otherwise-safe structure (codex). For a
+        # severe structure the clashing residues ARE counted invalid, so a
+        # localized severe clash stays high-coverage and a pervasive one drops.
+        if getattr(report, "has_severe_clashes", False) and report.clash_residue_indices:
+            cid = _resolve_export_chain_id(structure, chain_id)
+            if cid is not None:
+                node_valid = node_valid & residue_clash_mask(
+                    structure, report.clash_residue_indices, cid
+                )
     return ResidueCoverage(
         profile=profile,
         n_residues=len(residues),
