@@ -258,26 +258,33 @@ loops/residues), not clashes. Sequence-indexed labels fare far better (768/974,
 
 ### Coverage-based masking (keep the good residues)
 
-Demanding a *whole* complete structure throws away the 85% of diverse PDB that is
-a complete core plus a few missing loops: only ~15% of structures are 100%
-complete, but **~87% of all residues are**. So rather than drop an incomplete
-structure, keep it and mask its missing residues. `prepare_for_supervision` takes
-a `min_coverage` floor:
+Demanding a *whole* clean structure throws away most of diverse PDB: only ~15% of
+structures are 100% complete, but **~87% of all residues are**. So rather than
+drop a structure for a *localized* defect, keep it and mask the affected residues.
+`prepare_for_supervision` takes a `min_coverage` floor:
 
 ```python
 for res in proteon.prepare_for_supervision(paths, min_coverage=0.8, only_safe=True):
-    mask = res.coverage_info.node_valid   # per-residue bool, residue_index order
-    add_training_example(res.structure, label_mask=mask)
+    # MUST pass the report + mask flag: the gate kept this structure on the
+    # promise that its untrustworthy residues get masked here.
+    ex = proteon.build_structure_supervision_example(
+        res.structure, prep_report=res.report, mask_untrustworthy_coords=True)
+    add_training_example(ex)
 ```
 
-`res.coverage` is valid / exportable protein residues; `node_valid` is the
-per-residue label mask (aligned to the supervision `residue_index`). The
-calibrated default floor is **0.8** (keeps 89% of structures, cuts the sparse
-~10% tail) — a quality / crop-efficiency knob, not a corruption guard, since the
-missing residues are masked rather than trusted. `coverage_profile="backbone"`
-requires only N/CA/C/O (for backbone/frame labels). This is **phase 1**: it
-localizes the dominant *missing-atoms* hazard for the structure-level coverage
-gate.
+`res.coverage` is the fraction of **usable** residues; `node_valid` is the
+per-residue mask (aligned to `residue_index`). Usable = **complete AND
+trustworthy** — a residue is counted invalid if it is missing atoms, is an altloc
+pick, **or sits in a severe clash** (`res.report.clash_residue_indices`). So the
+gate now *keeps* a structure with a **localized** clash/altloc (high coverage) and
+masks those residues, but a **pervasively** clashing one still drops via low
+coverage. The calibrated default floor is **0.8**; `coverage_profile="backbone"`
+requires only N/CA/C/O.
+
+> ⚠ **The gate keeps clash/altloc structures on the promise you mask them.** If
+> you export a coverage-gated structure *without* `mask_untrustworthy_coords=True`
+> (and the `prep_report`), the kept clashing/altloc residues become labels — the
+> corruption the gate was supposed to prevent. Always pair the two.
 
 ### Trustworthiness masking into the export (the last mile)
 

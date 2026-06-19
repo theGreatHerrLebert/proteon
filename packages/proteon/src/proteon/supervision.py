@@ -354,7 +354,13 @@ def build_structure_supervision_example(
         from .supervision_mask import apply_residue_trust_mask
 
         trust = residue_trustworthy(residues)
-        if prep_report is not None and prep_report.clash_residue_indices:
+        # Clash masking only for SEVERE structures — mild clashes are tolerated
+        # heavy-coordinate labels (consistent with the coverage gate).
+        if (
+            prep_report is not None
+            and prep_report.has_severe_clashes
+            and prep_report.clash_residue_indices
+        ):
             trust = trust & residue_clash_mask(
                 structure, prep_report.clash_residue_indices, chain.id
             )
@@ -469,7 +475,7 @@ def batch_build_structure_supervision_examples(
 
                 trust = residue_trustworthy(residues)
                 rep = prep_reports[i]
-                if rep is not None and rep.clash_residue_indices:
+                if rep is not None and rep.has_severe_clashes and rep.clash_residue_indices:
                     trust = trust & residue_clash_mask(
                         structure, rep.clash_residue_indices, chain.id
                     )

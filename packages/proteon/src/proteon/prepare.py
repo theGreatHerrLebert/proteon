@@ -1201,11 +1201,11 @@ def batch_load_and_prepare(
 
 
 def _annotate_coverage(results, profile: str) -> None:
-    """Attach per-residue completeness coverage to each loaded result.
+    """Attach per-residue usability coverage to each loaded result.
 
-    Phase 1 of per-residue masking: localizes the missing-atoms hazard so a
-    mostly-complete structure is kept (with a per-residue validity mask) instead
-    of dropped whole. See :mod:`proteon.residue_mask`.
+    ``node_valid`` = complete AND trustworthy (not altloc, not in a severe clash
+    via the report) — so a *localized* defect leaves coverage high (kept + masked
+    downstream) while a *pervasive* one drops it. See :mod:`proteon.residue_mask`.
     """
     from .residue_mask import structure_coverage
 
@@ -1213,7 +1213,9 @@ def _annotate_coverage(results, profile: str) -> None:
         if not res.loaded or res.structure is None:
             continue
         try:
-            res.coverage_info = structure_coverage(res.structure, profile=profile)
+            res.coverage_info = structure_coverage(
+                res.structure, profile=profile, report=res.report
+            )
         except (ValueError, AttributeError):
             # Per-STRUCTURE non-scorability (a multi-chain input with no chain_id,
             # or an unexpected structure): leave coverage unset (None) so the gate
@@ -1331,11 +1333,14 @@ def prepare_for_supervision(
     return results
 
 
-#: Hazards that per-residue COVERAGE masking handles (phase 1: missing atoms
-#: only). Every OTHER profile blocker must still gate the coverage mode — a
-#: complete structure with severe clashes / altlocs / chirality is NOT safe just
-#: because coverage is high (codex). Grows as phase 2 localizes more hazards.
-_COVERAGE_MASKED_HAZARDS = frozenset({"missing_atoms"})
+#: Hazards that per-residue COVERAGE masking now LOCALIZES (so the gate keeps the
+#: structure and the export masks the affected residues), instead of dropping the
+#: whole structure: missing atoms (presence), altlocs + severe clashes
+#: (trustworthiness — `structure_coverage(report=...)` counts those residues
+#: invalid, so a *pervasive* defect still drops via low coverage). Hazards NOT
+#: here (e.g. chirality) remain whole-structure blockers. The kept defects MUST
+#: be exported with `mask_untrustworthy_coords=True` or they become labels.
+_COVERAGE_MASKED_HAZARDS = frozenset({"missing_atoms", "altlocs", "severe_heavy_clashes"})
 
 
 def _supervision_keep(res, repair, min_coverage) -> bool:
