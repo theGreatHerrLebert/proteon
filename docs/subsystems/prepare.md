@@ -324,6 +324,21 @@ residues) are the remaining follow-ons (`devdocs/PER_RESIDUE_MASKING_SKETCH.md`)
 proteon CHARMM19 + EEF1 has median TM = 0.9945, **30× faster** than
 OpenMM CHARMM36 + OBC2.
 
+### Label-safe path battle test
+
+The full path — `prepare → coverage gate → supervision export with
+trustworthiness masking` — over **9,422 diverse real PDB structures**
+(`validation/eval_archive_scale.py`):
+
+- **0 crashes.** Every structure either prepared + exported cleanly or was
+  recorded as a graceful skip (349 unparseable files, 1 with no protein chain) —
+  never an exception through the pipeline.
+- **6,072 label-safe masked training examples** exported (67% of the 9,073 that
+  prepared) at coverage floor 0.8; the rest fell below the floor.
+- **6.3%** of exported residues (120k / 1.9M) carry a zeroed coordinate-label
+  mask (missing or untrustworthy); most structures mask < 20%.
+- **No perf cliff** — slowest single export 4.2 s; 2.67 structures/s single-process.
+
 ## API reference
 
 ### `proteon.prepare`
