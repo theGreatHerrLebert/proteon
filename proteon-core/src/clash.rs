@@ -64,7 +64,7 @@ fn cell_of(p: [f64; 3], cell: f64) -> (i32, i32, i32) {
 }
 
 /// Heavy-atom clash statistics for one structure.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ClashStats {
     /// Number of clashing heavy-atom pairs (each unordered pair once).
     pub n_clashes: usize,
@@ -75,6 +75,10 @@ pub struct ClashStats {
     /// pairs; 0.0 when there are no clashes. Caps catastrophic local defects
     /// that a size-normalized clashscore would dilute.
     pub max_overlap: f64,
+    /// Sorted, unique `residue_idx` (the topology's 0-based index over ALL
+    /// model-0 residues) of every residue with an atom in a clashing pair — for
+    /// per-residue masking. Both residues of each pair are recorded.
+    pub clash_residues: Vec<usize>,
 }
 
 /// Count heavy-atom steric clashes on `coords` (same ordering and length as
@@ -116,6 +120,7 @@ pub fn clash_stats(coords: &[[f64; 3]], topo: &Topology) -> ClashStats {
             n_clashes: 0,
             n_heavy_atoms,
             max_overlap: 0.0,
+            clash_residues: Vec::new(),
         };
     }
 
@@ -133,6 +138,7 @@ pub fn clash_stats(coords: &[[f64; 3]], topo: &Topology) -> ClashStats {
 
     let mut clashes = 0usize;
     let mut max_overlap = 0.0_f64;
+    let mut clash_res: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for (pos, &(ti, ri)) in heavy.iter().enumerate() {
         let ci = coords[ti];
         let (cx, cy, cz) = cell_of(ci, cell);
@@ -179,16 +185,24 @@ pub fn clash_stats(coords: &[[f64; 3]], topo: &Topology) -> ClashStats {
                             if overlap > max_overlap {
                                 max_overlap = overlap;
                             }
+                            // Record BOTH residues of the clashing pair (MolProbity
+                            // attributes an overlap to both atoms) for per-residue
+                            // masking.
+                            clash_res.insert(ai.residue_idx);
+                            clash_res.insert(aj.residue_idx);
                         }
                     }
                 }
             }
         }
     }
+    let mut clash_residues: Vec<usize> = clash_res.into_iter().collect();
+    clash_residues.sort_unstable();
     ClashStats {
         n_clashes: clashes,
         n_heavy_atoms,
         max_overlap,
+        clash_residues,
     }
 }
 
@@ -362,6 +376,25 @@ mod tests {
         t.atoms[1].residue_idx = 1;
         t.inferred_residues.insert(1);
         assert_eq!(count_heavy_clashes(&coords(&t), &t), 0);
+    }
+
+    #[test]
+    fn clash_residues_records_both_residues_of_a_pair() {
+        // Three carbons: res 0 and res 2 overlap (a clashing pair); res 5 is far
+        // away. Both residues of the pair are recorded, sorted; res 5 is absent.
+        let mut t = topo(
+            &[
+                ([0.0, 0.0, 0.0], "C", false),
+                ([2.9, 0.0, 0.0], "C", false),
+                ([50.0, 0.0, 0.0], "C", false),
+            ],
+            &[],
+        );
+        t.atoms[1].residue_idx = 2;
+        t.atoms[2].residue_idx = 5;
+        let s = clash_stats(&coords(&t), &t);
+        assert_eq!(s.n_clashes, 1);
+        assert_eq!(s.clash_residues, vec![0, 2]);
     }
 
     #[test]

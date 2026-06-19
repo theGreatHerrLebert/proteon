@@ -346,13 +346,19 @@ def build_structure_supervision_example(
         quality=_with_io_provenance(_quality_from_prep_report(prep_report), structure, chain),
     )
     if mask_untrustworthy_coords:
-        # Zero the COORDINATE label masks on untrustworthy residues (phase 2:
-        # altloc) — the trustworthiness hazards presence masks can't see. Off by
+        # Zero the COORDINATE label masks on untrustworthy residues — the
+        # trustworthiness hazards presence masks can't see (altloc; plus severe
+        # clash when a prep report carries per-residue clash attribution). Off by
         # default so the oracle-gated tensors keep byte-parity.
-        from .residue_mask import residue_trustworthy
+        from .residue_mask import residue_clash_mask, residue_trustworthy
         from .supervision_mask import apply_residue_trust_mask
 
-        example = apply_residue_trust_mask(example, residue_trustworthy(residues))
+        trust = residue_trustworthy(residues)
+        if prep_report is not None and prep_report.clash_residue_indices:
+            trust = trust & residue_clash_mask(
+                structure, prep_report.clash_residue_indices, chain.id
+            )
+        example = apply_residue_trust_mask(example, trust)
     return example
 
 
@@ -458,10 +464,16 @@ def batch_build_structure_supervision_examples(
                     quality=_with_io_provenance(_quality_from_prep_report(prep_reports[i]), structure, chain),
             )
             if mask_untrustworthy_coords:
-                from .residue_mask import residue_trustworthy
+                from .residue_mask import residue_clash_mask, residue_trustworthy
                 from .supervision_mask import apply_residue_trust_mask
 
-                example = apply_residue_trust_mask(example, residue_trustworthy(residues))
+                trust = residue_trustworthy(residues)
+                rep = prep_reports[i]
+                if rep is not None and rep.clash_residue_indices:
+                    trust = trust & residue_clash_mask(
+                        structure, rep.clash_residue_indices, chain.id
+                    )
+                example = apply_residue_trust_mask(example, trust)
             out.append(example)
         return out
 

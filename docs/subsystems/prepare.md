@@ -297,11 +297,18 @@ ex = proteon.build_structure_supervision_example(structure, mask_untrustworthy_c
 
 The combination respects each label's dependency — **not one broadcast mask**:
 `phi`/`pre_omega` zero on residue *i* **and** *i+1* (they read residue *i-1*),
-`psi` zeros on *i* and *i-1* (reads *i+1*), residue-local masks (atoms, χ,
-pseudo-beta, frames) zero only on *i*. **Phase 2 ships the altloc hazard**
-(`residue.conformer_count > 1`); severe-clash attribution (needs the Rust
-topology) and chirality plug into the same `apply_residue_trust_mask` wiring
-(`devdocs/PER_RESIDUE_MASKING_SKETCH.md`).
+the classic `psi_mask` zeros on *i* and *i-1* (reads *i+1*), residue-local masks
+(atoms, χ, pseudo-beta, frames, and the AF `psi` torsion column) zero only on *i*.
+
+Two trustworthiness hazards are localized: **altloc** (`conformer_count > 1`) and
+**severe clash**. Clash attribution comes from the same Rust scan that computes
+`clashscore` — `PrepReport.clash_residue_indices` lists the residues in any
+heavy-atom clash, and `residue_clash_mask` aligns them to the export's
+`residue_index` (the topology `res_idx` walks the identical
+`models[0].chains → residues` order, so the alignment is exact). When you pass the
+`prep_report`, those residues' coordinate masks are zeroed too. Chirality and the
+gate-relaxation (keep a localized-severe structure by masking its clashing
+residues) are the remaining follow-ons (`devdocs/PER_RESIDUE_MASKING_SKETCH.md`).
 
 ## Validation
 

@@ -314,6 +314,10 @@ pub struct PrepareReport {
     /// Worst single heavy-atom overlap depth in Å (0.0 when clash-free). A large
     /// value is a catastrophic local defect a size-normalized clashscore hides.
     pub max_heavy_overlap: f64,
+    /// `residue_idx` (0-based over ALL model-0 residues, chain→residue order) of
+    /// every residue participating in a heavy-atom clash — for per-residue
+    /// masking of clash-corrupted coordinate labels.
+    pub clash_residue_indices: Vec<usize>,
     /// True if the clash count is APPROXIMATE because the topology used the
     /// distance-inferred bond fallback for un-templated residues (ligands /
     /// non-standard); intra-residue clashes there cannot be told from bonds.
@@ -567,6 +571,7 @@ pub fn prepare_structure<P: ForceField>(
     out.n_heavy_clashes = clash.n_clashes;
     out.n_heavy_atoms = clash.n_heavy_atoms;
     out.max_heavy_overlap = clash.max_overlap;
+    out.clash_residue_indices = clash.clash_residues;
     // Approximate whenever ANY un-templated residue was present: the clash count
     // skips every pair touching one (ligands / non-standard / single-atom metals),
     // so its contacts are excluded. Sourced from `inferred_residues` (non-empty),

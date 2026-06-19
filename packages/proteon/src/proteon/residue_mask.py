@@ -146,6 +146,30 @@ def residue_trustworthy(residues, hazards=_TRUST_HAZARDS) -> NDArray:
     return trust
 
 
+def residue_clash_mask(structure, clash_residue_indices, chain_id: str) -> NDArray:
+    """Per-residue bool — is each export residue CLASH-FREE (trustworthy)?
+
+    ``clash_residue_indices`` (from ``PrepReport.clash_residue_indices``) are the
+    topology's ``residue_idx``: a 0-based index over ALL model-0 residues in
+    chain→residue order. The supervision export uses the AA-only residues of ONE
+    chain, so this re-walks the same model-0 iteration to recover each export
+    residue's all-residue index and looks it up. Aligned to ``residue_index`` by
+    construction (the Rust topology builds ``res_idx`` from the identical
+    ``models[0].chains() → residues()`` walk). Returns True where a residue is
+    clash-free, so it ANDs directly into :func:`residue_trustworthy`.
+    """
+    clash = set(clash_residue_indices)
+    out = []
+    all_idx = 0
+    for ch in structure.models[0].chains:
+        in_export_chain = ch.id == chain_id
+        for r in ch.residues:
+            if in_export_chain and r.is_amino_acid:
+                out.append(all_idx not in clash)
+            all_idx += 1
+    return np.array(out, dtype=bool)
+
+
 def structure_coverage(
     structure, *, profile: str = "heavy_coords", chain_id: Optional[str] = None
 ) -> ResidueCoverage:

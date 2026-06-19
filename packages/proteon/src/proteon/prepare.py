@@ -216,6 +216,10 @@ class PrepReport:
     #: catastrophic local defect that the size-normalized :attr:`clashscore`
     #: would dilute — see :attr:`has_severe_clashes`.
     max_heavy_overlap: float = 0.0
+    #: ``residue_idx`` (0-based over ALL model-0 residues, chain→residue order) of
+    #: every residue in a heavy-atom clash. For per-residue masking; align to the
+    #: supervision residue order via :func:`proteon.residue_mask.residue_clash_mask`.
+    clash_residue_indices: List[int] = field(default_factory=list)
     #: True if the clash count is APPROXIMATE because the topology used the
     #: distance-inferred bond fallback for un-templated residues (ligands /
     #: non-standard). Intra-ligand clashes there can't be told from bonds.
@@ -725,6 +729,7 @@ def prepare(
             report.n_heavy_clashes = r.get("n_heavy_clashes", 0)
             report.n_heavy_atoms = r.get("n_heavy_atoms", 0)
             report.max_heavy_overlap = r.get("max_heavy_overlap", 0.0)
+            report.clash_residue_indices = list(r.get("clash_residue_indices", []))
             report.clash_count_inferred = r.get("clash_count_inferred", False)
             report.n_models = r.get("n_models", 1)
             report.has_altlocs = r.get("has_altlocs", False)
@@ -795,6 +800,7 @@ def prepare(
             report.n_heavy_clashes = r.get("n_heavy_clashes", 0)
             report.n_heavy_atoms = r.get("n_heavy_atoms", 0)
             report.max_heavy_overlap = r.get("max_heavy_overlap", 0.0)
+            report.clash_residue_indices = list(r.get("clash_residue_indices", []))
             report.clash_count_inferred = r.get("clash_count_inferred", False)
             report.n_models = r.get("n_models", 1)
             report.has_altlocs = r.get("has_altlocs", False)
@@ -825,6 +831,7 @@ def prepare(
         report.n_heavy_clashes = c.get("n_heavy_clashes", 0)
         report.n_heavy_atoms = c.get("n_heavy_atoms", 0)
         report.max_heavy_overlap = c.get("max_heavy_overlap", 0.0)
+        report.clash_residue_indices = list(c.get("clash_residue_indices", []))
         report.clash_count_inferred = c.get("clash_count_inferred", False)
         report.n_models = c.get("n_models", 1)
         report.has_altlocs = c.get("has_altlocs", False)
@@ -949,6 +956,7 @@ def batch_prepare(
             n_heavy_clashes=r.get("n_heavy_clashes", 0),
             n_heavy_atoms=r.get("n_heavy_atoms", 0),
             max_heavy_overlap=r.get("max_heavy_overlap", 0.0),
+            clash_residue_indices=list(r.get("clash_residue_indices", [])),
             clash_count_inferred=r.get("clash_count_inferred", False),
             n_models=r.get("n_models", 1),
             has_altlocs=r.get("has_altlocs", False),

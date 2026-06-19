@@ -112,6 +112,51 @@ class TestApplyTrustMask:
         assert out[0].all_atom_mask.sum(axis=1).tolist() == [4, 0, 4]
 
 
+class TestClashAttribution:
+    def _hhb(self):
+        s = proteon.load(os.path.join(PDBS, "4hhb.pdb"))
+        return s, proteon.prepare(s, minimize=False)
+
+    def test_clash_indices_sorted_unique_and_protein_scoped(self):
+        _, r = self._hhb()
+        assert r.clash_residue_indices == sorted(set(r.clash_residue_indices))
+        assert len(r.clash_residue_indices) > 0  # 4hhb has clashes
+
+    def test_clash_mask_alignment_sums_to_report(self):
+        # The per-chain clash masks, summed, must equal the report's index count:
+        # proof the Python residue walk aligns with the Rust topology res_idx.
+        s, r = self._hhb()
+        total = 0
+        for ch in s.models[0].chains:
+            m = proteon.residue_clash_mask(s, r.clash_residue_indices, ch.id)
+            total += int((~m).sum())
+        assert total == len(r.clash_residue_indices)
+
+    def test_clean_structure_no_clash_residues(self):
+        s = proteon.load(os.path.join(PDBS, "1crn.pdb"))
+        r = proteon.prepare(s, minimize=False)
+        assert r.clash_residue_indices == []
+        mask = proteon.residue_clash_mask(s, r.clash_residue_indices, "A")
+        assert mask.all()
+
+    def test_clashing_residues_masked_in_export(self):
+        s, r = self._hhb()
+        clash_free = proteon.residue_clash_mask(s, r.clash_residue_indices, "A")
+        base = build_structure_supervision_example(s, chain_id="A")
+        masked = build_structure_supervision_example(
+            s, chain_id="A", prep_report=r, mask_untrustworthy_coords=True)
+        bsum, msum = base.all_atom_mask.sum(axis=1), masked.all_atom_mask.sum(axis=1)
+        assert (msum[~clash_free] == 0).all()           # clashing residues zeroed
+        assert (msum[clash_free] == bsum[clash_free]).all()  # clash-free unchanged
+        assert np.array_equal(base.seq_mask, masked.seq_mask)
+
+    def test_no_clash_data_falls_back_to_altloc_only(self):
+        # mask flag on but prep_report=None -> only altloc masking, no crash.
+        s, residues = _residues(ALTLOC)
+        ex = build_structure_supervision_example(s, mask_untrustworthy_coords=True)
+        assert ex.all_atom_mask.sum(axis=1).tolist() == [4, 0, 4]  # altloc only
+
+
 def masked_implies(base_col, masked_col, killed):
     """masked_col is base_col with exactly the `killed` rows zeroed (where base
     had a 1) and all other rows preserved."""
