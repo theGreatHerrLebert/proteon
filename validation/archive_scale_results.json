@@ -1,0 +1,98 @@
+{
+  "corpus_size": 9422,
+  "floor": 0.8,
+  "seconds": 3522.4,
+  "throughput_per_s": 2.67,
+  "counts": {
+    "prepared": 9073,
+    "gated_in": 6072,
+    "exported": 6072,
+    "below_floor": 3000,
+    "load_failed": 349,
+    "no_protein_chain": 1
+  },
+  "coverage_histogram_tenths": {
+    "0": 76,
+    "1": 65,
+    "2": 116,
+    "3": 176,
+    "4": 277,
+    "5": 481,
+    "6": 760,
+    "7": 1049,
+    "8": 1746,
+    "9": 3650,
+    "10": 676
+  },
+  "trust_masked_fraction_histogram_tenths": {
+    "0": 4627,
+    "1": 1439,
+    "2": 6
+  },
+  "total_exported_residues": 1896418,
+  "total_zeroed_label_rows": 120321,
+  "n_failures": 0,
+  "failures_sample": [],
+  "slowest_exports": [
+    [
+      4.19,
+      "6xz7.pdb",
+      271
+    ],
+    [
+      4.17,
+      "6rw9.pdb",
+      2469
+    ],
+    [
+      3.55,
+      "7aqc.pdb",
+      277
+    ],
+    [
+      3.43,
+      "6eu2.pdb",
+      1460
+    ],
+    [
+      3.0,
+      "6rcp.pdb",
+      349
+    ],
+    [
+      2.78,
+      "7d0j.pdb",
+      740
+    ],
+    [
+      2.63,
+      "6y41.pdb",
+      227
+    ],
+    [
+      2.63,
+      "6ret.pdb",
+      82
+    ],
+    [
+      2.39,
+      "5fge.pdb",
+      250
+    ],
+    [
+      2.34,
+      "6s6y.pdb",
+      547
+    ],
+    [
+      2.29,
+      "6a5o.pdb",
+      1743
+    ],
+    [
+      2.27,
+      "6p5t.pdb",
+      814
+    ]
+  ]
+}
