@@ -17,6 +17,8 @@ Functions:
 
 from __future__ import annotations
 
+from .io import normalize_paths
+
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -249,6 +251,7 @@ def batch_total_sasa(
     return np.asarray(_sasa.batch_total_sasa(ptrs, probe, n_points, n_threads, radii))
 
 
+@normalize_paths
 def load_and_sasa(
     paths: Sequence,
     probe: float = 1.4,

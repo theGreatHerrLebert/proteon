@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Sequence
 
+from .io import normalize_paths
+
 
 class PrepStatus(str, Enum):
     """Outcome verdict for a prepared structure (see :attr:`PrepReport.status`)."""
@@ -1020,7 +1022,7 @@ def load_and_prepare(
     Returns:
         (structure, PrepReport) tuple.
     """
-    from .io import load
+    from .io import normalize_paths, load
     structure = load(path)
     report = prepare(
         structure,
@@ -1143,6 +1145,7 @@ class LoadPrepResult:
         return []
 
 
+@normalize_paths
 def batch_load_and_prepare(
     paths: Sequence,
     *,
@@ -1233,6 +1236,7 @@ def _annotate_coverage(results, profile: str) -> None:
             continue
 
 
+@normalize_paths
 def prepare_for_supervision(
     paths: Sequence,
     *,

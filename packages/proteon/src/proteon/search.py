@@ -26,7 +26,7 @@ try:
 except ImportError:  # pragma: no cover
     _search = None
 
-from .io import batch_load_tolerant
+from .io import normalize_paths, batch_load_tolerant
 
 
 SEARCH_DB_VERSION = 4
@@ -1140,6 +1140,7 @@ def _entries_by_index(entries: Sequence[SearchEntry]) -> Dict[int, SearchEntry]:
     return {entry.entry_index: entry for entry in entries}
 
 
+@normalize_paths
 def build_search_db(
     paths: Sequence[Union[str, Path]],
     out: Optional[Union[str, Path]] = None,

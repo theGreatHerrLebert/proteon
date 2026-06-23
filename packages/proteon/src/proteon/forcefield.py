@@ -24,6 +24,8 @@ Functions:
 
 from __future__ import annotations
 
+from .io import normalize_paths
+
 import functools
 import warnings
 from typing import Optional
@@ -392,6 +394,7 @@ def batch_minimize_hydrogens(
     return [_convert_energy_dict(r, u) for r in results]
 
 
+@normalize_paths
 def load_and_minimize_hydrogens(
     paths,
     max_steps: int = 500,
