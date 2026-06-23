@@ -136,7 +136,7 @@ from .residue_mask import (
     structure_coverage,
 )
 from .supervision_mask import apply_residue_trust_mask
-from .assembly_builder import BuiltAssembly, build_assembly
+from .assembly_builder import BuiltAssembly, PreparedAssembly, build_assembly, prepare_assembly
 from .repair import (
     RepairOutcome,
     RepairPolicy,
@@ -486,7 +486,9 @@ _PREPARE_API = (
     "residue_clash_mask",
     "apply_residue_trust_mask",
     "BuiltAssembly",
+    "PreparedAssembly",
     "build_assembly",
+    "prepare_assembly",
     "DEFAULT_COVERAGE",
     "RepairPolicy",
     "RepairOutcome",
