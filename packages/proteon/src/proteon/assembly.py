@@ -33,13 +33,31 @@ _IDENTITY_TOL = 1e-4
 
 
 @dataclass
+class OperatorBlock:
+    """One ``APPLY THE FOLLOWING TO CHAINS`` section: a chain list + the BIOMT
+    operators that apply to EXACTLY those chains (not all-to-all)."""
+
+    chains: List[str] = field(default_factory=list)
+    #: Each operator is a 3x4 row-major matrix [[m11..t1],[m21..t2],[m31..t3]].
+    operators: List[List[List[float]]] = field(default_factory=list)
+
+
+@dataclass
 class Biomolecule:
-    """One BIOMOLECULE block: the chains it applies to and its operators."""
+    """One BIOMOLECULE: its operator blocks, each a chain list + its operators.
+
+    A biomolecule can have MULTIPLE blocks (different operator sets for different
+    chain groups). :attr:`blocks` preserves the per-block chain↔operator
+    association (the assembly builder applies each block's operators only to its
+    own chains); :attr:`chains` / :attr:`operators` are flattened (deduped) views
+    of all blocks, kept for the assembly *gate* (chain-set match + all-identity).
+    """
 
     id: int
     chains: List[str] = field(default_factory=list)
     #: Each operator is a 3x4 row-major matrix [[m11..t1],[m21..t2],[m31..t3]].
     operators: List[List[List[float]]] = field(default_factory=list)
+    blocks: List[OperatorBlock] = field(default_factory=list)
 
     def all_identity(self) -> bool:
         """True iff every operator is the identity transform (no expansion)."""
@@ -53,10 +71,23 @@ class Biomolecule:
 
 
 def parse_remark_350(text: str) -> List[Biomolecule]:
-    """Parse the BIOMOLECULE / chain-list / BIOMT operators out of PDB text."""
+    """Parse the BIOMOLECULE / chain-list / BIOMT operators out of PDB text.
+
+    A ``CHAINS:`` line that follows operators starts a NEW block (a distinct
+    chain group with its own operator set); consecutive ``CHAINS:`` lines before
+    any operator (the "AND CHAINS:" continuation) extend the current block.
+    """
     bios: List[Biomolecule] = []
     cur: Optional[Biomolecule] = None
+    block: Optional[OperatorBlock] = None
     ops: dict = {}  # op_number -> {row: [m,m,m,t]}
+
+    def _start_block():
+        nonlocal block, ops
+        block = OperatorBlock()
+        cur.blocks.append(block)
+        ops = {}
+
     for line in text.splitlines():
         if not line.startswith("REMARK 350"):
             continue
@@ -68,7 +99,7 @@ def parse_remark_350(text: str) -> List[Biomolecule]:
             bio_id = int(raw[0]) if raw and raw[0].lstrip("-").isdigit() else 0
             cur = Biomolecule(id=bio_id)
             bios.append(cur)
-            ops = {}
+            block = None
             continue
         if cur is None:
             continue
@@ -76,15 +107,21 @@ def parse_remark_350(text: str) -> List[Biomolecule]:
             # "APPLY THE FOLLOWING TO CHAINS: A, B" or a continuation "AND CHAINS: C".
             # A blank chain identifier is encoded as the literal "NULL"; the loader
             # exposes it as an empty id, so normalise it for the chain-set compare.
-            chains = line.split("CHAINS:")[1]
-            cur.chains.extend(
+            # A CHAINS line AFTER this block already has operators = a new block.
+            if block is None or block.operators:
+                _start_block()
+            new_chains = [
                 ("" if c.strip().upper() == "NULL" else c.strip())
-                for c in chains.replace(",", " ").split()
+                for c in line.split("CHAINS:")[1].replace(",", " ").split()
                 if c.strip()
-            )
+            ]
+            block.chains.extend(new_chains)
+            cur.chains.extend(new_chains)  # flattened view (gate)
             continue
         m = _BIOMT_RE.search(line)
         if m:
+            if block is None:  # operators before any CHAINS line (malformed) — tolerate
+                _start_block()
             row = int(m.group(1)) - 1
             opnum = int(m.group(2))
             vals = [float(m.group(i)) for i in range(3, 7)]
@@ -93,8 +130,10 @@ def parse_remark_350(text: str) -> List[Biomolecule]:
             entry = ops[opnum]
             if len(entry) == 3 and all(r in entry for r in (0, 1, 2)):
                 op = [entry[0], entry[1], entry[2]]
+                if op not in block.operators:
+                    block.operators.append(op)
                 if op not in cur.operators:
-                    cur.operators.append(op)
+                    cur.operators.append(op)  # flattened view (gate)
     return bios
 
 
