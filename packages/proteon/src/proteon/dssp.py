@@ -14,6 +14,8 @@ Functions:
 
 from __future__ import annotations
 
+from .io import normalize_paths
+
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -100,6 +102,7 @@ def batch_dssp(
     return _dssp.batch_dssp(ptrs, n_threads)
 
 
+@normalize_paths
 def load_and_dssp(
     paths: Sequence,
     *,

@@ -5,6 +5,9 @@ Includes batch_load for parallel loading with rayon (GIL released).
 
 from __future__ import annotations
 
+import functools
+import os
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 import tempfile
@@ -12,6 +15,38 @@ from typing import List, Optional, Sequence, Set, Tuple, Union
 
 from .loader_failure_analysis import KNOWN_BUCKETS, LoaderFailureBucket, bucket_loader_failure
 from .structure import Structure
+
+
+def as_path_sequence(paths):
+    """Normalize a ``paths`` argument for the batch convenience functions.
+
+    A bare ``str`` / ``os.PathLike`` is a valid ``Sequence``, so passing a single
+    path to a batch function would silently iterate it CHARACTER-BY-CHARACTER and
+    fail to load each char — a quiet footgun. This wraps a single path into a
+    one-element list (so ``load_and_sasa("f.pdb")`` does the obvious thing) and
+    nudges toward the list form. Any other iterable is returned unchanged.
+    """
+    if isinstance(paths, (str, os.PathLike)):
+        warnings.warn(
+            "Pass a sequence of paths (e.g. [path]) to this batch function; a "
+            "single path was wrapped into a one-element list. A bare string would "
+            "otherwise be iterated character-by-character.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return [paths]
+    return paths
+
+
+def normalize_paths(fn):
+    """Decorator: normalize the first (``paths``) argument via
+    :func:`as_path_sequence`, guarding the single-path footgun."""
+
+    @functools.wraps(fn)
+    def wrapper(paths, *args, **kwargs):
+        return fn(as_path_sequence(paths), *args, **kwargs)
+
+    return wrapper
 
 try:
     import proteon_connector
@@ -184,6 +219,7 @@ def load_with_rescue(
         )
 
 
+@normalize_paths
 def batch_load_tolerant_with_rescue(
     paths: Sequence[Union[str, Path]],
     *,
@@ -258,6 +294,7 @@ def save_mmcif(structure: Structure, path: Union[str, Path]) -> None:
     _io.save_mmcif(structure.get_py_ptr(), str(path))
 
 
+@normalize_paths
 def batch_load(
     paths: Sequence[Union[str, Path]],
     *,
@@ -287,6 +324,7 @@ def batch_load(
     return [Structure.from_py_ptr(ptr) for ptr in ptrs]
 
 
+@normalize_paths
 def batch_load_tolerant(
     paths: Sequence[Union[str, Path]],
     *,

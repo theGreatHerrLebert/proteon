@@ -25,6 +25,8 @@ Batch-parallel (rayon, GIL released):
 
 from __future__ import annotations
 
+from .io import normalize_paths
+
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -344,6 +346,7 @@ def batch_radius_of_gyration(
 # ---------------------------------------------------------------------------
 
 
+@normalize_paths
 def load_and_analyze(
     paths: Sequence,
     cutoff: float = 8.0,
@@ -380,6 +383,7 @@ def load_and_analyze(
     return _analysis.load_and_analyze(str_paths, cutoff, n_threads)
 
 
+@normalize_paths
 def load_and_extract_ca(
     paths: Sequence,
     *,
@@ -399,6 +403,7 @@ def load_and_extract_ca(
     return [(i, np.asarray(a)) for i, a in _analysis.load_and_extract_ca(str_paths, n_threads)]
 
 
+@normalize_paths
 def load_and_contact_maps(
     paths: Sequence,
     cutoff: float = 8.0,

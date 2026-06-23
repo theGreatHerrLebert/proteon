@@ -11,7 +11,7 @@ from typing import Iterable, List, Mapping, Optional, Sequence
 from .corpus_release import build_corpus_release_manifest
 from .corpus_validation import validate_corpus_release
 from .failure_taxonomy import PARSE_ERROR
-from .io import LoadRescueResult, batch_load_tolerant, batch_load_tolerant_with_rescue
+from .io import normalize_paths, LoadRescueResult, batch_load_tolerant, batch_load_tolerant_with_rescue
 from .msa_io import load_msas_from_dir
 from .prepare import batch_prepare
 from .sequence_release import build_sequence_dataset
@@ -20,6 +20,7 @@ from .supervision_release import FailureRecord
 from .training_example import build_training_release
 
 
+@normalize_paths
 def build_local_corpus_smoke_release(
     paths: Sequence[str | Path],
     out_dir: str | Path,
