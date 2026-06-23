@@ -50,12 +50,17 @@ STRUCTURES = ["1crn", "1ubq", "1enh", "1ake", "4hhb"]
 
 PRECISION_TOLERANCE = 0.95
 RECALL_TOLERANCE = 0.95
-# Rigid-H limits carry ~35% headroom over the worst measured (4hhb med 0.287,
-# 1enh/4hhb p90 ~0.598) so OpenMM/PDBFixer version drift (8.1→8.5 template
-# tweaks move these ±0.03 Å) doesn't flip the gate, while still catching real
-# placement regressions (a med past ~0.4 Å is no longer rotamer noise).
-RIGID_MEDIAN_TOLERANCE = 0.40   # Å
-RIGID_P90_TOLERANCE = 0.80      # Å
+# Rigid-H limits bound the PDBFixer reference, whose `addMissingHydrogens` runs a
+# brief OpenMM minimization that is PLATFORM-nondeterministic: with IDENTICAL
+# versions (pdbfixer 1.12.0 / openmm 8.5.2) 4hhb's rigid-H median measured 0.298 Å
+# locally but 0.420 Å on the CI ubuntu runner — a ~0.12 Å platform artifact of the
+# OpenMM reference, NOT a proteon regression (proteon's H placement is
+# deterministic). So the median layer must carry headroom over the worst OBSERVED
+# (0.420), not just version drift. 0.55 still catches a real placement regression
+# (proteon tight-H medians are 0.13–0.30; a true break blows past 0.55); the p90,
+# L1 completeness, and L3 sanity layers stay tight as the primary guards.
+RIGID_MEDIAN_TOLERANCE = 0.55   # Å (platform-robust; see note above)
+RIGID_P90_TOLERANCE = 0.80      # Å (CI worst 0.665, headroom intact)
 RIGID_MIN_SAMPLES = 20
 SANITY_P99_TOLERANCE = 2.5      # Å
 SANITY_MAX_TOLERANCE = 3.0      # Å
