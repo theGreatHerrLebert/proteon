@@ -152,6 +152,38 @@ conservative gate that prevents training on the wrong oligomer); it does not
 build the assembly. Capability: PDB `REMARK 350` only — mmCIF
 `_pdbx_struct_assembly` and applying the transforms are follow-ons.
 
+#### Exporting a verified complex (label-safe substrate)
+
+`build_complex_supervision_examples` turns a verified assembly into masked
+per-chain examples — connecting the assembly gate to the coverage/masking path:
+
+```python
+out = proteon.build_complex_supervision_examples(
+    res.structure, prep_report=res.report, min_coverage=0.8)
+if isinstance(out, proteon.ComplexSupervisionExamples):
+    for cid in out.chain_order:
+        ex = out.chain_examples[cid]   # masked, cross-chain-correct
+        ...  # the consumer computes pair labels from the chains' coordinates
+else:
+    log.info("dropped: %s", out)       # a distinct drop reason
+```
+
+The interface gate keeps a complex iff `assembly_is_asu is True` (which already
+requires the deposited chains to equal the assembly's chain list), it has **≥ 2
+protein chains**, and **every** chain clears `min_coverage` (the weakest chain
+gates — both interface partners must be usable). The clash scan is whole-complex,
+so a residue clashing *across* an interface is already masked in its own chain.
+Drops carry a distinct reason — notably `requires_assembly_expansion` (a
+monomeric ASU that BIOMT would expand: valid, just not built here — recoverable
+by the assembly-builder follow-on), vs `assembly_unverified` (no `REMARK 350`).
+
+This is a **label-safe complex *substrate*** — the trustworthy, masked coordinate
+inputs — not a turnkey interface-label format: it emits no contact map / neighbor
+edges and no multimer tensor packing (`devdocs/MULTI_CHAIN_COVERAGE_DESIGN.md`).
+On a 293-structure diverse sample (floor 0.8): **15% kept** verified complexes
+(mostly dimers), **38% `requires_assembly_expansion`** (the recoverable bucket),
+27% verified monomers, 14% below coverage, 5% an unmasked hazard (e.g. chirality).
+
 ### Clash *severity*, not "any clash"
 
 A single 0.4 Å heavy-atom overlap is not a poisoned coordinate label — and 99%

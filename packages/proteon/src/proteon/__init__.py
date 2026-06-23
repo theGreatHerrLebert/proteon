@@ -127,6 +127,8 @@ from .prepare import (
 from .residue_mask import (
     DEFAULT_COVERAGE,
     ResidueCoverage,
+    ComplexCoverage,
+    complex_coverage,
     residue_clash_mask,
     residue_completeness,
     residue_trustworthy,
@@ -240,9 +242,11 @@ from .io import (
 )
 from .structure import Atom, Chain, Model, Residue, Structure
 from .supervision import (
+    ComplexSupervisionExamples,
     StructureQualityMetadata,
     StructureSupervisionExample,
     batch_build_structure_supervision_examples,
+    build_complex_supervision_examples,
     build_structure_supervision_example,
 )
 from .supervision_crop import (
@@ -472,6 +476,8 @@ _PREPARE_API = (
     "prepare_for_supervision",
     "ResidueCoverage",
     "structure_coverage",
+    "ComplexCoverage",
+    "complex_coverage",
     "residue_completeness",
     "residue_trustworthy",
     "residue_clash_mask",
@@ -595,8 +601,10 @@ _STRUCTURE_API = (
 _SUPERVISION_API = (
     "StructureQualityMetadata",
     "StructureSupervisionExample",
+    "ComplexSupervisionExamples",
     "batch_build_structure_supervision_examples",
     "build_structure_supervision_example",
+    "build_complex_supervision_examples",
     "crop_structure_supervision_example",
     "crop_sequence_example",
     "crop_template_features",
