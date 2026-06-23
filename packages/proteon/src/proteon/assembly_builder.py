@@ -154,6 +154,74 @@ def prepare_assembly(
     )
 
 
+def build_assembly_supervision_examples(
+    path_or_text: Union[str, os.PathLike],
+    *,
+    min_coverage: float,
+    biomolecule: int = 1,
+    profile: str = "heavy_coords",
+    mask_untrustworthy_coords: bool = True,
+    **prepare_kwargs,
+):
+    """Build a biological assembly from BIOMT and export it as label-safe interface
+    supervision (PR3) — recovering the ``requires_assembly_expansion`` bucket.
+
+    Pipeline: :func:`prepare_assembly` (build + re-prepare, validating the new
+    inter-copy interfaces) → :func:`build_complex_supervision_examples` (the
+    interface gate from #197: ≥2 chains, per-chain coverage, no unmasked hazard,
+    masked per-chain examples). A BUILT assembly is the biological assembly *by
+    construction* (all BIOMT operators applied), so ``assembly_is_asu`` is set
+    ``True`` for the gate — unlike the deposited-ASU path, no REMARK 350 chain-set
+    match is needed (we generated the chains).
+
+    Returns a :class:`~proteon.supervision.ComplexSupervisionExamples`, or a
+    drop-reason string (materialization reasons from :func:`build_assembly`, or the
+    interface-gate reasons). Supervision callers pass ``reconstruct=False`` /
+    ``minimize=False`` by convention; defaulted here for the label-safe path.
+    """
+    prepare_kwargs.setdefault("reconstruct", False)
+    prepare_kwargs.setdefault("minimize", False)
+    text = _read(path_or_text)
+    pa = prepare_assembly(text, biomolecule=biomolecule, **prepare_kwargs)
+    if isinstance(pa, str):
+        return pa  # materialization drop reason
+    # Built from BIOMT => this IS the biological assembly; mark it verified so the
+    # interface gate (which guards against the WRONG oligomeric state) admits it.
+    pa.report.assembly_is_asu = True
+    # `build_assembly` materializes model 1 only, so the re-prepared assembly's
+    # report sees a single model — carry the SOURCE model count forward so a
+    # multi-model (NMR) input still trips the `multiple_models` hazard and is not
+    # silently exported from one ensemble member (codex).
+    pa.report.n_models = max(pa.report.n_models, _count_models(text))
+    # Source-derived record id (the temp PDB is coordinate-only, so the default id
+    # would collide across distinct inputs) (codex).
+    record_id = _source_record_id(path_or_text)
+    from .supervision import build_complex_supervision_examples
+
+    return build_complex_supervision_examples(
+        pa.structure,
+        prep_report=pa.report,
+        min_coverage=min_coverage,
+        profile=profile,
+        mask_untrustworthy_coords=mask_untrustworthy_coords,
+        record_id=record_id,
+    )
+
+
+def _count_models(text: str) -> int:
+    """Number of MODEL records in PDB text (0/1 → single model)."""
+    return sum(1 for line in text.splitlines() if line.startswith("MODEL "))
+
+
+def _source_record_id(path_or_text) -> Optional[str]:
+    """A stable record id from the source path stem; None for inline text."""
+    s = str(path_or_text)
+    if "\n" in s or s.startswith(("ATOM", "HEADER", "REMARK")):
+        return None
+    stem = os.path.splitext(os.path.basename(s))[0]
+    return f"{stem}:assembly" if stem else None
+
+
 def _op_matrix(op):
     """(R 3x3, t 3) from a REMARK 350 3x4 row-major operator."""
     r = np.array([[op[i][j] for j in range(3)] for i in range(3)], dtype=np.float64)

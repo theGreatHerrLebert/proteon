@@ -415,8 +415,13 @@ def build_complex_supervision_examples(
     min_coverage: float,
     profile: str = "heavy_coords",
     mask_untrustworthy_coords: bool = True,
+    record_id: Optional[str] = None,
 ):
     """Build the verified, masked per-chain examples of a biological assembly.
+
+    ``record_id`` overrides the default (structure-identifier-derived) id — pass a
+    source-derived id when the structure is a coordinate-only artifact (e.g. a
+    built assembly reloaded from temp text) so records stay unique + provenanced.
 
     Returns a :class:`ComplexSupervisionExamples` if the complex passes the
     interface gate, else a ``str`` drop reason (one of
@@ -463,7 +468,7 @@ def build_complex_supervision_examples(
         for cid in chain_order
     }
     return ComplexSupervisionExamples(
-        record_id=_default_record_id(structure, "+".join(chain_order)),
+        record_id=record_id or _default_record_id(structure, "+".join(chain_order)),
         chain_order=chain_order,
         chain_examples=chain_examples,
         assembly_is_asu=True,
