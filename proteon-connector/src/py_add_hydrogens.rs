@@ -366,6 +366,11 @@ pub(crate) fn batch_prepare(
             dict.set_item("n_chain_gaps", r.n_chain_gaps).unwrap();
             dict.set_item("n_chirality_outliers", r.n_chirality_outliers)
                 .unwrap();
+            dict.set_item(
+                "chirality_residue_indices",
+                r.chirality_residue_indices.clone(),
+            )
+            .unwrap();
             // Component breakdown at the post-minimization geometry (all
             // zero if minimize=False or skipped_no_protein).
             let components = pyo3::types::PyDict::new(py);

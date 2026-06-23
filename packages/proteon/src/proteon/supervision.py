@@ -350,20 +350,27 @@ def build_structure_supervision_example(
         # trustworthiness hazards presence masks can't see (altloc; plus severe
         # clash when a prep report carries per-residue clash attribution). Off by
         # default so the oracle-gated tensors keep byte-parity.
-        from .residue_mask import residue_clash_mask, residue_trustworthy
+        from .residue_mask import (
+            residue_chirality_mask,
+            residue_clash_mask,
+            residue_trustworthy,
+        )
         from .supervision_mask import apply_residue_trust_mask
 
         trust = residue_trustworthy(residues)
-        # Clash masking only for SEVERE structures — mild clashes are tolerated
-        # heavy-coordinate labels (consistent with the coverage gate).
-        if (
-            prep_report is not None
-            and prep_report.has_severe_clashes
-            and prep_report.clash_residue_indices
-        ):
-            trust = trust & residue_clash_mask(
-                structure, prep_report.clash_residue_indices, chain.id
-            )
+        if prep_report is not None:
+            # Clash masking only for SEVERE structures — mild clashes are tolerated
+            # heavy-coordinate labels (consistent with the coverage gate).
+            if prep_report.has_severe_clashes and prep_report.clash_residue_indices:
+                trust = trust & residue_clash_mask(
+                    structure, prep_report.clash_residue_indices, chain.id
+                )
+            # D-chirality CA centres, localized like clashes (gated on the active
+            # hazard so stale indices on a cleared report do not mask).
+            if prep_report.has_chirality_outliers and prep_report.chirality_residue_indices:
+                trust = trust & residue_chirality_mask(
+                    structure, prep_report.chirality_residue_indices, chain.id
+                )
         example = apply_residue_trust_mask(example, trust)
     return example
 
@@ -567,15 +574,24 @@ def batch_build_structure_supervision_examples(
                     quality=_with_io_provenance(_quality_from_prep_report(prep_reports[i]), structure, chain),
             )
             if mask_untrustworthy_coords:
-                from .residue_mask import residue_clash_mask, residue_trustworthy
+                from .residue_mask import (
+                    residue_chirality_mask,
+                    residue_clash_mask,
+                    residue_trustworthy,
+                )
                 from .supervision_mask import apply_residue_trust_mask
 
                 trust = residue_trustworthy(residues)
                 rep = prep_reports[i]
-                if rep is not None and rep.has_severe_clashes and rep.clash_residue_indices:
-                    trust = trust & residue_clash_mask(
-                        structure, rep.clash_residue_indices, chain.id
-                    )
+                if rep is not None:
+                    if rep.has_severe_clashes and rep.clash_residue_indices:
+                        trust = trust & residue_clash_mask(
+                            structure, rep.clash_residue_indices, chain.id
+                        )
+                    if rep.has_chirality_outliers and rep.chirality_residue_indices:
+                        trust = trust & residue_chirality_mask(
+                            structure, rep.chirality_residue_indices, chain.id
+                        )
                 example = apply_residue_trust_mask(example, trust)
             out.append(example)
         return out

@@ -156,6 +156,43 @@ class TestClashAttribution:
         ex = build_structure_supervision_example(s, mask_untrustworthy_coords=True)
         assert ex.all_atom_mask.sum(axis=1).tolist() == [4, 0, 4]  # altloc only
 
+    def test_stale_chirality_indices_do_not_mask_when_outlier_cleared(self):
+        # codex: if the chirality count is cleared but indices remain (accepted /
+        # reset finding), masking must NOT fire — gated on has_chirality_outliers.
+        s, r = self._hhb()
+        assert r.chirality_residue_indices
+        r.n_chirality_outliers = 0  # outlier accepted/cleared; indices now stale
+        cid = next(ch.id for ch in s.models[0].chains
+                   if not proteon.residue_chirality_mask(s, r.chirality_residue_indices, ch.id).all())
+        base = build_structure_supervision_example(s, chain_id=cid)
+        masked = build_structure_supervision_example(
+            s, chain_id=cid, prep_report=r, mask_untrustworthy_coords=True)
+        # chirality didn't mask; only clash (still active) may differ — so the
+        # chirality-only residue keeps its label.
+        chiral_idx = (~proteon.residue_chirality_mask(s, r.chirality_residue_indices, cid)).nonzero()[0]
+        clash_free = proteon.residue_clash_mask(s, r.clash_residue_indices, cid)
+        for i in chiral_idx:
+            if clash_free[i]:  # not also a clash -> must be unmasked
+                assert masked.all_atom_mask[i].sum() == base.all_atom_mask[i].sum()
+
+    def test_chirality_residue_masked_in_export(self):
+        # 4hhb carries one D-chirality CA centre; the chain holding it must have
+        # exactly that residue's coordinate label zeroed in the masked export.
+        s, r = self._hhb()
+        assert r.chirality_residue_indices, "4hhb should have a chirality outlier"
+        for cid in (ch.id for ch in s.models[0].chains if any(x.is_amino_acid for x in ch.residues)):
+            chiral_free = proteon.residue_chirality_mask(s, r.chirality_residue_indices, cid)
+            if chiral_free.all():
+                continue  # outlier is in another chain
+            base = build_structure_supervision_example(s, chain_id=cid)
+            masked = build_structure_supervision_example(
+                s, chain_id=cid, prep_report=r, mask_untrustworthy_coords=True)
+            bsum, msum = base.all_atom_mask.sum(axis=1), masked.all_atom_mask.sum(axis=1)
+            assert (msum[~chiral_free] == 0).all()   # the D residue zeroed
+            assert np.array_equal(base.seq_mask, masked.seq_mask)  # identity intact
+            return
+        pytest.fail("chirality outlier did not map to any protein chain")
+
 
 def masked_implies(base_col, masked_col, killed):
     """masked_col is base_col with exactly the `killed` rows zeroed (where base

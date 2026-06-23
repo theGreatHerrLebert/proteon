@@ -170,17 +170,35 @@ class TestCoverageGate:
         # auto-excludes — coverage (which already counts clash residues invalid)
         # decides. Localized (high coverage) kept; pervasive (low) dropped.
         from proteon import PrepReport
-        rep = PrepReport(hydrogens_added=50, n_heavy_clashes=50, n_heavy_atoms=200)
+        rep = PrepReport(hydrogens_added=50, n_heavy_clashes=50, n_heavy_atoms=200,
+                         clash_residue_indices=[1, 2, 3])  # attribution present -> localizable
         assert "severe_heavy_clashes" in rep.label_hazards
         assert self._keep_with(rep, 0.9) is True   # localized -> kept + masked
         assert self._keep_with(rep, 0.6) is False  # pervasive -> dropped
 
     def test_unmasked_hazard_still_excludes_at_full_coverage(self):
-        # Chirality is NOT localized by coverage masking -> still drops the whole
-        # structure even at coverage 1.0.
+        # multiple_models is NOT localized by coverage masking -> still drops the
+        # whole structure even at coverage 1.0 (chirality/clash/altloc ARE masked).
         from proteon import PrepReport
-        rep = PrepReport(hydrogens_added=50, n_chirality_outliers=1)
+        rep = PrepReport(hydrogens_added=50, n_models=2)
+        assert "multiple_models" in rep.label_hazards
+        assert self._keep_with(rep, 1.0) is False
+
+    def test_chirality_is_now_localized_not_a_blocker(self):
+        # A chirality outlier WITH residue attribution is masked per-residue, so it
+        # no longer blocks the coverage gate (coverage already counts it invalid).
+        from proteon import PrepReport
+        rep = PrepReport(hydrogens_added=50, n_chirality_outliers=1,
+                         chirality_residue_indices=[5])
         assert "chirality_outliers" in rep.label_hazards
+        assert self._keep_with(rep, 0.9) is True   # localized -> kept + masked
+
+    def test_localizable_hazard_without_attribution_still_blocks(self):
+        # codex: a chirality (or clash) hazard flagged but lacking its residue
+        # index list can't actually be masked -> it must STILL block, or a corrupt
+        # label would pass unmasked (e.g. older metadata, hand-built reports).
+        from proteon import PrepReport
+        rep = PrepReport(hydrogens_added=50, n_chirality_outliers=1)  # no indices
         assert self._keep_with(rep, 1.0) is False
 
     def test_multichain_requires_chain_id(self):
