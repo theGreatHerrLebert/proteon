@@ -163,12 +163,17 @@ fn ca_chirality_is_d(n: [f64; 3], ca: [f64; 3], c: [f64; 3], cb: [f64; 3]) -> bo
 /// Count backbone-geometry label hazards in model 0: `(n_chain_gaps,
 /// n_chirality_outliers)`. Chain gaps are broken peptide bonds between
 /// consecutive amino acids; chirality outliers are non-L CA centres.
-fn scan_geometry_hazards(pdb: &pdbtbx::PDB) -> (usize, usize) {
+fn scan_geometry_hazards(pdb: &pdbtbx::PDB) -> (usize, usize, Vec<usize>) {
     let mut n_gaps = 0;
-    let mut n_chirality = 0;
+    let mut chirality_residues: Vec<usize> = Vec::new();
     let Some(model) = pdb.models().next() else {
-        return (0, 0);
+        return (0, 0, Vec::new());
     };
+    // `res_idx` increments for EVERY residue in chain->residue order, identical to
+    // the topology's `res_idx` convention, so the recorded chirality-outlier
+    // indices align with `clash_residue_indices` and the export's per-chain
+    // re-walk (the global all-model-0-residue namespace).
+    let mut res_idx = 0usize;
     for chain in model.chains() {
         let mut prev_c: Option<[f64; 3]> = None;
         let mut prev_was_aa = false;
@@ -192,15 +197,16 @@ fn scan_geometry_hazards(pdb: &pdbtbx::PDB) -> (usize, usize) {
                     residue_atom_pos(residue, "CB"),
                 ) {
                     if ca_chirality_is_d(n, ca, c, cb) {
-                        n_chirality += 1;
+                        chirality_residues.push(res_idx);
                     }
                 }
             }
             prev_c = residue_atom_pos(residue, "C");
             prev_was_aa = is_aa;
+            res_idx += 1;
         }
     }
-    (n_gaps, n_chirality)
+    (n_gaps, chirality_residues.len(), chirality_residues)
 }
 
 /// Knobs for [`prepare_structure`]. [`Default`] mirrors the Python
@@ -350,6 +356,10 @@ pub struct PrepareReport {
     /// CA centres with non-L (D) chirality — a D-amino acid or a modeling error;
     /// a coordinate-geometry anomaly a standard L-protein pipeline should see.
     pub n_chirality_outliers: usize,
+    /// `residue_idx` (0-based over ALL model-0 residues, chain→residue order) of
+    /// every non-L (D) chirality CA centre — for per-residue masking, aligned to
+    /// `clash_residue_indices` and the supervision residue order.
+    pub chirality_residue_indices: Vec<usize>,
 }
 
 /// Force fields the preparation pipeline supports (`amber96_obc` is not a
@@ -587,9 +597,11 @@ pub fn prepare_structure<P: ForceField>(
     out.has_insertion_codes = sh.has_insertion_codes;
     out.has_nonstandard_residues = sh.has_nonstandard_residues;
     out.has_metals = sh.has_metals;
-    let (n_chain_gaps, n_chirality_outliers) = scan_geometry_hazards(pdb);
+    let (n_chain_gaps, n_chirality_outliers, chirality_residue_indices) =
+        scan_geometry_hazards(pdb);
     out.n_chain_gaps = n_chain_gaps;
     out.n_chirality_outliers = n_chirality_outliers;
+    out.chirality_residue_indices = chirality_residue_indices;
     // Missing heavy atoms on the FINAL structure: nonzero only when residues are
     // incomplete AND reconstruction did not fill them (the supervision default).
     out.n_missing_heavy_atoms = crate::reconstruct::count_missing_heavy_atoms(pdb);

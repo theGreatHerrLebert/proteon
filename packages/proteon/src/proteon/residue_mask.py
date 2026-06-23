@@ -176,28 +176,41 @@ def residue_trustworthy(residues, hazards=_TRUST_HAZARDS) -> NDArray:
     return trust
 
 
-def residue_clash_mask(structure, clash_residue_indices, chain_id: str) -> NDArray:
-    """Per-residue bool — is each export residue CLASH-FREE (trustworthy)?
+def _residue_keep_mask(structure, global_indices, chain_id: str) -> NDArray:
+    """Per-export-residue bool — True where the residue's GLOBAL ``residue_idx`` is
+    NOT in ``global_indices``.
 
-    ``clash_residue_indices`` (from ``PrepReport.clash_residue_indices``) are the
-    topology's ``residue_idx``: a 0-based index over ALL model-0 residues in
-    chain→residue order. The supervision export uses the AA-only residues of ONE
+    ``global_indices`` are the topology's ``residue_idx``: 0-based over ALL model-0
+    residues in chain→residue order. The export uses the AA-only residues of ONE
     chain, so this re-walks the same model-0 iteration to recover each export
-    residue's all-residue index and looks it up. Aligned to ``residue_index`` by
-    construction (the Rust topology builds ``res_idx`` from the identical
-    ``models[0].chains() → residues()`` walk). Returns True where a residue is
-    clash-free, so it ANDs directly into :func:`residue_trustworthy`.
+    residue's global index — aligned by construction (the Rust scans build
+    ``res_idx`` from the identical ``models[0].chains() → residues()`` walk).
     """
-    clash = set(clash_residue_indices)
+    bad = set(global_indices)
     out = []
     all_idx = 0
     for ch in structure.models[0].chains:
         in_export_chain = ch.id == chain_id
         for r in ch.residues:
             if in_export_chain and r.is_amino_acid:
-                out.append(all_idx not in clash)
+                out.append(all_idx not in bad)
             all_idx += 1
     return np.array(out, dtype=bool)
+
+
+def residue_clash_mask(structure, clash_residue_indices, chain_id: str) -> NDArray:
+    """Per-residue bool — is each export residue CLASH-FREE? (See
+    :func:`_residue_keep_mask`.) ANDs directly into the trust mask."""
+    return _residue_keep_mask(structure, clash_residue_indices, chain_id)
+
+
+def residue_chirality_mask(structure, chirality_residue_indices, chain_id: str) -> NDArray:
+    """Per-residue bool — is each export residue L-chirality (not a D outlier)?
+
+    Localizes the chirality hazard like :func:`residue_clash_mask` does clashes:
+    a single D / mis-modelled CA centre masks just that residue's coordinate
+    labels instead of dropping the whole structure."""
+    return _residue_keep_mask(structure, chirality_residue_indices, chain_id)
 
 
 def _resolve_export_chain_id(structure, chain_id: Optional[str]) -> Optional[str]:
@@ -241,11 +254,19 @@ def structure_coverage(
         # reduce coverage and drop an otherwise-safe structure (codex). For a
         # severe structure the clashing residues ARE counted invalid, so a
         # localized severe clash stays high-coverage and a pervasive one drops.
-        if getattr(report, "has_severe_clashes", False) and report.clash_residue_indices:
-            cid = _resolve_export_chain_id(structure, chain_id)
-            if cid is not None:
+        cid = _resolve_export_chain_id(structure, chain_id)
+        if cid is not None:
+            if getattr(report, "has_severe_clashes", False) and report.clash_residue_indices:
                 node_valid = node_valid & residue_clash_mask(
                     structure, report.clash_residue_indices, cid
+                )
+            # D-chirality CA centres: a coordinate-geometry anomaly, localized like
+            # clashes (a single outlier masks its residue, not the whole structure).
+            # Gated on the ACTIVE hazard (like has_severe_clashes), so stale indices
+            # on a report whose outlier was cleared don't mask (codex).
+            if getattr(report, "has_chirality_outliers", False) and report.chirality_residue_indices:
+                node_valid = node_valid & residue_chirality_mask(
+                    structure, report.chirality_residue_indices, cid
                 )
     return ResidueCoverage(
         profile=profile,

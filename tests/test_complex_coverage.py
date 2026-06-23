@@ -106,14 +106,21 @@ class TestInterfaceGate:
 
     def test_unmasked_hazard_blocks_complex_export(self):
         # A verified multi-chain assembly with high coverage but an UNMASKED
-        # coordinate hazard (chirality) must still drop — coverage only masks
-        # missing/altloc/clash, not chirality (codex). Patch a chirality outlier
-        # onto an otherwise-keepable complex.
+        # coordinate hazard (multiple models) must still drop — coverage masks
+        # missing/altloc/clash/chirality, NOT multi-model. Patch it on.
         s, r = _prep("4hhb")
-        r.n_chirality_outliers = 1
-        assert "chirality_outliers" in r.label_hazards
+        r.n_models = 2
+        assert "multiple_models" in r.label_hazards
         out = build_complex_supervision_examples(s, prep_report=r, min_coverage=0.3)
-        assert out == "unmasked_hazard:chirality_outliers"
+        assert out == "unmasked_hazard:multiple_models"
+
+    def test_chirality_is_localized_not_a_complex_blocker(self):
+        # 4hhb's incidental chirality outlier is now MASKED, not a whole-complex
+        # blocker — the verified tetramer is kept (with that residue masked).
+        s, r = _prep("4hhb")
+        assert r.n_chirality_outliers >= 1
+        out = build_complex_supervision_examples(s, prep_report=r, min_coverage=0.3)
+        assert isinstance(out, ComplexSupervisionExamples)
 
     def test_high_floor_drops_on_coverage(self):
         s, r = _prep_no_incidental_chirality("4hhb")  # severe clashes -> chains ~0.63

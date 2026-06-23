@@ -252,6 +252,10 @@ class PrepReport:
     #: CA centres with non-L (D) chirality — a D-amino acid or a modeling error;
     #: a coordinate-geometry anomaly a standard L-protein pipeline should see.
     n_chirality_outliers: int = 0
+    #: ``residue_idx`` (0-based over ALL model-0 residues, chain→residue order) of
+    #: every non-L (D) chirality CA centre. For per-residue masking; aligned to
+    #: ``clash_residue_indices`` and the supervision residue order.
+    chirality_residue_indices: List[int] = field(default_factory=list)
     # --- biological-assembly signals (interface-label hazard; path-layer-set) ---
     #: Number of operators in the first biological assembly (REMARK 350); 1 =
     #: no expansion. ``None`` when the assembly was not determined (no path, or no
@@ -739,6 +743,7 @@ def prepare(
             report.has_metals = r.get("has_metals", False)
             report.n_chain_gaps = r.get("n_chain_gaps", 0)
             report.n_chirality_outliers = r.get("n_chirality_outliers", 0)
+            report.chirality_residue_indices = list(r.get("chirality_residue_indices", []))
             if report.skipped_no_protein:
                 report.warnings.append(
                     f"skipped: {report.n_unassigned_atoms} atoms have no "
@@ -810,6 +815,7 @@ def prepare(
             report.has_metals = r.get("has_metals", False)
             report.n_chain_gaps = r.get("n_chain_gaps", 0)
             report.n_chirality_outliers = r.get("n_chirality_outliers", 0)
+            report.chirality_residue_indices = list(r.get("chirality_residue_indices", []))
 
     # Step 4: FF coverage + readiness flags. Source them from the SAME Rust
     # prepare path the default (strip_hydrogens) branch uses, via a coverage-only
@@ -841,6 +847,7 @@ def prepare(
         report.has_metals = c.get("has_metals", False)
         report.n_chain_gaps = c.get("n_chain_gaps", 0)
         report.n_chirality_outliers = c.get("n_chirality_outliers", 0)
+        report.chirality_residue_indices = list(c.get("chirality_residue_indices", []))
     if report.n_unassigned_atoms > 10:
         report.warnings.append(
             f"{report.n_unassigned_atoms} atoms without force field type "
@@ -966,6 +973,7 @@ def batch_prepare(
             has_metals=r.get("has_metals", False),
             n_chain_gaps=r.get("n_chain_gaps", 0),
             n_chirality_outliers=r.get("n_chirality_outliers", 0),
+            chirality_residue_indices=list(r.get("chirality_residue_indices", [])),
         )
         if report.skipped_no_protein:
             report.warnings.append(
@@ -1335,26 +1343,39 @@ def prepare_for_supervision(
 
 #: Hazards that per-residue COVERAGE masking now LOCALIZES (so the gate keeps the
 #: structure and the export masks the affected residues), instead of dropping the
-#: whole structure: missing atoms (presence), altlocs + severe clashes
-#: (trustworthiness — `structure_coverage(report=...)` counts those residues
-#: invalid, so a *pervasive* defect still drops via low coverage). Hazards NOT
-#: here (e.g. chirality) remain whole-structure blockers. The kept defects MUST
-#: be exported with `mask_untrustworthy_coords=True` or they become labels.
-_COVERAGE_MASKED_HAZARDS = frozenset({"missing_atoms", "altlocs", "severe_heavy_clashes"})
+#: whole structure: missing atoms (presence), altlocs + severe clashes + D-chirality
+#: outliers (trustworthiness — `structure_coverage(report=...)` counts those
+#: residues invalid, so a *pervasive* defect still drops via low coverage). Hazards
+#: NOT here (multiple models / reconstructed / relaxed) remain whole-structure
+#: blockers. The kept defects MUST be exported with `mask_untrustworthy_coords=True`
+#: or they become labels.
+_COVERAGE_MASKED_HAZARDS = frozenset(
+    {"missing_atoms", "altlocs", "severe_heavy_clashes", "chirality_outliers"}
+)
 
 
 def unmasked_heavy_coord_hazards(report) -> set:
     """Heavy-coordinate label hazards that coverage masking does NOT localize.
 
     A coverage-gated structure (or complex) is only label-safe if this is empty:
-    coverage masks missing atoms / altlocs / severe clashes per residue, but
-    chirality / multiple models / reconstructed / relaxed coordinates would
+    coverage masks missing atoms / altlocs / severe clashes / D-chirality per
+    residue, but multiple models / reconstructed / relaxed coordinates would
     corrupt the KEPT residues' labels and so must still block the export. Shared
     by the single-chain gate and the complex builder so they cannot drift.
     """
     from .repair import PROFILE_BLOCKERS
 
-    return (set(report.label_hazards) & PROFILE_BLOCKERS["heavy_coords"]) - _COVERAGE_MASKED_HAZARDS
+    hazards = set(report.label_hazards) & PROFILE_BLOCKERS["heavy_coords"]
+    unmasked = hazards - _COVERAGE_MASKED_HAZARDS
+    # A report-attributed hazard is only ACTUALLY localized when its per-residue
+    # index list is present — otherwise the mask is a no-op and the corrupt label
+    # would pass unmasked, so it must still block (codex). (altlocs / missing
+    # atoms localize from the structure itself, so they need no attribution.)
+    if "severe_heavy_clashes" in hazards and not report.clash_residue_indices:
+        unmasked.add("severe_heavy_clashes")
+    if "chirality_outliers" in hazards and not report.chirality_residue_indices:
+        unmasked.add("chirality_outliers")
+    return unmasked
 
 
 def _supervision_keep(res, repair, min_coverage) -> bool:
