@@ -101,6 +101,59 @@ class BuiltAssembly:
             os.unlink(tmp)
 
 
+@dataclass
+class PreparedAssembly:
+    """A built biological assembly, re-prepared so the NEW inter-copy interfaces
+    are validated by the normal `prepare` scans (PR2).
+
+    `report.n_heavy_clashes` / `clash_residue_indices` / `chirality_residue_indices`
+    now cover the FULL assembly — including clashes that exist only between
+    symmetry copies and were invisible to the deposited ASU's scan. Feed
+    `structure` + `report` into `build_complex_supervision_examples` (PR3).
+    """
+
+    structure: object
+    report: object
+    chains: List[AssemblyChain] = field(default_factory=list)
+    n_operators: int = 0
+    biomolecule_id: Optional[int] = None
+
+    @property
+    def n_chains(self) -> int:
+        return len(self.chains)
+
+
+def prepare_assembly(
+    path_or_text: Union[str, os.PathLike], *, biomolecule: int = 1, **prepare_kwargs
+) -> Union[PreparedAssembly, str]:
+    """Build biomolecule `biomolecule` from BIOMT and re-prepare it (PR2).
+
+    Returns a :class:`PreparedAssembly` (the prepared assembled structure + a
+    report whose clash/chirality scans cover the new inter-copy interfaces), or a
+    materialization drop-reason string (see :func:`build_assembly`).
+
+    `prepare_kwargs` is forwarded to :func:`proteon.prepare`; supervision callers
+    typically pass ``reconstruct=False`` (don't fabricate atoms) and
+    ``minimize=False`` (the clash/chirality gates are structural). The key
+    property: a steric overlap that exists ONLY in the assembly is detected here,
+    because the whole oligomer goes through the same clash scan as any structure.
+    """
+    built = build_assembly(path_or_text, biomolecule=biomolecule)
+    if isinstance(built, str):
+        return built  # materialization failed (no metadata / too large / etc.)
+    from .prepare import prepare as _prepare
+
+    structure = built.load()
+    report = _prepare(structure, **prepare_kwargs)
+    return PreparedAssembly(
+        structure=structure,
+        report=report,
+        chains=built.chains,
+        n_operators=built.n_operators,
+        biomolecule_id=built.biomolecule_id,
+    )
+
+
 def _op_matrix(op):
     """(R 3x3, t 3) from a REMARK 350 3x4 row-major operator."""
     r = np.array([[op[i][j] for j in range(3)] for i in range(3)], dtype=np.float64)
