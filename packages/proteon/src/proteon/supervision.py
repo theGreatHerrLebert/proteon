@@ -368,6 +368,103 @@ def build_structure_supervision_example(
     return example
 
 
+#: Interface-mode drop reasons (distinct, not a flat "unsafe" — so a
+#: requires-expansion complex stays recoverable by a later assembly builder).
+INTERFACE_DROP_REASONS = (
+    "requires_assembly_expansion",  # assembly_is_asu is False (BIOMT expansion needed)
+    "assembly_unverified",          # assembly_is_asu is None (no REMARK 350 / no path)
+    "unmasked_hazard:<name>",       # a heavy-coord hazard coverage masking can't localize
+    "not_a_complex",                # < 2 protein chains
+    "below_coverage_floor",         # a chain fell below min_coverage
+)
+
+
+@dataclass
+class ComplexSupervisionExamples:
+    """The label-safe substrate of a verified biological assembly (interface labels).
+
+    A complex-level wrapper over the per-chain examples, so chain relationships
+    are recoverable: each ``chain_examples[cid]`` is the same single-chain tensor
+    bundle as :func:`build_structure_supervision_example`, masked
+    cross-chain-correctly (a residue clashing across an interface is masked in its
+    own chain). It is NOT a multimer tensor format — no contact map / neighbor
+    edges, no asym_id concatenation; the consumer computes pair labels from the
+    chains' coordinates (see ``devdocs/MULTI_CHAIN_COVERAGE_DESIGN.md``).
+    """
+
+    record_id: str
+    chain_order: List[str]
+    chain_examples: Dict[str, StructureSupervisionExample]
+    assembly_is_asu: bool
+    prep_report: Optional[PrepReport] = None
+    #: The :class:`~proteon.residue_mask.ComplexCoverage` that gated this complex.
+    coverage: Optional[object] = None
+
+
+def build_complex_supervision_examples(
+    structure,
+    *,
+    prep_report: PrepReport,
+    min_coverage: float,
+    profile: str = "heavy_coords",
+    mask_untrustworthy_coords: bool = True,
+):
+    """Build the verified, masked per-chain examples of a biological assembly.
+
+    Returns a :class:`ComplexSupervisionExamples` if the complex passes the
+    interface gate, else a ``str`` drop reason (one of
+    :data:`INTERFACE_DROP_REASONS`) — never raises on a gate failure.
+
+    The interface gate (see the design doc): the deposited ASU must BE the
+    biological assembly (``prep_report.assembly_is_asu is True``, which already
+    requires the assembly's chain list to equal the present chains exactly), there
+    must be ≥ 2 protein chains, and every chain's per-residue coverage must clear
+    ``min_coverage``. A ``False`` assembly (expansion needed) and ``None``
+    (unverified) drop with distinct reasons.
+    """
+    from .residue_mask import complex_coverage
+
+    if prep_report.assembly_is_asu is None:
+        return "assembly_unverified"
+    if prep_report.assembly_is_asu is False:
+        return "requires_assembly_expansion"
+
+    # Unmasked heavy-coordinate hazards (chirality / multiple models /
+    # reconstructed / relaxed) corrupt even the KEPT residues — coverage masking
+    # only localizes missing atoms / altlocs / severe clashes. They must still
+    # block, exactly like the single-chain coverage gate (shared helper) (codex).
+    from .prepare import unmasked_heavy_coord_hazards
+
+    unmasked = unmasked_heavy_coord_hazards(prep_report)
+    if unmasked:
+        return f"unmasked_hazard:{sorted(unmasked)[0]}"
+
+    cov = complex_coverage(structure, profile=profile, report=prep_report)
+    if cov.n_protein_chains < 2:
+        return "not_a_complex"
+    if cov.min_coverage < min_coverage:
+        return "below_coverage_floor"
+
+    chain_order = list(cov.chains.keys())
+    chain_examples = {
+        cid: build_structure_supervision_example(
+            structure,
+            prep_report=prep_report,
+            chain_id=cid,
+            mask_untrustworthy_coords=mask_untrustworthy_coords,
+        )
+        for cid in chain_order
+    }
+    return ComplexSupervisionExamples(
+        record_id=_default_record_id(structure, "+".join(chain_order)),
+        chain_order=chain_order,
+        chain_examples=chain_examples,
+        assembly_is_asu=True,
+        prep_report=prep_report,
+        coverage=cov,
+    )
+
+
 def _batch_alt_positions(residues, batch_tensors, i, length):
     """Compute atom14 alt positions for one example in a Rust batch."""
     a14_pos = np.asarray(batch_tensors["atom14_gt_positions"])[i, :length].astype(np.float32, copy=False)

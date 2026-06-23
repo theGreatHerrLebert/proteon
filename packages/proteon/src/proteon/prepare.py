@@ -1343,22 +1343,27 @@ def prepare_for_supervision(
 _COVERAGE_MASKED_HAZARDS = frozenset({"missing_atoms", "altlocs", "severe_heavy_clashes"})
 
 
+def unmasked_heavy_coord_hazards(report) -> set:
+    """Heavy-coordinate label hazards that coverage masking does NOT localize.
+
+    A coverage-gated structure (or complex) is only label-safe if this is empty:
+    coverage masks missing atoms / altlocs / severe clashes per residue, but
+    chirality / multiple models / reconstructed / relaxed coordinates would
+    corrupt the KEPT residues' labels and so must still block the export. Shared
+    by the single-chain gate and the complex builder so they cannot drift.
+    """
+    from .repair import PROFILE_BLOCKERS
+
+    return (set(report.label_hazards) & PROFILE_BLOCKERS["heavy_coords"]) - _COVERAGE_MASKED_HAZARDS
+
+
 def _supervision_keep(res, repair, min_coverage) -> bool:
     """The ``only_safe`` keep decision: coverage gate if requested, else policy,
     else strict label-safety."""
     if min_coverage is not None:
-        # Coverage-based supervision: keep a structure iff (a) enough residues are
-        # complete AND (b) it carries no UNMASKED coordinate hazard. Coverage only
-        # masks missing atoms; severe clashes / altlocs / chirality / multi-model
-        # would still corrupt the kept residues' labels, so they still gate.
-        from .repair import PROFILE_BLOCKERS
-
         if res.coverage is None or res.coverage < min_coverage or res.report is None:
             return False
-        unmasked = (
-            set(res.report.label_hazards) & PROFILE_BLOCKERS["heavy_coords"]
-        ) - _COVERAGE_MASKED_HAZARDS
-        return not unmasked
+        return not unmasked_heavy_coord_hazards(res.report)
     if repair is not None:
         return res.passes_policy
     return res.label_safe

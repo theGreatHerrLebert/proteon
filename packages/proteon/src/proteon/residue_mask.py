@@ -65,6 +65,36 @@ class ResidueCoverage:
         return self.n_valid / self.n_residues
 
 
+@dataclass
+class ComplexCoverage:
+    """Per-chain coverage of a multi-chain structure, for interface labels."""
+
+    #: chain id -> its :class:`ResidueCoverage` (one per protein chain).
+    chains: "dict"
+
+    @property
+    def min_coverage(self) -> float:
+        """The WEAKEST chain's coverage — the interface gate value.
+
+        An interface label needs every partner usable, so one bad chain must drop
+        the complex, not be averaged away by a pristine partner. 0.0 if empty.
+        """
+        if not self.chains:
+            return 0.0
+        return min(c.coverage for c in self.chains.values())
+
+    @property
+    def total_coverage(self) -> float:
+        """Valid / all protein residues across all chains (reporting only)."""
+        nv = sum(c.n_valid for c in self.chains.values())
+        nr = sum(c.n_residues for c in self.chains.values())
+        return nv / nr if nr else 0.0
+
+    @property
+    def n_protein_chains(self) -> int:
+        return len(self.chains)
+
+
 def _amino_acid_residues(structure, chain_id: Optional[str]) -> List:
     """Model-0 amino-acid residues of ONE chain — matching the supervision export.
 
@@ -223,3 +253,28 @@ def structure_coverage(
         n_valid=int(node_valid.sum()),
         node_valid=node_valid,
     )
+
+
+def _protein_chain_ids(structure) -> List[str]:
+    """Model-0 chain ids that contain at least one amino-acid residue."""
+    return [
+        ch.id for ch in structure.models[0].chains if any(r.is_amino_acid for r in ch.residues)
+    ]
+
+
+def complex_coverage(structure, *, profile: str = "heavy_coords", report=None) -> ComplexCoverage:
+    """Per-chain :class:`ResidueCoverage` for every protein chain — for interface labels.
+
+    One :func:`structure_coverage` per protein chain, sharing the whole-complex
+    ``report``. The shared ``report.clash_residue_indices`` is the GLOBAL
+    all-model-0-residue index namespace; each chain's :func:`residue_clash_mask`
+    maps its residues back to that same global index (never chain-local), so a
+    residue clashing only ACROSS an interface is correctly masked in its own
+    chain. The clash scan is whole-complex, so inter-chain clashes are already
+    included — no special interface handling needed.
+    """
+    chains = {
+        cid: structure_coverage(structure, profile=profile, chain_id=cid, report=report)
+        for cid in _protein_chain_ids(structure)
+    }
+    return ComplexCoverage(chains=chains)
