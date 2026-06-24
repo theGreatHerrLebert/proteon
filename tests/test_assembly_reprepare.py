@@ -58,6 +58,10 @@ class TestPrepareAssembly:
         # never a crash.
         assert prepare_assembly(os.path.join(PDBS, "1ubq.pdb")) == "no_assembly_metadata"
 
-    def test_too_large_propagates(self):
-        # 1mva (180 copies) -> too large for PDB, propagated from build.
-        assert prepare_assembly(_corpus("1mva")) == "assembly_too_large_for_pdb"
+    def test_large_assembly_reprepares_via_mmcif(self):
+        # 1z14 (60-mer capsid) is too large for PDB -> built as mmCIF, re-prepared
+        # over the whole oligomer (no longer dropped). The report covers all copies.
+        pa = prepare_assembly(_corpus("1z14"), reconstruct=False, minimize=False)
+        assert isinstance(pa, PreparedAssembly)
+        assert pa.n_chains == 60
+        assert len(set(pa.structure.chain_ids)) == 60
