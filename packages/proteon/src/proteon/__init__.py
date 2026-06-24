@@ -4,13 +4,24 @@ Fast structure loading, alignment, analysis, and preparation from Python, plus
 an experimental structural search stack and a NumPy/Parquet-first data layer
 for downstream geometric deep learning.
 
-The top-level ``proteon`` namespace is a curated convenience surface for the
-most common workflows, including the canonical "prepare and export a
-structure-supervision corpus" path. More specialized or format-specific APIs
-remain available from their submodules. Underscore-prefixed names and
-non-exported internals are not part of the stable top-level contract.
-Search-related APIs are available here, but should currently be treated as
-experimental.
+**Stability tiers** (see ``STABILITY.md``). The top-level namespace is split
+into two tiers, exposed as ``proteon.__stable__`` and
+``proteon.__experimental__``:
+
+- **Stable** — the strict pure-compute core: one oracle-validated quantity per
+  call, fixed signature (alignment, SASA, DSSP, H-bonds, geometry, I/O, the
+  structure model, and energy/minimization). proteon promises to keep these
+  working.
+- **Experimental** — research frontiers and multi-stage orchestration whose
+  heuristics/schemas still move: the ``prepare`` + structure-supervision corpus
+  pipeline, structural search, MSA/templates, electrostatics, Vina docking, and
+  ``run_md``. These are validated but not contract-frozen. Their canonical
+  access path is ``proteon.experimental.*`` (e.g. ``proteon.experimental.prepare``);
+  flat top-level access is retained for back-compat and will warn in a future
+  minor release.
+
+Underscore-prefixed names and non-exported internals are not part of either
+contract.
 
     >>> import proteon
     >>> s = proteon.load("1crn.pdb")
@@ -20,12 +31,13 @@ experimental.
     >>> cm = proteon.contact_map(proteon.extract_ca_coords(s), cutoff=8.0)
     >>> df = proteon.to_dataframe(s)
 
-DL prep, three lines from PDBs to a supervision release directory:
+DL prep (experimental tier), three lines from PDBs to a supervision release
+directory — canonical access is via ``proteon.experimental.*``:
 
     >>> import proteon as p
     >>> structures = [p.load(path) for path in pdb_paths]
-    >>> prep_reports = p.batch_prepare(structures)  # mutates in place
-    >>> p.build_structure_supervision_dataset_from_prepared(
+    >>> prep_reports = p.experimental.batch_prepare(structures)  # mutates in place
+    >>> p.experimental.build_structure_supervision_dataset_from_prepared(
     ...     structures, prep_reports, out_dir="out/release", release_id="v1",
     ... )
 
@@ -446,6 +458,9 @@ _ANALYSIS_API = (
 
 _CORE_API = ("RustWrapperObject",)
 
+# Energy + minimization are oracle-gated (AMBER96 ≤0.5%, OBC GB ≤1% vs OpenMM)
+# and stable. `run_md` (SHAKE/RATTLE MD) is far less validated and is treated as
+# experimental — split out below rather than poisoning the whole group.
 _FORCEFIELD_API = (
     "batch_compute_energy",
     "batch_minimize_hydrogens",
@@ -455,8 +470,9 @@ _FORCEFIELD_API = (
     "load_and_minimize_hydrogens",
     "minimize_hydrogens",
     "minimize_structure",
-    "run_md",
 )
+
+_FORCEFIELD_EXPERIMENTAL_API = ("run_md",)
 
 _HBOND_API = (
     "backbone_hbonds",
@@ -786,19 +802,12 @@ _FAILURE_API = (
     "summaries_to_markdown",
 )
 
-__all__ = (
-    "__version__",
-    *_ARROW_API,
-    *_ALIGN_API,
-    *_ANALYSIS_API,
-    *_CORE_API,
-    *_FORCEFIELD_API,
-    *_HBOND_API,
-    *_HYDROGEN_API,
-    *_PREPARE_API,
-    *_DSSP_API,
-    *_GEOMETRY_API,
-    *_SASA_API,
+# Electrostatics: BEM science (`born_energy`, `surface_potential`) is built on a
+# DRAFT formulation; the surface-format parsers (`read_*` / `write_off`) serve
+# that experimental workflow and have no independently-validated round-trip
+# contract yet. The whole group is experimental for now (parsers are promotion
+# candidates once round-trip-tested).
+_ELECTROSTATICS_API = (
     "born_energy",
     "surface_potential",
     "read_off",
@@ -806,20 +815,93 @@ __all__ = (
     "read_hmo",
     "read_msms",
     "write_off",
-    *_SELECT_API,
-    *_SEARCH_API,
-    *_MSA_API,
-    *_TEMPLATE_API,
-    *_SEQUENCE_API,
-    *_IO_API,
-    *_STRUCTURE_API,
-    *_SUPERVISION_API,
-    *_SUPERVISION_EXPORT_API,
-    *_CORPUS_RELEASE_API,
-    *_SEQUENCE_EXPORT_API,
-    *_TRAINING_API,
-    *_CORPUS_VALIDATION_API,
-    *_CLUSTER_ASSIGNMENTS_API,
-    *_VINA_API,
-    *_FAILURE_API,
 )
+
+# --- Stability tiering (see devdocs/STABLE_SURFACE_TIERING_DESIGN.md and
+# STABILITY.md). STABLE is the strict pure-compute core: one oracle-validated
+# quantity per call, fixed signature, named oracle/N/tolerance. Everything else
+# is EXPERIMENTAL — research frontiers or multi-stage orchestration whose
+# heuristics/schemas still move (this includes the robust-but-not-correctness-
+# frozen prepare/supervision flagship). The split is the public contract; the
+# frozen-snapshot guard in tests/test_public_api_surface.py makes growing the
+# STABLE set a deliberate, reviewed act.
+_STABLE_GROUPS = (
+    _IO_API,
+    _STRUCTURE_API,
+    _ALIGN_API,
+    _ANALYSIS_API,
+    _GEOMETRY_API,
+    _SASA_API,
+    _DSSP_API,
+    _HBOND_API,
+    _FORCEFIELD_API,
+)
+
+_EXPERIMENTAL_GROUPS = (
+    _CORE_API,
+    _FORCEFIELD_EXPERIMENTAL_API,
+    _HYDROGEN_API,
+    _PREPARE_API,
+    _ARROW_API,
+    _ELECTROSTATICS_API,
+    _SELECT_API,
+    _SEARCH_API,
+    _MSA_API,
+    _TEMPLATE_API,
+    _SEQUENCE_API,
+    _SUPERVISION_API,
+    _SUPERVISION_EXPORT_API,
+    _CORPUS_RELEASE_API,
+    _SEQUENCE_EXPORT_API,
+    _TRAINING_API,
+    _CORPUS_VALIDATION_API,
+    _CLUSTER_ASSIGNMENTS_API,
+    _VINA_API,
+    _FAILURE_API,
+)
+
+#: Frozenset of top-level names proteon promises to keep stable (signature +
+#: documented behaviour). Frozen by the API-growth guard; grow it deliberately.
+__stable__ = frozenset(name for group in _STABLE_GROUPS for name in group)
+
+#: Frozenset of experimental top-level names. NOT frozen (research churns), but
+#: kept disjoint from ``__stable__`` so nothing silently graduates. The canonical
+#: access path for these is ``proteon.experimental.*``; flat top-level access is
+#: retained for back-compat and will warn in a future minor release.
+__experimental__ = frozenset(name for group in _EXPERIMENTAL_GROUPS for name in group)
+
+__all__ = ("__version__", *sorted(__stable__ | __experimental__))
+
+# Canonical experimental namespace: ``proteon.experimental.prepare`` etc. Built
+# from the already-imported globals (no duplicate import list, no extra deps) and
+# registered as a real importable submodule. Flat names remain bound on the
+# package for now — this is additive (PR1, non-breaking); the flat→deprecation
+# flip is a follow-up.
+import importlib.machinery as _machinery
+import sys as _sys
+import types as _types
+
+experimental = _types.ModuleType(__name__ + ".experimental")
+# Give the synthetic submodule a spec/package so tooling that reads __spec__
+# (importlib, some IDEs/static analysers) does not choke on it.
+experimental.__spec__ = _machinery.ModuleSpec(experimental.__name__, loader=None)
+experimental.__package__ = __name__
+experimental.__doc__ = (
+    "Experimental proteon surface — research frontiers and multi-stage "
+    "orchestration whose APIs/schemas may change without a deprecation cycle. "
+    "See STABILITY.md. Stable APIs live at the top level (proteon.*)."
+)
+# Every experimental symbol is eagerly imported above, so it must already be a
+# package global. Fail loudly and specifically if that ever stops holding,
+# rather than with a bare KeyError mid-construction.
+_unbound = [_name for _name in sorted(__experimental__) if _name not in globals()]
+if _unbound:  # pragma: no cover - guards against a future import regression
+    raise ImportError(
+        f"proteon: experimental symbols declared in __experimental__ but not "
+        f"bound at import time: {_unbound}"
+    )
+for _name in sorted(__experimental__):
+    setattr(experimental, _name, globals()[_name])
+experimental.__all__ = tuple(sorted(__experimental__))
+_sys.modules[experimental.__name__] = experimental
+del _name
