@@ -37,6 +37,42 @@ except ImportError:  # pragma: no cover
     _ff = None
 
 
+class ParameterizationError(ValueError):
+    """Raised by :func:`compute_energy` when no atom could be parameterized.
+
+    Subclasses :class:`ValueError` so existing ``except ValueError`` handlers
+    still catch it. Signals that the force field assigned *zero* atoms a
+    topology (``n_topo_atoms == 0``) — e.g. HETATM-only input (waters/ligands
+    the protein force field drops). In that case the returned ``total`` would be
+    a meaningless ``0.0``, which reads as "perfectly relaxed"; raising instead is
+    the documented validity boundary. See STABILITY.md.
+    """
+
+
+def _annotate_parameterization(energy: dict) -> dict:
+    """Annotate an energy dict with explicit parameterization status.
+
+    Adds (additive, non-breaking):
+      * ``is_parameterized`` — True iff every atom that entered the topology was
+        assigned a force-field type (``n_unassigned_atoms == 0``) and at least
+        one atom was typed.
+      * ``parameterization_status`` — ``"complete"`` | ``"partial"`` | ``"empty"``.
+
+    ``total`` is only physically meaningful when status is ``"complete"``.
+    """
+    n_topo = energy.get("n_topo_atoms", 0)
+    n_unassigned = energy.get("n_unassigned_atoms", 0)
+    if n_topo == 0:
+        status = "empty"
+    elif n_unassigned > 0:
+        status = "partial"
+    else:
+        status = "complete"
+    energy["parameterization_status"] = status
+    energy["is_parameterized"] = status == "complete"
+    return energy
+
+
 @functools.lru_cache(maxsize=1)
 def _warn_amber96_cutoff_policy() -> None:
     """Warn once per process about the proteon-vs-OpenMM AMBER96 policy
@@ -237,14 +273,37 @@ def compute_energy(
 
     Returns dict with energy components:
         bond_stretch, angle_bend, torsion, improper_torsion,
-        vdw, electrostatic, solvation, total
+        vdw, electrostatic, solvation, total, plus topology counts
+        (n_topo_atoms, n_unassigned_atoms, ...) and a parameterization
+        signal: ``parameterization_status`` ("complete" | "partial" |
+        "empty") and ``is_parameterized`` (bool). ``total`` is only
+        physically meaningful when status is "complete".
+
+    Validity boundary:
+        Raises :class:`ParameterizationError` (a ``ValueError`` subclass) when
+        NO atom could be parameterized (``n_topo_atoms == 0``, e.g. HETATM-only
+        input) — returning the meaningless ``0.0`` total would read as a
+        relaxed structure. When some but not all atoms are typed
+        (``n_unassigned_atoms > 0``) it returns a dict with
+        ``parameterization_status == "partial"`` and ``total`` covering only the
+        typed subset. Note: amber96 energies on a structure WITHOUT hydrogens
+        are computed but are not physically meaningful — protonate first.
     """
     u = _validate_units(units)
     _maybe_warn_ff(ff)
     if ff is not None and ff.lower() == "amber96" and _structure_has_unrenamed_his(structure):
         _warn_amber96_unrenamed_his()
     result = _ff.compute_energy(_get_ptr(structure), ff, nbl_threshold, nonbonded_cutoff)
-    return _convert_energy_dict(result, u)
+    energy = _annotate_parameterization(_convert_energy_dict(result, u))
+    if energy["parameterization_status"] == "empty":
+        raise ParameterizationError(
+            f"compute_energy: no atoms could be parameterized with force field "
+            f"{ff!r} (n_topo_atoms=0). The energy would be a meaningless 0.0 — "
+            f"the input has no force-field-typable atoms (e.g. HETATM-only "
+            f"waters/ligands the protein force field drops). Prepare/protonate a "
+            f"protein structure first, or check the input."
+        )
+    return energy
 
 
 def batch_compute_energy(
@@ -272,13 +331,19 @@ def batch_compute_energy(
         n_threads: Thread count. ``None`` / ``-1`` / ``0`` = all cores.
 
     Returns:
-        List of energy dicts, one per input structure, in input order.
+        List of energy dicts, one per input structure, in input order. Each
+        dict carries ``parameterization_status`` / ``is_parameterized`` (see
+        :func:`compute_energy`). Unlike the single-structure call, the batch
+        does NOT raise on an unparameterizable structure — it annotates it with
+        ``parameterization_status == "empty"`` so one bad input does not abort
+        the whole batch. Filter on ``is_parameterized`` before trusting
+        ``total``.
     """
     u = _validate_units(units)
     _maybe_warn_ff(ff)
     ptrs = [_get_ptr(s) for s in structures]
     raw = _ff.batch_compute_energy(ptrs, ff, nbl_threshold, nonbonded_cutoff, n_threads)
-    return [_convert_energy_dict(d, u) for d in raw]
+    return [_annotate_parameterization(_convert_energy_dict(d, u)) for d in raw]
 
 
 def minimize_hydrogens(

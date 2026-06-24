@@ -101,6 +101,7 @@ from .analysis import (
 )
 from .core import RustWrapperObject
 from .forcefield import (
+    ParameterizationError,
     batch_compute_energy,
     batch_minimize_hydrogens,
     compute_energy,
@@ -462,6 +463,7 @@ _CORE_API = ("RustWrapperObject",)
 # and stable. `run_md` (SHAKE/RATTLE MD) is far less validated and is treated as
 # experimental — split out below rather than poisoning the whole group.
 _FORCEFIELD_API = (
+    "ParameterizationError",
     "batch_compute_energy",
     "batch_minimize_hydrogens",
     "compute_energy",

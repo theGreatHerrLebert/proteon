@@ -51,6 +51,11 @@ class TestComputeEnergy:
     def test_components_are_finite(self):
         e = proteon.compute_energy(load_crambin(), units=UNITS)
         for key, val in e.items():
+            # The dict also carries non-numeric parameterization metadata
+            # (parameterization_status: str); finiteness applies to the numeric
+            # energy components / topology counts only.
+            if isinstance(val, str) or isinstance(val, bool):
+                continue
             assert np.isfinite(val), f"{key} is not finite: {val}"
 
     def test_bond_stretch_positive(self):

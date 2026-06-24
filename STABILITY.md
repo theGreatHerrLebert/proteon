@@ -74,6 +74,31 @@ access is kept for back-compat and will warn in a future minor.
   still being discovered).
 - **`RustWrapperObject`** — implementation base class; candidate for de-export.
 
+## Validity boundaries (stable tier)
+
+Stable functions are tested not just on the happy path but at their domain
+boundary (`tests/test_stable_validity_boundaries.py`,
+devdocs/STABLE_VALIDITY_BOUNDARY_DESIGN.md). The invariant: on out-of-domain
+input a stable function whose output could be mistaken for a meaningful
+scientific result must **fail loud or carry an explicit validity signal — never
+return a silent plausible-but-wrong number.** Notable boundaries:
+
+- **`compute_energy`** raises `ParameterizationError` (a `ValueError` subclass)
+  when no atom could be parameterized (`n_topo_atoms == 0`, e.g. HETATM-only
+  input) — it will not return a misleading `0.0`. It also reports
+  `parameterization_status` (`"complete"` / `"partial"` / `"empty"`) and
+  `is_parameterized`; `total` is physically meaningful only when `"complete"`.
+  `batch_compute_energy` annotates each result instead of raising, so one bad
+  structure does not abort the batch.
+- **`total_sasa`** computes the SASA of whatever atoms it is given (atom-set
+  correct); it does not validate "proteinness" and does not raise on
+  HETATM-only input.
+- **`kabsch_superpose`** is NaN-in/NaN-out by convention and returns a finite
+  RMSD for rank-deficient (single-point / colinear) input even though the
+  rotation is underdetermined.
+- **`tm_align`** raises on degenerate input (<3 residues, no CA); `dssp` returns
+  `""` for unassignable input (a deliberately coarse signal).
+
 ## Adding to the stable tier
 
 1. Make the symbol pass all 5 gates above.
