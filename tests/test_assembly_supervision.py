@@ -50,10 +50,9 @@ class TestAssemblySupervision:
         assert out == "not_a_complex"
 
     def test_materialization_drop_reason_propagates(self):
+        # Only genuine "can't build" reasons propagate now (size builds as mmCIF).
         assert build_assembly_supervision_examples(
             os.path.join(PDBS, "1ubq.pdb"), min_coverage=0.5) == "no_assembly_metadata"
-        assert build_assembly_supervision_examples(
-            _corpus("1mva"), min_coverage=0.5) == "assembly_too_large_for_pdb"
 
     def test_record_id_is_source_derived(self):
         # The temp PDB the assembly reloads from is coordinate-only, so the record

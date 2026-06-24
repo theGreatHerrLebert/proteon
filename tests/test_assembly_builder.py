@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import proteon
-from proteon.assembly_builder import BuiltAssembly, build_assembly
+from proteon.assembly_builder import AssemblyChain, BuiltAssembly, build_assembly
 
 # Real expanders from the validation corpus (skip if that corpus isn't present).
 CORPUS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -73,23 +73,48 @@ class TestBuild:
         assert 0.5 < mind < 5.0  # an interface, not coincident, not detached
 
 
-class TestEdgeCases:
-    def test_too_many_chains_for_pdb(self):
-        # 1mva: 60 operators x 3 chains = 180 > 62 legal PDB chain ids.
-        assert build_assembly(_corpus("1mva")) == "assembly_too_large_for_pdb"
+class TestLargeAssemblyMmcif:
+    def test_180_chain_assembly_emits_mmcif(self):
+        # 1mva: 60 operators x 3 chains = 180 > 62 PDB chain ids -> mmCIF, loads.
+        b = build_assembly(_corpus("1mva"))
+        assert isinstance(b, BuiltAssembly)
+        assert b.format == "mmcif" and b.n_chains == 180
+        assert len(set(b.load().chain_ids)) == 180
 
-    def test_capsid_too_large_by_atom_count(self):
-        # 1z14: 60 copies x ~6000 atoms = ~360k > 99999 PDB serial limit -> the
-        # atom-count overflow catches it even though 60 chains fit the alphabet.
-        assert build_assembly(_corpus("1z14")) == "assembly_too_large_for_pdb"
+    def test_capsid_emits_mmcif(self):
+        # 1z14: 60 copies, ~266k atoms > 99999 PDB serials -> mmCIF, 60 chains.
+        b = build_assembly(_corpus("1z14"))
+        assert isinstance(b, BuiltAssembly)
+        assert b.format == "mmcif" and b.n_chains == 60
+        assert len(set(b.load().chain_ids)) == 60
 
-    def test_blank_identity_plus_full_alphabet_fits(self):
-        # Blank-chain identity (preserved as ' ') + 62 expansions = 63 chains, all
-        # representable (' ' + the 62-char alphabet). Must build, NOT overflow
-        # (codex: capacity is the alphabet PLUS the preserved blank).
+    def test_coord_overflow_emits_mmcif(self):
+        # A huge translation (>9999.999 Å) overflows PDB coord fields -> mmCIF.
+        text = (
+            "REMARK 350 BIOMOLECULE: 1\n"
+            "REMARK 350 APPLY THE FOLLOWING TO CHAINS: A\n"
+            "REMARK 350   BIOMT1   1  1.000000  0.000000  0.000000        0.00000\n"
+            "REMARK 350   BIOMT2   1  0.000000  1.000000  0.000000        0.00000\n"
+            "REMARK 350   BIOMT3   1  0.000000  0.000000  1.000000        0.00000\n"
+            "REMARK 350   BIOMT1   2  1.000000  0.000000  0.000000    50000.00000\n"
+            "REMARK 350   BIOMT2   2  0.000000  1.000000  0.000000        0.00000\n"
+            "REMARK 350   BIOMT3   2  0.000000  0.000000  1.000000        0.00000\n"
+            "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\n"
+        )
+        b = build_assembly(text)
+        assert isinstance(b, BuiltAssembly) and b.format == "mmcif"
+
+    def test_small_assembly_stays_pdb(self):
+        b = build_assembly(_corpus("1doe"))
+        assert isinstance(b, BuiltAssembly) and b.format == "pdb"
+
+    def test_blank_identity_plus_full_alphabet_still_pdb(self):
+        # Blank-chain identity (space) + 62 expansions = 63 chains is PDB-
+        # representable (space + the 62-char alphabet) -> stays PDB, NOT mmCIF
+        # (codex: exact capacity via the id assignment, not a count pre-check).
         ops = ("REMARK 350   BIOMT1   1  1.000000  0.000000  0.000000        0.00000\n"
                "REMARK 350   BIOMT2   1  0.000000  1.000000  0.000000        0.00000\n"
-               "REMARK 350   BIOMT3   1  0.000000  0.000000  1.000000        0.00000\n")  # identity
+               "REMARK 350   BIOMT3   1  0.000000  0.000000  1.000000        0.00000\n")
         ops += "".join(
             f"REMARK 350   BIOMT1{k:4d}  1.000000  0.000000  0.000000  {k * 3.0:9.5f}\n"
             f"REMARK 350   BIOMT2{k:4d}  0.000000  1.000000  0.000000        0.00000\n"
@@ -101,22 +126,46 @@ class TestEdgeCases:
                 + "ATOM      1  CA  ALA     1       0.000   0.000   0.000  1.00  0.00           C\n")
         b = build_assembly(text)
         assert isinstance(b, BuiltAssembly)
-        assert b.n_chains == 63
+        assert b.format == "pdb" and b.n_chains == 63
         assert sum(1 for c in b.chains if c.assembled_chain_id == " ") == 1  # blank preserved
 
-    def test_chain_count_overflow(self):
-        # A synthetic 63-chain-copy case: chain-id alphabet overflow (>62), even
-        # with few atoms. Build a 1-atom chain replicated by 63 translations.
+    def test_chain_id_exhaustion_falls_to_mmcif(self):
+        # 64 copies of a non-blank chain (no space to borrow) > 62 ids -> mmCIF.
         ops = "".join(
-            f"REMARK 350   BIOMT1{k:4d}  1.000000  0.000000  0.000000  {k * 5.0:9.5f}\n"
+            f"REMARK 350   BIOMT1{k:4d}  1.000000  0.000000  0.000000  {k * 3.0:9.5f}\n"
             f"REMARK 350   BIOMT2{k:4d}  0.000000  1.000000  0.000000        0.00000\n"
             f"REMARK 350   BIOMT3{k:4d}  0.000000  0.000000  1.000000        0.00000\n"
-            for k in range(1, 64)
+            for k in range(1, 65)  # 64 distinct copies of chain A
         )
         text = ("REMARK 350 BIOMOLECULE: 1\n"
                 "REMARK 350 APPLY THE FOLLOWING TO CHAINS: A\n" + ops
                 + "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\n")
-        assert build_assembly(text) == "assembly_too_large_for_pdb"
+        b = build_assembly(text)
+        assert isinstance(b, BuiltAssembly) and b.format == "mmcif"
+
+    def test_pdb_text_guard_on_mmcif(self):
+        # pdb_text must NOT return mmCIF (callers may feed it to a PDB parser).
+        b = build_assembly(_corpus("1z14"))
+        with pytest.raises(ValueError):
+            _ = b.pdb_text
+        assert b.text.startswith("data_")  # the mmCIF is on .text
+
+    def test_pdb_mmcif_parity_through_prepare(self):
+        # Forcing mmCIF on a small dimer must re-prepare IDENTICALLY to the PDB
+        # path (format-invariant: chains/atoms/clashes match; only chain-id strings
+        # differ for generated copies) — so the large-assembly path behaves the
+        # same as the small one through PR2/PR3 (codex parity).
+        import proteon
+        P = _corpus("1doe")
+        sp = build_assembly(P).load()
+        sm = build_assembly(P, prefer_mmcif=True).load()
+        rp = proteon.prepare(sp, reconstruct=False, minimize=False)
+        rm = proteon.prepare(sm, reconstruct=False, minimize=False)
+        assert len(set(sp.chain_ids)) == len(set(sm.chain_ids))
+        assert rp.n_heavy_clashes == rm.n_heavy_clashes
+        assert rp.n_heavy_atoms == rm.n_heavy_atoms
+        assert abs(rp.clashscore - rm.clashscore) < 1e-6
+        assert rp.clash_residue_indices == rm.clash_residue_indices
 
     def test_no_remark_350(self):
         assert build_assembly(os.path.join(PDBS, "1ubq.pdb")) == "no_assembly_metadata"
@@ -185,22 +234,31 @@ class TestChainSpecificBlocks:
         assert srcs == [("A", 0), ("A", 1), ("B", 0)]
 
 
-class TestCoordinateOverflow:
-    def test_transform_outside_pdb_coord_range_rejected(self):
-        # A huge translation pushes atoms past the %8.3f field (>9999.999) ->
-        # must fail loud, not emit malformed columns (codex).
-        text = (
-            "REMARK 350 BIOMOLECULE: 1\n"
-            "REMARK 350 APPLY THE FOLLOWING TO CHAINS: A\n"
-            "REMARK 350   BIOMT1   1  1.000000  0.000000  0.000000        0.00000\n"
-            "REMARK 350   BIOMT2   1  0.000000  1.000000  0.000000        0.00000\n"
-            "REMARK 350   BIOMT3   1  0.000000  0.000000  1.000000        0.00000\n"
-            "REMARK 350   BIOMT1   2  1.000000  0.000000  0.000000    50000.00000\n"
-            "REMARK 350   BIOMT2   2  0.000000  1.000000  0.000000        0.00000\n"
-            "REMARK 350   BIOMT3   2  0.000000  0.000000  1.000000        0.00000\n"
-            "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\n"
-        )
-        assert build_assembly(text) == "assembly_coords_exceed_pdb"
+class TestBuiltAssemblyConstructor:
+    def test_legacy_pdb_text_kwarg_back_compat(self):
+        # The old `BuiltAssembly(pdb_text=...)` constructor still works (codex).
+        b = BuiltAssembly(pdb_text="ATOM ...\nEND\n")
+        assert b.format == "pdb"
+        assert b.text == "ATOM ...\nEND\n"
+        assert b.pdb_text == "ATOM ...\nEND\n"
+
+    def test_legacy_positional_chains_second(self):
+        # Old dataclass order was (pdb_text/text, chains, ...); `format` is now
+        # keyword-only so a positional (text, chains) still binds chains (codex).
+        ch = [AssemblyChain("A", "A", 0, True)]
+        b = BuiltAssembly("ATOM ...\nEND\n", ch)
+        assert b.chains == ch and b.n_chains == 1
+        assert b.format == "pdb"
+
+
+class TestElementInference:
+    def test_pdb_column_alignment_disambiguates_element(self):
+        from proteon.assembly_builder import _infer_element
+        assert _infer_element(" CA ") == "C"   # alpha-carbon (col 13 blank -> 1-letter)
+        assert _infer_element(" N  ") == "N"
+        assert _infer_element("CA  ") == "CA"  # calcium (col 13 letter -> 2-letter)
+        assert _infer_element("FE  ") == "FE"
+        assert _infer_element("1HG1") == "H"   # numbered hydrogen
 
 
 class TestChainIdReservation:

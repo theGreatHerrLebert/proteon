@@ -66,37 +66,79 @@ class AssemblyChain:
     is_identity: bool
 
 
-@dataclass
+@dataclass(init=False)
 class BuiltAssembly:
-    """A materialized biological assembly (PR1): re-loadable text + provenance."""
+    """A materialized biological assembly: re-loadable text + provenance.
 
-    pdb_text: str
-    chains: List[AssemblyChain] = field(default_factory=list)
-    n_operators: int = 0
-    n_source_chains: int = 0
-    biomolecule_id: Optional[int] = None
+    ``format`` is ``"pdb"`` when the assembly fits PDB's limits (≤62 chains,
+    ≤99,999 atoms, coords within ±9999.999 Å) or ``"mmcif"`` for the larger
+    assemblies PDB can't represent (capsids, big oligomers). ``text`` is the
+    serialized structure; ``load()`` dispatches to the right loader.
+    """
+
+    text: str
+    format: str
+    chains: List[AssemblyChain]
+    n_operators: int
+    n_source_chains: int
+    biomolecule_id: Optional[int]
+
+    def __init__(
+        self,
+        text: Optional[str] = None,
+        chains: Optional[List[AssemblyChain]] = None,
+        n_operators: int = 0,
+        n_source_chains: int = 0,
+        biomolecule_id: Optional[int] = None,
+        *,
+        format: str = "pdb",
+        pdb_text: Optional[str] = None,
+    ):
+        # Positional order preserved from the old dataclass `(pdb_text/text, chains,
+        # n_operators, n_source_chains, biomolecule_id)`; `format` is keyword-only
+        # so a legacy positional `BuiltAssembly(text, chains)` still binds `chains`
+        # correctly (codex). `pdb_text` is the legacy text kwarg (always PDB).
+        self.text = text if text is not None else (pdb_text or "")
+        self.format = format
+        self.chains = list(chains) if chains else []
+        self.n_operators = n_operators
+        self.n_source_chains = n_source_chains
+        self.biomolecule_id = biomolecule_id
 
     @property
     def n_chains(self) -> int:
         return len(self.chains)
 
+    @property
+    def pdb_text(self) -> str:
+        """The PDB text — only valid when ``format == "pdb"``. Raises for an
+        mmCIF-backed assembly (callers must not feed mmCIF to a PDB parser); use
+        ``.text`` / ``.load()`` instead."""
+        if self.format != "pdb":
+            raise ValueError(
+                "this assembly is mmCIF-backed (too large for PDB); use .text or .load()"
+            )
+        return self.text
+
     def __repr__(self) -> str:
         return (
-            f"BuiltAssembly(biomolecule={self.biomolecule_id}, "
+            f"BuiltAssembly(format={self.format}, biomolecule={self.biomolecule_id}, "
             f"operators={self.n_operators}, source_chains={self.n_source_chains}, "
-            f"chains={self.n_chains}, {len(self.pdb_text)} chars)"
+            f"chains={self.n_chains}, {len(self.text)} chars)"
         )
 
     def load(self):
         """Load the assembled coordinates as a proteon Structure (via a temp file,
-        since the loader is path-based). Ready for PR2's re-prepare."""
-        from .io import load_pdb
+        since the loader is path-based), dispatching on ``format``."""
+        from .io import load_mmcif, load_pdb
 
-        with tempfile.NamedTemporaryFile("w", suffix=".pdb", delete=False) as fh:
-            fh.write(self.pdb_text)
+        suffix = ".cif" if self.format == "mmcif" else ".pdb"
+        loader = load_mmcif if self.format == "mmcif" else load_pdb
+        with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False) as fh:
+            fh.write(self.text)
             tmp = fh.name
         try:
-            return load_pdb(tmp)
+            return loader(tmp)
         finally:
             os.unlink(tmp)
 
@@ -282,15 +324,108 @@ def _transform_line(line, r, t, new_chain, serial):
     return body.rstrip()
 
 
+# --- mmCIF emission (for assemblies PDB can't represent: >62 chains / >99999
+# atoms / coords beyond ±9999.999) -------------------------------------------
+
+# PDB ATOM/HETATM fixed columns (0-based) for the fields mmCIF needs.
+_ATOM_NAME = slice(12, 16)
+_ALTLOC = 16
+_RESNAME = slice(17, 20)
+_RESSEQ = slice(22, 26)
+_ICODE = 26
+_OCC = slice(54, 60)
+_BFAC = slice(60, 66)
+_ELEM = slice(76, 78)
+
+#: mmCIF column order for the `_atom_site` loop.
+_CIF_COLUMNS = [
+    "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
+    "label_comp_id", "label_asym_id", "label_seq_id", "pdbx_PDB_ins_code",
+    "Cartn_x", "Cartn_y", "Cartn_z", "occupancy", "B_iso_or_equiv",
+    "auth_seq_id", "auth_asym_id", "pdbx_PDB_model_num",
+]
+
+
+def _cif_token(value: str) -> str:
+    """One mmCIF data value: ``.`` for empty, quoted if it contains whitespace or
+    a quote, else the bare token. (mmCIF is whitespace-delimited.)"""
+    if value is None or value == "":
+        return "."
+    if any(c.isspace() for c in value) or "'" in value or '"' in value:
+        q = '"' if "'" in value and '"' not in value else "'"
+        return f"{q}{value}{q}"
+    return value
+
+
+def _infer_element(atom_field: str) -> str:
+    """Element from the RAW 4-char PDB atom-name field (cols 13-16) when the
+    element column is blank — using the PDB column alignment that disambiguates a
+    1-letter element from a 2-letter one (codex):
+
+    - col 13 (index 0) blank  -> 1-letter element in col 14, e.g. ``" CA "`` =
+      alpha-carbon -> ``C`` (NOT calcium).
+    - col 13 a digit          -> a numbered hydrogen, e.g. ``"1HG1"`` -> ``H``.
+    - col 13 a letter         -> a 2-letter element, e.g. ``"CA  "`` = calcium ->
+      ``CA``, ``"FE  "`` -> ``FE``.
+    """
+    s = atom_field or ""
+    if not s or s[0] == " ":
+        t = s.strip()
+        return t[0].upper() if t and t[0].isalpha() else "X"
+    if s[0].isdigit():
+        return "H"
+    return s[:2].strip().upper() or "X"
+
+
+def _atom_site_row(line, r, t, asym_id, serial):
+    """One mmCIF `_atom_site` row from a transformed PDB ATOM/HETATM line."""
+    rec = line[:6].strip()  # ATOM | HETATM
+    name_field = line[_ATOM_NAME]  # raw 4-char field (alignment matters for element)
+    name = name_field.strip()
+    alt = line[_ALTLOC].strip()
+    resname = line[_RESNAME].strip()
+    resseq = line[_RESSEQ].strip()
+    icode = line[_ICODE].strip() if len(line) > _ICODE else ""
+    elem = (line[_ELEM].strip() if len(line) >= 78 else "") or _infer_element(name_field)
+    occ = line[_OCC].strip() if len(line) >= 60 else ""
+    bfac = line[_BFAC].strip() if len(line) >= 66 else ""
+    xyz = np.array([float(line[_X]), float(line[_Y]), float(line[_Z])])
+    nx, ny, nz = r @ xyz + t
+    # label_seq_id: integer for ATOM polymer rows; "." for HETATM (ligand/water
+    # have no polymer sequence position — `= resseq` would be wrong) (codex).
+    label_seq = resseq if rec == "ATOM" else "."
+    fields = [
+        rec, str(serial), _cif_token(elem), _cif_token(name), _cif_token(alt),
+        _cif_token(resname), _cif_token(asym_id), label_seq, _cif_token(icode),
+        f"{nx:.3f}", f"{ny:.3f}", f"{nz:.3f}",
+        occ or "1.00", bfac or "0.00",
+        resseq, _cif_token(asym_id), "1",
+    ]
+    return " ".join(fields)
+
+
+def _emit_mmcif(copies, cids):
+    """The mmCIF text (a single `_atom_site` loop) for the assembled copies."""
+    rows = []
+    serial = 0
+    for (r, t, _ident, _src, _op, lines, _m), cid in zip(copies, cids):
+        for ln in lines:
+            serial += 1
+            rows.append(_atom_site_row(ln, r, t, cid, serial))
+    header = ["data_assembly", "#", "loop_"] + [f"_atom_site.{c}" for c in _CIF_COLUMNS]
+    return "\n".join(header + rows) + "\n#\n"
+
+
 def build_assembly(
-    path_or_text: Union[str, os.PathLike], *, biomolecule: int = 1
+    path_or_text: Union[str, os.PathLike], *, biomolecule: int = 1, prefer_mmcif: bool = False
 ) -> Union[BuiltAssembly, str]:
     """Build biomolecule ``biomolecule`` from a PDB's REMARK 350 BIOMT operators.
 
-    Returns a :class:`BuiltAssembly`, or a distinct drop-reason string:
-    ``"no_assembly_metadata"`` (no usable REMARK 350), ``"biomolecule_not_found"``,
-    ``"assembly_too_large_for_pdb"`` (copy count exceeds the 62 legal chain ids —
-    mmCIF output is a follow-on). Never raises on these.
+    Returns a :class:`BuiltAssembly` (PDB-backed when it fits PDB's limits, else
+    mmCIF — see :attr:`BuiltAssembly.format`), or a drop-reason string for the only
+    genuine "can't build" cases: ``"no_assembly_metadata"`` (no usable REMARK 350)
+    or ``"biomolecule_not_found"``. Size is never a reason to drop — large
+    assemblies (capsids, big oligomers) are emitted as mmCIF. Never raises on these.
     """
     text = _read(path_or_text)
     bios = parse_remark_350(text)
@@ -349,26 +484,56 @@ def build_assembly(
         placed.append(moved)
         copies.append((r, t, ident, src, op_idx, lines, moved))
 
-    # PDB serial field is 5 digits — too many atoms can't be a valid PDB (the
-    # chain-id capacity is checked exactly during id assignment below, so a
-    # preserved blank-chain identity plus a full 62-letter alphabet still fits).
+    # Choose the output FORMAT. PDB caps at 99,999 atom serials, ±9999.999 Å coords,
+    # and a finite chain-id space (62 alphabet + a preserved blank→space); an
+    # assembly exceeding any of these is emitted as mmCIF (no such limits) — size is
+    # never a reason to drop now. The chain-id capacity is checked EXACTLY by trying
+    # the PDB id assignment (which returns None on exhaustion), so a blank-chain
+    # identity + a full 62-letter alphabet (63 chains) still fits PDB (codex).
     n_atoms = sum(len(lines) for *_x, lines, _m in copies)
-    if n_atoms > _MAX_PDB_SERIAL:
-        return "assembly_too_large_for_pdb"
-    # A transform can move atoms outside the fixed-width PDB coordinate fields
-    # (%8.3f) — that would overflow the columns and break re-loadability, so fail
-    # loud rather than emit malformed text (codex; mmCIF output is a follow-on).
-    for *_x, _m in copies:
-        if _m.size and (_m.min() < _PDB_COORD_MIN or _m.max() > _PDB_COORD_MAX):
-            return "assembly_coords_exceed_pdb"
+    coords_overflow = any(
+        _m.size and (_m.min() < _PDB_COORD_MIN or _m.max() > _PDB_COORD_MAX) for *_x, _m in copies
+    )
+    pdb_cids = None
+    if not prefer_mmcif and n_atoms <= _MAX_PDB_SERIAL and not coords_overflow:
+        pdb_cids = _assign_pdb_chain_ids(copies)  # None if it runs out of legal ids
 
-    # Pass 1: identity copies claim their deposited chain id (a legal letter, or a
-    # blank chain as a space) so an identity-only assembly reproduces the ASU ids.
-    # Pass 2: everything else gets the next free synthetic id.
+    if pdb_cids is not None:
+        cids = pdb_cids
+        emitted, serial = [], 0
+        for (r, t, _i, _s, _o, lines, _m), cid in zip(copies, cids):
+            for ln in lines:
+                serial += 1
+                emitted.append(_transform_line(ln, r, t, cid, serial))
+        text, fmt = "\n".join(emitted) + "\nEND\n", "pdb"
+    else:
+        cids = _assign_mmcif_chain_ids(copies)
+        text, fmt = _emit_mmcif(copies, cids), "mmcif"
+
+    provenance = [
+        AssemblyChain(cid, src, op_idx, ident)
+        for (_r, _t, ident, src, op_idx, _ln, _m), cid in zip(copies, cids)
+    ]
+    return BuiltAssembly(
+        text=text,
+        format=fmt,
+        chains=provenance,
+        n_operators=n_ops_total,
+        n_source_chains=len(chain_lines),
+        biomolecule_id=biomolecule,
+    )
+
+
+def _assign_pdb_chain_ids(copies):
+    """Two-pass legal single-char PDB chain ids: identity copies claim their
+    deposited id (letter, or blank→space), expansions get the next free letter.
+    Returns ``None`` if the legal id space is exhausted (caller falls to mmCIF) —
+    an EXACT capacity check, so a blank-chain identity (space) plus a full 62-letter
+    alphabet (63 chains) still fits."""
     used: set = set()
     cids = [None] * len(copies)
     for i, (_r, _t, ident, src, _op, _ln, _m) in enumerate(copies):
-        deposited = src if src else " "  # blank chain id -> space (valid in PDB)
+        deposited = src if src else " "
         if ident and (deposited in _CHAIN_ALPHABET or deposited == " ") and deposited not in used:
             cids[i] = deposited
             used.add(deposited)
@@ -376,24 +541,34 @@ def build_assembly(
     for i in range(len(copies)):
         if cids[i] is None:
             cids[i] = next(free, None)
-            if cids[i] is None:  # ran out of legal PDB chain ids (mmCIF follow-on)
-                return "assembly_too_large_for_pdb"
+            if cids[i] is None:
+                return None  # ran out of legal PDB chain ids -> mmCIF
+    return cids
 
-    emitted, provenance, serial = [], [], 0
-    for (r, t, ident, src, op_idx, lines, _m), cid in zip(copies, cids):
-        for ln in lines:
-            serial += 1
-            emitted.append(_transform_line(ln, r, t, cid, serial))
-        provenance.append(AssemblyChain(cid, src, op_idx, ident))
 
-    pdb_text = "\n".join(emitted) + "\nEND\n"
-    return BuiltAssembly(
-        pdb_text=pdb_text,
-        chains=provenance,
-        n_operators=n_ops_total,
-        n_source_chains=len(chain_lines),
-        biomolecule_id=biomolecule,
-    )
+def _assign_mmcif_chain_ids(copies):
+    """Multi-char mmCIF chain ids (no 62-char limit): identity copies preserve the
+    deposited id (blank → ``"A"`` — mmCIF label_asym_id can't be empty), expansions
+    get a unique ``{source}-{n}`` token."""
+    used: set = set()
+    cids = [None] * len(copies)
+    for i, (_r, _t, ident, src, _op, _ln, _m) in enumerate(copies):
+        if ident and src and src not in used:
+            cids[i] = src
+            used.add(src)
+    counter: dict = {}
+    for i in range(len(copies)):
+        if cids[i] is None:
+            base = copies[i][3] or "A"  # src; blank -> "A"
+            k = counter.get(base, 1)
+            cid = f"{base}-{k}"
+            while cid in used:
+                k += 1
+                cid = f"{base}-{k}"
+            counter[base] = k + 1
+            cids[i] = cid
+            used.add(cid)
+    return cids
 
 
 def _read(path_or_text) -> str:
