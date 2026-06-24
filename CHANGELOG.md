@@ -11,6 +11,48 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-24
+
+### Public API stability tiers + a freeze guard (#206)
+
+The top-level `proteon.*` namespace is now split into two tiers, exposed as
+`proteon.__stable__` and `proteon.__experimental__`, so users can tell the
+oracle-validated, contract-stable core from research frontiers:
+
+- **Stable (the strict pure-compute core)** — one oracle-validated quantity per
+  call, fixed signature: alignment, SASA, DSSP, H-bonds, geometry, I/O, the
+  structure model, and energy/minimization. proteon promises to keep these
+  working (the 5 stability gates are documented in `STABILITY.md`).
+- **Experimental** — the `prepare` + structure-supervision corpus pipeline,
+  structural search, MSA/templates, electrostatics, Vina docking, and `run_md`.
+  Validated but not contract-frozen. Their canonical access path is the new
+  `proteon.experimental.*` namespace; flat top-level names remain bound for
+  back-compat (this release is **non-breaking**) and will warn in a future
+  minor.
+
+A CI guard freezes the stable surface against a checked-in snapshot, so growing
+the promised API is a deliberate, reviewed act; the experimental tier is free to
+churn but can never silently graduate.
+
+### Stable-tier validity boundaries + `compute_energy` fix (#207)
+
+Robustness is not correctness: a boundary suite now pins what each stable
+function does on ugly-but-common inputs, with the invariant *fail loud or carry
+an explicit validity signal — never a silent plausible-but-wrong number.*
+
+- **`compute_energy` no longer returns a misleading `0.0`** for input it could
+  not parameterize. It raises `ParameterizationError` (a `ValueError` subclass,
+  so existing `except ValueError` still catches) when no atom entered the force
+  field (`n_topo_atoms == 0`, e.g. HETATM-only input). The result dict gains
+  `parameterization_status` (`"complete"` / `"partial"` / `"empty"`) and
+  `is_parameterized`; `total` is physically meaningful only when `"complete"`.
+  `batch_compute_energy` annotates each result instead of raising, so one bad
+  structure does not abort the batch.
+- Correctness oracles added (Kabsch rigid-transform recovery, MSE→MET
+  normalization) plus a meta-coverage test so the suite cannot silently rot.
+
+Boundaries are documented in `STABILITY.md`.
+
 ## [0.3.0] — 2026-06-17
 
 ### GPU k-mer prefilter: from 0.32× to beating CPU, wired into `search()`
