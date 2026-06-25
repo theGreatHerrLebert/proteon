@@ -1,9 +1,55 @@
 # proteon — product readiness assessment (candid)
 
-> Status: **internal assessment for external review** (2026-06-24). Written to be
-> pressure-tested, not to sell. The author (Claude) wrote it; it is going to
-> Codex for an adversarial second opinion before the maintainer acts on it.
-> Where the author is rationalizing a gap away, say so.
+> Status: **living record.** Originally written 2026-06-24 as an internal
+> assessment for adversarial Codex review; **updated 2026-06-25** to record what
+> shipped and to correct one materially wrong claim. The original analysis below
+> is preserved (it drove the work); corrections are marked inline and summarized
+> in the update section. Still written to be pressure-tested, not to sell.
+
+## Update (2026-06-25) — status after v0.4.0
+
+Three of the four gaps below were actioned within a day; one was **factually
+wrong** and is corrected here.
+
+- **Gap 1 ("cannot be published") was WRONG.** proteon was already on PyPI
+  (v0.3.0, published 2026-06-17 via a complete, working release workflow);
+  `pip install proteon` worked the whole time. The author *and* Codex treated the
+  `pdbtbx` git-dep as a hard gate on "product" without checking PyPI: it only
+  ever blocked **crates.io** (the Rust crates), never the **PyPI wheel** path
+  (maturin resolves the git dep at build time and bundles the compiled
+  connector). The crates.io blocker is intentionally left as-is — upstream
+  `pdbtbx` is not under our control. **Lesson: verify the distribution channel
+  before calling something unpublishable.**
+- **Gap 2 (flat, under-hardened surface) — addressed (#206, #207).** The public
+  surface is now tiered into `proteon.__stable__` (81 oracle-validated symbols
+  with a back-compat promise) and `proteon.__experimental__`, with a canonical
+  `proteon.experimental.*` namespace and a CI snapshot guard that freezes the
+  stable surface against accidental growth. The stable tier's **validity
+  boundaries** are now proven, not assumed — a boundary suite found and fixed a
+  real bug (`compute_energy` returned a misleading `0.0` for unparameterizable
+  input; now raises `ParameterizationError`). `STABILITY.md` documents the 5
+  stability gates.
+- **Gap 3 (breadth > depth) — mitigated, not closed.** The research frontiers
+  (electrostatics BEM, GPU SES, Vina, advanced search GPU, `run_md`) are still
+  present, but are now explicitly in the **experimental** tier rather than
+  exposed at equal endorsement. That is the intended treatment; they remain
+  frontiers.
+- **Gap 4 (dev-facing docs) — partially addressed.** Added `STABILITY.md` (tier
+  table + gates) and a Keep-a-Changelog `CHANGELOG.md` with versioned 0.4.0
+  notes. A getting-started tutorial / published API reference for the stable tier
+  is still open.
+
+**Shipped:** v0.4.0 on PyPI (tiered surface + validity fix), PRs #206/#207/#208.
+**Corrected author's read:** proteon is a **published 0.x library with a 1.0-grade,
+now-tier-frozen-and-boundary-tested core.** The remaining distance to a 1.0
+*label* is user-facing docs + completing the deprecation cycle for the
+experimental flat-name shims — not a publishing blocker, which never really
+existed for the Python product. The crates.io/Rust distribution stays gated by
+upstream `pdbtbx` and is out of scope.
+
+---
+
+> The original 2026-06-24 assessment follows, with gap #1 corrected inline.
 
 ## What proteon is
 
@@ -48,13 +94,23 @@ messy real-PDB tail, not just curated benchmark sets.
 ## Evidence AGAINST readiness (the honest gaps)
 
 ### 1. Cannot be published / installed by anyone else
-- 4 of 6 publishable crates depend on a **patched `pdbtbx` fork via `git = …`
+
+> **CORRECTED (2026-06-25): this gap was wrong.** `pip install proteon` worked
+> the whole time — proteon was already on PyPI. The claim below conflated
+> crates.io with the actual (PyPI wheel) distribution channel. See the update
+> section at the top. Kept for the record as a cautionary example of asserting a
+> blocker without checking the channel.
+
+- ~~4 of 6 publishable crates depend on a **patched `pdbtbx` fork via `git = …`
   with no `version`** → crates.io rejects the manifest. There is no
-  `pip install proteon` / `cargo add proteon-io` today. (`proteon-search`
-  dry-runs clean; `proteon-align` needs a 3-line `include!`-path fix.)
-- This is a **hard gate on the word "product."** A library nobody can depend on
-  is, by definition, not yet shipped. Resolution is known (publish the pdbtbx
-  fork or vendor it in-tree as `proteon-pdbtbx`) but not done.
+  `pip install proteon` / `cargo add proteon-io` today.~~ The `pdbtbx` git-dep
+  blocks **crates.io** (Rust crates) only; the **PyPI wheel** is built by maturin
+  from the git dep and was already published. (`proteon-search` dry-runs clean;
+  `proteon-align` needs a 3-line `include!`-path fix — relevant only if/when
+  crates.io distribution is wanted.)
+- ~~This is a **hard gate on the word "product."**~~ It is a gate on *crates.io
+  Rust distribution* only, which is intentionally deferred (upstream `pdbtbx` not
+  under our control). It was never a gate on the Python product.
 
 ### 2. The public Python surface is large, flat, and under-hardened
 - ~52 Python modules re-exported through one flat `proteon.` namespace; the
@@ -106,6 +162,12 @@ narrowing + shipping discipline**:
 Claim: doing (1)–(4) on the *existing* core would make proteon a credible,
 publishable 1.0 **without writing a single new algorithm.** The core is done;
 the productization is not.
+
+> **Outcome (2026-06-25):** (1) was already done (PyPI), (2) and the tiering half
+> of (3) shipped in #206/#207 (v0.4.0), (4) is partially done (`STABILITY.md` +
+> `CHANGELOG.md`). The "scope narrowing + shipping discipline" thesis held: no
+> new algorithm was written. Remaining for a 1.0 *label*: user-facing docs and
+> the experimental-shim deprecation cycle.
 
 ## Questions for the reviewer (Codex)
 
