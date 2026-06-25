@@ -1,5 +1,10 @@
 # Supervision
 
+!!! warning "Experimental tier"
+    The supervision / corpus-export pipeline is **experimental** — its APIs and
+    on-disk schemas are still evolving. Canonical access is
+    `proteon.experimental.*`. See [API stability](../stability.md).
+
 "Layer 5" — geometric-DL data export. Turns prepared structures into
 training-ready supervision targets (atom37 indexing, masks, frames).
 

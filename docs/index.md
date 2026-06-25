@@ -21,12 +21,24 @@ Python and CLI entry points.
 - **[Rust API](rust.md)** — `cargo doc` output for the workspace crates.
 - **[Why Proteon](WHY.md)** — the motivation behind the project.
 
-## Stable surface
+## API stability tiers
 
-The top-level `proteon` namespace is the curated public API. Submodules
-(`proteon.align`, `proteon.dssp`, …) are also stable. Names beginning with `_`
-and the underlying `proteon_connector` PyO3 bindings are **not**
-part of the public contract — depend on them at your own risk.
+The top-level `proteon` namespace is split into two tiers — see
+**[API stability](stability.md)** for the full contract:
+
+- **Stable** (`proteon.__stable__`) — the strict pure-compute core: one
+  oracle-validated quantity per call, fixed signature (alignment, SASA, DSSP,
+  H-bonds, geometry, I/O, the structure model, energy/minimization). proteon
+  promises to keep these working.
+- **Experimental** (`proteon.__experimental__`, canonical path
+  `proteon.experimental.*`) — research frontiers and multi-stage orchestration
+  whose APIs/schemas may still change: the `prepare` + structure-supervision
+  pipeline, structural search, MSA/templates, electrostatics, Vina, `run_md`.
+  Validated but not contract-frozen; flat top-level access is retained for
+  back-compat and will warn in a future minor release.
+
+Names beginning with `_` and the underlying `proteon_connector` PyO3 bindings
+are **not** part of either contract — depend on them at your own risk.
 
 ## Search
 

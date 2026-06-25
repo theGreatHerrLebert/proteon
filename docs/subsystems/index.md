@@ -6,18 +6,22 @@ which is the **public Python surface** (Layer 3 in the
 auto-generated from the docstrings of those wrappers, not from the underlying
 `proteon_connector` PyO3 bindings.
 
-| Subsystem | Module | Notes |
-|-----------|--------|-------|
-| [I/O](io.md) | `proteon.io` | Load and save PDB / mmCIF, with batch variants. |
-| [Alignment](align.md) | `proteon.align` | TM-align, SOI-align, FlexAlign, MM-align. |
-| [Geometry](geometry.md) | `proteon.geometry`, `proteon.analysis` | Transforms, RMSD, dihedrals, contact maps. |
-| [DSSP](dssp.md) | `proteon.dssp` | Secondary-structure assignment. |
-| [SASA](sasa.md) | `proteon.sasa` | Solvent-accessible surface area. |
-| [H-bonds](hbond.md) | `proteon.hbond` | Hydrogen-bond detection. |
-| [Forcefield / MD](forcefield.md) | `proteon.forcefield` | CHARMM19+EEF1, AMBER96, OBC GB. |
-| [Preparation](prepare.md) | `proteon.prepare`, `proteon.hydrogens` | Add hydrogens + minimize. |
-| [Search](search.md) | `proteon.search`, `proteon.msa` | MMseqs2-compatible search stack. *Experimental.* |
-| [Supervision](supervision.md) | `proteon.supervision` | Geometric-DL data export (Layer 5). |
+The **Tier** column reflects the [API stability](../stability.md) split:
+🟢 stable (contract-frozen) / 🧪 experimental (may change; canonical access via
+`proteon.experimental.*`).
+
+| Subsystem | Module | Tier | Notes |
+|-----------|--------|------|-------|
+| [I/O](io.md) | `proteon.io` | 🟢 stable | Load and save PDB / mmCIF, with batch variants. |
+| [Alignment](align.md) | `proteon.align` | 🟢 stable | TM-align, SOI-align, FlexAlign, MM-align. |
+| [Geometry](geometry.md) | `proteon.geometry`, `proteon.analysis` | 🟢 stable | Transforms, RMSD, dihedrals, contact maps. |
+| [DSSP](dssp.md) | `proteon.dssp` | 🟢 stable | Secondary-structure assignment. |
+| [SASA](sasa.md) | `proteon.sasa` | 🟢 stable | Solvent-accessible surface area. |
+| [H-bonds](hbond.md) | `proteon.hbond` | 🟢 stable | Hydrogen-bond detection. |
+| [Forcefield / MD](forcefield.md) | `proteon.forcefield` | 🟢/🧪 | `compute_energy`, `minimize_*`, `gpu_*` stable; `run_md` experimental. |
+| [Preparation](prepare.md) | `proteon.prepare`, `proteon.hydrogens` | 🧪 experimental | Add hydrogens + minimize; heuristics still evolving. |
+| [Search](search.md) | `proteon.search`, `proteon.msa` | 🧪 experimental | MMseqs2-compatible search stack. |
+| [Supervision](supervision.md) | `proteon.supervision` | 🧪 experimental | Geometric-DL data export (Layer 5). |
 
 ## Conventions
 
@@ -26,5 +30,7 @@ auto-generated from the docstrings of those wrappers, not from the underlying
   serially (almost certainly not what you want).
 - **Wrappers, not bindings.** The pages here document the Pythonic wrappers.
   The PyO3 layer is implementation detail — depend on it at your own risk.
-- **Search is experimental.** API may change without deprecation cycles until
-  we cut a 1.0.
+- **Stable vs experimental.** Stable subsystems carry a back-compat promise;
+  experimental ones (prepare, search, supervision, electrostatics, Vina,
+  `run_md`) may change without a deprecation cycle and are reached via
+  `proteon.experimental.*`. See [API stability](../stability.md).

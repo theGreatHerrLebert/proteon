@@ -1,5 +1,12 @@
 # Preparation
 
+!!! warning "Experimental tier"
+    Preparation is **experimental** — validated (47k-structure battle test, zero
+    crashes) but not contract-frozen: heuristics and on-disk schemas may still
+    change. Canonical access is `proteon.experimental.*` (e.g.
+    `proteon.experimental.batch_prepare`); flat names still work for now. See
+    [API stability](../stability.md).
+
 End-to-end "make this structure usable" pipeline: add missing hydrogens,
 optionally minimize, return a structure ready for MD or geometric-DL work.
 
