@@ -47,8 +47,15 @@ The same one-pair / one-to-many / many-to-many shape is available for
 
 ## Prepare for downstream work
 
+!!! warning "Experimental tier"
+    `prepare` / `batch_prepare` and the structure-supervision pipeline are in
+    the **experimental** tier — validated but not contract-frozen (heuristics
+    and schemas may still change). The canonical access path is
+    `proteon.experimental.*`; the flat names below still work for now but will
+    warn in a future release. See [API stability](stability.md).
+
 ```python
-prep = proteon.batch_prepare(
+prep = proteon.experimental.batch_prepare(
     structures,
     hydrogens="backbone",   # "none" | "backbone" | "all"
     minimize=True,
@@ -62,14 +69,18 @@ ready for MD or geometric-DL pipelines.
 
 ## Export
 
-`proteon.to_parquet` writes one structure per file (Rust-side, no Python deps):
+!!! note "Tiers"
+    `to_parquet` / `to_arrow` (the columnar contract) are **experimental**
+    (`proteon.experimental.*`); `to_dataframe` is **stable**.
+
+`to_parquet` writes one structure per file (Rust-side, no Python deps):
 
 ```python
-proteon.to_parquet(structures[0], "1crn.parquet")
-restored = proteon.from_parquet("1crn.parquet")
+proteon.experimental.to_parquet(structures[0], "1crn.parquet")
+restored = proteon.experimental.from_parquet("1crn.parquet")
 ```
 
-For columnar manipulation, `proteon.to_arrow(structure)` returns a
+For columnar manipulation, `proteon.experimental.to_arrow(structure)` returns a
 `pyarrow.Table`. `proteon.to_dataframe(structure)` returns a pandas
 DataFrame but requires the optional pandas extra:
 
