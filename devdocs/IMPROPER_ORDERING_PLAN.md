@@ -176,11 +176,40 @@ Two schema rules, both from review:
   identity differs across engines and is itself a failure mode
   (`mapping mismatch` below).
 
-Sources: proteon — extend the existing `dump_topology_obc` debug entry point
-(`tests/test_dump_topology_obc.py`) rather than inventing a new one. OpenMM —
-the improper-only force already split out by
-`validation/amber96_molly_triangulate.py:_split_torsion_force`. Molly —
-extend `molly_energy_oracle.jl` to emit `sils[4].is/js/ks/ls` with terms.
+Sources and their current state (checked 2026-08-27):
+
+- **proteon — mostly already available, no Rust work needed.**
+  `proteon_connector.py_forcefield.dump_topology(pdb, "amber96")` already
+  returns `impropers` as **ordered index 4-tuples** (125 of them on the
+  fixture), plus `atom_identities` (index, resname, atom name), `atom_types`
+  and `bonds`. Missing only the per-improper **term multiset** and per-improper
+  **energy**; those are the additions to make.
+- **OpenMM** — the improper-only force already split out by
+  `validation/amber96_molly_triangulate.py:_split_torsion_force`;
+  `getTorsionParameters` yields one record per term, so the multiset falls out
+  by grouping on the tuple.
+- **Molly** — extend `molly_energy_oracle.jl` to emit `sils[4].is/js/ks/ls`
+  alongside the per-term parameters.
+
+### Already ruled out (cheap checks, done before Phase 1 starts)
+
+**Hypothesis A (central-atom placement) is dead for proteon vs OpenMM.**
+Across all 125 impropers on the fixture, the atom bonded to the other three
+sits in **slot 2** (0-indexed) in proteon's tuples — 125/125, no exceptions.
+That matches OpenMM's `match = (a1, a2, central, t4)`, which also places the
+centre at index 2. Verified by deriving the centre from connectivity and
+counting slots, exactly the independent-centre method §3.3 prescribes.
+
+So the difference is confined to the ordering of the two **leading** atoms
+(slots 0 and 1) and the choice of the slot-3 atom. Spot-checking the first
+amide improper (`THR0:CA, THR1:N, THR0:C, THR0:O`) against OpenMM's tie-break
+gives the same order — proteon and OpenMM agree there — so the disagreement is
+residue- or type-specific rather than global. Phase 1's job is to find *which*
+groups diverge, not to establish *that* they do.
+
+This shrinks Phase 1 meaningfully: the proteon dump is close to free, and two
+of the six competing explanations (A, and F via §2) are largely disposed of
+before any new code is written.
 
 ### 3.2 Replay
 
