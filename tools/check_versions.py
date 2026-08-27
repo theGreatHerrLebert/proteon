@@ -50,6 +50,34 @@ def _extract_string(body: str, key: str) -> str:
     return match.group(1)
 
 
+def _workspace_member_names(cargo_text: str) -> list[str]:
+    """Workspace member crate names, read from [workspace] members paths.
+
+    Members are declared as directory paths; the crate name is the final path
+    component for every member in this repo. Falling back to the directory
+    name keeps this free of a second TOML parse per crate.
+    """
+    body = _extract_section(cargo_text, "workspace")
+    match = re.search(r"(?ms)^members\s*=\s*\[(.*?)\]", body)
+    if not match:
+        return []
+    return [entry.rstrip("/").split("/")[-1]
+            for entry in re.findall(r'"([^"]+)"', match.group(1))]
+
+
+def _lockfile_versions(lock_text: str, names: set[str]) -> dict[str, str]:
+    """Map crate name -> version for the requested crates in Cargo.lock."""
+    found: dict[str, str] = {}
+    for block in re.split(r"(?m)^\[\[package\]\]\s*$", lock_text):
+        name_match = re.search(r'(?m)^name\s*=\s*"([^"]+)"', block)
+        if not name_match or name_match.group(1) not in names:
+            continue
+        version_match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', block)
+        if version_match:
+            found[name_match.group(1)] = version_match.group(1)
+    return found
+
+
 def _extract_dependencies(body: str) -> list[str]:
     match = re.search(r"(?ms)^dependencies\s*=\s*\[(.*?)\]", body)
     if not match:
@@ -96,6 +124,38 @@ def main() -> int:
             "Version mismatch: "
             + ", ".join(f"{name}={version}" for name, version in versions.items())
         )
+
+    # Cargo.lock is generated, but it is COMMITTED, so it drifts silently:
+    # bumping the workspace version in Cargo.toml does not rewrite the lock
+    # until someone runs cargo, and whoever does gets a dirty tree they did
+    # not create. The v0.4.0 bump left all nine workspace crates pinned at
+    # 0.3.0 here, which this check did not catch because it only ever read
+    # the declared versions.
+    cargo_text = _read_text(ROOT / "Cargo.toml")
+    member_names = set(_workspace_member_names(cargo_text))
+    if member_names:
+        lock_path = ROOT / "Cargo.lock"
+        if not lock_path.exists():
+            errors.append("Cargo.lock is missing")
+        else:
+            locked = _lockfile_versions(_read_text(lock_path), member_names)
+            missing = sorted(member_names - set(locked))
+            if missing:
+                errors.append(
+                    "Cargo.lock has no [[package]] entry for workspace "
+                    f"member(s): {', '.join(missing)}"
+                )
+            stale = sorted(
+                f"{name}={version}"
+                for name, version in locked.items()
+                if version != source_version
+            )
+            if stale:
+                errors.append(
+                    f"Cargo.lock out of sync with VERSION ({source_version}): "
+                    + ", ".join(stale)
+                    + ". Run `cargo metadata >/dev/null` and commit Cargo.lock."
+                )
 
     expected_connector_pin = f"proteon-connector=={connector_version}"
     actual_connector_dep = next(
