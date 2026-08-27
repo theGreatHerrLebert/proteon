@@ -327,7 +327,7 @@ mod tests {
 
         let (transform, xt) = assign2super(&xa, &ya, &invmap, &params);
         // After superposition, xt should be close to ya
-        assert!(xt.len() == 2);
+        assert_eq!(xt.len(), 2);
         // The transform should exist
         // Just confirm it ran without panicking; a zero translation is valid here.
         let _ = transform.t;

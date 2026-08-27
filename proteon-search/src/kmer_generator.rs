@@ -342,10 +342,7 @@ mod tests {
         // Query: "MKL" encoded. Self-score >= 3 * match_score, comfortably above
         // any non-trivial threshold. With threshold=15 we expect at least
         // the identity k-mer.
-        let q: Vec<u8> = [b'M', b'K', b'L']
-            .iter()
-            .map(|&c| alpha.encode(c))
-            .collect();
+        let q: Vec<u8> = b"MKL".iter().map(|&c| alpha.encode(c)).collect();
         let self_hash = enc.encode(&q);
         let self_score_i32: i32 = (0..k)
             .map(|i| scores_i32[q[i] as usize * alpha.size() + q[i] as usize])

@@ -59,9 +59,7 @@ impl SymMat {
         }
     }
     fn zero_all(&mut self) {
-        for v in &mut self.data {
-            *v = 0.0;
-        }
+        self.data.fill(0.0);
     }
 }
 

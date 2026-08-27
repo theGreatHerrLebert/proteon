@@ -6,6 +6,14 @@ on:
   push:
     branches: [main]
 
+# Cancel superseded runs. Without this, every push to a PR starts a fresh run
+# while the previous one keeps burning to completion — a rebase or a review
+# fixup pays for the run it just obsoleted. Guarded on pull_request so pushes
+# to main always run to completion and never lose a main-branch signal.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   version-sync:
     name: Version Sync
@@ -33,6 +41,12 @@ jobs:
   # at the binary level. Not worth the ~5 min per PR.
   rust-tests:
     name: Rust (ubuntu-latest)
+    # Gated on `lint` to avoid paying for a full test cycle on a PR that
+    # cannot merge anyway. This costs latency on a green PR (these jobs start
+    # ~40s later) but no extra runner minutes — they run either way. On a
+    # lint-broken PR it saves the entire cycle. Trade-off accepted
+    # deliberately: spend matters more here than time-to-first-signal.
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,6 +84,12 @@ jobs:
   # not need an extra macOS matrix leg burning runner minutes.
   python-tests:
     name: Python ${{ matrix.python-version }} (ubuntu-latest)
+    # Gated on `lint` to avoid paying for a full test cycle on a PR that
+    # cannot merge anyway. This costs latency on a green PR (these jobs start
+    # ~40s later) but no extra runner minutes — they run either way. On a
+    # lint-broken PR it saves the entire cycle. Trade-off accepted
+    # deliberately: spend matters more here than time-to-first-signal.
+    needs: lint
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -161,6 +181,12 @@ jobs:
   # Bump MMSEQS_VERSION deliberately when tracking a new upstream release.
   mmseqs-oracle:
     name: MMseqs2 byte-exact round-trip oracle
+    # Gated on `lint` to avoid paying for a full test cycle on a PR that
+    # cannot merge anyway. This costs latency on a green PR (these jobs start
+    # ~40s later) but no extra runner minutes — they run either way. On a
+    # lint-broken PR it saves the entire cycle. Trade-off accepted
+    # deliberately: spend matters more here than time-to-first-signal.
+    needs: lint
     runs-on: ubuntu-latest
     env:
       MMSEQS_VERSION: "18-8cc5c"
@@ -208,6 +234,12 @@ jobs:
   # Smoke test: binaries build and run
   cli-smoke:
     name: CLI smoke (ubuntu-latest)
+    # Gated on `lint` to avoid paying for a full test cycle on a PR that
+    # cannot merge anyway. This costs latency on a green PR (these jobs start
+    # ~40s later) but no extra runner minutes — they run either way. On a
+    # lint-broken PR it saves the entire cycle. Trade-off accepted
+    # deliberately: spend matters more here than time-to-first-signal.
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -401,18 +401,18 @@ mod tests {
         for k in 0..dof {
             // Zero all directions then light one up.
             probe = ConfGrad::zero(tree.num_torsions());
-            let analytic_component;
-            if k < 3 {
+
+            let analytic_component = if k < 3 {
                 probe.center[k] = 1.0;
-                analytic_component = g_analytic.center[k];
+                g_analytic.center[k]
             } else if k < 6 {
                 probe.orientation[k - 3] = 1.0;
-                analytic_component = g_analytic.orientation[k - 3];
+                g_analytic.orientation[k - 3]
             } else {
                 let t = k - 6;
                 probe.torsions[t] = 1.0;
-                analytic_component = g_analytic.torsions[t];
-            }
+                g_analytic.torsions[t]
+            };
 
             let fd = fd_energy_directional(tree, conf, &probe, h, energy);
             // analytic is -∂E/∂x, fd is +∂E/∂x. They should differ by
