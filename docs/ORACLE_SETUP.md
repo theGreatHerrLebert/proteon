@@ -57,6 +57,7 @@ last section.
 | GROMACS | 2026.1 | source build / package install, see below |
 | BALL C++ (`libBALL.so`) | commit `d85d2dd` | source build, see below |
 | BALL Julia (BiochemicalAlgorithms.jl) | commit `99e4acb` | `Pkg.instantiate()`, see below |
+| Molly.jl | 0.23.3 | `Pkg.instantiate()` in `tests/oracle/julia/molly`, see below |
 | Julia | 1.11.5 | https://julialang.org/downloads/ |
 
 ## Prerequisites
@@ -291,6 +292,62 @@ julia --project=$BALL_JL \
 The expected JSON has `total` ≈ 78911 kJ/mol and `NonBonded::Electrostatic`
 ≈ 77998; if those numbers have drifted, see the regeneration workflow
 below.
+
+## Install — Molly.jl (third AMBER96 opinion)
+
+Molly.jl is the tie-breaker between proteon and OpenMM: it is an
+independent Julia implementation that parses the **same** `amber96.xml`
+OpenMM uses, so a proteon-vs-OpenMM disagreement can be attributed rather
+than argued about.
+
+The project is self-contained and pinned by its committed `Manifest.toml`
+— unlike the BALL oracle there is no external checkout to clone.
+
+```bash
+export JULIA=/path/to/julia          # or have `julia` on $PATH
+$JULIA --project=$PROTEON/tests/oracle/julia/molly \
+       -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+```
+
+Smoke test (should print a JSON blob of per-component energies):
+
+```bash
+$JULIA --project=$PROTEON/tests/oracle/julia/molly \
+    $PROTEON/tests/oracle/julia/molly/molly_energy_oracle.jl \
+    --ff $(.venv/bin/python -c 'import openmm.app,os;print(os.path.join(os.path.dirname(openmm.app.__file__),"data","amber96.xml"))') \
+    --solvent none \
+    $PROTEON/tests/oracle/data/1crn_prepped_amber96.pdb
+```
+
+Expected on that fixture: `total` ≈ 9145.05 kJ/mol, `bond_stretch` ≈ 8827.03,
+`improper_torsion` ≈ 116.83.
+
+Two setup hazards, both of which silently produce wrong numbers rather
+than errors:
+
+1. **`nonbonded_method=:none` does not mean "no cutoff".** Molly still
+   builds a neighbour list at `dist_cutoff`, which defaults to 1.0 nm.
+   Left alone it truncates long-range Coulomb — worth ~2600 kJ/mol on
+   crambin, which reads as a 129% "disagreement" that is entirely a
+   setup error. `molly_energy_oracle.jl` sizes the cutoff and the box
+   from the structure's own extent to avoid this.
+2. **Molly does not read `GBSAOBCForce` from OpenMM XML.** It warns
+   ("GBSAOBCForce not currently supported, ignoring") and builds its OBC
+   radii from an internal element table instead. Molly is therefore not
+   a valid tie-breaker for proteon's OBC GB work; OpenMM remains the
+   authoritative GB oracle.
+
+Three-way comparison against proteon and OpenMM in one table:
+
+```bash
+JULIA=$JULIA .venv/bin/python validation/amber96_molly_triangulate.py \
+    --prepped --solvent obc1 tests/oracle/data/1crn_prepped_amber96.pdb
+```
+
+Pass `--prepped` whenever you need reproducible absolute numbers:
+PDBFixer's `addMissingHydrogens` is **not deterministic** across runs, so
+letting the driver prepare the structure gives a valid within-run
+comparison but different absolute energies each time.
 
 ## Running the evaluations
 

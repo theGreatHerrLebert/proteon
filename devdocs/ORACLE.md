@@ -46,8 +46,9 @@ The reason this works as a *velocity* strategy, not just a correctness one:
 These are different and the distinction matters.
 
 - An **oracle** is a live, externally-implemented tool we call at test
-  time. BALL (Julia), OpenMM, Foldseek, MMseqs2, original TMalign C++,
-  Biopython, Gemmi, FreeSASA, DSSP. Recomputation is part of the test.
+  time. BALL (Julia), Molly.jl, OpenMM, Foldseek, MMseqs2, original
+  TMalign C++, Biopython, Gemmi, FreeSASA, DSSP. Recomputation is part of
+  the test.
 - A **golden fixture** is a captured value frozen into the repo. Useful
   for CI stability (oracles are slow, sometimes flaky to install), but
   it can go stale silently. Every fixture should carry a header
@@ -100,12 +101,22 @@ Key constants are preserved exactly across the port (Kabsch `epsilon=1e-8`,
   on crambin without reconstruction. Same atom set fed to both engines.
 - **OpenMM** — AMBER96 and AMBER96+OBC single-point energies on 1000
   random PDBs, using PDBFixer-prepared inputs so both tools see
-  identical hydrogens.
+  identical hydrogens. Authoritative for AMBER96 and for OBC GB.
+- **Molly.jl** — third independent AMBER96 implementation, and the
+  *tie-breaker*: it parses the same `amber96.xml` OpenMM does, so a
+  proteon-vs-OpenMM gap can be attributed instead of argued. Added
+  2026-08-27. Not valid for GB (see the improper/GB rows below).
 
 **Scope:** bond stretch, angle bend, torsion, improper torsion, vdW,
 electrostatic, solvation (EEF1 for CHARMM, OBC for AMBER).
 
 - `tests/oracle/test_ball_energy.py` — fast crambin oracle, runs in CI.
+- `tests/oracle/test_molly_energy.py` — fast crambin oracle against frozen
+  Molly values; needs no Julia to run.
+- `validation/amber96_molly_triangulate.py` — three-way proteon / OpenMM /
+  Molly table, with OpenMM's `PeriodicTorsionForce` split into proper and
+  improper by bond topology so the improper term is *measured* rather than
+  inferred from the sum.
 - `validation/amber96_oracle.py` — OpenMM component oracle, 1000 PDBs.
 - `validation/amber96_obc_oracle.py` — OpenMM AMBER96+OBC oracle.
 - `validation/amber96_oracle_triangulate.py` — three-way: proteon,
@@ -121,6 +132,8 @@ electrostatic, solvation (EEF1 for CHARMM, OBC for AMBER).
 | VdW | < 0.1% at NoCutoff | Cutoff adds ~1.4% at 15 Å — that's policy, not bug |
 | Electrostatic | < 0.1% at NoCutoff | Same cutoff caveat |
 | Improper | proteon ≥ BALL, OpenMM ≤ 0.5% | BALL uses single-wildcard improper matching; AMBER spec requires double-wildcard (e.g. `* * N H` for amide-plane). BALL therefore misses ~100 amide-plane impropers on crambin. Proteon: 125 / 8.1 kJ/mol; BALL: 10 / 2.08 kJ/mol; OpenMM amber96 matches proteon. Test asserts proteon ≥ BALL as regression guard. |
+| Bond / angle / proper torsion / vdW | 0.000% vs Molly | Triangulated: proteon, OpenMM and Molly agree at print precision on the committed crambin fixture. Any movement here is a regression, not drift. |
+| Improper (3-way) | proteon within 15% of Molly, and proteon ≥ Molly | All three engines find 125 impropers from the same XML and evaluate them differently: proteon 128.94, OpenMM 124.50, Molly 116.83 kJ/mol. The spread is geometry-dependent (on a differently-hydrogenated crambin: 81.08 / 75.72 / 75.61), which rules out a constant parameter offset and points at differing atom-ordering conventions in the improper 4-tuple. Open convention gap, not a pass. |
 | Total energy | < 1% at NoCutoff | Tightest contract — everything else rolls up here |
 | GB solvation | < 5% | OBC is an analytical approximation; proteon matches OpenMM to ≤5% GB / ≤1% total on crambin (Phase B) |
 
@@ -345,6 +358,28 @@ Oracles are not infallible. Three cases we've hit:
    A runtime warning now tells the user to pass `nonbonded_cutoff=1e6`
    for oracle-grade comparison.
 
+4. **Oracle doesn't consume the parameters you think it does — Molly
+   and OBC GB.** Molly.jl parses OpenMM force-field XML, which made it
+   look like a drop-in second opinion for AMBER96+OBC. It is not: it
+   silently skips `GBSAOBCForce` (warning: "GBSAOBCForce not currently
+   supported, ignoring") and builds OBC radii from its own element
+   table. Its GB energy on crambin is -1658 kJ/mol against OpenMM's
+   -1302 and proteon's -1361 — a 21% spread that measures *parameter
+   sets*, not GB math. Molly is a valid tie-breaker for the bonded and
+   nonbonded terms and an invalid one for GB. Check what an oracle
+   actually reads before trusting the component you care about.
+
+5. **The oracle is fine but the input isn't reproducible — PDBFixer
+   hydrogens.** `PDBFixer.addMissingHydrogens` is not deterministic:
+   three successive preparations of `1crn.pdb` produced three different
+   hydrogen coordinate sets (642 atoms each time), moving single-point
+   energies by tens of kJ/mol and the improper term by over 30%.
+   Within-run comparisons stay valid because every engine is handed the
+   same file. Any *frozen* value must be pinned to a committed prepared
+   structure — hence `tests/oracle/data/1crn_prepped_amber96.pdb`. A
+   published absolute energy from a freshly-prepped run is not
+   reproducible, and re-running it will look like drift.
+
 Decision tree when oracle disagrees:
 
 1. Read the oracle's source for the component in question.
@@ -378,6 +413,15 @@ Listed so new contributors see what "oracle testing paid off" looks like:
   crambin). Phase B filled in the math; energy within 5% GB / 1%
   total, forces FD-verified, GPU matches CPU to 1e-11. The
   contract-first pattern made the 4–6h math session tractable.
+- **Improper-torsion three-way split (2026-08-27).** Adding Molly.jl as
+  a third AMBER96 engine turned an arguable proteon-vs-OpenMM improper
+  gap into a measured three-way disagreement: 128.94 / 124.50 / 116.83
+  kJ/mol from the same `amber96.xml` and the same 125 impropers. The
+  gap's size moves with geometry, so it is a 4-tuple ordering convention
+  rather than a parameter error. Two oracles localise what one oracle can
+  only flag. Same session also showed proteon, OpenMM and Molly agreeing
+  to 0.000% on bond, angle, proper torsion and vdW — those components are
+  now triangulated rather than cross-checked.
 - **AMBER96 n_threads trap.** `n_threads=0` silently ran serial
   (not all-cores). Caught by a throughput oracle that expected
   multi-core timings.
