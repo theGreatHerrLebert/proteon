@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "proteon-align"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "approx",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "proteon-arrow"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -1276,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "proteon-bin"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1295,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "proteon-connector"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -1315,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "proteon-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "cudarc",
@@ -1326,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "proteon-electrostatics"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cudarc",
  "nalgebra",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "proteon-io"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "pdbtbx",
@@ -1347,7 +1347,7 @@ dependencies = [
 
 [[package]]
 name = "proteon-search"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "cudarc",
@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "proteon-vina"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "approx",
  "rand",
