@@ -1,0 +1,14 @@
+[deps]
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Molly = "aa0f7f06-fcc0-5ec4-a7f3-a573f33f9c4c"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
+
+# Pinned so the oracle is reproducible. The committed Manifest.toml fixes the
+# full dependency graph; these bounds make an accidental major bump loud.
+# Bumping Molly means re-measuring every frozen value in
+# tests/oracle/test_molly_energy.py — the oracle moved, not proteon.
+[compat]
+JSON = "1.7"
+Molly = "0.23"
+Unitful = "1.28"
+julia = "1.11"
