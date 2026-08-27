@@ -632,7 +632,7 @@ mod tests {
         );
 
         assert!(result.frames.len() >= 2);
-        assert!(result.coords.len() == coords.len());
+        assert_eq!(result.coords.len(), coords.len());
 
         // In NVE, total energy should be approximately conserved
         let e0 = result.frames[0].total_energy;

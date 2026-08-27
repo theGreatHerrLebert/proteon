@@ -424,15 +424,7 @@ mod tests {
         // V/I or V/L (aliphatic). We don't pin which one wins because
         // that's an algorithmic choice, but it must be one of these.
         let sensible_pairs = [
-            [b'I', b'L'],
-            [b'D', b'E'],
-            [b'K', b'R'],
-            [b'F', b'Y'],
-            [b'I', b'V'],
-            [b'L', b'V'],
-            [b'S', b'T'],
-            [b'N', b'D'],
-            [b'Q', b'E'],
+            *b"IL", *b"DE", *b"KR", *b"FY", *b"IV", *b"LV", *b"ST", *b"ND", *b"QE",
         ];
         assert!(
             sensible_pairs.iter().any(|p| p[..] == merged_letters[..]),
