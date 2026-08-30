@@ -82,6 +82,16 @@ def _release_summary(manifest: dict) -> dict:
 
 
 def _render(reports_dir: pathlib.Path, releases: list[tuple[str, dict, dict]]) -> str:
+    # The one-page claim viewer (evident/scripts/build_site.py) is the
+    # entry point for anyone who does not yet know the claims: it explains
+    # the vocabulary and lets a reviewer filter, browse coverage, and
+    # drill into every claim. Link it first when it has been generated.
+    site_link = (
+        '<p class="site"><a href="site.html"><strong>Browse all current claims →</strong></a> '
+        '— filterable table, coverage by subsystem and tier, claim–oracle graph, and a '
+        '"Start here" introduction for readers new to EVIDENT.</p>'
+        if (reports_dir / "site.html").is_file() else ""
+    )
     rows = []
     for tag, manifest, summary in releases:
         # Coverage = locked artifacts / claims that should produce one
@@ -146,8 +156,10 @@ def _render(reports_dir: pathlib.Path, releases: list[tuple[str, dict, dict]]) -
   tr:hover td {{ background: #f7f9fc; }}
   td code {{ font-size: 12px; }}
   .footer {{ margin-top: 3em; color: #999; font-size: 12px; }}
+  .site {{ background: #eef3f8; border-left: 4px solid #0b4f9c; padding: 0.6em 1em; border-radius: 4px; }}
 </style>
 <h1>Proteon EVIDENT — Releases</h1>
+{site_link}
 <p class="meta">
   Each row is a frozen release bundle. Click into a release for the per-claim manifest,
   rendered HTML reports, and sha256-pinned artifacts. Bundles are immutable —
