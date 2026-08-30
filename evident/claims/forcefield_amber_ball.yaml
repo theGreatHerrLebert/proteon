@@ -93,16 +93,27 @@ claims:
           or 1-4 scaling). Proteon matches OpenMM. The 25% band
           catches a catastrophic charge-set regression without
           breaking on the known BALL gap.
-      - output: improper_torsion
+      - metric: absolute_error
+        op: "<"
+        value: 20
+        output: improper_torsion
         prose: >
-          One-sided sanity: 0 < proteon_improper < 20 kJ/mol and
-          proteon_improper >= BALL_improper. Proteon's double-
+          Magnitude bound: |proteon_improper - 0| < 20 kJ/mol, i.e. the
+          improper term stays small on crambin (the reference for this
+          criterion is 0, not BALL). Post-2026-04-13 proteon is ~8.1
+          kJ/mol (matches OpenMM canonical); the test also asserts
+          proteon_improper > 0 (see next entry).
+      - metric: signed_difference
+        op: ">="
+        value: 0
+        output: improper_torsion
+        prose: >
+          proteon_improper - BALL_improper >= 0. Proteon's double-
           wildcard improper lookup catches ~100 amide-plane impropers
-          BALL's single-wildcard implementation misses; pre-2026-04-13
-          fix proteon was ~2.2 kJ/mol (close to BALL), post-fix it is
-          ~8.1 kJ/mol (matches OpenMM canonical). No structured
-          metric/op/value because the assertion is interval +
-          inequality, not a single-threshold comparison.
+          BALL's single-wildcard implementation misses, so proteon
+          must report at least BALL's value (~2.08 kJ/mol); pre-fix
+          proteon was ~2.2 kJ/mol, post-fix ~8.1 kJ/mol. One-sided by
+          design: BALL is a lower bound here, not a parity oracle.
     evidence:
       oracle:
         - BALL

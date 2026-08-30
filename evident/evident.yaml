@@ -25,6 +25,8 @@ project: proteon
 # See evident/workflow/SCHEMA.md (in the framework repo) for the full schema.
 
 vocabularies:
+  tolerance_metric:
+    - signed_difference   # a - b, one-sided bounds (improper torsion vs BALL)
   subsystem:
     - io
     - sasa
