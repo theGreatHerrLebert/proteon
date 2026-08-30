@@ -55,14 +55,16 @@ claims:
           |gb_proteon - gb_openmm| / max(|gb_openmm|, 1.0) < 5%
           on the GB component alone. Phase D PASS contract. Memory
           cites achieved <=5%.
-      - output: gb_kj
+      - metric: absolute_error
+        op: ">"
+        value: 0.000001
+        output: gb_kj
         prose: >
-          Honesty guard: gb_kj must be non-zero in the proteon
-          output. The script's Phase A short-circuit returns 0
-          (pass) when proteon GB is essentially zero, so a
-          regression-to-stub would silently look like a pass under
-          the current control flow. CI must explicitly check
-          gb_kj != 0.
+          Honesty guard: |gb_kj - 0| > 1e-6, i.e. proteon's GB
+          component is non-zero. The oracle script's historical
+          Phase A short-circuit exited 0 when proteon GB was
+          essentially zero, so a regression-to-stub would have looked
+          like a pass; the script now fails in that branch.
     evidence:
       oracle:
         - OpenMM

@@ -60,19 +60,6 @@ claims:
           without letting a systematic minimisation regression
           ship. Source: validation/stage3_50k_gpu.log summary block,
           line 'Negative: 44837/45242 (99.1%)'.
-      - output: coverage_rate
-        prose: >
-          n_ok / n_input is reported but not gated. Documented run
-          achieved 0.959 (45,242 / 47,183). A loader or pre-process
-          regression that pushed structures from status=ok into
-          status=error or status=skipped would show in the log but
-          not break this structured tolerance — flagged as a
-          failure mode for the next iteration.
-      - output: throughput
-        prose: >
-          Documented throughput 3.6 structures/s on RTX 5090 + 128
-          cores. Reported as run-cost context for replay budgeting,
-          not as a gated capability.
     evidence:
       oracle:
         - physics-invariant

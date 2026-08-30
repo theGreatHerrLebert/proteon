@@ -72,11 +72,17 @@ claims:
         prose: >
           Per-chain n_aligned within +/- 2 residues. Allows
           tie-breaking differences in the dynamic-programming path.
-      - output: chain_assignments
+      - metric: absolute_error
+        op: "=="
+        value: 0
+        output: chain_assignments
         prose: >
-          Chain assignments must agree as sets — the order USAlign and
-          proteon report pairs in does NOT have to match, but the
-          set of (query, target) pairs does. A divergence here would
+          Size of the symmetric difference between proteon's set of
+          (query, target) chain pairs and the expected set == 0. Order
+          does NOT have to match; the set does. Today the test checks
+          identity on self-alignments and a valid bijection on cross
+          pairs; set-equality against USAlign's per-chain rows is the
+          documented gap in failure_modes. A divergence here would
           indicate a real multimer-assembly bug rather than numerical
           drift.
     evidence:

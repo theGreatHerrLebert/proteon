@@ -167,9 +167,9 @@ def main() -> int:
     print(f"  Δ GB:        {delta_gb:>10.3f} kJ/mol  ({rel_gb*100:.2f} %)")
 
     if abs(fr["gb_kj"]) < 1e-6 and abs(om["gb_kj"]) > 1.0:
-        print("\nPHASE A: proteon solvation = 0.0 (stub) — math not yet implemented.")
-        print("This script is the contract for Phase B/C/D. It MUST pass when GB lands.")
-        return 0  # not a hard fail in Phase A
+        print("\nFAIL: proteon solvation = 0.0 while OpenMM GB is non-zero.")
+        print("GB has landed; a zero GB term is a regression to the Phase A stub.")
+        return 1
 
     if rel_total < 1e-2 and rel_gb < 5e-2:
         print("\nPHASE D PASS — proteon AMBER96+OBC matches OpenMM to <1% total.")

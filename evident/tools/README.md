@@ -1,16 +1,19 @@
 # Vendored EVIDENT CLI
 
-`evident.py` and `validate_manifest.py` here are vendored copies of
-the upstream EVIDENT framework
-(https://github.com/.../evident — `workflow/`).
+`validate_manifest.py` is a vendored copy of the upstream EVIDENT
+framework's `workflow/validate_manifest.py`
+(https://github.com/theGreatHerrLebert/evident). `evident.py` is
+proteon's own thin CLI over it (`validate`, `list`, `replay`, `draft`);
+upstream retired its copy in favour of `evident-agent replay`, so
+`evident.py` is maintained here.
 
 This vendor exists so the proteon Dockerfile and the CI manifest
 check do not need a cross-repo fetch at build time.
 
-Proteon's copy currently carries one local hardening patch: the
-`--strict-release-pins` validator option rejects placeholder release
-corpus hashes, pinned versions, and `last_verified` pins during release
-prep.
+The `--strict-release-pins` option (rejects placeholder release corpus
+hashes, pinned versions, and `last_verified` pins during release prep)
+was upstreamed on 2026-08-30; the vendored copy is byte-identical to
+upstream `workflow/validate_manifest.py`.
 
 ## Re-syncing
 
@@ -18,14 +21,12 @@ When the framework's `validate_manifest.py` schema or `evident.py`
 CLI evolves:
 
 ```bash
-cp <FRAMEWORK_REPO>/workflow/{evident.py,validate_manifest.py} \
-   proteon/evident/tools/
+cp <FRAMEWORK_REPO>/workflow/validate_manifest.py proteon/evident/tools/
 python3 proteon/evident/tools/validate_manifest.py \
    proteon/evident/evident.yaml   # confirm proteon's manifest still passes
 ```
 
-Then reapply or upstream proteon's local `--strict-release-pins` patch
-before committing the updated files. Keep any local drift explicit:
+Keep any local drift explicit:
 untracked divergence between proteon's vendored copy and the framework
 breaks composability across projects using EVIDENT.
 
