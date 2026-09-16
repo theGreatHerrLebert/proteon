@@ -916,6 +916,7 @@ fn run_electrostatics(args: &ElectrostaticsArgs) -> Result<()> {
             tol: args.tol,
             restart: args.restart,
             max_iter: args.max_iter,
+            ..Default::default()
         },
         nonlocal: args.nonlocal,
         quadrature: quad,

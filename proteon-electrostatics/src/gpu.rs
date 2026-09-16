@@ -483,6 +483,7 @@ pub fn solve_local_gpu(
 
     let stats = SolveStats {
         iterations: u_sol.iterations + q_sol.iterations,
+        restart: u_sol.restart.max(q_sol.restart),
         residual: res_u.max(res_q),
         per_block_residual: vec![res_u, res_q],
         converged: res_u <= cfg.tol && res_q <= cfg.tol,
@@ -646,6 +647,7 @@ pub fn solve_nonlocal_gpu(
     );
     let stats = SolveStats {
         iterations: sol.iterations,
+        restart: sol.restart,
         residual: res,
         per_block_residual: vec![res],
         converged: res <= cfg.tol,
