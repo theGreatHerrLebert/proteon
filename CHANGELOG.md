@@ -11,6 +11,37 @@ release tag has a paired EVIDENT bundle pinned by sha256.
 
 ## [Unreleased]
 
+### Electrostatics: GMRES basis memory is now bounded and halved
+
+`proteon-electrostatics`' GMRES no longer stores a preconditioned copy `M⁻¹vᵢ`
+of every Krylov basis vector: it applies the (fixed, linear) Jacobi
+preconditioner once per restart cycle to the basis combination. That halves the
+solver's O(restart·n) storage, and the O(n) work buffers are now reused instead of
+allocated on every iteration. The result is unchanged up to rounding. Checked
+against NESSie's exact dense LU on real protein surfaces (1CRN, 1HEL, 1CLL, 1S0Q,
+1AKE; local and nonlocal): iteration counts are identical and W* moves by
+≤ 2.3e-15 relative, except on 1AKE's nonlocal system. That system needs ~6,300
+Jacobi-GMRES iterations, and rounding shifts the count by 30 (0.5 %) and W* by
+6.5e-12, still matching NESSie to 6.6e-12. That iteration count also shows the
+Jacobi preconditioner is the limiting factor on hard meshes.
+
+`SolveConfig` gains `basis_budget_bytes` (default `GMRES_BASIS_BUDGET` = 2 GiB),
+and the restart length used is `min(restart, n, budget)` (`gmres_restart`),
+reported as `SolveStats::restart`. The default budget never binds at dense-solve
+sizes (only above ~1.3 M unknowns at restart 200); it bounds the matrix-free
+treecode/GPU paths. A binding budget is not free: on 1HEL lysozyme (nonlocal,
+8,044 elements, one buried cavity) restart 30 did not converge within 10,000
+iterations where restart 200 needs 326 — it fails loudly with `NotConverged`, but
+the budget should be raised rather than relied on at a small restart. The
+`Preconditioner` trait now documents that implementations
+must be fixed linear maps. Electrostatics is in the experimental tier; code that
+builds `SolveConfig` with a struct literal needs `..Default::default()`.
+
+Re-orthogonalization was evaluated and deliberately not added. MGS-GMRES is
+backward stable: on cond-1e12 and Grcar test matrices a second Gram–Schmidt pass
+restored basis orthogonality (1e-3 → 1e-15) but did not change the iteration count
+or the final residual.
+
 ## [0.4.0] — 2026-06-24
 
 ### Public API stability tiers + a freeze guard (#206)

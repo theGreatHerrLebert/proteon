@@ -396,6 +396,12 @@ impl BlockLayout {
 
 /// Preconditioner `z ← M⁻¹·r`. Scalar Jacobi to start (mirrors NESSie's
 /// `DiagonalPreconditioner`); the trait leaves room for a block-diagonal one.
+///
+/// Contract: `apply` must be a **fixed linear** map (the same `M⁻¹` on every call).
+/// [`crate::solve`]'s GMRES relies on it to apply the preconditioner once per restart
+/// cycle to the basis combination instead of storing `M⁻¹ v_i` for every basis vector.
+/// A varying or nonlinear preconditioner (e.g. an inner iterative solve) would need
+/// flexible GMRES instead.
 pub trait Preconditioner {
     /// Apply `z = M⁻¹·r`.
     fn apply(&self, r: &[f64], z: &mut [f64]);

@@ -240,6 +240,7 @@ fn solve_surface_py<'py>(
             tol,
             restart,
             max_iter,
+            ..Default::default()
         },
         nonlocal: nonlocal_,
         quadrature: quad,

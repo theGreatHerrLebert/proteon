@@ -88,11 +88,11 @@ pub use post::{espotential, rfenergy, ENERGY_FACTOR, POTPREFACTOR};
 pub use quadrature::{radon7, TriangleQuad};
 pub use quality::{QualityIssue, QualityReport, Severity, TopologyReport};
 pub use solve::{
-    dense_matrix_bytes, solve_local, solve_local_elements, solve_local_elements_auto,
-    solve_local_elements_treecode, solve_nonlocal, solve_nonlocal_elements,
-    solve_nonlocal_elements_auto, solve_nonlocal_elements_q, solve_nonlocal_elements_treecode,
-    CauchyData, LocalResult, NonlocalResult, SolveConfig, SolveError, SolveStats,
-    DENSE_MATRIX_BUDGET,
+    dense_matrix_bytes, gmres_restart, solve_local, solve_local_elements,
+    solve_local_elements_auto, solve_local_elements_treecode, solve_nonlocal,
+    solve_nonlocal_elements, solve_nonlocal_elements_auto, solve_nonlocal_elements_q,
+    solve_nonlocal_elements_treecode, CauchyData, LocalResult, NonlocalResult, SolveConfig,
+    SolveError, SolveStats, DENSE_MATRIX_BUDGET, GMRES_BASIS_BUDGET,
 };
 pub use surface::{
     solve_surface, FastSummation, SurfaceSolution, SurfaceSolveError, SurfaceSolveOptions,

@@ -2,7 +2,11 @@
 //!
 //! Decided (plan Q2): **roll our own** matrix-free GMRES for op-order control + zero
 //! dep — modified Gram-Schmidt, restart, happy-breakdown, Givens rotations, **right**
-//! (Jacobi) preconditioning, and a true-residual gate. Right preconditioning is chosen
+//! (Jacobi) preconditioning, and a true-residual gate. The Krylov basis is the only
+//! O(restart·n) storage: the preconditioner is applied once per cycle to the basis
+//! combination (exact for a fixed linear preconditioner), and the restart length is
+//! capped by [`SolveConfig::basis_budget_bytes`] so matrix-free solves at large `n` stay
+//! within a stated memory bound. Right preconditioning is chosen
 //! so the residual the iteration tracks *is* the true `‖b − A·x‖` — converging on it
 //! gives the gate directly. NESSie uses `IterativeSolvers.gmres` with a *left* `Pl`
 //! `DiagonalPreconditioner`, so the iteration path differs, but the solution is the
@@ -135,15 +139,31 @@ impl CauchyData for NonlocalResult {
     }
 }
 
+/// Default cap on the GMRES Krylov-basis memory: 2 GiB (see
+/// [`SolveConfig::basis_budget_bytes`]). The dense solves never reach it (at the default
+/// restart of 200 it binds only above ~1.3 M unknowns); it exists for the matrix-free
+/// treecode / GPU paths, whose operators are O(n) but whose basis is O(restart·n).
+pub const GMRES_BASIS_BUDGET: usize = 2 << 30;
+
 /// GMRES configuration (explicit, not hidden constants — plan §2).
 #[derive(Debug, Clone, Copy)]
 pub struct SolveConfig {
     /// Relative residual tolerance.
     pub tol: f64,
-    /// Restart length (NESSie default `restart = 200`).
+    /// Requested restart length (NESSie default `restart = 200`). The length actually
+    /// used is `min(restart, n, basis budget)` — see [`gmres_restart`] — and is reported
+    /// in [`SolveStats::restart`].
     pub restart: usize,
     /// Iteration cap (a non-converging system must fail loudly, not hang).
     pub max_iter: usize,
+    /// Upper bound, in bytes, on the Krylov basis (`(restart + 1)` vectors of `n` f64).
+    /// When `restart` would exceed it, the restart length is reduced to fit (never below
+    /// 1). A shorter restart can need many more iterations or stagnate outright: on a
+    /// real lysozyme surface (PDB 1HEL, 8,044 elements, one buried cavity) the nonlocal
+    /// system converged in 326 iterations at restart 200 but not within 10,000 at
+    /// restart 30. Stagnation still fails loudly via `max_iter`
+    /// ([`SolveError::NotConverged`]); prefer raising the budget over a small restart.
+    pub basis_budget_bytes: usize,
 }
 
 impl Default for SolveConfig {
@@ -152,8 +172,19 @@ impl Default for SolveConfig {
             tol: 1e-10,
             restart: 200,
             max_iter: 10_000,
+            basis_budget_bytes: GMRES_BASIS_BUDGET,
         }
     }
+}
+
+/// Restart length GMRES uses for an `n`-unknown system: the requested
+/// [`SolveConfig::restart`], capped at `n` and at the largest `m` whose `(m + 1)`-vector
+/// basis fits [`SolveConfig::basis_budget_bytes`]; at least 1.
+#[must_use]
+pub fn gmres_restart(n: usize, cfg: &SolveConfig) -> usize {
+    let bytes_per_vector = n.max(1).saturating_mul(std::mem::size_of::<f64>());
+    let fits = (cfg.basis_budget_bytes / bytes_per_vector).saturating_sub(1);
+    cfg.restart.min(n.max(1)).min(fits).max(1)
 }
 
 /// Convergence/diagnostic info — all **measured** stats (not gates).
@@ -161,6 +192,10 @@ impl Default for SolveConfig {
 pub struct SolveStats {
     /// GMRES iterations across both stages.
     pub iterations: usize,
+    /// GMRES restart length actually used (largest over the stages) — below the
+    /// requested [`SolveConfig::restart`] when the system is smaller or the basis budget
+    /// binds.
+    pub restart: usize,
     /// Worst true (unpreconditioned) relative residual over the two stages.
     pub residual: f64,
     /// True relative residual per stage (`[u-system, q-system]`).
@@ -206,6 +241,8 @@ fn givens(a: f64, b: f64) -> (f64, f64) {
 pub(crate) struct GmresSolution {
     pub(crate) x: Vec<f64>,
     pub(crate) iterations: usize,
+    /// Restart length used ([`gmres_restart`]).
+    pub(crate) restart: usize,
 }
 
 /// Right-preconditioned restarted GMRES solving `A·x = b`. Converges on the
@@ -227,26 +264,43 @@ pub(crate) fn gmres(
         return Err(SolveError::NotConverged);
     }
     let n = op.dim();
-    let m = cfg.restart.clamp(1, n.max(1));
+    let m = gmres_restart(n, cfg);
 
     let bnorm = norm(b);
     let mut x = vec![0.0; n];
     if bnorm == 0.0 {
-        return Ok(GmresSolution { x, iterations: 0 });
+        return Ok(GmresSolution {
+            x,
+            iterations: 0,
+            restart: m,
+        });
     }
+
+    // O(n) work buffers, reused across iterations and cycles; the basis `v` is the only
+    // O(m·n) storage.
+    let mut ax = vec![0.0; n];
+    let mut r = vec![0.0; n];
+    let mut z = vec![0.0; n];
+    let mut w = vec![0.0; n];
+    let mut comb = vec![0.0; n];
 
     let mut iterations = 0;
     loop {
         // True residual r = b − A·x (right preconditioning keeps this the tracked one).
-        let mut ax = vec![0.0; n];
         op.matvec(&x, &mut ax);
-        let r: Vec<f64> = (0..n).map(|i| b[i] - ax[i]).collect();
+        for i in 0..n {
+            r[i] = b[i] - ax[i];
+        }
         let beta = norm(&r);
         if !beta.is_finite() {
             return Err(SolveError::NonFinite);
         }
         if beta / bnorm <= cfg.tol {
-            return Ok(GmresSolution { x, iterations });
+            return Ok(GmresSolution {
+                x,
+                iterations,
+                restart: m,
+            });
         }
         if iterations >= cfg.max_iter {
             return Err(SolveError::NotConverged);
@@ -256,7 +310,6 @@ pub(crate) fn gmres(
         // |g[j+1]| then equals ‖b − A·x‖ directly.
         let mut v: Vec<Vec<f64>> = Vec::with_capacity(m + 1);
         v.push(r.iter().map(|&ri| ri / beta).collect());
-        let mut zs: Vec<Vec<f64>> = Vec::with_capacity(m); // M⁻¹·v_j, reused to build x
         let mut h = vec![vec![0.0_f64; m]; m + 1];
         let mut cs = vec![0.0; m];
         let mut sn = vec![0.0; m];
@@ -266,14 +319,13 @@ pub(crate) fn gmres(
 
         for j in 0..m {
             // w = A·M⁻¹·v_j
-            let mut z = vec![0.0; n];
             precond.apply(&v[j], &mut z);
-            let mut w = vec![0.0; n];
             op.matvec(&z, &mut w);
-            zs.push(z);
             let wnorm0 = norm(&w); // pre-orthogonalization scale, for breakdown
 
-            // Modified Gram–Schmidt.
+            // Modified Gram–Schmidt. No re-orthogonalization: MGS-GMRES is backward
+            // stable (Paige, Rozložník & Strakoš 2006) — lost basis orthogonality does not
+            // delay the residual reduction, so a second pass would only add cost.
             for i in 0..=j {
                 h[i][j] = dot(&w, &v[i]);
                 for t in 0..n {
@@ -312,8 +364,7 @@ pub(crate) fn gmres(
             }
         }
 
-        // Back-substitute H[0..k,0..k]·yk = g[0..k] (guard a zero pivot), then
-        // x += M⁻¹·(Σ yk_i v_i) = Σ yk_i z_i.
+        // Back-substitute H[0..k,0..k]·yk = g[0..k] (guard a zero pivot).
         let mut y = vec![0.0; k];
         for i in (0..k).rev() {
             if h[i][i].abs() <= 1e-300 {
@@ -325,10 +376,18 @@ pub(crate) fn gmres(
             }
             y[i] = s / h[i][i];
         }
+        // x += M⁻¹·(Σ yk_i v_i): one preconditioner application to the combination.
+        // Equal to Σ yk_i (M⁻¹ v_i) because the preconditioner is a fixed linear map
+        // (the `Preconditioner` contract), so no per-vector `M⁻¹ v_i` copies are stored.
+        comb.fill(0.0);
         for (i, &yi) in y.iter().enumerate() {
             for t in 0..n {
-                x[t] += yi * zs[i][t];
+                comb[t] += yi * v[i][t];
             }
+        }
+        precond.apply(&comb, &mut z);
+        for t in 0..n {
+            x[t] += z[t];
         }
     }
 }
@@ -477,6 +536,7 @@ fn solve_local_with_ops(
     // successful return already guarantees convergence — no silent loosening here.
     let stats = SolveStats {
         iterations: u_sol.iterations + q_sol.iterations,
+        restart: u_sol.restart.max(q_sol.restart),
         residual: res_u.max(res_q),
         per_block_residual: vec![res_u, res_q],
         converged: res_u <= cfg.tol && res_q <= cfg.tol,
@@ -775,6 +835,7 @@ fn solve_nonlocal_with_ops(
     }
     let stats = SolveStats {
         iterations: sol.iterations,
+        restart: sol.restart,
         residual: res,
         per_block_residual: vec![res],
         converged: res <= cfg.tol,
@@ -920,6 +981,7 @@ mod tests {
             tol: 1e-13,
             restart: 10,
             max_iter: 100,
+            ..Default::default()
         };
         let sol = gmres(&a, &b, &pre, &cfg).expect("converge");
         // The returned solution must actually solve A·x = b (not just stop early).
@@ -942,11 +1004,13 @@ mod tests {
                 tol: 1e-10,
                 restart: 10,
                 max_iter: 0,
+                ..Default::default()
             },
             SolveConfig {
                 tol: 0.0,
                 restart: 10,
                 max_iter: 100,
+                ..Default::default()
             },
         ] {
             assert_eq!(gmres(&a, &b, &pre, &cfg), Err(SolveError::NotConverged));
@@ -1005,7 +1069,155 @@ mod tests {
             tol: 1e-15,
             restart: 1, // restart(1) + 1 iter caps progress hard
             max_iter: 1,
+            ..Default::default()
         };
         assert_eq!(gmres(&a, &b, &pre, &cfg), Err(SolveError::NotConverged));
+    }
+
+    /// Deterministic non-symmetric `n×n` system with a strongly varying diagonal (so the
+    /// Jacobi preconditioner is far from the identity) and off-diagonal coupling large
+    /// enough that GMRES needs many iterations.
+    fn varied_system(n: usize) -> (DenseOperator, Vec<f64>) {
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+        };
+        let mut a = DenseOperator::zeros(n);
+        for i in 0..n {
+            for j in 0..n {
+                a.set(i, j, next());
+            }
+            // Diagonal spans ~3 orders of magnitude, dominant enough to stay non-singular.
+            let d = (n as f64) * 10f64.powf(3.0 * i as f64 / (n - 1) as f64);
+            a.set(i, i, d);
+        }
+        let b: Vec<f64> = (0..n).map(|_| next()).collect();
+        (a, b)
+    }
+
+    fn rel_l2(x: &[f64], reference: &[f64]) -> f64 {
+        let d: f64 = x
+            .iter()
+            .zip(reference)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        d / reference.iter().map(|b| b * b).sum::<f64>().sqrt()
+    }
+
+    fn dense_lu_solve(a: &DenseOperator, b: &[f64]) -> Vec<f64> {
+        let n = a.dim();
+        let mut ai = vec![0.0; n * n];
+        let mut e = vec![0.0; n];
+        let mut col = vec![0.0; n];
+        for j in 0..n {
+            e.fill(0.0);
+            e[j] = 1.0;
+            a.matvec(&e, &mut col);
+            for i in 0..n {
+                ai[i * n + j] = col[i];
+            }
+        }
+        let m = nalgebra::DMatrix::from_row_slice(n, n, &ai);
+        let x = m
+            .lu()
+            .solve(&nalgebra::DVector::from_row_slice(b))
+            .expect("non-singular");
+        x.iter().copied().collect()
+    }
+
+    #[test]
+    fn gmres_restart_respects_basis_budget() {
+        let base = SolveConfig {
+            restart: 200,
+            ..Default::default()
+        };
+        // Small systems: capped at n.
+        assert_eq!(gmres_restart(3, &base), 3);
+        // Default budget does not bind at dense-solve sizes.
+        assert_eq!(gmres_restart(30_000, &base), 200);
+        // A budget for exactly 51 vectors of 1000 f64 allows restart 50.
+        let tight = SolveConfig {
+            basis_budget_bytes: 51 * 1000 * 8,
+            ..base
+        };
+        assert_eq!(gmres_restart(1000, &tight), 50);
+        // One byte short of 51 vectors → 49.
+        let short = SolveConfig {
+            basis_budget_bytes: 51 * 1000 * 8 - 1,
+            ..base
+        };
+        assert_eq!(gmres_restart(1000, &short), 49);
+        // Never below 1, even with a zero budget or restart.
+        let zero = SolveConfig {
+            basis_budget_bytes: 0,
+            ..base
+        };
+        assert_eq!(gmres_restart(1000, &zero), 1);
+        let r0 = SolveConfig { restart: 0, ..base };
+        assert_eq!(gmres_restart(1000, &r0), 1);
+        // The documented default: 2 GiB binds just above 1.3 M unknowns at restart 200.
+        assert_eq!(gmres_restart(1_335_000, &base), 200);
+        assert!(gmres_restart(1_336_000, &base) < 200);
+    }
+
+    #[test]
+    fn restarted_gmres_matches_lu_with_nontrivial_jacobi() {
+        // Short restart forces many cycles, each ending in the single M⁻¹ application
+        // to the basis combination; a varying diagonal makes that application matter.
+        let n = 60;
+        let (a, b) = varied_system(n);
+        let pre = JacobiPreconditioner::from_operator(&a);
+        let cfg = SolveConfig {
+            tol: 1e-13,
+            restart: 5,
+            max_iter: 10_000,
+            ..Default::default()
+        };
+        let sol = gmres(&a, &b, &pre, &cfg).expect("converge");
+        assert_eq!(sol.restart, 5);
+        assert!(
+            sol.iterations > 5,
+            "must actually restart: {}",
+            sol.iterations
+        );
+        assert!(true_residual(&a, &sol.x, &b) <= 1e-13);
+        let lu = dense_lu_solve(&a, &b);
+        let rel = rel_l2(&sol.x, &lu);
+        assert!(rel < 1e-10, "GMRES vs LU relative L2 {rel:.2e}");
+    }
+
+    #[test]
+    fn budget_capped_restart_still_converges_to_lu() {
+        // The same system with a basis budget of 4 vectors → restart 3: slower, but the
+        // solution is unchanged and the used restart is reported.
+        let n = 60;
+        let (a, b) = varied_system(n);
+        let pre = JacobiPreconditioner::from_operator(&a);
+        let unconstrained = SolveConfig {
+            tol: 1e-12,
+            restart: 60,
+            max_iter: 10_000,
+            ..Default::default()
+        };
+        let capped = SolveConfig {
+            basis_budget_bytes: 4 * n * 8,
+            ..unconstrained
+        };
+        let full = gmres(&a, &b, &pre, &unconstrained).expect("converge");
+        let small = gmres(&a, &b, &pre, &capped).expect("converge");
+        assert_eq!(full.restart, 60);
+        assert_eq!(small.restart, 3);
+        assert!(small.iterations >= full.iterations);
+        assert!(true_residual(&a, &small.x, &b) <= 1e-12);
+        let lu = dense_lu_solve(&a, &b);
+        let rel = rel_l2(&small.x, &lu);
+        assert!(
+            rel < 1e-10,
+            "budget-capped GMRES vs LU relative L2 {rel:.2e}"
+        );
     }
 }
